@@ -17,6 +17,7 @@ import (
 	"github.com/IvanLi-CN/Loomhelm/internal/platform/database"
 	"github.com/IvanLi-CN/Loomhelm/internal/projects"
 	"github.com/IvanLi-CN/Loomhelm/internal/protocol"
+	"github.com/IvanLi-CN/Loomhelm/internal/sessions"
 )
 
 func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
@@ -191,7 +192,7 @@ func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
 	if err := db.Pool().QueryRow(ctx, `SELECT history_state, files_complete FROM codex_threads WHERE host_id = $1 AND thread_id = $2`, hostID, threadID).Scan(&historyState, &filesComplete); err != nil {
 		t.Fatalf("read partial thread readiness: %v", err)
 	}
-	if historyState != "partial" || filesComplete {
+	if historyState != "failed" || filesComplete {
 		t.Fatalf("partial snapshot readiness = (%q, %t)", historyState, filesComplete)
 	}
 	if err := db.Pool().QueryRow(ctx, `
@@ -247,6 +248,243 @@ func TestImportSnapshotRetainsRawHistoryFilesAndReadiness(t *testing.T) {
 		t.Fatalf("reference-only Codex file chunk = %+v", refChunk)
 	}
 
+}
+
+func TestStandaloneSessionKeepsCodexHistoryVisibleAfterActivation(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("LOOMHELM_DATABASE_URL")) == "" {
+		t.Skip("LOOMHELM_DATABASE_URL is not set")
+	}
+	config, err := platform.LoadDatabaseConfig()
+	if err != nil {
+		t.Fatalf("load database configuration: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, database.Config{URL: config.URL, MinConns: 1, MaxConns: 4})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate database: %v", err)
+	}
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := "codex-standalone-owner-" + suffix
+	creatorUserID := "codex-standalone-creator-" + suffix
+	hostID := "codex-standalone-host-" + suffix
+	sessionID := "codex-standalone-session-" + suffix
+	threadID := "codex-standalone-thread-" + suffix
+	commandID := "codex-standalone-command-" + suffix
+	projectScopedSessionID := "codex-project-session-" + suffix
+	projectScopedThreadID := "codex-project-thread-" + suffix
+	projectScopedTaskID := "codex-project-task-" + suffix
+	projectScopedTaskThreadID := "codex-project-task-thread-" + suffix
+	projectScopedProjectID := "codex-project-scope-" + suffix
+	projectID := "codex-standalone-project-" + suffix
+	taskID := "codex-standalone-task-" + suffix
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO auth_users (id, issuer, subject) VALUES ($1, 'test', $1)`, userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO auth_users (id, issuer, subject) VALUES ($1, 'test', $1)`, creatorUserID); err != nil {
+		t.Fatalf("seed Session creator: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO host_registrations (id, singleton_key, name, status, owner_user_id) VALUES ($1, NULL, 'Codex standalone test', 'online', $2)`, hostID, userID); err != nil {
+		t.Fatalf("seed Host: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO host_share_grants (host_id, user_id, granted_by, created_at) VALUES ($1, $2, $3, $4)`, hostID, creatorUserID, userID, now); err != nil {
+		t.Fatalf("share Host with Session creator: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO projects (id, name, created_by) VALUES ($1, 'Codex standalone target project', $2)`, projectID, userID); err != nil {
+		t.Fatalf("seed target project: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'owner')`, projectID, userID); err != nil {
+		t.Fatalf("seed target project member: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO tasks (id, project_id, title, goal) VALUES ($1, $2, 'Codex standalone target task', 'Verify private Session binding')`, taskID, projectID); err != nil {
+		t.Fatalf("seed target task: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO codex_sync_sources (host_id, state, sync_state, as_of, updated_at) VALUES ($1, 'online', 'complete', $2, $2)`, hostID, now); err != nil {
+		t.Fatalf("seed Codex source: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO projects (id, name, created_by) VALUES ($1, 'Codex project Session visibility', $2)`, projectScopedProjectID, userID); err != nil {
+		t.Fatalf("seed project-scoped Session project: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'owner')`, projectScopedProjectID, creatorUserID); err != nil {
+		t.Fatalf("seed project-scoped Session member: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `INSERT INTO tasks (id, project_id, title, goal) VALUES ($1, $2, 'Codex project task', 'Verify task-bound Codex file visibility')`, projectScopedTaskID, projectScopedProjectID); err != nil {
+		t.Fatalf("seed project-scoped task: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO execution_sessions (
+			id, external_thread_ref, path, state, project_id, generation,
+			creation_state, creator_user_id, host_id, created_at, updated_at
+		) VALUES ($1, $2, 'new', 'active', $3, $4, 'confirmed', $5, $6, $7, $7)
+	`, projectScopedSessionID, projectScopedThreadID, projectScopedProjectID, "generation-"+suffix, creatorUserID, hostID, now); err != nil {
+		t.Fatalf("seed project-scoped Session: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO codex_threads (
+			host_id, thread_id, source_kind, conversation_title, preview, cwd,
+			source_status, history_state, files_complete, title_sync_state,
+			bound_session_id, imported_by, as_of, last_activity_at, updated_at
+		) VALUES ($1, $2, 'main', 'Project Session history', 'project-only preview', '/workspace',
+			'active', 'complete', TRUE, 'unsupported', $3, $4, $5, $5, $5)
+	`, hostID, projectScopedThreadID, projectScopedSessionID, userID, now); err != nil {
+		t.Fatalf("seed project-scoped Codex thread: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO codex_thread_history (host_id, thread_id, event_id, sequence, event_type, raw_payload, readable_fallback, occurred_at)
+		VALUES ($1, $2, 'project-event-1', 1, 'user_message', '{}', 'project-only event', $3)
+	`, hostID, projectScopedThreadID, now); err != nil {
+		t.Fatalf("seed project-scoped history: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO codex_thread_files (host_id, thread_id, path, content_type, size, sha256, content_bytes, complete, updated_at)
+		VALUES ($1, $2, 'project-only.txt', 'text/plain', 12, '', 'project-only', TRUE, $3)
+	`, hostID, projectScopedThreadID, now); err != nil {
+		t.Fatalf("seed project-scoped file: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO codex_threads (
+			host_id, thread_id, source_kind, conversation_title, preview, cwd,
+			source_status, history_state, files_complete, title_sync_state,
+			bound_task_id, imported_by, as_of, last_activity_at, updated_at
+		) VALUES ($1, $2, 'main', 'Project Task history', 'project-task preview', '/workspace',
+			'active', 'complete', TRUE, 'unsupported', $3, $4, $5, $5, $5)
+	`, hostID, projectScopedTaskThreadID, projectScopedTaskID, userID, now); err != nil {
+		t.Fatalf("seed project-task Codex thread: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO codex_thread_files (host_id, thread_id, path, content_type, size, sha256, content_bytes, complete, updated_at)
+		VALUES ($1, $2, 'project-task.txt', 'text/plain', 12, '', 'project-task', TRUE, $3)
+	`, hostID, projectScopedTaskThreadID, now); err != nil {
+		t.Fatalf("seed project-task file: %v", err)
+	}
+	if _, err := db.Pool().Exec(ctx, `
+		INSERT INTO codex_threads (
+			host_id, thread_id, codex_title, conversation_title, preview, cwd,
+			source_status, history_state, files_complete, title_sync_state, imported_by,
+			as_of, last_activity_at, updated_at
+		) VALUES ($1, $2, 'Codex standalone title', 'Loomhelm standalone title', 'preview', '/workspace', 'active', 'complete', TRUE, 'unsupported', $3, $4, $4, $4)
+	`, hostID, threadID, userID, now); err != nil {
+		t.Fatalf("seed Codex thread: %v", err)
+	}
+
+	cleanup := func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = db.Pool().Exec(cleanupCtx, `UPDATE codex_threads SET bound_session_id = NULL WHERE host_id = $1 AND thread_id = $2`, hostID, threadID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM codex_sync_sources WHERE host_id = $1`, hostID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM execution_sessions WHERE id = $1`, projectScopedSessionID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM execution_sessions WHERE id = $1`, sessionID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM tasks WHERE id = $1`, projectScopedTaskID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM tasks WHERE id = $1`, taskID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM project_members WHERE project_id = $1`, projectScopedProjectID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM projects WHERE id = $1`, projectScopedProjectID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM project_members WHERE project_id = $1`, projectID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM projects WHERE id = $1`, projectID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM host_registrations WHERE id = $1`, hostID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM auth_users WHERE id = $1`, creatorUserID)
+		_, _ = db.Pool().Exec(cleanupCtx, `DELETE FROM auth_users WHERE id = $1`, userID)
+	}
+	t.Cleanup(cleanup)
+
+	service := codex.NewService(db.Pool(), nil, hosts.NewService(db.Pool()), projects.NewService(db.Pool(), nil))
+	store := sessions.NewStore(db.Pool(), sessions.StoreConfig{BindingReconciler: service.ReconcileSessionTaskBinding})
+	if _, err := store.CreateIntent(ctx, sessions.CreationIntentInput{
+		SessionID:     sessionID,
+		CommandID:     commandID,
+		CreatorUserID: creatorUserID,
+		HostID:        hostID,
+		Path:          protocol.SessionPathNew,
+		Parameters:    []byte(`{"path":"new"}`),
+		Summary:       "standalone Codex continuity",
+	}); err != nil {
+		t.Fatalf("create standalone Session intent: %v", err)
+	}
+	if _, err := store.ActivateIntent(ctx, sessions.ActivationInput{SessionID: sessionID, ExternalThreadRef: threadID, ExecutionGeneration: "generation-" + suffix, UpdatedAt: now.Format(time.RFC3339Nano)}); err != nil {
+		t.Fatalf("activate standalone Session: %v", err)
+	}
+
+	hostRef := hostID
+	bound := true
+	includeArchived := true
+	page, err := service.ListConversations(ctx, auth.Principal{UserID: creatorUserID}, protocol.ListCodexConversationsQuery{HostID: &hostRef, Bound: &bound, IncludeArchived: &includeArchived})
+	if err != nil {
+		t.Fatalf("list standalone Codex history: %v", err)
+	}
+	var standaloneItem *protocol.CodexConversation
+	for index := range page.Items {
+		if page.Items[index].ThreadID == threadID {
+			standaloneItem = &page.Items[index]
+			break
+		}
+	}
+	if standaloneItem == nil || standaloneItem.BoundSessionID == nil || *standaloneItem.BoundSessionID != sessionID || standaloneItem.BoundTaskID != nil {
+		t.Fatalf("standalone Codex list = %+v, want one Session-only binding", page.Items)
+	}
+	if _, err := service.GetConversation(ctx, auth.Principal{UserID: creatorUserID}, hostID, threadID); err != nil {
+		t.Fatalf("read standalone Codex history: %v", err)
+	}
+	ownerPage, err := service.ListConversations(ctx, auth.Principal{UserID: userID}, protocol.ListCodexConversationsQuery{HostID: &hostRef, Bound: &bound, IncludeArchived: &includeArchived})
+	if err != nil {
+		t.Fatalf("list private standalone Codex history as Host owner: %v", err)
+	}
+	if len(ownerPage.Items) != 0 {
+		t.Fatalf("private standalone Codex list leaked to Host owner: %+v", ownerPage.Items)
+	}
+	if _, err := service.GetConversation(ctx, auth.Principal{UserID: userID}, hostID, threadID); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("private standalone Codex detail error = %v, want not found", err)
+	}
+	projectPage, err := service.ListConversations(ctx, auth.Principal{UserID: creatorUserID}, protocol.ListCodexConversationsQuery{HostID: &hostRef, Bound: &bound, IncludeArchived: &includeArchived})
+	if err != nil {
+		t.Fatalf("list project-scoped Codex history as member: %v", err)
+	}
+	var foundProjectSession bool
+	for _, item := range projectPage.Items {
+		if item.ThreadID == projectScopedThreadID {
+			foundProjectSession = true
+			break
+		}
+	}
+	if !foundProjectSession {
+		t.Fatalf("project-scoped Codex list omitted Session member view: %+v", projectPage.Items)
+	}
+	if _, err := service.GetConversation(ctx, auth.Principal{UserID: creatorUserID}, hostID, projectScopedThreadID); err != nil {
+		t.Fatalf("read project-scoped Codex history as member: %v", err)
+	}
+	projectFileLimit := int64(64)
+	if _, err := service.GetConversationFile(ctx, auth.Principal{UserID: creatorUserID}, hostID, projectScopedThreadID, protocol.GetCodexConversationFileQuery{Path: "project-only.txt", Limit: &projectFileLimit}); err != nil {
+		t.Fatalf("read project-scoped Codex file as member: %v", err)
+	}
+	if _, err := service.GetConversationFile(ctx, auth.Principal{UserID: creatorUserID}, hostID, projectScopedTaskThreadID, protocol.GetCodexConversationFileQuery{Path: "project-task.txt", Limit: &projectFileLimit}); err != nil {
+		t.Fatalf("read task-bound project Codex file as member: %v", err)
+	}
+	ownerProjectPage, err := service.ListConversations(ctx, auth.Principal{UserID: userID}, protocol.ListCodexConversationsQuery{HostID: &hostRef, Bound: &bound, IncludeArchived: &includeArchived})
+	if err != nil {
+		t.Fatalf("list project-scoped Codex history as Host owner: %v", err)
+	}
+	for _, item := range ownerProjectPage.Items {
+		if item.ThreadID == projectScopedThreadID {
+			t.Fatalf("project-scoped Codex list leaked to Host owner: %+v", ownerProjectPage.Items)
+		}
+	}
+	if _, err := service.GetConversation(ctx, auth.Principal{UserID: userID}, hostID, projectScopedThreadID); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("project-scoped Codex detail error = %v, want not found", err)
+	}
+	if _, err := service.GetConversationFile(ctx, auth.Principal{UserID: userID}, hostID, projectScopedThreadID, protocol.GetCodexConversationFileQuery{Path: "project-only.txt", Limit: &projectFileLimit}); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("project-scoped Codex file error = %v, want not found", err)
+	}
+	if _, err := service.GetConversationFile(ctx, auth.Principal{UserID: userID}, hostID, projectScopedTaskThreadID, protocol.GetCodexConversationFileQuery{Path: "project-task.txt", Limit: &projectFileLimit}); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("task-bound project Codex file error = %v, want not found", err)
+	}
+	confirmShare := true
+	if _, err := service.Bind(ctx, auth.Principal{UserID: userID}, hostID, threadID, protocol.CodexBindRequest{RequestID: "owner-private-bind-" + suffix, TaskID: taskID, ConfirmShare: &confirmShare}); !errors.Is(err, codex.ErrForbidden) {
+		t.Fatalf("private standalone Codex bind error = %v, want forbidden", err)
+	}
 }
 
 func TestUpdateTitlePersistsPreflightFailuresForRetry(t *testing.T) {

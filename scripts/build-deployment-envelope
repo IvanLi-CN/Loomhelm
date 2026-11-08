@@ -73,7 +73,7 @@ if state_version <= 0 or read_min <= 0 or read_max < read_min or not (read_min <
     raise SystemExit("compatibility range is invalid")
 if migration_mode not in {"none", "expand"}:
     raise SystemExit("migration mode must be none or expand")
-image_pattern = r"^[A-Za-z0-9._/:@-]+@sha256:[0-9a-f]{64}$"
+image_pattern = r"^(?:[A-Za-z0-9._/:@-]+@)?sha256:[0-9a-f]{64}$"
 if re.fullmatch(image_pattern, server_image) is None or re.fullmatch(image_pattern, worker_image) is None:
     raise SystemExit("server and worker image references must be immutable @sha256 references")
 with open(candidate_path, encoding="utf-8") as stream:

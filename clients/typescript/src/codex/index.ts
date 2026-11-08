@@ -1,2 +1,2 @@
-export * from './app-server.js';
-export type * from './protocol.js';
+export * from './app-server.ts';
+export type * from './protocol.ts';

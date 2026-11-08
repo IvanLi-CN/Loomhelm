@@ -46,6 +46,6 @@ The canonical bootstrap entrypoint is `scripts/setup`; it does not depend on his
 
 默认集成分支为 `main`，其中同时保存服务端、Go 客户端、Web App 和独立 TypeScript 客户端。`feat/phase1` 是保留的历史集成分支，不再作为新任务、候选发布或操作手册的默认来源。新工作开始前应 fetch 并核实远端 main 的完整工程目录与当前提交，不能只依据本地分支名称判断基线。
 
-Go 客户端继续使用 `cmd/connector/` 和既有构建、安装方式。TS 客户端位于 `clients/typescript/`，保留独立 package-lock.json；它不加入根 Bun workspace，根 Bun 锁文件只管理既有 Web 与共享包。`scripts/checks client` 从根目录执行 npm ci、类型检查及 Node.js/Bun 测试；也可进入 TS 包后直接使用 npm，不要求先安装 Web 依赖。
+Go 客户端继续使用 `cmd/connector/` 和既有构建、安装方式。TS 客户端位于 `clients/typescript/`，使用独立 `bun.lock`；它不加入根 Bun workspace，根锁文件只管理既有 Web 与共享包。客户端与 Skills 使用 Bun 1.4.4 直接运行 TypeScript，不再支持 Node.js 或预编译 JS 入口。`scripts/checks client` 从根目录依次准备 Skills、网页资源和客户端的固定依赖，执行不发射代码的类型检查、Bun 源码测试及独立源码包验证。独立使用方式见[客户端说明](../clients/typescript/README.md)，不要求先安装 Web App 依赖。
 
 Candidate CI 与 Blue-Green Baseline 验证 PR 及 main 提交。Branch Preview、Connector Release、Release Candidate 和 V01 联合验收保持显式手动入口，并验证 main 的来源与候选身份。仓库合流不代表已发布版本、部署环境或完成全部一期业务验收。

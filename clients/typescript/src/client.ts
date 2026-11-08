@@ -1,7 +1,7 @@
-import { type ClientConfig, loadConfig } from './config.js';
-import { Ledger } from './tasks/ledger.js';
-import { runProcess, type ProcessOptions } from './runtime/process.js';
-import type { Receipt } from './tasks/ledger.js';
+import { type ClientConfig, loadConfig } from './config.ts';
+import { Ledger } from './tasks/ledger.ts';
+import { runProcess, type ProcessOptions } from './runtime/process.ts';
+import type { Receipt } from './tasks/ledger.ts';
 
 export interface TaskRunOptions extends Omit<ProcessOptions, 'timeoutMs' | 'maxOutputBytes'> {
   timeoutMs?: number;

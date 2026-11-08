@@ -35,7 +35,7 @@ Keep topic-level specs in `docs/specs/` aligned with behavior, contracts, and ac
   - `Spec同步证据=<spec_paths@sha_csv|未检查>`
   - `结束原因=<one-line>`
 - When a canonical `SPEC.md` contains `## Related ADRs`, the detector validates that the section is either exactly `None` or path-sorted, duplicate-free Markdown links to existing `docs/adr/<NNNN>-<slug>.md` files. A missing ADR status is compatible with `accepted`; explicit `superseded` or `deprecated`, another non-accepted status, or an invalid target blocks sync. Specs without the section remain readable compatibility inputs.
-- When a canonical `SPEC.md` is new or modified, run `bun skills/bin/spec_contract_check.ts --path <SPEC.md>` in addition to the drift detector. Untouched legacy and external Specs remain readable compatibility inputs.
+- When a canonical `SPEC.md` is new or modified, run `bun --no-install skills/bin/spec_contract_check.ts --path <SPEC.md>` in addition to the drift detector. Untouched legacy and external Specs remain readable compatibility inputs.
 
 ## Workflow
 

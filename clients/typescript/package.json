@@ -4,27 +4,27 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "bun": "1.4.4"
   },
   "bin": {
-    "loomhelm": "dist/cli.js"
+    "loomhelm": "src/cli.ts"
   },
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./src/index.ts"
   },
-  "types": "./dist/index.d.ts",
+  "types": "src/index.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json && node ../../skills/scripts/package-client-skills.mjs",
-    "check": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test test/*.test.mjs",
-    "test:bun": "npm run build && bun test test/*.test.mjs"
+    "build": "bun ../../skills/scripts/package-client-skills.ts",
+    "check": "bun x --no-install tsc -p tsconfig.json --noEmit",
+    "test": "bun run build && bun test test/*.test.ts"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "5.9.3",
+    "@types/bun": "1.4.4"
   },
   "dependencies": {
     "sharp": "0.35.5",
     "zod": "4.6.7"
-  }
+  },
+  "packageManager": "bun@1.4.4"
 }

@@ -220,6 +220,8 @@ describe("visual review regressions", () => {
     const real = join(root, "real");
     const alias = join(root, "alias");
     mkdirSync(real);
+    // Keep the fixture inside the worktree while preventing parent Git discovery.
+    writeFileSync(join(real, ".git"), "gitdir: ./missing-test-repository\n");
     symlinkSync(real, alias, "dir");
     expect(repoScope(alias).repoRoot).toBe(realpathSync(real));
   });

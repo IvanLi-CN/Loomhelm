@@ -209,9 +209,20 @@ PY
 echo "build-candidate: building Go components for $goos/$goarch from $source_sha"
 GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM='' GOEXPERIMENT='' GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
 	go mod download
+projected_version=$(python3 tools/release/product.py check)
+product_version=dev
+if [ -n "${LOOMHELM_PRODUCT_BUILD_VERSION:-}" ]; then
+    [ "$LOOMHELM_PRODUCT_BUILD_VERSION" = "$projected_version" ] || [ "${LOOMHELM_FIXTURE_BUILD_VERSION:-}" = 0.0.0-ci ] || exit 1
+    product_version=$LOOMHELM_PRODUCT_BUILD_VERSION
+fi
+if [ -n "${LOOMHELM_FIXTURE_BUILD_VERSION:-}" ]; then
+	[ "$LOOMHELM_FIXTURE_BUILD_VERSION" = 0.0.0-ci ] || exit 1
+	product_version=$LOOMHELM_FIXTURE_BUILD_VERSION
+fi
+identity_flags="-s -w -buildid= -X github.com/IvanLi-CN/Loomhelm/internal/buildinfo.Version=$product_version -X github.com/IvanLi-CN/Loomhelm/internal/buildinfo.SourceSHA=$source_sha"
 for component in server worker connector; do
 	GOTOOLCHAIN=local GOAMD64=v1 GOARM64=v8.0 GOARM=7 GO386=sse2 GOMIPS=hardfloat GOMIPS64=hardfloat GOPPC64=power8 GORISCV64=rva20u64 GOWASM='' GOEXPERIMENT='' GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 GOFLAGS='-mod=readonly' \
-		go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o "$stage_dir/bin/$component" "./cmd/$component"
+		go build -trimpath -buildvcs=false -ldflags="$identity_flags" -o "$stage_dir/bin/$component" "./cmd/$component"
 done
 
 echo "build-candidate: building Web static assets with Bun $actual_bun"

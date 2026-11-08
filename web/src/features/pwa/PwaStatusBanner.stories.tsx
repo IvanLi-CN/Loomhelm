@@ -131,3 +131,13 @@ export const RegistrationFailure: Story = {
     expect(canvas.queryByRole("button", { name: "应用更新" })).not.toBeInTheDocument();
   }
 };
+
+export const ProductVersionMismatch: Story = {
+  render: () => <Surface><div className="grid gap-4"><label className="grid gap-2 text-sm">未发送内容<textarea aria-label="未发送内容" defaultValue="版本升级前保留的输入" className="rounded border p-3" /></label><PwaStatusBanner placement="inline" isOnline versionMismatch updateAvailable={false} updating={false} registrationError={false} onApplyUpdate={fn()} /></div></Surface>,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    expect(canvas.getByRole("status")).toHaveTextContent("联网操作已暂停");
+    expect(canvas.getByRole("textbox", { name: "未发送内容" })).toHaveValue("版本升级前保留的输入");
+    expect(canvas.queryByRole("button")).not.toBeInTheDocument();
+  }
+};

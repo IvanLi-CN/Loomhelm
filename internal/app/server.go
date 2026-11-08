@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/IvanLi-CN/Loomhelm/internal/artifacts"
+	"github.com/IvanLi-CN/Loomhelm/internal/buildinfo"
 	"github.com/IvanLi-CN/Loomhelm/internal/platform"
 	"github.com/go-chi/chi/v5"
 )
@@ -351,9 +352,9 @@ func withListenerCloseError(base, closeErr error) error {
 }
 
 func (s *Server) registerRoutes() {
-	s.router.Mount("/api/v1", http.HandlerFunc(s.handleApplication))
-	s.router.Handle("/mcp", http.HandlerFunc(s.handleMCP))
-	s.router.Handle(connectorGatewayPath, http.HandlerFunc(s.handleGateway))
+	s.router.Mount("/api/v1", buildinfo.ApplicationGuard(buildinfo.Version, http.HandlerFunc(s.handleApplication)))
+	s.router.Handle("/mcp", buildinfo.Guard(buildinfo.Version, http.HandlerFunc(s.handleMCP)))
+	s.router.Handle(connectorGatewayPath, buildinfo.Guard(buildinfo.Version, http.HandlerFunc(s.handleGateway)))
 	s.router.Get("/livez", s.handleLive)
 	s.router.Get("/readyz", s.handleReady)
 	s.router.Get("/version", s.handleVersion)
@@ -395,6 +396,8 @@ type healthResponse struct {
 }
 
 type versionResponse struct {
+	Policy             string `json:"policy"`
+	Compatibility      string `json:"compatibility"`
 	Component          string `json:"component"`
 	Version            string `json:"version"`
 	CandidateSourceSHA string `json:"candidate_source_sha"`
@@ -451,8 +454,10 @@ func (s *Server) handleReady(writer http.ResponseWriter, request *http.Request) 
 }
 
 func (s *Server) handleVersion(writer http.ResponseWriter, _ *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
 	s.writeJSON(writer, http.StatusOK, versionResponse{
-		Component:          string(s.cfg.Component),
+		Component: string(s.cfg.Component),
+		Policy:    buildinfo.Policy, Compatibility: "exact-version",
 		Version:            s.cfg.Version,
 		CandidateSourceSHA: s.cfg.CandidateSource(),
 		ArtifactDigest:     s.cfg.CandidateArtifactDigest(),

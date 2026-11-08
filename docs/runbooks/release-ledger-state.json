@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "kind": "persistent-state-migration-record",
+  "migration": {
+    "description": "新增产品发布 ledger；不迁移或重写既有产品、客户端 journal 或数据库状态。",
+    "release_unit_description": "服务端、Go 客户端、TypeScript 客户端及 Web/PWA",
+    "version_impact": "由 owner 的 release_target 决定，本文不分配版本"
+  },
+  "durable_state": {
+    "description": "reservation、版本墓碑、冻结 digest、公开完成与通知回执",
+    "storage_implementation": "release-ledger Git ref；现有认证调用 GitHub 原生平台签名和 expectedHeadOid CAS，追加 JSON 事件",
+    "source_compatibility_range": {
+      "from_program_versions": "无 ledger（原子初始化）或 ledger schema 1",
+      "to_program_version": "支持 ledger schema 1 的本实现；产品版本尚未选择",
+      "direct_major_skips_supported": false
+    }
+  },
+  "database_migration": {
+    "applicable": false,
+    "ddl_structural_changes": [],
+    "dml_changes": [],
+    "historical_data_backfill_or_transformation": []
+  },
+  "rollout_observability": {
+    "operations_must_remain_separate": true,
+    "operation_sequence": [
+      "reserve",
+      "prepare",
+      "bind",
+      "build_claim",
+      "stage",
+      "upload-and-verify",
+      "freeze",
+      "publication_intent",
+      "publish",
+      "complete"
+    ],
+    "progress_signals": [
+      "签名 commit SHA",
+      "CAS ref",
+      "sequence/kind",
+      "逐项 artifact digest",
+      "公开状态",
+      "completion",
+      "不可撤销公开意图；此后只能原身份恢复，不允许终止"
+    ],
+    "pause_points": [
+      "每个成功追加的阶段之后；仅沿原 identity 接续"
+    ]
+  },
+  "recovery": {
+    "deployed_migrations_immutable": true,
+    "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
+    "faulty_release_recovery": "forward-repair-by-a-new-program-version",
+    "backup_restore_role": "separate-disaster-recovery"
+  },
+  "validation": {
+    "required_test_evidence": [
+      "空 ref 竞争初始化",
+      "schema 1 追加与原身份重入",
+      "未知 schema 拒绝",
+      "历史事件与冻结 inventory 不可改写",
+      "公开后 completion 丢失修复",
+      "终止版本不释放"
+    ]
+  }
+}

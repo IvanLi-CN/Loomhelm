@@ -58,7 +58,7 @@ func scanConversation(rows conversationScanner) (protocol.CodexConversation, []b
 
 func (s *Service) readConversation(ctx context.Context, access sourceAccess, principal auth.Principal, threadID string) (protocol.CodexConversation, []byte, *string, time.Time, string, error) {
 	var item protocol.CodexConversation
-	var projectID, projectName, cwd, codexTitle, titleError, conflictCodex, boundTask, boundSession, taskProjectID, importedBy *string
+	var projectID, projectName, cwd, codexTitle, titleError, conflictCodex, boundTask, boundSession, taskProjectID, importedBy, sessionID, sessionCreator, sessionProjectID *string
 	var sourceKind, sourceStatus, historyState, titleState string
 	var conflictAt *time.Time
 	var asOf, updatedAt, activity time.Time
@@ -69,17 +69,19 @@ func (s *Service) readConversation(ctx context.Context, access sourceAccess, pri
 		       t.preview, t.cwd, t.source_kind, t.source_status, t.history_state, t.files_complete,
 		       t.title_sync_state, t.title_sync_error, t.title_conflict_codex_title, t.title_conflict_detected_at,
 		       t.bound_task_id, t.bound_session_id, t.imported_by, t.as_of, t.updated_at, t.last_activity_at,
-		       COALESCE(src.capabilities, '[]'::jsonb), task.project_id, COALESCE(src.state, 'offline')
+		       COALESCE(src.capabilities, '[]'::jsonb), task.project_id,
+		       session.id, session.creator_user_id, session.project_id, COALESCE(src.state, 'offline')
 		FROM codex_threads t
 		LEFT JOIN codex_projects cp ON cp.host_id = t.host_id AND cp.project_id = t.project_id
 		LEFT JOIN tasks task ON task.id = t.bound_task_id
+		LEFT JOIN execution_sessions session ON session.host_id = t.host_id AND session.external_thread_ref = t.thread_id AND session.creation_state = 'confirmed'
 		LEFT JOIN codex_sync_sources src ON src.host_id = t.host_id
 		WHERE t.host_id = $1 AND t.thread_id = $2
 	`, access.host.ID, threadID).Scan(
 		&item.HostID, &item.ThreadID, &projectID, &projectName, &item.ConversationTitle, &codexTitle,
 		&item.Preview, &cwd, &sourceKind, &sourceStatus, &historyState, &item.FilesComplete,
 		&titleState, &titleError, &conflictCodex, &conflictAt, &boundTask, &boundSession, &importedBy,
-		&asOf, &updatedAt, &activity, &capabilities, &taskProjectID, &sourceState,
+		&asOf, &updatedAt, &activity, &capabilities, &taskProjectID, &sessionID, &sessionCreator, &sessionProjectID, &sourceState,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return protocol.CodexConversation{}, nil, nil, time.Time{}, "", ErrNotFound
@@ -90,15 +92,25 @@ func (s *Service) readConversation(ctx context.Context, access sourceAccess, pri
 	if importedBy == nil {
 		return protocol.CodexConversation{}, nil, nil, time.Time{}, "", auth.ErrNotFound
 	}
-	if *importedBy != principal.UserID || access.restricted {
-		if boundTask == nil || taskProjectID == nil {
-			return protocol.CodexConversation{}, nil, nil, time.Time{}, "", auth.ErrNotFound
+	privateSession := sessionID != nil && sessionProjectID == nil
+	projectSession := sessionID != nil && sessionProjectID != nil
+	if *importedBy != principal.UserID || access.restricted || privateSession || projectSession || taskProjectID != nil {
+		projectID := taskProjectID
+		if projectID == nil {
+			projectID = sessionProjectID
 		}
-		allowed, authorizeErr := s.projects.CanReadProject(ctx, principal, *taskProjectID)
-		if authorizeErr != nil {
-			return protocol.CodexConversation{}, nil, nil, time.Time{}, "", authorizeErr
-		}
-		if !allowed {
+		if projectID != nil {
+			if historyState != string(protocol.CodexHistoryStateComplete) || !item.FilesComplete || (sessionID != nil && (boundSession == nil || *boundSession != *sessionID)) {
+				return protocol.CodexConversation{}, nil, nil, time.Time{}, "", auth.ErrNotFound
+			}
+			allowed, authorizeErr := s.projects.CanReadProject(ctx, principal, *projectID)
+			if authorizeErr != nil {
+				return protocol.CodexConversation{}, nil, nil, time.Time{}, "", authorizeErr
+			}
+			if !allowed {
+				return protocol.CodexConversation{}, nil, nil, time.Time{}, "", auth.ErrNotFound
+			}
+		} else if sessionCreator == nil || *sessionCreator != principal.UserID || access.restricted {
 			return protocol.CodexConversation{}, nil, nil, time.Time{}, "", auth.ErrNotFound
 		}
 	}
@@ -128,7 +140,7 @@ func (s *Service) readProjectedConversation(ctx context.Context, access sourceAc
 	}
 	item.ReadOnly = true
 	item.CanEditTitle = boolPointer(false)
-	if item.BoundTaskID != nil && taskProjectID != nil && sourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && capabilityContains(capabilities, "thread/name/set") {
+	if item.SourceKind == protocol.CodexThreadSourceKindMain && item.BoundTaskID != nil && taskProjectID != nil && sourceState == string(protocol.CodexSourceStateOnline) && item.SourceStatus == protocol.CodexSourceStatusActive && item.HistoryState == protocol.CodexHistoryStateComplete && item.FilesComplete && capabilityContains(capabilities, "thread/name/set") {
 		allowed, authorizeErr := s.projects.CanWriteProject(ctx, principal, *taskProjectID)
 		if authorizeErr != nil {
 			return protocol.CodexConversation{}, authorizeErr

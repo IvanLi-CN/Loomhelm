@@ -1,11 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { LocalValidation, type ContractDecision, type ValidationEntry } from './local.js';
-import { loadSkills, requireSkill, type SkillScope } from './skills.js';
+import { LocalValidation, type ContractDecision, type ValidationEntry } from './local.ts';
+import { loadSkills, requireSkill, type SkillScope } from './skills.ts';
 
 async function main(): Promise<void> {
   const [command, path, user, ...extra] = process.argv.slice(2);
-  if (!path || extra.length || (command === 'local-verify' && user)) throw new Error('Usage: workflow/cli.js skills <project-skills-dir> [user-skills-dir] | local-verify <manifest.json>');
+  if (!path || extra.length || (command === 'local-verify' && user)) throw new Error('Usage: workflow/cli.ts skills <project-skills-dir> [user-skills-dir] | local-verify <manifest.json>');
   if (command === 'skills') {
     const catalog = await loadSkills({ project: resolve(path), ...(user ? { user: resolve(user) } : {}) });
     console.log(JSON.stringify(catalog));

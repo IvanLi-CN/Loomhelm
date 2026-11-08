@@ -38,6 +38,7 @@ async function build() {
   const child = Bun.spawn(
     [
       process.execPath,
+      "--no-install",
       "run",
       "scripts/build.ts",
       "--output",

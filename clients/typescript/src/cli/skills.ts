@@ -1,4 +1,4 @@
-import { SkillsRuntime } from '../toolkit.js';
+import { SkillsRuntime } from '../toolkit.ts';
 
 export async function runSkillsCommand(args: string[]): Promise<void> {
   const runtime = new SkillsRuntime();

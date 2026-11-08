@@ -1,9 +1,10 @@
-import { Info, LoaderCircle, MonitorCog, Send, ShieldCheck, WifiOff } from "lucide-react";
+import { History, Info, LoaderCircle, MonitorCog, Send, ShieldCheck, WifiOff } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { ApiClientError, type ResolveApprovalParams } from "@loomhelm/api-client";
-import type { Approval, ApprovalDecision, CommandState, CreateSessionRequest, Event, ModificationOrder, Run, Session, SessionPath } from "@loomhelm/protocol";
+import type { Approval, ApprovalDecision, CodexConversation, CommandState, CreateSessionRequest, Event, ModificationOrder, Run, Session, SessionPath } from "@loomhelm/protocol";
 
+import { useOptionalProductionApi } from "@/app/providers";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -23,6 +24,7 @@ import { SessionContextSummary } from "../sessions/SessionContextSummary";
 import { SessionClientAdapter } from "../sessions/session-client-adapter";
 import { SessionRunHistoryClientAdapter, type SessionRunHistoryReadReason } from "../sessions/session-run-history-adapter";
 import { canSendControl, type ConnectionAvailability } from "../sessions/session-model";
+import { codexRouteKey, findBoundCodexConversation, listAllCodexConversations } from "../codex/source";
 import {
   approvalContextFromApproval,
   applyApprovalResolutionEvents,
@@ -847,6 +849,7 @@ export function ProductionSessionCreationPanel({
 
 export interface ProductionConversationWorkspaceProps {
   api?: PublishedSessionApi;
+  boundCodexConversation?: CodexConversation;
   conversationTitle?: string;
   existingActiveSupported?: boolean;
   initialRunId?: string;
@@ -886,6 +889,7 @@ function sessionEventKey(event: Pick<Event, "event_id" | "run_id">): string {
 
 export function ProductionConversationWorkspace({
   api,
+  boundCodexConversation: initialBoundCodexConversation,
   conversationTitle,
   existingActiveSupported = false,
   initialRunId,
@@ -900,6 +904,7 @@ export function ProductionConversationWorkspace({
   sessionId,
   task
 }: ProductionConversationWorkspaceProps) {
+  const productionApi = useOptionalProductionApi();
   const draftClientId = useMemo(() => sessionId ? readStoredDraftClientId(principalId, sessionId) : undefined, [principalId, sessionId]);
   const adapters = useMemo(() => api ? {
     approval: new ApprovalClientAdapter(api),
@@ -927,6 +932,8 @@ export function ProductionConversationWorkspace({
   const [sessionRunHistoryFailure, setSessionRunHistoryFailure] = useState<string | null>(null);
   const [sessionMessageHistoryFailure, setSessionMessageHistoryFailure] = useState<string | null>(null);
   const [sessionRunHistory, setSessionRunHistory] = useState<readonly Run[]>([]);
+  const [boundCodexConversation, setBoundCodexConversation] = useState<CodexConversation | undefined>(initialBoundCodexConversation);
+  const [boundCodexLookupFailure, setBoundCodexLookupFailure] = useState<string | null>(null);
   const [run, setRun] = useState<Run | undefined>();
   const [commandState, setCommandState] = useState<CommandState | undefined>();
   const [messages, setMessages] = useState<readonly ConversationMessage[]>([]);
@@ -1004,6 +1011,28 @@ export function ProductionConversationWorkspace({
     : undefined);
   const taskSummary = mapTaskSummary(task);
   const context = sessionForRoute ? toSessionContextModel(sessionForRoute, { conversationTitle: currentConversationTitle, projectName: sessionProjectName, task: taskSummary }) : undefined;
+
+  useEffect(() => {
+    if (initialBoundCodexConversation) {
+      setBoundCodexConversation(initialBoundCodexConversation);
+      setBoundCodexLookupFailure(null);
+      return;
+    }
+    setBoundCodexConversation(undefined);
+    setBoundCodexLookupFailure(null);
+    if (!sessionId || productionApi?.auth.status !== "authenticated") return;
+    let cancelled = false;
+    void listAllCodexConversations(productionApi.client, { bound: true, include_archived: true })
+      .then((response) => {
+        if (!cancelled) setBoundCodexConversation(findBoundCodexConversation(response.items, sessionId));
+      })
+      .catch(() => {
+        if (!cancelled) setBoundCodexLookupFailure("原始 Codex 历史暂时无法核对；当前 Session 与已有消息仍保持可用。");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialBoundCodexConversation, productionApi?.auth.status, productionApi?.client, sessionId]);
   const activeApprovals = runIdentityVerified && activeRunId ? approvals.filter((approval) => approval.run_id === activeRunId) : [];
   const approvalHistoryBlocked = Boolean(activeRunId && !approvalHistoryAvailable);
   const runRouteUnverified = Boolean(initialRunId && (!activeRun || !runIdentityVerified));
@@ -2174,6 +2203,8 @@ export function ProductionConversationWorkspace({
   return (
     <section className="grid min-w-0 gap-5" aria-label="生产会话工作区">
       <SessionContextSummary connection={connection} context={context} />
+      {boundCodexConversation ? <div className="grid gap-2 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-soft)] p-3 text-xs leading-5" role="status"><span className="inline-flex items-center gap-1.5 font-semibold text-[var(--ink)]"><History className="size-3.5" aria-hidden="true" />Codex 原始历史</span><span className="text-[var(--muted)]">此 Session 保留已绑定 Codex 主对话的原始历史，不会创建重复会话。</span><a className="font-semibold text-[var(--accent)] underline-offset-2 hover:underline" href={`/conversations/${encodeURIComponent(codexRouteKey(boundCodexConversation.host_id, boundCodexConversation.thread_id))}`}>查看 Codex 原始历史</a></div> : null}
+      {boundCodexLookupFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--warning)]/30 bg-[var(--warning-bg)] p-3 text-xs leading-5 text-[var(--warning)]" role="status" aria-live="polite"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{boundCodexLookupFailure}</span></div> : null}
       {activityNotice ? <div className="flex flex-wrap items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1">{activityNotice}</span>{uncertainRunCommandId ? <Button type="button" variant="secondary" onClick={reconcileRunSubmission}>我已对账，复用命令重试</Button> : null}</div> : null}
       {readFailure ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--danger)]/30 bg-[var(--danger-bg)] p-3 text-xs leading-5 text-[var(--danger)]" role="alert" aria-live="assertive"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>{readFailure}</span></div> : null}
       {sessionRunHistoryLoading ? <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--surface-soft)] p-3 text-xs leading-5 text-[var(--muted)]" role="status" aria-live="polite" aria-busy="true"><LoaderCircle className="mt-0.5 size-4 shrink-0 animate-spin" aria-hidden="true" /><span>正在核对 Run 历史；核对完成前不会发送命令。</span></div> : null}
