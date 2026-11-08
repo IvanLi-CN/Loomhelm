@@ -1,0 +1,92 @@
+name: Explicit Go cache
+description: Bounded caches with one writer per purpose
+inputs:
+  purpose:
+    description: repository or candidate
+    required: true
+  operation:
+    description: restore or save
+    default: restore
+runs:
+  using: composite
+  steps:
+    - name: Resolve cache identity
+      if: inputs.operation == 'restore'
+      shell: bash
+      env:
+        PURPOSE: ${{ inputs.purpose }}
+        SOURCE_HASH: ${{ hashFiles('**/*.go', 'go.mod', 'go.sum', 'scripts/**', 'tools/release/**', '.github/actions/go-cache/**') }}
+      run: |
+        set -euo pipefail
+        case "$PURPOSE" in repository|candidate) ;; *) exit 1 ;; esac
+        prefix="loomhelm-go-v2-${RUNNER_OS}-${RUNNER_ARCH}-$(go env GOVERSION)"
+        {
+          echo "GO_MODULE_CACHE=$(go env GOMODCACHE)"
+          echo "GO_BUILD_CACHE=$(go env GOCACHE)"
+          echo "GO_MODULE_KEY=$prefix-modules-$(python3 -c 'import hashlib; print(hashlib.sha256(open("go.sum", "rb").read()).hexdigest())')"
+          echo "GO_BUILD_PREFIX=$prefix-build-$PURPOSE-"
+          echo "GO_BUILD_KEY=$prefix-build-$PURPOSE-$SOURCE_HASH"
+        } >> "$GITHUB_ENV"
+    - name: Restore modules
+      if: inputs.operation == 'restore'
+      id: modules
+      continue-on-error: true
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ env.GO_MODULE_CACHE }}
+        key: ${{ env.GO_MODULE_KEY }}
+    - name: Restore build inputs
+      if: inputs.operation == 'restore'
+      id: build
+      continue-on-error: true
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ env.GO_BUILD_CACHE }}
+        key: ${{ env.GO_BUILD_KEY }}
+        restore-keys: ${{ env.GO_BUILD_PREFIX }}
+    - name: Report restores
+      if: inputs.operation == 'restore'
+      shell: bash
+      env:
+        MODULE_HIT: ${{ steps.modules.outputs.cache-hit }}
+        BUILD_HIT: ${{ steps.build.outputs.cache-hit }}
+        BUILD_MATCH: ${{ steps.build.outputs.cache-matched-key }}
+      run: |
+        echo "Go modules hit=$MODULE_HIT key=$GO_MODULE_KEY"
+        echo "Go build hit=$BUILD_HIT matched=$BUILD_MATCH requested=$GO_BUILD_KEY"
+    - name: Measure cache sizes
+      if: inputs.operation == 'save'
+      id: sizes
+      shell: bash
+      run: |
+        python3 - <<'PYTHON'
+        import os
+        from pathlib import Path
+        for name, limit in (("MODULE", 500 * 1024**2), ("BUILD", 1024**3)):
+            root = Path(os.environ[f"GO_{name}_CACHE"])
+            size = sum(p.stat().st_size for p in root.rglob("*") if p.is_file() and not p.is_symlink())
+            print(f"Go {name} cache bytes={size} limit={limit}")
+            with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                output.write(f"{name.lower()}={str(0 < size <= limit).lower()}\n")
+        PYTHON
+    - name: Save dependency cache from repository writer
+      if: >-
+        inputs.operation == 'save' && inputs.purpose == 'repository' && success() &&
+        steps.sizes.outputs.module == 'true' &&
+        (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
+      continue-on-error: true
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ env.GO_MODULE_CACHE }}
+        key: ${{ env.GO_MODULE_KEY }}
+    - name: Save purpose build cache
+      if: >-
+        inputs.operation == 'save' && success() && steps.sizes.outputs.build == 'true' &&
+        (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
+      continue-on-error: true
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ env.GO_BUILD_CACHE }}
+        key: ${{ env.GO_BUILD_KEY }}
