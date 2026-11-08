@@ -101,3 +101,43 @@ test("ordinary startup rejects the legacy plist before calling launchctl", async
   writeFileSync(join(state.paths.config, "viewer.plist"), '<key>Label</key><string>cn.ivan.multi-task-flow.viewer</string>');
   expect(() => startUserService(state)).toThrow("explicit upgrade");
 });
+
+test.skipIf(process.platform !== "darwin" || process.env.GITHUB_ACTIONS !== "true" || !process.env.LOOMHELM_VIEWER_LABEL_BEFORE || !process.env.LOOMHELM_VIEWER_LABEL_AFTER)("native launchd label transition preserves port and retires legacy registration", async () => {
+  const { installRelease, switchRelease } = await import("../scripts/service-maintenance");
+  const { writeLaunchdDefinition, startUserService, unloadUserService, launchdDomain, launchctl } = await import("../scripts/service-launchd");
+  const { serviceStatus } = await import("../scripts/service-lifecycle");
+  const { processAlive } = await import("../../bin/modules/workspace/port_registry");
+  const state = fixture();
+  // Cleanup must wait for the actual launchd child, not just test completion.
+  roots.splice(roots.indexOf(state.paths.root), 1);
+  const legacyLabel = state.paths.label.replace("cc.ivanli.loomhelm.multi-task-flow.viewer", "cn.ivan.multi-task-flow.viewer");
+  const legacyState = new ServiceState({ ...state.paths, label: legacyLabel });
+  const domain = launchdDomain();
+  try {
+    const installed = await installRelease(state, process.env.LOOMHELM_VIEWER_LABEL_BEFORE!);
+    state.renew({ id: "native-label", kind: "agent", run_id: null, thread_id: null }, 180_000);
+    // Reproduce the legacy registration independently of program build identity.
+    writeLaunchdDefinition(legacyState);
+    startUserService(legacyState);
+    let healthy = false;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      try { await serviceStatus(state); healthy = true; break; } catch { await Bun.sleep(100); }
+    }
+    expect(healthy).toBe(true);
+    const previousPid = state.runtime().pid;
+    expect(launchctl(["print", `${domain}/${legacyLabel}`], true)).toBe(true);
+    await switchRelease(state, process.env.LOOMHELM_VIEWER_LABEL_AFTER!);
+    await serviceStatus(state);
+    expect(state.config().port).toBe(installed.port);
+    expect(state.config().current_build).not.toBe(installed.build_id);
+    expect(state.runtime().pid).not.toBe(previousPid);
+    expect(launchctl(["print", `${domain}/${legacyLabel}`], true)).toBe(false);
+    expect(launchctl(["print", `${domain}/${state.paths.label}`], true)).toBe(true);
+  } finally {
+    const pid = state.runtime().pid;
+    unloadUserService(state);
+    for (let attempt = 0; pid && processAlive(pid) && attempt < 200; attempt++) await Bun.sleep(100);
+    if (pid && processAlive(pid)) throw new Error(`Isolated viewer did not stop; retained ${state.paths.root}`);
+    rmSync(state.paths.root, { recursive: true, force: true });
+  }
+}, 120_000);

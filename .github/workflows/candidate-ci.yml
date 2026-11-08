@@ -251,6 +251,15 @@ jobs:
           bun skills/scripts/test-skills-native.ts
           bun test ./skills/bin/native-tests/core ./skills/bin/native-tests/visual
 
+      - name: Verify isolated viewer label upgrade
+        timeout-minutes: 5
+        run: |
+          bun install --cwd skills/multi-task-flow --frozen-lockfile --ignore-scripts --backend=copy
+          bun run --cwd skills/multi-task-flow build
+          bun skills/multi-task-flow/scripts/build-service.ts --output "$RUNNER_TEMP/viewer-label-before" --service-version 0.0.0-ci
+          bun skills/multi-task-flow/scripts/build-service.ts --output "$RUNNER_TEMP/viewer-label-after" --service-version 0.0.1-ci
+          LOOMHELM_VIEWER_LABEL_BEFORE="$RUNNER_TEMP/viewer-label-before" LOOMHELM_VIEWER_LABEL_AFTER="$RUNNER_TEMP/viewer-label-after" bun test ./skills/multi-task-flow/tests/service-contract.test.ts --test-name-pattern 'native launchd label transition'
+
   candidate-producer:
     name: Candidate Producer
     needs: quality-gates
