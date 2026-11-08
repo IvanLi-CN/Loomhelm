@@ -11,7 +11,18 @@ export const loginPage = viewerPage(
   '<p id="status" role="status">正在验证一次性登录入口。</p>',
   "/login.js",
 );
-export const loginScript = `const ticket=location.hash.slice(1);history.replaceState(null,"","/login");fetch("/api/v1/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ticket})}).then(async r=>{if(!r.ok)throw Error();const v=await r.json();location.replace(v.target)}).catch(()=>{document.getElementById("status").textContent="入口已过期或已使用。请通过 service login 重新获取。"});`;
+export function pendingTaskTarget(value: string | null, origin: string): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value, origin);
+    if (url.origin !== origin || url.username || url.password || !/^\/runs\/[A-Za-z0-9_-]+\/$/.test(url.pathname)) return null;
+    const selected = url.searchParams.get("selected");
+    if (!selected || !/^task:[A-Za-z0-9_-]{1,128}$/.test(selected)) return null;
+    return url.pathname + "?" + new URLSearchParams({ selected, detail: "1" });
+  } catch { return null; }
+}
+export const resumeTaskScript = `const pendingTaskTarget=${pendingTaskTarget.toString()};try{const target=pendingTaskTarget(location.href,location.origin);if(target)sessionStorage.setItem("multi-task-flow.pending-task",target)}catch{}`;
+export const loginScript = `const ticket=location.hash.slice(1);history.replaceState(null,"","/login");fetch("/api/v1/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ticket})}).then(async r=>{if(!r.ok)throw Error();const v=await r.json();let target=null;try{const pending=sessionStorage.getItem("multi-task-flow.pending-task");target=(${pendingTaskTarget.toString()})(pending,location.origin);sessionStorage.removeItem("multi-task-flow.pending-task")}catch{}location.replace(target||v.target)}).catch(()=>{document.getElementById("status").textContent="入口已过期或已使用。请通过 service login 重新获取。"});`;
 export const homePage = viewerPage(
   "编排运行",
   '<p id="status" role="status">正在读取运行。</p><ul id="runs"></ul><button id="more" hidden>加载更多</button><p><small id="build"></small></p>',

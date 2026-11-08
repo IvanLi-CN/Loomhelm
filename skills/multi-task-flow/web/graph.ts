@@ -73,6 +73,7 @@ export function renderAccessibleNodes(projection: GraphProjection, context: Grap
     button.type = "button";
     button.className = "graph-a11y-node";
     button.dataset.graphNodeId = node.id;
+    if (node.nodeKind === "task" && node.refId) button.dataset.contextTask = node.refId;
     button.setAttribute("aria-pressed", "false");
     button.setAttribute("aria-label", accessibleNodeLabel(node, projection));
     button.textContent = `${node.title}${node.stateLabel ? ` · ${node.stateLabel}` : ""}`;

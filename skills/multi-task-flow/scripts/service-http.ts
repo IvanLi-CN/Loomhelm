@@ -19,6 +19,7 @@ import {
   homeScript,
   loginPage,
   loginScript,
+  resumeTaskScript,
   viewerPage,
   runClientScript,
 } from "./service-pages";
@@ -192,13 +193,15 @@ export async function startSharedViewer(
             "Set-Cookie": session.cookie,
           });
         }
+        if (request.method === "GET" && url.pathname === "/resume-task.js") return script(resumeTaskScript);
         const actor = auth.authorize(request);
         if (!actor)
           return request.method === "GET" && !url.pathname.startsWith("/api/")
             ? html(
                 viewerPage(
                   "需要连接本地展示服务",
-                  "<p>请通过 service login 获取一次性登录入口，再打开此运行链接。</p>",
+                  "<p>请通过 service login 获取一次性登录入口；登录后将恢复任务定位。若在其他标签页登录，请返回此页刷新。</p>",
+                  "/resume-task.js",
                 ),
                 401,
               )
