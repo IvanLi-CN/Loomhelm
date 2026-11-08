@@ -20,7 +20,6 @@ export function renderTaskOutput(value: string | null | undefined, projection?: 
   const output = text("p", value?.trim() ?? "", "task-card-output");
   const content = value?.trim();
   if (content) {
-    output.dataset.tooltip = `最新 Agent 输出：${content}`;
     output.setAttribute("aria-label", `最新 Agent 输出：${content}`);
   } else {
     output.classList.add("is-empty");

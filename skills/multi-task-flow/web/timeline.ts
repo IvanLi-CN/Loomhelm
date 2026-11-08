@@ -22,6 +22,7 @@ type TimelineContext = {
   hideHoverPreview: () => void;
   recordPointerType: (pointerType: string | null) => void;
   selectTask: (id: string) => void;
+  taskContextMenu?: (event: MouseEvent, id: string, target: HTMLElement) => void;
 };
 
 function text(tag: string, value: string): HTMLElement {
@@ -34,6 +35,10 @@ function pointerTypeFromEvent(event: unknown): "mouse" | "touch" | "pen" | null 
   if (!event || typeof event !== "object") return null;
   const value = (event as { pointerType?: unknown }).pointerType;
   return value === "mouse" || value === "touch" || value === "pen" ? value : null;
+}
+
+function taskLabel(label: string, id: string): HTMLElement {
+  const element = text("span", label); element.dataset.contextTask = id; element.tabIndex = 0; return element;
 }
 
 export function createTimelineController(context: TimelineContext) {
@@ -171,7 +176,7 @@ export function createTimelineController(context: TimelineContext) {
     target.replaceChildren();
     const includedTasks = new Set(tasks.map((task) => task.id));
     const nodes = data.nodes.filter((node) => node.kind !== "task" || !!node.ref_id && includedTasks.has(node.ref_id));
-    const groups = new DataSet(nodes.map((node, index) => ({ id: node.id, content: node.label, order: index })));
+    const groups = new DataSet(nodes.map((node, index) => ({ id: node.id, content: node.kind === "task" && node.ref_id ? taskLabel(node.label, node.ref_id) : text("span", node.label), order: index })));
     const entries: any[] = [];
     const entryTasks = new Map<string, string>();
     const unknown: string[] = [];
@@ -200,6 +205,11 @@ export function createTimelineController(context: TimelineContext) {
     bindWheel(target, timeline, mode);
     bindPan(target, timeline, mode, renderSerial);
     window.requestAnimationFrame(() => { const currentTimeline = mode === "planned" ? plannedTimeline : actualTimeline; const currentSerial = mode === "planned" ? plannedRenderSerial : actualRenderSerial; if (renderSerial !== currentSerial || currentTimeline !== timeline) return; timeline.redraw(); const root = target.querySelector<HTMLElement>(".vis-timeline"); if (root) root.style.visibility = "visible"; const loadingScreen = target.querySelector<HTMLElement>(".vis-loading-screen"); if (loadingScreen) { loadingScreen.hidden = true; loadingScreen.setAttribute("aria-hidden", "true"); } bindPan(target, timeline, mode, renderSerial); });
+    target.oncontextmenu = (event) => {
+      const properties = timeline.getEventProperties(event);
+      const id = nodes.find(node => node.id === String(properties.group) && node.kind === "task")?.ref_id;
+      if (id) context.taskContextMenu?.(event, id, target);
+    };
     timeline.on("select", (event: { items: string[] }) => { const id = entryTasks.get(String(event.items[0] ?? "")); if (id) context.selectTask(id); });
     timeline.on("itemover", (event: { item: string; event?: MouseEvent }) => { const id = entryTasks.get(event.item); const task = id ? data.tasks.find((item) => item.id === id) : null; if (!task) return; context.recordPointerType(pointerTypeFromEvent(event.event)); const item = target.querySelector<HTMLElement>(`.vis-item[data-id="${CSS.escape(event.item)}"]`); const anchor = item ?? (event.event ? { x: event.event.clientX, y: event.event.clientY } : target); context.showHoverPreview(context.taskPreview(task), anchor); });
     timeline.on("itemout", context.hideHoverPreview);

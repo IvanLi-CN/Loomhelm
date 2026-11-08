@@ -71,7 +71,6 @@ function iconLink(label: string, iconName: string, url: string, external = false
   const anchor = document.createElement("a");
   anchor.className = "resource-action icon-button";
   anchor.href = url;
-  anchor.dataset.tooltip = label;
   anchor.setAttribute("aria-label", label);
   if (external) anchor.rel = "noopener noreferrer";
   const icon = document.createElement("i");
@@ -88,7 +87,6 @@ function iconAction(label: string, iconName: string, url: string | null, externa
   button.type = "button";
   button.className = "resource-action icon-button";
   button.setAttribute("aria-disabled", "true");
-  button.dataset.tooltip = label;
   button.setAttribute("aria-label", label);
   const icon = document.createElement("i");
   icon.dataset.lucide = iconName;
@@ -125,6 +123,7 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   const card = document.createElement("article");
   card.className = "task-card";
   card.dataset.taskId = task.id;
+  card.dataset.contextTask = task.id;
   card.setAttribute("role", "listitem");
   card.setAttribute("aria-current", String(context.getSelectedTask() === task.id));
   const head = text("div", "", "task-card-head");
@@ -134,7 +133,6 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   select.setAttribute("aria-label", selectionAriaLabel("任务", task.title, task.is_ready && task.state === "planned" ? "ready" : task.state, context.labels));
   select.setAttribute("aria-pressed", String(context.getSelectedTask() === task.id));
   select.append(statusIcon(task.state, task.is_ready), text("span", task.title, "task-card-title"));
-  (select.lastElementChild as HTMLElement).dataset.tooltip = task.title;
   select.addEventListener("click", (event) => { event.stopPropagation(); if (event.detail === 0) context.setKeyboardSelection(); context.selectTask(task.id); });
   head.append(select);
   const actions = text("div", "", "task-card-actions");
@@ -169,7 +167,6 @@ function groupCard(group: Group, context: CardContext): HTMLElement {
   select.setAttribute("aria-label", selectionAriaLabel("交付单元", group.title, visualState, context.labels));
   select.setAttribute("aria-pressed", String(context.getSelectedGroup() === group.id));
   select.append(statusIcon(visualState), text("span", group.title, "task-card-title"));
-  (select.lastElementChild as HTMLElement).dataset.tooltip = group.title;
   select.addEventListener("click", (event) => { event.stopPropagation(); if (event.detail === 0) context.setKeyboardSelection(); context.selectGroup(group.id); });
   head.append(select);
   const actions = text("div", "", "task-card-actions");
@@ -221,7 +218,6 @@ export function createCardRenderer(context: CardContext): { renderList: (tasks: 
       const pr = context.safeExternal(group.parent_pr?.url ?? null);
       actions.append(iconAction(pr ? "打开交付单元 PR" : "交付单元 PR 尚未创建", "git-pull-request", pr, true));
       const progress = text("span", groupAtomProgress(group), "task-column-count");
-      progress.dataset.tooltip = groupAtomProgress(group);
       const meta = text("div", "", "task-card-meta task-column-time");
       meta.append(durationValue(group.started_at ?? null, group.finished_at ?? null));
       resources(actions, meta, "group", group.id, context);
