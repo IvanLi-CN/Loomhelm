@@ -128,3 +128,5 @@
 ## Viewer 服务身份
 
 正式 launchd label 使用 `cc.ivanli.loomhelm.multi-task-flow.viewer`，隔离 profile 继续使用根目录派生的后缀。显式升级卸载对应 profile 的新旧 label 并写入新定义；普通启动遇到旧定义时要求使用新 bundle 的维护 CLI 升级。数据根、端口 scope 和凭据身份保持不变。
+
+Viewer 使用 launchd `Interactive` 分类，避免完整资源校验受 `Background` I/O 限流而无法在既有升级健康检查窗口内完成；完整性校验、健康检查时限和租约退出规则保持原有合同。

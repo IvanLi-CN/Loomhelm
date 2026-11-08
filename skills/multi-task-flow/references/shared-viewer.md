@@ -50,3 +50,5 @@ Re-running the exact command is idempotent. A prepared journal after source seal
 `viewer.jsonl` 中 `stopping` 记录关闭入口，`stopped` 记录完成；`stop_started_at` 和 `stop_completed_at` 分别表示两个阶段。原因区分 `SIGTERM`、`SIGINT`、`leases_expired`、`lease_state_error`、`registry_heartbeat_error`、`startup_error` 和 `requested`。旧构建的 `signal` 也可能来自内部异常，不能据此推断 OS 信号或发送者。注册表锁超时以固定错误码 `REGISTRY_LOCK_TIMEOUT` 记录：前两次失败保留监听，第三次关闭；成功心跳产生恢复事件并清零。其他未知错误及所有权变化立即关闭。日志不输出异常消息、路径或凭据，诊断写入失败只输出固定提示。
 
 服务 label 从 `cn.ivan.multi-task-flow.viewer` 改为 `cc.ivanli.loomhelm.multi-task-flow.viewer`；隔离实例保留原有 profile 后缀。已有安装使用新 bundle 的维护 CLI 执行显式 `upgrade`，卸载当前 profile 的新旧 label，再生成新 plist 并启动。普通 `ensure` 遇到旧 plist 时要求升级，不自动迁移。数据根目录、端口 registry scope、凭据和运行账本保持原位。
+
+展示服务使用 launchd 的 `Interactive` 进程分类：它直接响应用户的 HTTP 操作，不使用 XPC 活动驱动的 `Adaptive` 分类。`Background` 的 I/O 限流会拖慢完整资源校验，导致升级健康检查超时；分类调整不跳过校验、不延长超时，也不改变租约退出规则。
