@@ -25,7 +25,8 @@
     "Product Package (macos-15)"
   ],
   "informational_checks": [
-    "Candidate Reproducibility"
+    "Candidate Reproducibility",
+    "Skills Native macOS"
   ],
   "waivers": [],
   "expected_pr_workflows": [
