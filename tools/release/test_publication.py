@@ -47,6 +47,18 @@ def frozen():
 
 
 class PublicationTests(unittest.TestCase):
+    def test_unclaimed_bound_publication_stops_before_inventory_or_provider_writes(self):
+        from unittest.mock import patch
+        for source in (None,{}, {'run_id':'101'}, {'run_id':'101','attempt':'invalid'}):
+            record = dict(frozen(),state='bound')
+            if source is not None:record['build_source']=source
+            api=Provider();ledger=MemoryLedger(record)
+            with self.subTest(source=source), patch('product.inventory') as inspect, self.assertRaises(ReleaseError):
+                publish(api,ledger,record,Path('/missing'))
+            inspect.assert_not_called()
+            self.assertEqual(record['state'],'bound')
+            self.assertEqual((api.uploads,api.publications),(0,0))
+
     def test_lost_upload_response_recovers_same_identity(self):
         r=frozen();api=Provider();api.fail_upload=True;ledger=MemoryLedger(r);identity=copy.deepcopy(r)
         with tempfile.TemporaryDirectory() as tmp:
@@ -79,7 +91,7 @@ class PublicationTests(unittest.TestCase):
 
     def test_partial_upload_is_staged_until_all_originals_are_durable(self):
         from unittest.mock import patch
-        record=frozen();record['state']='bound';record['artifacts']={}
+        record=frozen();record['state']='bound';record['artifacts']={};record['build_source']={'run_id':'101','attempt':'1'}
         api=Provider();api.fail_upload=True;ledger=MemoryLedger(record)
         with tempfile.TemporaryDirectory() as tmp, patch('product.inventory',return_value={'package':hashlib.sha256(b'original').hexdigest()}):
             directory=Path(tmp);(directory/'package').write_bytes(b'original')

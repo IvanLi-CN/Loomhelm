@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Implementation: 已实现统一合同与验证入口，正在进行当前 Candidate 的平台验证及 PR 收敛。尚未运行真实发布、通知或生产部署；不能宣称已完成真实首发验收。
+Implementation: 统一合同及原生包验证入口已由 PR #77 合并，合并提交 c45218ad238ef4f56621f832fcfb086bb2bc679e 的主干 CI 已通过。后续修正使用现有认证、GitHub 原生签名提交和 main 保护审计；当前 follow-up 仍需其自身的 CI 与正式审查。真实首发、通知及恢复尚未验收。
 
 ## Implementation Coverage
 
@@ -16,6 +16,8 @@ Implementation: 已实现统一合同与验证入口，正在进行当前 Candid
 | REQ-MVR-007 | Go/Web/TS 门禁、426 失败、不可变 build identity、Web 受控错误及 TS Local mode 独立；Go 和 TS 覆盖测试 |
 | REQ-MVR-008、011 | Go 独立版本旁路关闭，保留其实现与统一包；可信默认分支通知 sidecar 与身份 Issue 对账 |
 
+缺失 ledger 时只将包含完整正式版或预发布版本及身份后缀的准备分支视为发布历史，普通开发分支不会阻断首发。正式发布从 bound 进入 staged 前必须已有持久构建 claim，manifest 的 run 与 attempt 必须与该来源一致；缺失或不符在上传前拒绝。
+
 ## Verification
 
 - `python3 -m unittest discover -s tools/release -p 'test_*.py'`
@@ -28,11 +30,11 @@ Implementation: 已实现统一合同与验证入口，正在进行当前 Candid
 
 ## Remaining Gaps
 
-平台只读核验时，Release App／签名变量和 secret 名称列表为空，main required checks 已在 owner 单独授权后追加本次三项，保留原八项、strict 与其余保护；追加前已观察三项检查全部通过。真实发布需 owner 配置签名、App、ledger 与 tag 保护。平台漂移不是可忽略的 waiver，不因代码检查通过而推断已对齐。
+main 已有原生分支保护，required checks 共十一项，strict、签名及管理员保护有效。此前只检查 Rulesets 导致的误判已修正。额外 App、发布私钥和强制 Rulesets 不再是前置条件，不能把不采用这些方案记为配置缺失。
 
-A6 等待真实 Merge Receipt、owner 首发 target 和授权后执行。没有完整统一产品 baseline 时，必须输入完整版本；本次未选择首发版本。
+仓库当前禁止 Actions 创建 PR；保持该设置，版本准备分支由工作流创建，普通 PR 由 owner 或已获授权的 agent 用现有 gh 身份打开。内置令牌不能读取管理员级保护详情；CI 只验证可见 protected 与 required contexts，完整配置由 owner 现有 gh 审计并保留证据。发布运行另外拒绝无精确 main 合并 PR、无签名或检查不通过的真实源码。写权限与平台签名的真实行为必须在授权发布时观察；PR fixtures 不能证明真实发布成功。
 
-本机 bootstrap 检出 Go 补丁版本和 sqlc 前置差异；定向 Go 验证使用声明的 go1.27.2，Linux/镜像及数据库验证由 Actions 承担。Markdown 固定工具已恢复；真实程序截图仍受逐次授权约束。
+A6 已有真实 Merge Receipt；owner 已将真实首发纳入后续执行，但完整版本目标与明确发布授权仍待提供，不自动选择 patch 或完整版本。GitHub API 返回不可见或无权限时，记录 unknown，而非宣称资源不存在。
 
 ## Compatibility
 

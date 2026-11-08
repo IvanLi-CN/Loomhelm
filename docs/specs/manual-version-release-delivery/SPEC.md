@@ -24,7 +24,7 @@
 
 ### REQ-MVR-004：受保护源码与质量门禁
 
-发布源码 MUST 经过受保护 PR、verified commit、适用 review 与 required checks，并验证 exact-head merge；工作流 MUST NOT 直接写 main。reservation、Release、Deploy 边界 MUST 重验权威源码、权限、policy、产物和目标身份；缺失证明 MUST fail closed。仓库质量声明与平台规则 MUST 对齐。
+发布源码 MUST 经过受保护 PR、verified commit、适用 review 与 required checks，并验证 exact-head merge；工作流 MUST NOT 直接写 main。reservation、Release、Deploy 边界 MUST 重验权威源码、权限、policy、产物和目标身份；缺失证明 MUST fail closed。仓库质量声明与平台规则 MUST 对齐。MUST 识别项目现有的原生分支保护，不得把采用特定 Rulesets 或新增 App、私钥作为额外强制条件；发布自动化复用现有认证，版本准备仍经过普通 PR。
 
 ### REQ-MVR-005：不可变产物与共同完成
 
@@ -125,7 +125,7 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 ## Related ADRs
 
 - [不可变候选与蓝绿](../../adr/0002-immutable-candidates-and-blue-green.md)
-- [统一产品版本与可恢复发布身份](../../adr/0022-unified-manual-product-release.md)
+- [现有认证与平台签名](../../adr/0023-native-release-authentication.md)
 
 ## References
 

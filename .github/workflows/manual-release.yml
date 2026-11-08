@@ -13,10 +13,13 @@ concurrency:
   cancel-in-progress: false
 jobs:
   prepare:
+    permissions:
+      contents: write
+      pull-requests: read
+      checks: read
     runs-on: ubuntu-24.04
     env:
-      RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
-      RELEASE_SIGNING_KEY_ID: ${{ vars.RELEASE_GPG_KEY_ID }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Require protected main
         run: test "$GITHUB_REF" = refs/heads/main
@@ -25,40 +28,12 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
-        id: app
-        with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          permission-actions: read
-          permission-checks: read
-          permission-administration: read
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-      - name: Configure ephemeral release signing
-        env:
-          SIGNING_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
-          APP_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          printf 'GH_TOKEN=%s\n' "$APP_TOKEN" >> "$GITHUB_ENV"
-          test -n "$SIGNING_KEY"
-          printf '%s' "$SIGNING_KEY" | gpg --batch --import
-          git config user.name 'Loomhelm Release'
-          git config user.email '${{ vars.RELEASE_SIGNING_EMAIL }}'
-          git config gpg.format openpgp
-      - name: Configure bound App Git transport
-        env:
-          APP_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          auth=$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)
-          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
       - name: Reserve owner intent
         env:
           TARGET: ${{ inputs.release_target }}
         run: |
           scripts/product-release reserve --target "$TARGET" --source-sha "$GITHUB_SHA" > "$RUNNER_TEMP/identity.json"
-      - name: Create protected preparation PR
+      - name: Prepare version branch for the normal owner PR
         run: |
           identity=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/identity.json"))["id"])')
           scripts/product-release prepare --identity "$identity"

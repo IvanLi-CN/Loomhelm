@@ -85,18 +85,6 @@ class BoundaryTests(unittest.TestCase):
             with self.assertRaises(ReleaseError):
                 reserve({previous['id']: previous}, target, 'b'*40, 'policy', 'owner', '1.0.0')
 
-    def test_signed_ledger_without_writer_restriction_fails_closed(self):
-        api = Mock()
-        tag = dict(id=1, target='tag', enforcement='active', conditions={'ref_name': {'include': ['refs/tags/v*'], 'exclude': []}}, rules=[{'type': 'update'}, {'type': 'deletion'}])
-        def read(path):
-            if path.startswith('rules/branches/'):
-                return [{'type': t} for t in ('required_signatures', 'non_fast_forward', 'deletion', 'pull_request')]
-            return [tag] if path.startswith('rulesets?') else tag
-        api.api = read
-        with patch.dict(os.environ, {'RELEASE_SIGNING_KEY_ID': 'A'*40, 'RELEASE_APP_ID': '123'}), self.assertRaises(ReleaseError):
-            prerequisites(api)
-
-
     def test_original_build_claim_survives_rerun_and_missing_originals(self):
         record = dict(frozen(), state='bound')
         shared = {'revision': 0, 'state': {'releases': {record['id']: record}}}
@@ -145,6 +133,24 @@ class BoundaryTests(unittest.TestCase):
             with patch('product.ROOT', root):
                 self.assertNotEqual(policy_hash(), before)
 
+    def test_inventory_rejects_a_different_build_run_or_attempt(self):
+        from assemble import assemble
+        from product import inventory
+        record = dict(frozen(),state='bound',build_source={'run_id':'101','attempt':'1'})
+        record['intent']['policy_hash'] = policy_hash()
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for name in contract()['artifacts']:
+                (directory/name).write_bytes(('original:'+name).encode())
+            assemble(directory,record)
+            path = directory/'release-manifest.json'
+            original = json.loads(path.read_text())
+            for field,value in (('build_run_id','102'),('build_attempt','2')):
+                manifest = dict(original,**{field:value})
+                path.write_text(json.dumps(manifest))
+                with self.subTest(field=field), self.assertRaisesRegex(ReleaseError,'original build claim'):
+                    inventory(directory,record)
+
     def test_stage_receipt_is_immutable_and_does_not_follow_symlinks(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'receipt'
@@ -159,22 +165,3 @@ class BoundaryTests(unittest.TestCase):
             with self.assertRaises(ReleaseError):
                 persist_receipt(link, {'status': 'imported'})
             self.assertEqual(path.read_bytes(), before)
-
-    def test_only_declared_app_can_write_ledger_without_bypassing_immutability(self):
-        def ruleset(identifier, target, names, rules, actors):
-            return dict(id=identifier,target=target,enforcement='active',conditions={'ref_name': {'include': names, 'exclude': []}},rules=[{'type': r} for r in rules],bypass_actors=actors)
-        app = {'actor_type': 'Integration', 'actor_id': 123, 'bypass_mode': 'always'}
-        rules = [ruleset(1,'branch',['refs/heads/release-ledger'],['creation','update'],[app]),ruleset(2,'branch',['refs/heads/release-ledger'],['required_signatures','non_fast_forward','deletion'],[]),ruleset(3,'tag',['refs/tags/v*'],['update','deletion'],[])]
-        api = Mock()
-        def read(path):
-            if path.startswith('rules/branches/'):
-                return [{'type': t} for t in ('required_signatures','non_fast_forward','deletion','pull_request')]
-            return rules if path.startswith('rulesets?') else next(r for r in rules if str(r['id']) == path.split('/')[-1])
-        api.api = read
-        with patch.dict(os.environ, {'RELEASE_SIGNING_KEY_ID': 'A'*40, 'RELEASE_APP_ID': '123'}):
-            prerequisites(api)
-            rules[0]['bypass_actors'].append({'actor_type': 'OrganizationAdmin', 'actor_id': 1, 'bypass_mode': 'always'})
-            with self.assertRaises(ReleaseError): prerequisites(api)
-            rules[0]['bypass_actors'] = [app]
-            del rules[2]['bypass_actors']
-            with self.assertRaises(ReleaseError): prerequisites(api)

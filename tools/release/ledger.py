@@ -19,10 +19,13 @@ def git(*args, data=None, env=None, check=True):
 class Ledger:
     ref = 'refs/heads/release-ledger'
 
-    def __init__(self, remote='origin', signed=True):
+    def __init__(self, remote='origin', signed=True, api=None):
         if remote != 'origin':
             raise ReleaseError('ledger must use the bound origin remote')
-        self.remote, self.signed = remote, signed
+        self.remote, self.signed, self.api = remote, signed, api
+        if signed and api is None:
+            from github import GitHub
+            self.api = GitHub(os.environ.get('GITHUB_REPOSITORY'))
         self.head = None
         self.state = {'schema_version': 1, 'releases': {}}
         self.original = copy.deepcopy(self.state)
@@ -35,23 +38,42 @@ class Ledger:
         if self.head:
             git('fetch', '--no-tags', self.remote, self.ref)
             if self.signed:
-                expected = os.environ.get('RELEASE_SIGNING_KEY_ID','').upper()
-                if not re.fullmatch('[0-9A-F]{40}',expected):
-                    raise ReleaseError('trusted full GPG primary fingerprint is required')
-                for sha in git('rev-list', self.head).stdout.decode().split():
-                    git('verify-commit', sha)
-                    if git('show','-s','--format=%GP',sha).stdout.decode().strip().upper() != expected:
-                        raise ReleaseError('ledger commit signer is not the authorized release key')
-            self.state = json.loads(git('show', f'{self.head}:ledger.json').stdout)
+                history = []
+                for sha in git('rev-list','--first-parent',self.head).stdout.decode().split():
+                    if git('cat-file','-e',f'{sha}:ledger.json',check=False).returncode:
+                        self.api.verify_seed(sha)
+                        break
+                    self.api.verify_record_commit(sha)
+                    history.append(json.loads(git('show',f'{sha}:ledger.json').stdout))
+                    parents = git('rev-list','--parents','-n','1',sha).stdout.decode().split()[1:]
+                    if len(parents) > 1:
+                        raise ReleaseError('ledger history must be linear')
+                    changed = (git('diff','--name-only',parents[0],sha) if parents else git('ls-tree','--name-only',sha)).stdout.decode().splitlines()
+                    if changed != ['ledger.json']:
+                        raise ReleaseError('ledger commit changes files outside the release record')
+                previous = {'schema_version':1,'releases':{}}
+                for snapshot in reversed(history):
+                    self.validate(snapshot,previous)
+                    previous = snapshot
+            content = git('show',f'{self.head}:ledger.json',check=False)
+            if content.returncode:
+                if not self.signed:
+                    raise ReleaseError('ledger content missing')
+                self.api.verify_seed(self.head)
+                self.api.require_empty_release_history()
+            else:
+                self.state = json.loads(content.stdout)
             if self.state.get('schema_version') != 1:
                 raise ReleaseError('unsupported ledger schema')
+        elif self.signed:
+            self.api.require_empty_release_history()
         self.original = copy.deepcopy(self.state)
         return self.state
 
-    def append(self, state):
+    def validate(self, state, previous=None):
         if state.get('schema_version') != 1:
             raise ReleaseError('unsupported ledger schema')
-        for identity, old in self.original['releases'].items():
+        for identity, old in (self.original if previous is None else previous)['releases'].items():
             new = state['releases'].get(identity)
             if new is None or new['events'][:len(old['events'])] != old['events']:
                 raise ReleaseError('ledger history cannot be removed or rewritten')
@@ -63,6 +85,21 @@ class Ledger:
         for record in state['releases'].values():
             if any(e.get('sequence') != i+1 for i,e in enumerate(record['events'])):
                 raise ReleaseError('invalid append-only event sequence')
+    def append(self, state):
+        self.validate(state)
+        if self.signed:
+            if not self.head:
+                # Reuse an existing verified source as the initialization seed.
+                # The ref creation is atomic; competing initializers must reread.
+                seed = self.api.api('commits/main')
+                if not seed['commit']['verification']['verified']:
+                    raise ReleaseError('ledger initialization requires verified main')
+                self.api.api('git/refs','POST',dict(ref=self.ref,sha=seed['sha']))
+                self.head = seed['sha']
+            commit = self.api.signed_commit('release-ledger',self.head,{'ledger.json':canonical(state)+b'\n'},'chore(release): append product identity receipt')
+            self.head, self.state = commit, state
+            self.original = copy.deepcopy(state)
+            return
         # The new tree keeps every historical event; only ledger.json grows.
         with tempfile.TemporaryDirectory(prefix='loomhelm-ledger-') as directory:
             index = str(Path(directory)/'index')

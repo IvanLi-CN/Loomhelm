@@ -8,12 +8,15 @@ on:
         type: string
 permissions:
   contents: read
-  actions: read
 concurrency:
   group: loomhelm-product-release
   cancel-in-progress: false
 jobs:
   resolve:
+    permissions:
+      contents: write
+      pull-requests: read
+      checks: read
     runs-on: ubuntu-24.04
     outputs:
       record: ${{ steps.resolve.outputs.record }}
@@ -21,8 +24,7 @@ jobs:
       build: ${{ steps.resolve.outputs.build }}
       state: ${{ steps.resolve.outputs.state }}
     env:
-      RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
-      RELEASE_SIGNING_KEY_ID: ${{ vars.RELEASE_GPG_KEY_ID }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - run: test "$GITHUB_REF" = refs/heads/main
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -30,34 +32,6 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
-        id: app
-        with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          permission-actions: read
-          permission-checks: read
-          permission-administration: read
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-      - name: Configure ephemeral release signing
-        env:
-          SIGNING_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
-          APP_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          printf 'GH_TOKEN=%s\n' "$APP_TOKEN" >> "$GITHUB_ENV"
-          test -n "$SIGNING_KEY"
-          printf '%s' "$SIGNING_KEY" | gpg --batch --import
-          git config user.name 'Loomhelm Release'
-          git config user.email '${{ vars.RELEASE_SIGNING_EMAIL }}'
-          git config gpg.format openpgp
-      - name: Configure bound App Git transport
-        env:
-          APP_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          auth=$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)
-          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
       - name: Resolve exact merged preparation
         id: resolve
         env:
@@ -122,46 +96,22 @@ jobs:
           if-no-files-found: error
           retention-days: 90
   publish:
+    permissions:
+      contents: write
+      pull-requests: read
+      checks: read
+      actions: read
     needs: [resolve, build]
     if: always() && needs.resolve.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-24.04
     env:
-      RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
-      RELEASE_SIGNING_KEY_ID: ${{ vars.RELEASE_GPG_KEY_ID }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ needs.resolve.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
-        id: app
-        with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          permission-actions: read
-          permission-checks: read
-          permission-administration: read
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-      - name: Configure ephemeral release signing
-        env:
-          SIGNING_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
-          APP_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          printf 'GH_TOKEN=%s\n' "$APP_TOKEN" >> "$GITHUB_ENV"
-          test -n "$SIGNING_KEY"
-          printf '%s' "$SIGNING_KEY" | gpg --batch --import
-          git config user.name 'Loomhelm Release'
-          git config user.email '${{ vars.RELEASE_SIGNING_EMAIL }}'
-          git config gpg.format openpgp
-      - name: Configure bound App Git transport
-        env:
-          APP_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          auth=$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)
-          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         if: needs.resolve.outputs.build == 'true'
         with:
