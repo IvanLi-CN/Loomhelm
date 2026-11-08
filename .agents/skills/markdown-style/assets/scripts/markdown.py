@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import socket
 import shutil
 import stat
 import subprocess
@@ -98,7 +99,7 @@ def download(resource: dict, *, opener=None, sleeper=None) -> bytes:
                     raise ToolError(f"Official download failed after {attempt} {noun}: {error}") from error
             finally:
                 error.close()
-        except (IncompleteRead, URLError, TimeoutError) as error:
+        except (IncompleteRead, URLError, TimeoutError, socket.timeout) as error:
             if attempt == DOWNLOAD_ATTEMPTS:
                 noun = "attempt" if attempt == 1 else "attempts"
                 raise ToolError(f"Official download failed after {attempt} {noun}: {error}") from error

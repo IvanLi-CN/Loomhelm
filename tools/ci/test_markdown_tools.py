@@ -5,6 +5,7 @@ from http.client import IncompleteRead
 import importlib.util
 import io
 from pathlib import Path
+import socket
 import unittest
 from urllib.error import HTTPError
 import zipfile
@@ -103,6 +104,24 @@ class MarkdownDownloadTests(unittest.TestCase):
     def test_truncated_response_is_retried(self):
         payload = b"verified after truncation"
         outcomes = [IncompleteRead(b"partial"), Response(payload)]
+        calls = []
+
+        def opener(url, timeout):
+            calls.append((url, timeout))
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        self.assertEqual(
+            MARKDOWN.download(self.resource(payload), opener=opener, sleeper=lambda _: None),
+            payload,
+        )
+        self.assertEqual(len(calls), 2)
+
+    def test_socket_timeout_is_retried(self):
+        payload = b"verified after socket timeout"
+        outcomes = [socket.timeout("read timed out"), Response(payload)]
         calls = []
 
         def opener(url, timeout):

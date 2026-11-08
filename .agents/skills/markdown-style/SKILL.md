@@ -22,7 +22,7 @@ public_url_hosts:
 1. 检查目标项目的 Markdown 范围、现有 formatter、Git hook 管理器、CI 和用户改动。首批范围为 Git 跟踪的 `.md`，formatter 使用官方 dprint Markdown 插件，不新增正文最大行宽。
 2. 预览项目 Policy 安装和工具接入变更。将 `assets/templates/markdown.py` 与 `lefthook.sh` 放到目标项目的 `tools/`，采用 `dprint.json` 配置；将 Lefthook 示例中的 Markdown job 合并到现有配置，不覆盖既有 hook、其他 job 或本地设置。在 `.gitignore` 中加入 `/.tmp/markdown-tools/`。
 3. 用 `python3 tools/markdown.py setup` 准备固定的原生工具与 Wasm；清单和 SHA256 来自 `assets/toolchain.json`。只有显式选择 `setup --install-hooks` 才安装 hook。遇到已有 `core.hooksPath` 或非本 Policy 管理的 pre-commit hook 时，保留它并完成可审查的手工集成。
-   固定工具下载只对 HTTP 408、429、500、502、503、504、Python 标准库 `URLError`、`TimeoutError` 和 `IncompleteRead` 做最多五次尝试，退避 1、2、4、8 秒；其他 HTTP 状态、最终失败和任一 SHA256 不匹配都必须失败，下载内容只有在归档与声明成员校验通过后才原子安装，且不改变官方 URL 或清单。
+   固定工具下载只对 HTTP 408、429、500、502、503、504、Python 标准库 `URLError`、`socket.timeout`、`TimeoutError` 和 `IncompleteRead` 做最多五次尝试，退避 1、2、4、8 秒；其他 HTTP 状态、最终失败和任一 SHA256 不匹配都必须失败，下载内容只有在归档与声明成员校验通过后才原子安装，且不改变官方 URL 或清单。
 4. 在提交阶段使用 Lefthook 的 `stage_fixed: true` 与原生部分暂存备份/隐藏/恢复机制。通过 `staged` 只修复已暂存 Markdown。工具或插件缺失时提示初始化，提交阶段不下载；无 Markdown 的提交跳过 formatter。
 5. CI 先执行普通 `setup`，再执行 `check`。使用项目已有 job 和 required check 名称，不自动重写分支保护。用真实 Git 暂存场景验证未暂存修改、无关文件和既有 stash 保留；失败或恢复冲突时停止提交并处理原生恢复材料。
 6. 用 `fix` 建立独立的机械格式化提交。核对 frontmatter、代码内容、文档解析和公开导出，修正生成模板，使重新生成后仍能通过 `check`。记录冷/热运行耗时，性能证据来自实际执行而不是工具名称。
