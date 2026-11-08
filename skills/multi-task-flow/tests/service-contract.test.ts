@@ -102,10 +102,24 @@ test("ordinary startup rejects the legacy plist before calling launchctl", async
   expect(() => startUserService(state)).toThrow("explicit upgrade");
 });
 
+test("readiness tolerates delayed health but stops at a finite elapsed-time budget", async () => {
+  const { waitForServiceHealth } = await import("../scripts/service-lifecycle");
+  const started = performance.now();
+  expect(await waitForServiceHealth(async () => {
+    if (performance.now() - started < 20) throw new Error("still starting");
+    return "healthy";
+  }, 500)).toBe("healthy");
+  const failure = new Error("unhealthy");
+  const deadlineStarted = performance.now();
+  await expect(waitForServiceHealth(async () => { throw failure; }, 25)).rejects.toBe(failure);
+  expect(performance.now() - deadlineStarted).toBeLessThan(500);
+  await expect(waitForServiceHealth(async () => "healthy", Infinity)).rejects.toThrow("finite");
+});
+
 test.skipIf(process.platform !== "darwin" || process.env.GITHUB_ACTIONS !== "true" || !process.env.LOOMHELM_VIEWER_LABEL_BEFORE || !process.env.LOOMHELM_VIEWER_LABEL_AFTER)("native launchd label transition preserves port and retires legacy registration", async () => {
   const { installRelease, switchRelease, nativeServiceControl } = await import("../scripts/service-maintenance");
   const { writeLaunchdDefinition, startUserService, unloadUserService, launchdDomain, launchctl } = await import("../scripts/service-launchd");
-  const { serviceStatus } = await import("../scripts/service-lifecycle");
+  const { serviceStatus, waitForServiceHealth } = await import("../scripts/service-lifecycle");
   const { processAlive } = await import("../../bin/modules/workspace/port_registry");
   const state = fixture();
   // Cleanup must wait for the actual launchd child, not just test completion.
@@ -128,11 +142,7 @@ test.skipIf(process.platform !== "darwin" || process.env.GITHUB_ACTIONS !== "tru
     // Reproduce the legacy registration independently of program build identity.
     writeLaunchdDefinition(legacyState);
     startWithDiagnostics(legacyState);
-    let healthy = false;
-    for (let attempt = 0; attempt < 200; attempt++) {
-      try { await serviceStatus(state); healthy = true; break; } catch { await Bun.sleep(100); }
-    }
-    expect(healthy).toBe(true);
+    await waitForServiceHealth(() => serviceStatus(state));
     const previousPid = state.runtime().pid;
     expect(launchctl(["print", `${domain}/${legacyLabel}`], true)).toBe(true);
     await switchRelease(state, process.env.LOOMHELM_VIEWER_LABEL_AFTER!, false, {
@@ -167,4 +177,4 @@ test.skipIf(process.platform !== "darwin" || process.env.GITHUB_ACTIONS !== "tru
     if (pid && processAlive(pid)) throw new Error(`Isolated viewer did not stop; retained ${state.paths.root}`);
     rmSync(state.paths.root, { recursive: true, force: true });
   }
-}, 120_000);
+}, 360_000);

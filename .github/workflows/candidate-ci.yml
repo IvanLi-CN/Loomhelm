@@ -252,7 +252,7 @@ jobs:
           bun test ./skills/bin/native-tests/core ./skills/bin/native-tests/visual
 
       - name: Verify isolated viewer label upgrade
-        timeout-minutes: 5
+        timeout-minutes: 8
         run: |
           bun install --cwd skills/multi-task-flow --frozen-lockfile --ignore-scripts --backend=copy
           bun run --cwd skills/multi-task-flow build

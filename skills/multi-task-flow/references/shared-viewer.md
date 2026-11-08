@@ -51,4 +51,4 @@ Re-running the exact command is idempotent. A prepared journal after source seal
 
 服务 label 从 `cn.ivan.multi-task-flow.viewer` 改为 `cc.ivanli.loomhelm.multi-task-flow.viewer`；隔离实例保留原有 profile 后缀。已有安装使用新 bundle 的维护 CLI 执行显式 `upgrade`，卸载当前 profile 的新旧 label，再生成新 plist 并启动。普通 `ensure` 遇到旧 plist 时要求升级，不自动迁移。数据根目录、端口 registry scope、凭据和运行账本保持原位。
 
-展示服务使用 launchd 的 `Interactive` 进程分类：它直接响应用户的 HTTP 操作，不使用 XPC 活动驱动的 `Adaptive` 分类。`Background` 的 I/O 限流会拖慢完整资源校验，导致升级健康检查超时；分类调整不跳过校验、不延长超时，也不改变租约退出规则。
+展示服务使用 launchd 的 `Interactive` 进程分类：它直接响应用户的 HTTP 操作，不使用 XPC 活动驱动的 `Adaptive` 分类。`Background` 的 I/O 限流会拖慢完整资源校验。启动、升级与恢复使用单调时钟限定 60 秒健康等待窗口，单次 HTTP 探测最多另占 1.5 秒；临时维护租约为 90 秒，覆盖整个等待窗口，结束或恢复失败后释放。已有 Agent／浏览器租约的期限不延长。超时仍执行既有失败恢复，完整性校验不跳过。

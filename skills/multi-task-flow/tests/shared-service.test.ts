@@ -90,13 +90,29 @@ test("code health failure restores config and preserves leases without touching 
   state.renew({ id: "agent:x:y", kind: "agent", run_id: "y", thread_id: "x" }, 60_000);
   const deadline = state.runtime().leases[0]!.expires_at;
   let healthCalls = 0;
-  const control = { ...nativeServiceControl, unload: () => {}, start: () => {}, status: async () => { healthCalls++; throw new Error("unhealthy"); } };
+  const control = { ...nativeServiceControl, startupTimeoutMs: 25, unload: () => {}, start: () => {}, status: async () => { healthCalls++; throw new Error("unhealthy"); } };
   // Deterministic failure exercises the same switch code without OS service mutation.
   await expect(switchRelease(state, next.source, false, control)).rejects.toThrow("healthy");
   expect(healthCalls).toBeGreaterThan(0); expect(state.config()).toEqual(previous);
   expect(state.runtime().leases[0]!.expires_at).toBe(deadline);
   expect(readFileSync(store.ledgerPath, "utf8")).toBe(bytes);
 }, 20_000);
+test("maintenance lease covers the readiness window and startup failure removes only that lease", async () => {
+  const { root, state } = fixture();
+  await installRelease(state, fixtureRelease(root).source);
+  state.renew({ id: "existing-agent", kind: "agent", run_id: null, thread_id: null }, 180_000);
+  const before = state.runtime().leases;
+  const control = {
+    ...nativeServiceControl,
+    unload: () => {},
+    start: () => {
+      expect(state.runtime().leases.find(lease => lease.id === "maintenance")!.expires_at).toBeGreaterThan(Date.now() + 60_000);
+      throw new Error("controlled startup failure");
+    },
+  };
+  await expect(switchRelease(state, fixtureRelease(root, "lease-window").source, false, control)).rejects.toThrow("controlled startup failure");
+  expect(state.runtime().leases).toEqual(before);
+});
 test("import seals old writes, retains backup and is idempotent", async () => {
   const { root, state } = fixture(); await installRelease(state, fixtureRelease(root).source);
   const source = join(root, "legacy"); const { store } = fixtureRun(source);
@@ -158,6 +174,7 @@ test("failed live upgrade verifies the recovered old build and retains exact dea
   const deadline = state.runtime().leases[0]!.expires_at;
   let restoredChecks = 0;
   const control = {
+    startupTimeoutMs: 25,
     unload: () => state.transaction(runtime => { runtime.phase = "stopped"; runtime.pid = null; }),
     start: () => state.transaction(runtime => { runtime.phase = "running"; runtime.pid = process.pid; }),
     status: async () => {
