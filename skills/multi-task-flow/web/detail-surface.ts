@@ -25,6 +25,8 @@ export function applyDetailSurface(elements: DetailSurfaceElements, surface: Det
   elements.workspace.classList.toggle("has-details", detailPanelViewport && surface === "desktop-inspector");
   elements.workspace.classList.toggle("has-overlay-selection", overlay);
   elements.workspace.classList.toggle("has-drawer-selection", drawer);
+  const slot = elements.details.closest<HTMLElement>(".details-slot");
+  if (slot) slot.hidden = !detailVisible;
   elements.details.hidden = !detailVisible;
   elements.details.classList.toggle("open", drawer || overlay);
   elements.details.setAttribute("aria-hidden", String(!detailVisible));
@@ -36,7 +38,32 @@ export function applyDetailSurface(elements: DetailSurfaceElements, surface: Det
     elements.hoverPreview.hidden = true;
   }
   if (focus) window.setTimeout(() => {
-    if (drawer || overlay) elements.closeDetails?.focus();
-    else if (surface === "desktop-inspector") elements.details.focus();
+    if (drawer || overlay) elements.closeDetails?.focus({ preventScroll: true });
+    else if (surface === "desktop-inspector") elements.details.focus({ preventScroll: true });
   }, 0);
+}
+
+// Keep the reserved grid column while the inspector follows the viewport.
+export function installDetailViewport(details: HTMLElement): void {
+  const slot = details.closest<HTMLElement>(".details-slot")!;
+  const topbar = document.querySelector<HTMLElement>(".topbar");
+  const update = (): void => {
+    if (details.hidden || window.innerWidth < 768) return;
+    const bounds = slot.getBoundingClientRect();
+    const top = Math.min(Math.max(16, (topbar?.getBoundingClientRect().bottom ?? 0) + 16), Math.max(16, window.innerHeight - 160));
+    details.style.setProperty("--details-left", `${bounds.left}px`);
+    details.style.setProperty("--details-width", `${bounds.width}px`);
+    details.style.setProperty("--details-top", `${top}px`);
+  };
+  let scheduled = false;
+  const schedule = (): void => {
+    if (scheduled) return;
+    scheduled = true;
+    window.requestAnimationFrame(() => { scheduled = false; update(); });
+  };
+  new ResizeObserver(schedule).observe(slot);
+  new MutationObserver(update).observe(details, { attributes: true, attributeFilter: ["hidden", "class"] });
+  window.addEventListener("scroll", schedule, { passive: true });
+  window.addEventListener("resize", schedule);
+  update();
 }

@@ -3,7 +3,7 @@ import { createDetailContent } from "../../web/details-content";
 import type { Group, View } from "../../web/model";
 
 beforeEach(() => {
-  document.body.innerHTML = `<div id="details-content"></div>`;
+  document.body.innerHTML = `<div id="details-summary"></div><div id="details-content"></div>`;
 });
 
 describe("dashboard details content", () => {
@@ -21,6 +21,25 @@ describe("dashboard details content", () => {
     expect(document.querySelector(".detail-duration")?.textContent).toBe("未知");
     expect(duration(details.groupPreview(group))).toBe("未知");
   });
+  test("keeps the summary outside the scroll body and preserves only the same object's reading position", () => {
+    const group = { id: "same", title: "交付单元", state: "closed", parent_pr: { url: null } } as Group;
+    const view = { groups: [group], tasks: [], actual_intervals: [] } as unknown as View;
+    const details = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "", time: () => "", safeExternal: () => null });
+    const body = document.getElementById("details-content")!;
+    details.showGroup(group);
+    expect(body.querySelector(".detail-title")).toBeNull();
+    expect(document.querySelector("#details-summary .detail-title")?.textContent).toBe(group.title);
+    body.scrollTop = 180;
+    details.showGroup({ ...group, title: "更新后的交付单元" });
+    expect(body.scrollTop).toBe(180);
+    details.showGroup({ ...group, id: "other" });
+    expect(body.scrollTop).toBe(0);
+    body.scrollTop = 90;
+    details.clearDetails();
+    expect(body.scrollTop).toBe(0);
+    expect(document.getElementById("details-summary")?.textContent).toBe("");
+  });
+
   test("keeps an explicit empty state when selection is invalid or absent", () => {
     const details = createDetailContent({
       getData: () => null,
@@ -71,6 +90,15 @@ describe("dashboard details content", () => {
     expect(content).toContain("父 PR 合并");
     expect(content).toContain("父 PR 已合并 merged");
     expect(content).toContain("edge-merge-task");
+    const body = document.getElementById("details-content")!;
+    body.scrollTop = 200;
+    details.showTask(view.tasks[0]!);
+    expect(body.scrollTop).toBe(200);
+    details.showGroup({ ...view.groups[0]!, id: view.tasks[0]!.id });
+    expect(body.scrollTop).toBe(0);
+    body.scrollTop = 80;
+    details.showTask(view.tasks[0]!);
+    expect(body.scrollTop).toBe(0);
 
     let retries = 0;
     Object.assign(view.tasks[0]!, { state: "agent_idle", thread_id: "thread-task", conversation_resource: { id: "conversation-task", kind: "conversation", target: "thread-task", status: "archive_failed", evidence_ref: "archive-error", error: "archive refused", last_attempt_at: "2026-01-01T00:00:00.000Z", operation_id: "archive-1" } });
