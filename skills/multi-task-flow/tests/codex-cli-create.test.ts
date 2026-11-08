@@ -39,12 +39,12 @@ test("real subprocess receives literal argv and EOF, never the formal prompt; th
   const oldPath = process.env.PATH;
   try {
     const executable = join(root, "codex"), capture = join(root, "argv.json");
-    writeFileSync(executable, `#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify(process.argv.slice(2)));process.stdin.on('end',()=>{console.log(JSON.stringify({type:'thread.started',thread_id:'real-event'}));setTimeout(()=>console.log(JSON.stringify({type:'turn.completed'})),30)});process.stdin.resume();`);
+    writeFileSync(executable, `#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({argv:process.argv.slice(2),nativeRequestId:process.env.MULTI_TASK_FLOW_NATIVE_REQUEST_ID}));process.stdin.on('end',()=>{console.log(JSON.stringify({type:'thread.started',thread_id:'real-event'}));setTimeout(()=>console.log(JSON.stringify({type:'turn.completed'})),30)});process.stdin.resume();`);
     chmodSync(executable, 0o755); process.env.PATH = `${root}:${oldPath}`;
     const observed: string[] = [];
-    const result = await runInitialization({ ...input, onThreadStarted: id => observed.push(id) });
+    const result = await runInitialization({ ...input, native_request_id: "native-test", onThreadStarted: id => observed.push(id) });
     expect(result.exit_code).toBe(0); expect(result.turn_completed).toBe(true); expect(observed).toEqual(["real-event"]);
-    expect(JSON.parse(readFileSync(capture, "utf8"))).toEqual(["exec", "-C", input.cwd, "--worktree", "--json", "-m", input.model, "-c", 'model_reasoning_effort="max"', INITIALIZATION_PROMPT]);
+    expect(JSON.parse(readFileSync(capture, "utf8"))).toEqual({ argv: ["exec", "-C", input.cwd, "--worktree", "--json", "-m", input.model, "-c", 'model_reasoning_effort="max"', INITIALIZATION_PROMPT], nativeRequestId: "native-test" });
     writeFileSync(executable, `#!/usr/bin/env node\nconsole.log(JSON.stringify({type:'thread.started',thread_id:'partial'}));console.log(JSON.stringify({type:'item.started',item:{type:'command_execution'}}));setInterval(()=>{},1000);`);
     const failed = await runInitialization(input);
     expect(failed.thread_id).toBe("partial"); expect(failed.error).toContain("attempted work"); expect(failed.exit_code).not.toBe(0);

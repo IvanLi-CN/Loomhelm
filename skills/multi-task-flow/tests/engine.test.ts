@@ -2799,6 +2799,7 @@ describe("native CLI handoff contract", () => {
     const ledger = claimed();
     apply(ledger, "dispatch-progress", request(ledger, "cli-observed", { operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread" }));
     apply(ledger, "dispatch-resolve", resolve(ledger));
+    expect(ledger.notifications.at(-1)?.event_id).toBe("cli-resolve-creation");
     const actor = { role: "task" as const, thread_id: "cli-thread" };
     expect(() => apply(ledger, "task-update", request(ledger, "too-early", { task_id: "a", state: "running", detail: "Start after readiness", occurred_at: at }, actor))).toThrow("baseline");
     apply(ledger, "task-runtime-observe", request(ledger, "initial-idle", {

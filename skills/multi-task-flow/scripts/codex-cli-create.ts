@@ -48,6 +48,7 @@ export async function runInitialization(input: CliCreationInput): Promise<CliRun
       command: "codex", args: ["exec", "-C", input.cwd ?? process.cwd(), "--worktree", "--json", "-m", input.model,
         "-c", `model_reasoning_effort=${JSON.stringify(input.thinking)}`, INITIALIZATION_PROMPT],
       cwd: input.cwd ?? process.cwd(), signal: controller.signal,
+      env: { ...process.env, MULTI_TASK_FLOW_NATIVE_REQUEST_ID: input.native_request_id },
       timeoutMs: Number.isFinite(configured) && configured >= 1000 && configured <= 600_000 ? configured : 300_000,
       maxCapturedOutputBytes: 0,
       outputSink: (stream, chunk) => {

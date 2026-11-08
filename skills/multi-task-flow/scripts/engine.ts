@@ -1613,7 +1613,7 @@ export function execute(
         group_snapshot: targetGroup ? structuredClone(targetGroup) : null,
       });
       const handoffNotice = outcome === "succeeded" && (op.request.creation_parameters as any)?.transport === "codex-exec"
-        ? addNotificationIntent(ledger, request, threadId!) : null;
+        ? addNotificationIntent(ledger, { ...request, request_id: `${request.request_id}-creation` }, threadId!) : null;
       if (handoffNotice) op.request.handoff_notification_id = handoffNotice.id;
       return { operation_id: op.id, outcome, thread_id: threadId,
         ...(handoffNotice ? { notification_request: notificationDeliveryRequest(handoffNotice) } : {}) };
