@@ -1519,6 +1519,9 @@ export function execute(
       const observed = creationObservations(op, payload);
       if (outcome === "failed") requireCondition(Object.keys(observed).length === 0,
         "UNKNOWN_REQUIRES_RECONCILIATION", "Known creation identity, resources or execution require reconciliation", 5);
+      if (outcome === "succeeded" && evidence.native_tool_name === "codex exec") requireCondition(
+        object(op.request.creation_parameters ?? {}).transport === "codex-exec",
+        "TRANSPORT_REQUIRED", "Codex exec success requires bound native transport for baseline readiness", 5);
       if (op.request.execution_profile && outcome !== "unknown") {
         requireCondition(
           evidence.source === "multi-task-flow-cli" &&

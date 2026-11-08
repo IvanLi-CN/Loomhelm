@@ -2677,6 +2677,19 @@ describe("native CLI handoff contract", () => {
         ...ledger.config.execution_profile, created_at: at, evidence_ref: "codex-exec:cli-request", thread_id: "cli-thread",
         exit_code, turn_completed: true, workspace_path: "/owned/worktree", initial_head: head } });
   }
+  test("native success cannot omit the transport used by baseline and handoff gates", () => {
+    for (const parameters of [undefined, { cwd: "/repo" }]) {
+      const ledger = claimed();
+      ledger.operations[0].request.creation_parameters = parameters;
+      apply(ledger, "dispatch-progress", request(ledger, "observed", {
+        operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread",
+      }));
+      const before = JSON.stringify(ledger);
+      expect(() => apply(ledger, "dispatch-resolve", resolve(ledger))).toThrow("bound native transport");
+      expect(JSON.stringify(ledger)).toBe(before);
+      expect(ledger.tasks[0].thread_id).toBeNull();
+    }
+  });
   test("identity is durable before binding; failed exit cannot bind and replay cannot create again", () => {
     const ledger = claimed();
     expect(() => apply(ledger, "dispatch-resolve", resolve(ledger))).toThrow("observed identity");
