@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { servicePaths, orchestrationRoot } from "../scripts/service-paths";
@@ -73,3 +73,108 @@ test("schema2/contract2 ledgers without idle or archive diagnostics remain reada
   expect(validateLedger(ledger).contract_version).toBe(2);
   expect(() => requireLedgerCompatibility(ledger)).not.toThrow();
 });
+
+test("viewer labels use the Loomhelm namespace and maintenance retires the matching legacy profile", async () => {
+  const { unloadUserService } = await import("../scripts/service-launchd");
+  expect(servicePaths({}).label).toBe("cc.ivanli.loomhelm.multi-task-flow.viewer");
+  const state = fixture();
+  expect(state.paths.label).toStartWith("cc.ivanli.loomhelm.multi-task-flow.viewer.");
+  const calls: string[][] = [];
+  const legacy = state.paths.label.replace("cc.ivanli.loomhelm.multi-task-flow.viewer", "cn.ivan.multi-task-flow.viewer");
+  unloadUserService(state, (args) => { calls.push(args); return true; }, "gui/123");
+  expect(calls).toEqual([
+    ["print", `gui/123/${state.paths.label}`],
+    ["bootout", `gui/123/${state.paths.label}`],
+    ["print", `gui/123/${legacy}`],
+    ["bootout", `gui/123/${legacy}`],
+  ]);
+  calls.length = 0;
+  unloadUserService(state, (args) => { calls.push(args); return false; }, "gui/123");
+  expect(calls.every(args => args[0] === "print")).toBe(true);
+});
+
+test("ordinary startup rejects the legacy plist before calling launchctl", async () => {
+  const { writeFileSync, mkdirSync } = await import("node:fs");
+  const { startUserService } = await import("../scripts/service-launchd");
+  const state = fixture();
+  mkdirSync(state.paths.config, { recursive: true });
+  writeFileSync(join(state.paths.config, "viewer.plist"), '<key>Label</key><string>cn.ivan.multi-task-flow.viewer</string>');
+  expect(() => startUserService(state)).toThrow("explicit upgrade");
+});
+
+test("readiness tolerates delayed health but stops at a finite elapsed-time budget", async () => {
+  const { waitForServiceHealth } = await import("../scripts/service-lifecycle");
+  const started = performance.now();
+  expect(await waitForServiceHealth(async () => {
+    if (performance.now() - started < 20) throw new Error("still starting");
+    return "healthy";
+  }, 500)).toBe("healthy");
+  const failure = new Error("unhealthy");
+  const deadlineStarted = performance.now();
+  await expect(waitForServiceHealth(async () => { throw failure; }, 25)).rejects.toBe(failure);
+  expect(performance.now() - deadlineStarted).toBeLessThan(500);
+  await expect(waitForServiceHealth(async () => "healthy", Infinity)).rejects.toThrow("finite");
+});
+
+test.skipIf(process.platform !== "darwin" || process.env.GITHUB_ACTIONS !== "true" || !process.env.LOOMHELM_VIEWER_LABEL_BEFORE || !process.env.LOOMHELM_VIEWER_LABEL_AFTER)("native launchd label transition preserves port and retires legacy registration", async () => {
+  const { installRelease, switchRelease, nativeServiceControl } = await import("../scripts/service-maintenance");
+  const { writeLaunchdDefinition, startUserService, unloadUserService, launchdDomain, launchctl } = await import("../scripts/service-launchd");
+  const { serviceStatus, waitForServiceHealth } = await import("../scripts/service-lifecycle");
+  const { processAlive } = await import("../../bin/modules/workspace/port_registry");
+  const state = fixture();
+  // Cleanup must wait for the actual launchd child, not just test completion.
+  roots.splice(roots.indexOf(state.paths.root), 1);
+  const legacyLabel = state.paths.label.replace("cc.ivanli.loomhelm.multi-task-flow.viewer", "cn.ivan.multi-task-flow.viewer");
+  const legacyState = new ServiceState({ ...state.paths, label: legacyLabel });
+  const domain = launchdDomain();
+  const stderr = join(state.paths.logs, "native-startup-stderr.log");
+  const startWithDiagnostics = (instance: ServiceState) => {
+    const plist = join(instance.paths.config, "viewer.plist");
+    writeFileSync(plist, readFileSync(plist, "utf8").replace(
+      "<key>StandardErrorPath</key><string>/dev/null</string>",
+      `<key>StandardErrorPath</key><string>${stderr}</string>`,
+    ));
+    startUserService(instance);
+  };
+  try {
+    const installed = await installRelease(state, process.env.LOOMHELM_VIEWER_LABEL_BEFORE!);
+    state.renew({ id: "native-label", kind: "agent", run_id: null, thread_id: null }, 180_000);
+    // Reproduce the legacy registration independently of program build identity.
+    writeLaunchdDefinition(legacyState);
+    startWithDiagnostics(legacyState);
+    await waitForServiceHealth(() => serviceStatus(state));
+    const previousPid = state.runtime().pid;
+    expect(launchctl(["print", `${domain}/${legacyLabel}`], true)).toBe(true);
+    await switchRelease(state, process.env.LOOMHELM_VIEWER_LABEL_AFTER!, false, {
+      ...nativeServiceControl,
+      start: startWithDiagnostics,
+    });
+    await serviceStatus(state);
+    expect(state.config().port).toBe(installed.port);
+    expect(state.config().current_build).not.toBe(installed.build_id);
+    expect(state.runtime().pid).not.toBe(previousPid);
+    expect(launchctl(["print", `${domain}/${legacyLabel}`], true)).toBe(false);
+    expect(launchctl(["print", `${domain}/${state.paths.label}`], true)).toBe(true);
+  } catch (error) {
+    // Only this disposable CI instance is inspected; never print credentials or environment.
+    const runtime = state.runtime();
+    console.error("native label diagnostics", JSON.stringify({ phase: runtime.phase, pid: runtime.pid }));
+    for (const label of [legacyLabel, state.paths.label]) {
+      const result = Bun.spawnSync(["/bin/launchctl", "print", `${domain}/${label}`]);
+      const text = result.stdout.toString();
+      console.error("native launchd diagnostics", label, text.split("\n").filter(line => /^\s*(state|pid|runs|last exit code|last terminating signal) =/.test(line)).join("\n"));
+      const pid = text.match(/^\s*pid = (\d+)$/m)?.[1];
+      if (pid) console.error("native process diagnostics", Bun.spawnSync(["/bin/ps", "-p", pid, "-o", "pid=,ppid=,etime=,comm="]).stdout.toString());
+    }
+    for (const path of [stderr, join(state.paths.state, "startup-failure.json"), join(state.paths.logs, "viewer.jsonl")]) {
+      if (existsSync(path)) console.error(path, readFileSync(path, "utf8").slice(-8000));
+    }
+    throw error;
+  } finally {
+    const pid = state.runtime().pid;
+    unloadUserService(state);
+    for (let attempt = 0; pid && processAlive(pid) && attempt < 200; attempt++) await Bun.sleep(100);
+    if (pid && processAlive(pid)) throw new Error(`Isolated viewer did not stop; retained ${state.paths.root}`);
+    rmSync(state.paths.root, { recursive: true, force: true });
+  }
+}, 360_000);
