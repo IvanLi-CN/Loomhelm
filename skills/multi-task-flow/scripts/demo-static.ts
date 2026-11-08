@@ -58,6 +58,7 @@ if (outputDemo && !singleUnit)
 if (archiveDemo) {
   // Controlled fixture: no live Codex connection or ledger writes.
   view.profile_read_only = false;
+  view.follow_prs = view.follow_prs.filter(pr => !["model", "scheduler", "server"].includes(pr.origin_task_id));
   for (const task of view.tasks as Task[]) {
     task.latest_agent_output!.text = `任务 ${task.title} 的受控运行时观察。`;
     if (task.id === "deploy" || task.id === "dashboard-ui") {
@@ -65,6 +66,16 @@ if (archiveDemo) {
       task.latest_agent_output!.stale = false;
       if (task.id === "dashboard-ui") { task.state = "agent_idle"; task.agent_resume_state = "running"; }
     }
+    if (["model", "scheduler", "server"].includes(task.id)) {
+      task.conversation_archive = { eligible: true, reason: null };
+      task.latest_agent_output!.agent_state = "idle";
+      task.latest_agent_output!.stale = false;
+      task.state = "closed";
+      task.conversation_resource = null;
+    }
+    if (task.id === "server") task.conversation_resource = {
+      id: "fixture-server", kind: "conversation", target: task.thread_id!, status: "closed", evidence_ref: "fixture:closed",
+    };
     if (task.id === "model" || task.id === "ledger") task.conversation_resource = {
       id: `fixture-${task.id}`, kind: "conversation", target: task.thread_id!,
       status: task.id === "model" ? "archive_failed" : "archive_unknown",

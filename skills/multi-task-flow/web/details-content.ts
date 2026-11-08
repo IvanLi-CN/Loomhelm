@@ -1,4 +1,4 @@
-import { archivePresentation, renderArchiveAction, type ArchiveAction } from "./conversation-control";
+import { hasArchiveAction, hasConversationControl, archivePresentation, renderArchiveAction, type ArchiveAction } from "./conversation-control";
 import { initialOutput, paintOutput } from "./agent-output";
 import { createProfileEditor, type ProfileEditorContext } from "./profile-editor";
 import { conversationUrl } from "./links";
@@ -173,14 +173,14 @@ export function createDetailContent(context: DetailContentContext) {
       if (observed?.runtime_turn_id) field(container, "观察 Turn", observed.runtime_turn_id);
     }
     const archive = task.conversation_resource;
-    if (archive && ["closed", "active", "archive_failed", "archive_unknown", "unarchive_failed", "unarchive_unknown"].includes(archive.status)) {
+    if (hasConversationControl(task)) {
       const presentation = archivePresentation(task);
       field(container, "对话归档", presentation.label);
-      field(container, archive.status.endsWith("failed") || archive.status.endsWith("unknown") ? "对话归档问题" : "归档说明", presentation.description);
-      if (archive.last_attempt_at) field(container, "最近归档尝试", renderTimestamp(archive.last_attempt_at));
-      if (archive.evidence_ref) field(container, "归档证据", archive.evidence_ref);
-      field(container, "归档操作", renderArchiveAction(task, context.archiveConversation, data.profile_read_only === true));
-    } else if (archive?.status === "pending") field(container, "对话归档", "等待归档");
+      field(container, archive?.status.endsWith("failed") || archive?.status.endsWith("unknown") ? "对话归档问题" : "归档说明", presentation.description);
+      if (archive?.last_attempt_at) field(container, "最近归档尝试", renderTimestamp(archive.last_attempt_at));
+      if (archive?.evidence_ref) field(container, "归档证据", archive.evidence_ref);
+      if (hasArchiveAction(task)) field(container, "归档操作", renderArchiveAction(task, context.archiveConversation, data.profile_read_only === true));
+    }
     field(container, "任务对话", task.thread_id ? link("打开对话", conversationUrl(task.thread_id)) : "尚未创建");
     const pr = context.safeExternal(task.pr?.url ?? null);
     if (pr) field(container, "子 PR", link("查看 PR", pr));

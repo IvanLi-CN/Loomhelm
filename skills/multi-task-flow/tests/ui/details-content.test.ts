@@ -80,7 +80,10 @@ describe("dashboard details content", () => {
     expect(document.getElementById("details-content")?.textContent).toContain("观察 Turnlatest-runtime-turn");
     expect(document.getElementById("details-content")?.textContent).not.toContain("older-public-turn");
     expect(document.getElementById("details-content")?.textContent).toContain("archive refused");
-    (document.querySelector(".detail-action") as HTMLButtonElement).click();
+    expect(document.querySelector(".archive-action")).toBeNull();
+    Object.assign(view.tasks[0]!, { state: "closed", conversation_archive: { eligible: true, reason: null }, latest_agent_output: { thread_id: "thread-task", agent_state: "idle", stale: false } });
+    archiveDetails.showTask(view.tasks[0]!);
+    (document.querySelector(".archive-action") as HTMLButtonElement).click();
     expect(retries).toBe(1);
   });
 
