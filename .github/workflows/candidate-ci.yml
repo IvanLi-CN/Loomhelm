@@ -251,6 +251,11 @@ jobs:
           bun skills/scripts/test-skills-native.ts
           bun test ./skills/bin/native-tests/core ./skills/bin/native-tests/visual
 
+      - name: Verify multi-task-flow contracts on macOS
+        run: |
+          bun install --cwd skills/multi-task-flow --frozen-lockfile --ignore-scripts --backend=copy
+          bun run --cwd skills/multi-task-flow test
+
       - name: Verify isolated viewer label upgrade
         timeout-minutes: 8
         run: |
@@ -317,7 +322,7 @@ jobs:
 
   candidate-build:
     name: Candidate Build
-    needs: [quality-gates, bootstrap-verification, react-doctor, repository-verification, repository-contracts, typescript-client, candidate-producer]
+    needs: [quality-gates, bootstrap-verification, react-doctor, repository-verification, repository-contracts, typescript-client, candidate-producer, skills-native-macos]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -327,7 +332,7 @@ jobs:
         run: |
           python3 - <<'PYTHON'
           import json, os
-          expected = {"quality-gates", "bootstrap-verification", "react-doctor", "repository-verification", "repository-contracts", "typescript-client", "candidate-producer"}
+          expected = {"quality-gates", "bootstrap-verification", "react-doctor", "repository-verification", "repository-contracts", "typescript-client", "candidate-producer", "skills-native-macos"}
           results = json.loads(os.environ["CANDIDATE_RESULTS"])
           if set(results) != expected or any(value.get("result") != "success" for value in results.values()):
               raise SystemExit("candidate dependencies incomplete or unsuccessful")

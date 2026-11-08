@@ -24,6 +24,28 @@ test("v2 checks complete resources, content, links and contained import closure"
     expect(() => verifyRelease(source)).toThrow("checksum");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("candidate discovery selects the newest verified build and ignores the current build", async () => {
+  const { root, state } = serviceFixture();
+  try {
+    const old = fixtureRelease(root, "old");
+    const newer = fixtureRelease(root, "newer");
+    const rewrite = (source: string, manifest: any, service_version: string) => {
+      const { build_id, ...body } = manifest;
+      const updated = { ...body, service_version, build_id: buildId({ ...body, service_version }) };
+      writeFileSync(join(source, "manifest.json"), JSON.stringify(updated));
+      return updated;
+    };
+    const oldManifest = rewrite(old.source, old.manifest, "1.8.0");
+    const newerManifest = rewrite(newer.source, newer.manifest, "1.10.0");
+    mkdirSync(state.paths.candidates, { recursive: true });
+    cpSync(old.source, join(state.paths.candidates, oldManifest.build_id), { recursive: true });
+    cpSync(newer.source, join(state.paths.candidates, newerManifest.build_id), { recursive: true });
+    state.saveConfig({ schema_version: 1, port: 49152, registry_dir: join(root, "registry"), current_build: oldManifest.build_id, previous_build: null, agent_ttl_ms: 3600000 });
+    const { discoverCandidate } = await import("../scripts/service-maintenance");
+    expect(discoverCandidate(state)?.service_version).toBe("1.10.0");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 test("v1 packages remain diagnostic-only and reject incomplete native pairs", () => {
   const { root } = serviceFixture();
   try {

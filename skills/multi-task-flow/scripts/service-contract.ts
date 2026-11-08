@@ -33,6 +33,14 @@ export const releaseManifestSchema = z
     frontend_contracts: z.array(z.number().int().positive()).min(1),
     readable: z.array(z.string()).min(1),
     writable: z.array(z.string()).min(1),
+    readable_releases: z.array(z.string().min(1)).optional(),
+    migration_guides: z.array(z.object({
+      id: z.string().min(1),
+      path: z.string().min(1),
+      sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      required_for: z.array(z.string().min(1)).min(1),
+      operation: z.string().min(1),
+    }).strict()).optional(),
     files: z.record(
       z.string().min(1),
       z.string().regex(/^[a-f0-9]{64}$/),
