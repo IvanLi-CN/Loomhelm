@@ -52,6 +52,8 @@ runs:
         BUILD_HIT: ${{ steps.build.outputs.cache-hit }}
         BUILD_MATCH: ${{ steps.build.outputs.cache-matched-key }}
       run: |
+        # Reuse compilation inputs, never prior test success against external state.
+        go clean -testcache
         echo "Go modules hit=$MODULE_HIT key=$GO_MODULE_KEY"
         echo "Go build hit=$BUILD_HIT matched=$BUILD_MATCH requested=$GO_BUILD_KEY"
     - name: Measure cache sizes

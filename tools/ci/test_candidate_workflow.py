@@ -51,6 +51,7 @@ class CandidateWorkflowTests(unittest.TestCase):
         writers = [chunks[i] for i in range(1, len(chunks), 2) if 'operation: save' in chunks[i+1]]
         self.assertEqual(set(writers), {'repository-verification', 'candidate-producer'})
         action = (ROOT / '.github/actions/go-cache/action.yml').read_text()
+        self.assertIn('go clean -testcache', action)
         self.assertIn('500 * 1024**2', action)
         self.assertIn('1024**3', action)
         self.assertIn('github.event.pull_request.head.repo.full_name == github.repository', action)
