@@ -14959,7 +14959,7 @@
       "path": "skills/multi-task-flow/web/cards.ts",
       "sourceBlob": "57042e51b19cba9153aa399c539abe4879ed515e",
       "sourceSha256": "c01ccf8399710aa7fd18b8e1e0ba4ce6ad04f4191181f8f9d43512835af9121f",
-      "installedSha256": "a8b39b0e1b2a2d05b98b4ff7b4dbef9c4fe08a4b27951e17dfce75a9a0181303",
+      "installedSha256": "e3308c6f9d6288b78d26438b0fbe6329fceb01834e24dd967463b0a5b48812a6",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15698,7 +15698,7 @@
     },
     {
       "path": "skills/support-manifest.json",
-      "installedSha256": "277ee2613d06d7dc2b71b13d5cbdde5523543bc0f8a11cfea6712f019ea8751a"
+      "installedSha256": "f62b35800765438acd6ccf1d35c919b28bd7d8f8853ffae0a3e6fdf940f3acc5"
     },
     {
       "path": "skills/multi-task-flow/examples/single-delivery-unit/README.md",
