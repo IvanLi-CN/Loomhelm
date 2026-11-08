@@ -32,7 +32,7 @@ export function servicePaths(env: NodeJS.ProcessEnv = process.env) {
     state: join(root, "state"),
     releases: join(root, "releases"),
     logs: join(root, "logs"),
-    label: "cn.ivan.multi-task-flow.viewer" + suffix,
+    label: "cc.ivanli.loomhelm.multi-task-flow.viewer" + suffix,
     scope: "multi-task-flow--user-" + String(process.getuid?.() ?? 0) + suffix,
   };
 }

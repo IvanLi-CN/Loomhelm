@@ -73,3 +73,31 @@ test("schema2/contract2 ledgers without idle or archive diagnostics remain reada
   expect(validateLedger(ledger).contract_version).toBe(2);
   expect(() => requireLedgerCompatibility(ledger)).not.toThrow();
 });
+
+test("viewer labels use the Loomhelm namespace and maintenance retires the matching legacy profile", async () => {
+  const { unloadUserService } = await import("../scripts/service-launchd");
+  expect(servicePaths({}).label).toBe("cc.ivanli.loomhelm.multi-task-flow.viewer");
+  const state = fixture();
+  expect(state.paths.label).toStartWith("cc.ivanli.loomhelm.multi-task-flow.viewer.");
+  const calls: string[][] = [];
+  const legacy = state.paths.label.replace("cc.ivanli.loomhelm.multi-task-flow.viewer", "cn.ivan.multi-task-flow.viewer");
+  unloadUserService(state, (args) => { calls.push(args); return true; }, "gui/123");
+  expect(calls).toEqual([
+    ["print", `gui/123/${state.paths.label}`],
+    ["bootout", `gui/123/${state.paths.label}`],
+    ["print", `gui/123/${legacy}`],
+    ["bootout", `gui/123/${legacy}`],
+  ]);
+  calls.length = 0;
+  unloadUserService(state, (args) => { calls.push(args); return false; }, "gui/123");
+  expect(calls.every(args => args[0] === "print")).toBe(true);
+});
+
+test("ordinary startup rejects the legacy plist before calling launchctl", async () => {
+  const { writeFileSync, mkdirSync } = await import("node:fs");
+  const { startUserService } = await import("../scripts/service-launchd");
+  const state = fixture();
+  mkdirSync(state.paths.config, { recursive: true });
+  writeFileSync(join(state.paths.config, "viewer.plist"), '<key>Label</key><string>cn.ivan.multi-task-flow.viewer</string>');
+  expect(() => startUserService(state)).toThrow("explicit upgrade");
+});
