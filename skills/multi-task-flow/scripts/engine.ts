@@ -1913,7 +1913,13 @@ export function execute(
           if (!cliDispatch.request.development_baseline) target.current_sha = baseline.sha;
         } else {
           const group = find(ledger.groups, g => g.id === target.group_id, "Group");
-          requireCondition(group.current_sha === baseline.sha, "BASELINE_MISMATCH", "Task baseline must match its group parent SHA", 4);
+          const postMerge = ["release", "deployment", "verification"].includes(target.kind);
+          requireCondition(
+            postMerge ? group.state === "merged" && group.merge_sha === baseline.sha : group.current_sha === baseline.sha,
+            "BASELINE_MISMATCH",
+            postMerge ? "Post-merge task baseline must match the merged parent SHA" : "Task baseline must match its group parent SHA",
+            4,
+          );
           target.base_sha = baseline.sha;
         }
         cliDispatch.request.development_baseline = baseline;

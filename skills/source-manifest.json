@@ -14199,7 +14199,7 @@
       "path": "skills/multi-task-flow/scripts/engine.ts",
       "sourceBlob": "ffd435e1e2211f7aecadab3004a909ff2828df07",
       "sourceSha256": "a4d00c849601abdbe2e08ccb26978fba04ca4042b33213e46c1206aa47273a8b",
-      "installedSha256": "40efa33f3c3d255c5fd9a28e0a1603e243df340809202b5992a0324b8f9a3c02",
+      "installedSha256": "877e7016b33182f2b02e9c15e6ce6a0217319633495e43c95b18013feabb51a5",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15734,7 +15734,7 @@
     },
     {
       "path": "skills/multi-task-flow/scripts/desktop-handoff.ts",
-      "installedSha256": "584a93535f46eaa8df002a0f4b4bf551128f8e65bfa38ec4bafa0546b0479696"
+      "installedSha256": "5180bc5dbcc69d735d44cd165d7e20969bb77a904b2c339a6ae4fe267fdf0b54"
     },
     {
       "path": "skills/multi-task-flow/scripts/pr-details.ts",
