@@ -31,7 +31,7 @@ export interface LockHandle {
 }
 
 export class RegistryError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly code = "REGISTRY_ERROR") {
     super(message);
     this.name = "RegistryError";
   }

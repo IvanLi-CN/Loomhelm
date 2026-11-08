@@ -7,6 +7,7 @@ import { tryLockFile } from "../../bin/modules/core/security_file";
 import { withExclusiveLockAsync } from "../../bin/modules/flow/storage";
 import {
   PortRegistry,
+  RegistryError,
   processAlive,
 } from "../../bin/modules/workspace/port_registry";
 import { ServiceState } from "./service-state";
@@ -167,16 +168,29 @@ export async function runDaemon(
   const generation = randomUUID();
   const registry = new PortRegistry(config.registry_dir);
   let viewer: Awaited<ReturnType<typeof startSharedViewer>> | undefined;
-  let registered = false;
   let reserved = false;
   let stopping: Promise<void> | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
-  let stopReason = "signal";
-  const shutdown = (reason = stopReason) => {
-    stopReason = reason;
+  // Diagnostics must not turn a recovered heartbeat into another outage.
+  const log = (event: Parameters<typeof serviceLog>[1], details: Record<string, unknown> = {}) => {
+    try { serviceLog(state.paths, event, generation, manifest.build_id, details); }
+    catch { console.error("VIEWER_DIAGNOSTIC_WRITE_FAILED"); }
+  };
+  type ShutdownReason =
+    | "requested"
+    | "SIGTERM"
+    | "SIGINT"
+    | "leases_expired"
+    | "lease_state_error"
+    | "registry_heartbeat_error"
+    | "startup_error";
+  type ShutdownErrorCode = "REGISTRY_LOCK_TIMEOUT" | "INTERNAL_ERROR";
+  const shutdown = (reason: ShutdownReason = "requested", errorCode?: ShutdownErrorCode) => {
     if (stopping) return stopping;
+    const stopStartedAt = new Date().toISOString();
     stopping = (async () => {
+      log("stopping", {stop_reason: reason, stop_started_at: stopStartedAt, ...(errorCode ? {error_code: errorCode} : {})});
       clearInterval(timer);
       clearInterval(heartbeat);
       try {
@@ -195,9 +209,11 @@ export async function runDaemon(
             });
         await viewer?.stop();
         state.stopped(generation);
-        serviceLog(state.paths, "stopped", generation, manifest.build_id, {
+        log("stopped", {
           stop_reason: reason,
-          stop_started_at: new Date().toISOString(),
+          stop_started_at: stopStartedAt,
+          stop_completed_at: new Date().toISOString(),
+          ...(errorCode ? { error_code: errorCode } : {}),
           leases: state.runtime().leases.map((lease) => ({
             kind: lease.kind,
             run_id: lease.run_id,
@@ -206,15 +222,22 @@ export async function runDaemon(
         });
       } finally {
         lifetime.release();
-        process.removeListener("SIGTERM", close);
-        process.removeListener("SIGINT", close);
+        process.removeListener("SIGTERM", terminate);
+        process.removeListener("SIGINT", interrupt);
       }
     })();
     return stopping;
   };
-  const close = () => {
-    void shutdown();
-  };
+  const terminate = () => { void shutdown("SIGTERM"); };
+  const interrupt = () => { void shutdown("SIGINT"); };
+  // Only this typed registry failure is known to be transient. Unknown errors
+  // and ownership changes still fence the viewer immediately. No error message
+  // enters logs: messages may contain private paths or command inputs.
+  let heartbeatFailures = 0;
+  const errorCode = (error: unknown) =>
+    error instanceof RegistryError &&
+    error.code === "REGISTRY_LOCK_TIMEOUT"
+      ? "REGISTRY_LOCK_TIMEOUT" : "INTERNAL_ERROR";
   try {
     state.transaction((runtime) => {
       runtime.generation = generation;
@@ -251,8 +274,7 @@ export async function runDaemon(
         return viewer;
       },
     );
-    registered = true;
-    serviceLog(state.paths, "started", generation, manifest.build_id);
+    log("started");
     state.transaction((runtime) => {
       requireCondition(
         runtime.generation === generation,
@@ -265,8 +287,8 @@ export async function runDaemon(
       if (!stopping)
         try {
           if (state.expire(generation)) void shutdown("leases_expired");
-        } catch {
-          void shutdown();
+        } catch (error) {
+          void shutdown("lease_state_error", errorCode(error));
         }
     }, 1000);
     let heartbeating = false;
@@ -281,16 +303,28 @@ export async function runDaemon(
           pid: process.pid,
           expectedPid: process.pid,
         })
-        .catch(() => shutdown())
+        .then(() => {
+          if (stopping) return;
+          if (heartbeatFailures) log("maintenance_recovered", { operation: "registry_heartbeat" });
+          heartbeatFailures = 0;
+        })
+        .catch((error) => {
+          if (stopping) return;
+          const code = errorCode(error);
+          heartbeatFailures++;
+          if (code !== "REGISTRY_LOCK_TIMEOUT" || heartbeatFailures >= 3)
+            return shutdown("registry_heartbeat_error", code);
+          log("maintenance_failed", { operation: "registry_heartbeat", error_code: code, consecutive_failures: heartbeatFailures });
+        })
         .finally(() => {
           heartbeating = false;
         });
     }, 30_000);
-    process.once("SIGTERM", close);
-    process.once("SIGINT", close);
-    return { generation, pid: process.pid, stop: shutdown };
+    process.once("SIGTERM", terminate);
+    process.once("SIGINT", interrupt);
+    return { generation, pid: process.pid, stop: () => shutdown() };
   } catch (error) {
-    await shutdown();
+    await shutdown("startup_error", errorCode(error));
     throw error;
   }
 }

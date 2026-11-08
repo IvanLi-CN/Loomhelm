@@ -17,6 +17,10 @@
 
 分发清单绑定提示边界实现、测试、规范与截图摘要，并保留服务构建及调用者环境继承资源，确保 TypeScript 客户端打包携带完整实现。
 
+## Viewer 心跳与关闭诊断
+
+`service-lifecycle.test.ts` 使用独立 ServiceState、真实 registry 和 HTTP listener，验证就绪后的单次锁超时不丢失监听、心跳恢复、连续三次超时关闭、未知错误立即关闭、自然租约到期，以及 SIGTERM/SIGINT 与状态读取异常的独立原因。Registry 锁竞争提供固定 `REGISTRY_LOCK_TIMEOUT`；日志保留关闭入口与完成时间，固定错误码不包含路径和异常消息。新增回归在 `support-manifest.json` 登记，并通过 `check-client-skills.ts --write` 刷新安装摘要，再用只读模式验证资源闭包。该回归覆盖已复现的内部错误停服机制；历史正式进程的触发错误已被旧日志吞掉，不能倒推为已确认的 OS 信号或锁超时。
+
 ## Shared Viewer Coverage
 
 - User-root paths, explicit build/API/frontend/ledger compatibility and isolated profiles.

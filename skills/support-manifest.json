@@ -37,6 +37,7 @@
   "skills/bin/native-tests/core/ffi_paths.test.ts",
   "skills/multi-task-flow/tests/conversation-archive.test.ts",
   "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/output-tooltip-boundary.png",
+  "skills/multi-task-flow/tests/service-lifecycle.test.ts",
   "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-desktop.png",
   "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-medium.png",
   "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/detail-viewport-mobile.png"

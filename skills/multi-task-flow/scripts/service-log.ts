@@ -17,9 +17,11 @@ export function serviceLog(
   event:
     | "started"
     | "stopped"
+    | "stopping"
     | "startup_failed"
     | "lease_failed"
-    | "maintenance_failed",
+    | "maintenance_failed"
+    | "maintenance_recovered",
   generation: string,
   buildId: string,
   details: Record<string, unknown> = {},
