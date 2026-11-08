@@ -1,4 +1,4 @@
-import { renderConversationControl, type ArchiveAction } from "./conversation-control";
+import { hasConversationControl, renderConversationControl, type ArchiveAction } from "./conversation-control";
 import { bindPRStatus } from "./pr-status";
 import { attachResourcePopover, closeResourcePopover, type ResourceSource } from "./resource-popover";
 import { initialOutput } from "./agent-output";
@@ -138,8 +138,7 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   select.addEventListener("click", (event) => { event.stopPropagation(); if (event.detail === 0) context.setKeyboardSelection(); context.selectTask(task.id); });
   head.append(select);
   const actions = text("div", "", "task-card-actions");
-  const archiveStatus = task.conversation_resource?.status;
-  if (archiveStatus && ["closed", "archive_failed", "archive_unknown", "unarchive_failed", "unarchive_unknown"].includes(archiveStatus) || task.conversation_resource?.archive_policy === "manual") {
+  if (hasConversationControl(task)) {
     actions.append(renderConversationControl(task, context.archiveConversation, context.getData()?.profile_read_only === true));
   } else actions.append(iconAction(task.thread_id ? task.state === "agent_idle" ? "Agent 已停止工作，打开任务对话" : "打开任务对话" : "任务对话尚未创建", "message-circle", task.thread_id ? conversationUrl(task.thread_id) : null));
   const pr = context.safeExternal(task.pr?.url ?? null);

@@ -108,8 +108,22 @@ describe("dashboard details content", () => {
     expect(document.getElementById("details-content")?.textContent).toContain("观察 Turnlatest-runtime-turn");
     expect(document.getElementById("details-content")?.textContent).not.toContain("older-public-turn");
     expect(document.getElementById("details-content")?.textContent).toContain("archive refused");
-    (document.querySelector(".detail-action") as HTMLButtonElement).click();
+    expect(document.querySelector(".archive-action")).toBeNull();
+    Object.assign(view.tasks[0]!, { state: "closed", conversation_archive: { eligible: true, reason: null }, latest_agent_output: { thread_id: "thread-task", agent_state: "idle", stale: false } });
+    archiveDetails.showTask(view.tasks[0]!);
+    (document.querySelector(".archive-action") as HTMLButtonElement).click();
     expect(retries).toBe(1);
+    const conversation = document.querySelector(".detail-conversation")!;
+    expect(conversation.querySelector("a")?.textContent).toBe("打开对话");
+    expect(conversation.querySelector(".archive-action")?.textContent).toBe("重试归档");
+    for (const label of ["对话归档", "归档说明", "归档操作", "最近归档尝试", "归档证据"])
+      expect([...document.querySelectorAll(".detail-label")].some(node => node.textContent === label)).toBe(false);
+    Object.assign(view.tasks[0]!, { conversation_resource: null });
+    archiveDetails.showTask(view.tasks[0]!);
+    expect(document.querySelector(".detail-conversation .archive-action")?.textContent).toBe("归档");
+    expect(document.querySelector(".detail-conversation-notice")).toBeNull();
+    expect(document.getElementById("details-content")?.textContent).not.toContain("对话归档尚未完成");
+
   });
 
   test("renders path provenance and hidden plan boundaries without flattening conditions", () => {

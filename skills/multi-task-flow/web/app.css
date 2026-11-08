@@ -637,3 +637,6 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .dependency-layout-pending { position:absolute; bottom:12px; left:12px; color:var(--muted); font-size:12px; }
 
 .dependency-state-idle { display:inline-flex; align-items:center; gap:4px; color:var(--warning); }
+
+.detail-conversation-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.detail-conversation-notice { margin: 6px 0 0; color: var(--warning); font-size: 12px; }
