@@ -19,6 +19,20 @@ import { verifyRelease, requireSourceRelease } from "./service-release";
 import { requireCondition, ContractError } from "./errors";
 import { serviceLog } from "./service-log";
 
+export const SERVICE_STARTUP_TIMEOUT_MS = 60_000;
+export async function waitForServiceHealth<T>(check: () => Promise<T>, timeoutMs = SERVICE_STARTUP_TIMEOUT_MS): Promise<T> {
+  requireCondition(Number.isFinite(timeoutMs) && timeoutMs > 0, "INVALID_TIMEOUT", "Startup timeout must be finite and positive");
+  const deadline = performance.now() + timeoutMs;
+  let failure: unknown;
+  do {
+    try { return await check(); } catch (error) { failure = error; }
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) break;
+    await Runtime.sleep(Math.min(100, remaining));
+  } while (performance.now() < deadline);
+  throw failure;
+}
+
 export async function serviceStatus(state: ServiceState) {
   const config = state.config();
   const response = await fetch(
@@ -116,17 +130,13 @@ export async function ensureService(
         };
       } catch {}
       start();
-      for (let attempt = 0; attempt < 100; attempt++) {
-        try {
-          const current = await serviceStatus(state);
-          return {
-            ...current,
-            url: `http://127.0.0.1:${config.port}/runs/${encodeURIComponent(input.run_id)}/`,
-          };
-        } catch {
-          await Runtime.sleep(100);
-        }
-      }
+      try {
+        const current = await waitForServiceHealth(() => serviceStatus(state));
+        return {
+          ...current,
+          url: `http://127.0.0.1:${config.port}/runs/${encodeURIComponent(input.run_id)}/`,
+        };
+      } catch {}
       throw new ContractError(
         "SERVICE_START_FAILED",
         "Viewer did not become healthy; use service doctor",

@@ -30,7 +30,7 @@ import { ServiceAuth } from "./service-auth";
 import { verifyRelease, requireSourceRelease } from "./service-release";
 import { requireCondition } from "./errors";
 import { type ReleaseManifest } from "./service-contract";
-import { serviceStatus } from "./service-lifecycle";
+import { serviceStatus, SERVICE_STARTUP_TIMEOUT_MS, waitForServiceHealth } from "./service-lifecycle";
 import {
   unloadUserService,
   writeLaunchdDefinition,
@@ -144,7 +144,7 @@ export async function switchRelease(
   state: ServiceState,
   source: string,
   rollback = false,
-  control = nativeServiceControl,
+  control: typeof nativeServiceControl & { startupTimeoutMs?: number } = nativeServiceControl,
   approval?: DowngradeApproval,
 ) {
   state.initialize();
@@ -153,6 +153,8 @@ export async function switchRelease(
       join(state.paths.data, ".maintenance.lock"),
       async () => {
         const old = state.config();
+        const startupTimeoutMs = control.startupTimeoutMs ?? SERVICE_STARTUP_TIMEOUT_MS;
+        requireCondition(Number.isFinite(startupTimeoutMs) && startupTimeoutMs > 0, "INVALID_TIMEOUT", "Startup timeout must be finite and positive");
         const selected = rollback ? old.previous_build : null;
         requireCondition(
           !rollback || selected,
@@ -194,19 +196,21 @@ export async function switchRelease(
           });
           state.renew(
             { id: "maintenance", kind: "agent", thread_id: null, run_id: null },
-            30_000,
+            startupTimeoutMs + 30_000,
           );
           control.start(state);
-          for (let index = 0; index < 100; index++) {
-            try {
-              await control.status(state);
-              state.release("maintenance");
-              return { build_id: manifest.build_id, changed: true };
-            } catch {
-              await Runtime.sleep(100);
-            }
+          // Native launchctl calls have their own bounded runtime. Refresh the
+          // temporary lease so readiness receives its complete health window.
+          state.renew(
+            { id: "maintenance", kind: "agent", thread_id: null, run_id: null },
+            startupTimeoutMs + 30_000,
+          );
+          try {
+            await waitForServiceHealth(() => control.status(state), startupTimeoutMs);
+          } catch {
+            throw new Error("New build did not become healthy");
           }
-          throw new Error("New build did not become healthy");
+          return { build_id: manifest.build_id, changed: true };
         } catch (error) {
           control.unload(state);
           await waitStopped();
@@ -229,20 +233,18 @@ export async function switchRelease(
                 thread_id: null,
                 run_id: null,
               },
-              30_000,
+              startupTimeoutMs + 30_000,
             );
-            control.start(state);
             let recovered = false;
-            for (let index = 0; index < 100; index++) {
-              try {
-                await control.status(state);
-                recovered = true;
-                break;
-              } catch {
-                await Runtime.sleep(100);
-              }
-            }
-            state.release("maintenance");
+            try {
+              control.start(state);
+              state.renew(
+                { id: "maintenance", kind: "agent", thread_id: null, run_id: null },
+                startupTimeoutMs + 30_000,
+              );
+              await waitForServiceHealth(() => control.status(state), startupTimeoutMs);
+              recovered = true;
+            } catch {}
             requireCondition(
               recovered,
               "ROLLBACK_HEALTH_FAILED",
@@ -250,6 +252,8 @@ export async function switchRelease(
             );
           }
           throw error;
+        } finally {
+          state.release("maintenance");
         }
       },
     ),
