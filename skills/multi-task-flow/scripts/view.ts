@@ -1,3 +1,4 @@
+import { conversationArchiveEligibility } from "./conversation-eligibility";
 import { runtimeTaskState } from "../web/task-state";
 import { planWarnings } from "./view-warnings";
 export { planWarnings, type PlanWarning } from "./view-warnings";
@@ -280,6 +281,7 @@ export function buildView(
         hold_reason: isHeld ? "等待高影响计划修订批准" : null,
         latest_agent_output: outputs[task.id] ?? initialOutput(task.thread_id),
         latest_output: outputs[task.id]?.text ?? null,
+        conversation_archive: conversationArchiveEligibility(ledger, task.id),
         conversation_resource: task.thread_id
           ? ledger.resources.find(
               (resource) =>

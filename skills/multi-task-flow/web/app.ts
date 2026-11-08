@@ -1,3 +1,4 @@
+import { hasArchiveAction } from "./conversation-control";
 import { installTextTooltips } from "./tooltip";
 import { runtimeTaskState } from "./task-state";
 import { refreshResourcePopover } from "./resource-popover";
@@ -43,13 +44,14 @@ function applyOutputs(next: OutputSnapshot, requestEpoch?: string | null): void 
   let idleChanged = false;
   for (const task of data.tasks) {
     const previousState = task.state;
+    const previousArchiveAction = hasArchiveAction(task);
     const output = outputSnapshot.outputs[`task:${task.id}`] ?? outputSnapshot.outputs[task.id];
     task.latest_agent_output = output?.thread_id === task.thread_id ? output : initialOutput(task.thread_id);
     const observedState = runtimeTaskState(task, task.latest_agent_output);
     if (observedState === "agent_idle" && previousState !== "agent_idle") task.agent_resume_state = previousState as "starting" | "running";
     task.state = observedState;
     if (observedState !== "agent_idle") delete task.agent_resume_state;
-    idleChanged ||= previousState !== task.state;
+    idleChanged ||= previousState !== task.state || previousArchiveAction !== hasArchiveAction(task);
   }
   for (const group of data.groups) {
     const thread = group.delivery_unit_kind === "bootstrap" ? data.orchestration.owner_thread_id : group.agent_thread_id;
@@ -86,11 +88,15 @@ function label(task: Task): string { return task.state === "planned" && task.is_
 async function archiveConversation(taskId: string, action: "archive" | "unarchive" = "archive"): Promise<void> {
   try {
     const response = await fetch("api/conversation-archive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ task_id: taskId, action }) });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      await refresh();
+      throw new Error(error.message ?? error.error ?? `HTTP ${response.status}`);
+    }
     await refresh();
-  } catch {
+  } catch (error) {
     const notice = document.getElementById("connection-notice");
-    if (notice) { notice.hidden = false; notice.textContent = "对话归档操作失败，请稍后重试并检查资源状态。"; }
+    if (notice) { notice.hidden = false; notice.textContent = `对话归档未完成：${error instanceof Error ? error.message : "请稍后重试并检查资源状态"}`; }
   }
 }
 function groupColor(groupId: string | null): string { if (!data || !groupId) return "#87978f"; const index = data.groups.findIndex((item) => item.id === groupId); return palette[Math.max(0, index) % palette.length] ?? "#87978f"; }
