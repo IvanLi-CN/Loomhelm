@@ -27,6 +27,7 @@ Business feature implementation and public business contract finalization requir
 
 ## Policy routing
 
+- Development previews: `.agents/skills/development-preview/SKILL.md`; read after interactive Web UI changes or when the owner requests a development preview.
 - Markdown edits and hooks: `.agents/skills/markdown-style/SKILL.md`.
 - Fresh worktrees, setup and local resource recovery: `.agents/skills/worktree-bootstrap/SKILL.md`.
 - CI, required checks, waivers and delivery gates: `.agents/skills/quality-gates/SKILL.md`.
