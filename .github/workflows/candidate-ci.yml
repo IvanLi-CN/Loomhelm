@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  administration: read
 
 concurrency:
   group: loomhelm-pr-candidate-${{ github.event.pull_request.number || github.ref }}
