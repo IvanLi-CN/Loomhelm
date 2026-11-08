@@ -1793,7 +1793,7 @@ export function execute(
         !ledger.operations.some(
           (item) =>
             item.id !== op.id &&
-            activeOperation(item) &&
+            item.kind === "dispatch" &&
             item.request.native_request_id === nativeId,
         ),
         "NATIVE_REQUEST_CONFLICT",

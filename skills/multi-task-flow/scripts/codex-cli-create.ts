@@ -12,9 +12,11 @@ export type CliRun = {
 };
 export type CliCreationInput = {
   title: string; prompt: string; model: string; thinking: string; cwd?: string;
+  repository?: RepositoryIdentity;
   native_request_id?: string;
   onThreadStarted?: (threadId: string) => void;
 };
+export type RepositoryIdentity = { host: string; owner: string; name: string };
 
 /** Each process belongs to this attempt; no shell or inherited stdin. */
 export async function runInitialization(input: CliCreationInput): Promise<CliRun> {
@@ -86,6 +88,40 @@ async function readAndNameThread(threadId: string, title: string): Promise<Recor
   } finally { socket.destroy(); }
 }
 
+function parseRemoteRepository(remote: string): RepositoryIdentity | null {
+  const value = remote.trim();
+  const scp = value.match(/^[^@]+@([^:]+):(.+)$/);
+  const hostPath = scp
+    ? `${scp[1]}/${scp[2]}`
+    : value.includes("://")
+      ? value.slice(value.indexOf("://") + 3).replace(/^[^/]*@/, "")
+      : value;
+  const parts = hostPath.split("/").filter(Boolean);
+  if (parts.length < 3) return null;
+  const name = parts.at(-1)?.replace(/\.git$/, "");
+  const owner = parts.at(-2);
+  const host = parts[0];
+  return host && owner && name ? { host, owner, name } : null;
+}
+
+function repositoryKey(repository: RepositoryIdentity): string {
+  return [repository.host, repository.owner, repository.name]
+    .map((value) => value.trim().replace(/\.git$/, "").toLowerCase())
+    .join("/");
+}
+
+export function verifyRepositoryIdentity(cwd: string, expected: RepositoryIdentity): void {
+  let remote: string;
+  try {
+    remote = execFileSync("git", ["-C", cwd, "remote", "get-url", "origin"], { encoding: "utf8", timeout: 10_000 }).trim();
+  } catch {
+    throw new Error("Repository origin is unavailable");
+  }
+  const actual = parseRemoteRepository(remote);
+  if (!actual || repositoryKey(actual) !== repositoryKey(expected))
+    throw new Error("Repository identity does not match the orchestration repository");
+}
+
 function verifyWorktree(cwd: string, source: string, threadId: string): string {
   const git = (path: string, args: string[]) => execFileSync("git", ["-C", path, ...args], { encoding: "utf8", timeout: 10_000 }).trim();
   const actual = realpathSync(cwd), root = realpathSync(git(cwd, ["rev-parse", "--show-toplevel"]));
@@ -107,6 +143,7 @@ export async function createCliThread(input: CliCreationInput, dependencies = {
   let execution: CliRun | undefined;
   let workspace_path: string | undefined;
   try {
+    if (input.repository) verifyRepositoryIdentity(input.cwd ?? process.cwd(), input.repository);
     execution = await dependencies.run(input);
     if (execution.error || execution.exit_code !== 0 || !execution.turn_completed || !execution.thread_id)
       throw new Error(execution.error ?? "Initialization did not finish with a unique persisted thread and normal exit");

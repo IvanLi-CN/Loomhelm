@@ -441,6 +441,7 @@ try {
       title: payload.title,
       prompt: payload.prompt,
       native_request_id: nativeRequestId,
+      repository: ledger.repository,
       onThreadStarted: (threadId) => {
         const current = validateLedger(store.read());
         store.update(raw => apply(raw, "dispatch-progress", {

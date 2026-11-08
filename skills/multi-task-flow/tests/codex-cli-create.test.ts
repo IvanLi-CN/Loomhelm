@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCliThread, runInitialization, INITIALIZATION_PROMPT, type CliRun } from "../scripts/codex-cli-create";
+import { createCliThread, runInitialization, INITIALIZATION_PROMPT, verifyRepositoryIdentity, type CliRun } from "../scripts/codex-cli-create";
 
 const input = { title: "test", prompt: "DO NOT EXECUTE THIS TASK", cwd: process.cwd(), model: "gpt-6.1-sol", thinking: "max" };
 const completed: CliRun = { thread_id: "thread-a", exit_code: 0, turn_completed: true, events: ["thread.started", "turn.completed"] };
@@ -23,6 +23,16 @@ test("actual profile and Codex ownership are required; initial HEAD is separate 
   expect(success).not.toHaveProperty("development_baseline");
   expect((await createCliThread(input, { ...deps, read: async () => ({ ...await read(), model: "other" }) })).outcome).toBe("unknown");
   expect((await createCliThread(input, { ...deps, verify: () => { throw new Error("ownership mismatch"); } })).outcome).toBe("unknown");
+});
+test("repository identity is checked before starting the external CLI", async () => {
+  expect(() => verifyRepositoryIdentity(input.cwd!, { host: "github.com", owner: "other", name: "repo" })).toThrow("Repository identity");
+  let started = false;
+  const receipt = await createCliThread(
+    { ...input, repository: { host: "github.com", owner: "other", name: "repo" } },
+    { run: async () => { started = true; return completed; }, read, verify: () => "a".repeat(40) },
+  );
+  expect(receipt.outcome).toBe("unknown");
+  expect(started).toBe(false);
 });
 test("real subprocess receives literal argv and EOF, never the formal prompt; thread identity persists before exit", async () => {
   const root = mkdtempSync(join(tmpdir(), "cli-adapter-"));

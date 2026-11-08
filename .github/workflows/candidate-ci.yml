@@ -251,6 +251,11 @@ jobs:
           bun skills/scripts/test-skills-native.ts
           bun test ./skills/bin/native-tests/core ./skills/bin/native-tests/visual
 
+      - name: Verify multi-task-flow contracts on macOS
+        run: |
+          bun install --cwd skills/multi-task-flow --frozen-lockfile --ignore-scripts --backend=copy
+          bun run --cwd skills/multi-task-flow test
+
       - name: Verify isolated viewer label upgrade
         timeout-minutes: 8
         run: |

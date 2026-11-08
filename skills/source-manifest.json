@@ -14199,7 +14199,7 @@
       "path": "skills/multi-task-flow/scripts/engine.ts",
       "sourceBlob": "ffd435e1e2211f7aecadab3004a909ff2828df07",
       "sourceSha256": "a4d00c849601abdbe2e08ccb26978fba04ca4042b33213e46c1206aa47273a8b",
-      "installedSha256": "67c0214ee68db88c71e812fbabb7875ac4a3c96611032bc91f7cc740684c02c8",
+      "installedSha256": "f1cda3bd2c473b660d42b237deb83aa9c06750abe3df7e48c4ca7c06570a9df3",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14247,7 +14247,7 @@
       "path": "skills/multi-task-flow/scripts/orchestrate.ts",
       "sourceBlob": "81c6ce8ba1c8183231b632b141b63fc4f95c9a42",
       "sourceSha256": "fd5e4c54b33a6e7e1bdff96d4eb01cdbed02484dabde36fc52abb91c05b6a6e7",
-      "installedSha256": "7359a642bb270f5ad7c350babf6b9d38602f22afff6046b5ab182989a86f3f21",
+      "installedSha256": "88de656a874ef7f78974dc004f70b29154792a8fe6071dc2c6c01483c89b5ccf",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14631,7 +14631,7 @@
       "path": "skills/multi-task-flow/tests/engine.test.ts",
       "sourceBlob": "211c5f1c5aa29985081f46b57abafdd3fa6b754a",
       "sourceSha256": "d5b24f927769c659fad43d83bf3ef9dd6e2df68339ccdc29be7cfa695c817361",
-      "installedSha256": "dc48b093aa3c51ff4638d5442e7eda6788508cbde7a492a6eb1b2013958484ed",
+      "installedSha256": "3f75c955c3717af3234845526661ed3cc8c29cdcd9f1d7fa2e19ef301d4d50ef",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15722,7 +15722,7 @@
     },
     {
       "path": "skills/multi-task-flow/scripts/codex-cli-create.ts",
-      "installedSha256": "39aca5f2ed54bc6588a600125ecca72751ec020ff8eab3b97eed1dff9f91b52e"
+      "installedSha256": "5d55401dcd55aa9782bd5919566f68672c86f436fee2594b7834d9e032235e00"
     },
     {
       "path": "skills/multi-task-flow/scripts/conversation-eligibility.ts",
@@ -15742,7 +15742,7 @@
     },
     {
       "path": "skills/multi-task-flow/tests/codex-cli-create.test.ts",
-      "installedSha256": "fab9b267df305f046e9604af9abcbfddf2aba18d20338794a0e475800b0927eb"
+      "installedSha256": "4ed92ae0569920f2951b2c3c9aad4e6b368105b960dd1d2a7a35c1a7d2a650a1"
     },
     {
       "path": "skills/multi-task-flow/tests/conversation-archive.test.ts",
