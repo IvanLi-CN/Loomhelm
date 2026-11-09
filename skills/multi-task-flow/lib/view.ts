@@ -271,6 +271,7 @@ export function buildView(
   const tasks = ledger.tasks
     .filter((task) => selectedTaskIds.has(task.id))
     .map((task) => {
+      const owner = ledger.groups.find((item) => item.id === task.group_id);
       let isReady = false;
       const isHeld =
         activePlan.revision?.paused_task_ids.includes(task.id) === true &&
@@ -307,6 +308,16 @@ export function buildView(
         : [];
       return {
         ...task,
+        dispatch_readiness:
+          task.execution_owner === null && task.conversation_policy === null && task.delivery_policy === null
+            ? "unknown"
+            : owner && (owner.delivery_unit_kind === "bootstrap" || !!owner.agent_thread_id)
+              ? "ready"
+              : "blocked",
+        dispatch_diagnostics:
+          owner && owner.delivery_unit_kind === "regular" && !owner.agent_thread_id
+            ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }]
+            : [],
         state: runtimeTaskState(task, outputs[task.id]),
         ...(runtimeTaskState(task, outputs[task.id]) === "agent_idle" && task.state !== "agent_idle" ? { agent_resume_state: task.state } : {}),
         atoms: atoms.map((atom) => ({
@@ -366,6 +377,8 @@ export function buildView(
         activePlan.id !== executionPlan.id ||
         activePlan.lifecycle !== "approved",
       scheduling_eligible: isApprovedExecution && completenessIssues.length === 0,
+      dispatch_readiness: ledger.groups.every((item) => item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id) ? "ready" : "blocked",
+      delivery_agent_readiness: ledger.groups.some((item) => item.delivery_unit_kind === "regular" && !item.agent_thread_id) ? "unbound" : "bound",
       completeness: {
         status: completenessIssues.length === 0 ? "complete" : "blocked",
         issues: completenessIssues,
@@ -380,6 +393,9 @@ export function buildView(
     semantic_context: localSemanticProjection(ledger, "dashboard_view"),
     groups: atomProjection.groups.map((item) => ({
       ...item,
+      delivery_agent_readiness: item.delivery_unit_kind === "bootstrap" ? "not_applicable" : item.agent_thread_id ? "bound" : "unbound",
+      dispatch_readiness: item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id ? "ready" : "blocked",
+      dispatch_diagnostics: item.delivery_unit_kind === "regular" && !item.agent_thread_id ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }] : [],
       ...profileProjection(ledger, "group", item),
       latest_agent_output: outputs[`group:${item.id}`] ?? initialOutput(item.delivery_unit_kind === "bootstrap" ? ledger.control.owner_thread_id : item.agent_thread_id),
       started_at: ledger.events.find(e => e.type === "group_execution_updated" && e.data.group_id === item.id && e.data.state === "running")?.occurred_at ?? null,

@@ -36,6 +36,7 @@ import {
   type Ledger,
   type Plan,
   type Task,
+  validateTaskExecutionPolicies,
 } from "../lib/schema";
 import {
   buildPlanRevision,
@@ -183,6 +184,7 @@ function legacyLedger(ledger: Ledger): boolean {
 }
 function ensureSchedulable(ledger: Ledger, candidate: Plan): void {
   if (legacyLedger(ledger) || ledger.source_schema_version === 1) return;
+  validateTaskExecutionPolicies(ledger.tasks);
   validateSchedulablePlan(candidate);
   if (ledger.schema_version !== 2) return;
   const contributionTasks = ledger.tasks.filter(

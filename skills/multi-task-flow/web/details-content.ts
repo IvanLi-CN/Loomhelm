@@ -194,6 +194,10 @@ export function createDetailContent(context: DetailContentContext) {
       conversation.append(text("p", `${presentation.label}：${presentation.description}`, "detail-conversation-notice"));
     }
     field(container, "任务对话", conversation);
+    field(container, "执行 Agent", task.execution_owner === "main" ? "Main Agent" : task.execution_owner === "delivery_agent" ? "交付 Agent" : task.execution_owner === "task_agent" ? "Task Agent" : "未声明");
+    field(container, "对话策略", task.conversation_policy ?? "未声明");
+    field(container, "交付策略", task.delivery_policy ?? "未声明");
+    field(container, "调度状态", task.dispatch_readiness === "blocked" ? `不可调度：${task.dispatch_diagnostics?.map((item) => item.message).join("；") || "未知原因"}` : task.dispatch_readiness === "ready" ? "可调度" : "未知");
     const pr = context.safeExternal(task.pr?.url ?? null);
     if (pr) field(container, "子 PR", link("查看 PR", pr));
     if (task.requirements_path) field(container, "任务要求", link("查看 Markdown", `api/document/task-${encodeURIComponent(task.id)}`));
@@ -233,6 +237,8 @@ export function createDetailContent(context: DetailContentContext) {
       field(container, "执行配置", createProfileEditor(profileContext, "group", group.id, group.execution_profile ?? null, group.effective_execution_profile ?? data.orchestration.execution_profile ?? null, data.profile_read_only ? "当前视图只读或尚未迁移" : group.profile_freeze_reason ?? (group.agent_thread_id ? "对话已创建" : null)));
     }
     field(container, "交付单元对话", group.agent_thread_id ? link("打开对话", conversationUrl(group.agent_thread_id)) : "尚未创建");
+    field(container, "交付 Agent", group.delivery_unit_kind === "bootstrap" ? "Main Agent（Bootstrap 特例）" : group.delivery_agent_readiness === "bound" ? "已绑定" : "未绑定");
+    field(container, "调度状态", group.dispatch_readiness === "blocked" ? `不可调度：${group.dispatch_diagnostics?.map((item) => item.message).join("；") || "未知原因"}` : group.dispatch_readiness === "ready" ? "可调度" : "未知");
     const pr = context.safeExternal(group.parent_pr?.url ?? null);
     field(container, "父 PR", pr ? link("查看 PR", pr) : "尚未创建");
     if (group.requirements_path) field(container, "交付单元要求", link("查看 Markdown", `api/document/group-${encodeURIComponent(group.id)}`));
