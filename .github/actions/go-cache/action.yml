@@ -56,6 +56,8 @@ runs:
         go clean -testcache
         echo "Go modules hit=$MODULE_HIT key=$GO_MODULE_KEY"
         echo "Go build hit=$BUILD_HIT matched=$BUILD_MATCH requested=$GO_BUILD_KEY"
+        echo "GO_MODULE_EXACT_HIT=$([[ \"$MODULE_HIT\" == \"true\" ]] && echo true || echo false)" >> "$GITHUB_ENV"
+        echo "GO_BUILD_EXACT_HIT=$([[ \"$BUILD_MATCH\" == \"$GO_BUILD_KEY\" ]] && echo true || echo false)" >> "$GITHUB_ENV"
     - name: Measure cache sizes
       if: inputs.operation == 'save'
       id: sizes
@@ -74,6 +76,7 @@ runs:
     - name: Save dependency cache from candidate producer
       if: >-
         inputs.operation == 'save' && inputs.purpose == 'candidate' && success() &&
+        env.GO_MODULE_EXACT_HIT != 'true' &&
         steps.sizes.outputs.module == 'true' &&
         (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
@@ -85,6 +88,7 @@ runs:
     - name: Save purpose build cache
       if: >-
         inputs.operation == 'save' && success() && steps.sizes.outputs.build == 'true' &&
+        env.GO_BUILD_EXACT_HIT != 'true' &&
         (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
       continue-on-error: true
