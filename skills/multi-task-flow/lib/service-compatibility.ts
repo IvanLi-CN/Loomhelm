@@ -37,9 +37,14 @@ function releaseReader(
       code: z.literal("OK"),
       result: z.object({ contract: z.string().min(1), revision: z.number().int().nonnegative() }).strict(),
     }).strict().parse(JSON.parse(result.stdout.toString()));
-    const expectedContract = ledgerContract(ledger);
+    const expectedContracts = new Set<string>([ledgerContract(ledger)]);
+    try {
+      const normalized = structuredClone(ledger);
+      validateLedger(normalized);
+      expectedContracts.add(ledgerContract(normalized));
+    } catch {}
     const expectedRevision = z.number().int().nonnegative().parse((ledger as { revision?: unknown }).revision);
-    if (parsed.result.contract !== expectedContract || parsed.result.revision !== expectedRevision) {
+    if (!expectedContracts.has(parsed.result.contract) || parsed.result.revision !== expectedRevision) {
       const failure = { ok: false as const, code: "LEDGER_UNREADABLE" };
       readerCache.set(cacheKey, failure);
       return failure;
