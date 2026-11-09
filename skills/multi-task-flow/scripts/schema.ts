@@ -417,7 +417,7 @@ export const fact = z
   .object({
     id,
     kind: z.enum([
-      "child_review",
+      "task_quality",
       "pr_merged",
       "branch_published",
       "pr_published",
@@ -432,6 +432,24 @@ export const fact = z
     observed_at: timestamp,
     sha: sha.nullable(),
     evidence_ref: nullableText,
+    quality: z
+      .object({
+        task_id: id,
+        thread_id: text,
+        pr: externalRef,
+        base_sha: sha,
+        head_sha: sha,
+        acceptance_refs: z.array(text).min(1),
+        checks: z
+          .array(
+            z
+              .object({ name: text, status: z.literal("passed"), evidence_ref: text })
+              .strict(),
+          )
+          .min(1),
+      })
+      .nullable()
+      .optional(),
     receipt: providerReceipt.nullable().optional(),
   })
   .strict();

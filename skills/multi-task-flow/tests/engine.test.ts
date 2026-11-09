@@ -14,6 +14,18 @@ const at = "2026-01-01T00:00:00.000Z";
 const main = { role: "main", thread_id: "main-thread" } as const;
 const groupActor = { role: "group", thread_id: "group-thread" } as const;
 
+function taskQuality(taskId: string, threadId: string, pr: any, baseSha: string, headSha: string) {
+  return {
+    task_id: taskId,
+    thread_id: threadId,
+    pr,
+    base_sha: baseSha,
+    head_sha: headSha,
+    acceptance_refs: ["acceptance"],
+    checks: [{ name: "tests", status: "passed" as const, evidence_ref: "tests" }],
+  };
+}
+
 type FixtureLedger = Ledger & {
   plans: [Plan, ...Plan[]];
   groups: [Ledger["groups"][number], ...Ledger["groups"][number][]];
@@ -644,7 +656,7 @@ describe("orchestration state", () => {
     );
     apply(
       ledger,
-      "review-record",
+      "task-quality-record",
       request(
         ledger,
         "task-review",
@@ -653,16 +665,17 @@ describe("orchestration state", () => {
           base_sha: base,
           evidence: {
             id: "task-review-fact",
-            kind: "child_review",
+            kind: "task_quality",
             subject_id: "a",
             status: "passed",
-            source: "group-thread",
+            source: taskActor.thread_id,
             observed_at: at,
             sha: base,
             evidence_ref: "review-proof",
+            quality: taskQuality("a", taskActor.thread_id, childPr.pr, base, base),
           },
         },
-        groupActor,
+        taskActor,
       ),
     );
     apply(
@@ -1732,10 +1745,10 @@ describe("orchestration state", () => {
         "merge-claim",
         request(ledger, "premature", claim, taskActor),
       ),
-    ).toThrow("review");
+    ).toThrow("quality proof");
     apply(
       ledger,
-      "review-record",
+      "task-quality-record",
       request(
         ledger,
         "review",
@@ -1744,16 +1757,17 @@ describe("orchestration state", () => {
           base_sha: base,
           evidence: {
             id: "review-fact",
-            kind: "child_review",
+            kind: "task_quality",
             subject_id: "a",
             status: "passed",
-            source: coordinator.thread_id,
+            source: taskActor.thread_id,
             observed_at: at,
             sha: head,
             evidence_ref: "review-proof",
+            quality: taskQuality("a", taskActor.thread_id, pr, base, head),
           },
         },
-        coordinator,
+        taskActor,
       ),
     );
     apply(
@@ -2019,7 +2033,7 @@ describe("orchestration state", () => {
     );
     apply(
       ledger,
-      "review-record",
+      "task-quality-record",
       request(
         ledger,
         "review-b",
@@ -2028,16 +2042,17 @@ describe("orchestration state", () => {
           base_sha: base,
           evidence: {
             id: "review-b",
-            kind: "child_review",
+            kind: "task_quality",
             subject_id: "b",
             status: "passed",
-            source: "group-thread",
+            source: actor.thread_id,
             observed_at: at,
             sha: head,
             evidence_ref: "review-proof",
+            quality: taskQuality("b", actor.thread_id, pr, base, head),
           },
         },
-        groupActor,
+        actor,
       ),
     );
     const claim = {

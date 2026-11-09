@@ -3010,11 +3010,11 @@ export function execute(
       });
       return { task_id: taskId, base_sha: baseSha };
     }
-    case "review-record": {
+    case "task-quality-record": {
       const taskId = parse(id, payload.task_id);
+      requireCondition(request.actor.role === "task", "FORBIDDEN", "Only the task Agent may record task quality", 3);
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
-      requireOwner(ledger, request, "group", target.group_id);
       requireCondition(
         target.pr &&
           taskExecutionState(target) === "running" &&
@@ -3032,19 +3032,24 @@ export function execute(
         payload.base_sha === owner.current_sha &&
           target.base_sha === owner.current_sha,
         "BASE_CHANGED",
-        "Review must bind the task and current parent base",
+        "Quality proof must bind the task and current parent base",
         3,
       );
       const review = parse(fact, payload.evidence);
       requireCondition(
-        review.kind === "child_review" &&
+        review.kind === "task_quality" &&
           review.subject_id === taskId &&
           review.status === "passed" &&
           review.sha &&
           review.evidence_ref &&
-          review.source === request.actor.thread_id,
+        review.source === request.actor.thread_id &&
+        review.quality?.task_id === taskId &&
+        review.quality.thread_id === request.actor.thread_id &&
+        stable(review.quality.pr) === stable(target.pr) &&
+        review.quality.base_sha === owner.current_sha &&
+        review.quality.head_sha === review.sha,
         "EVIDENCE_REQUIRED",
-        "Delivery-unit review evidence must identify the exact task and head SHA",
+        "Task quality evidence must identify the exact task, PR, head, base, acceptance and checks",
         5,
       );
       ledger.facts.push(review);
@@ -3203,11 +3208,16 @@ export function execute(
           target.base_sha === owner.current_sha &&
             ledger.facts.some(
               (item) =>
-                item.kind === "child_review" &&
+                item.kind === "task_quality" &&
                 item.subject_id === taskId &&
                 item.status === "passed" &&
                 item.sha === headSha &&
-                item.source === groupOwnerThread(ledger, owner) &&
+                item.source === target.thread_id &&
+                item.quality?.task_id === taskId &&
+                item.quality.thread_id === target.thread_id &&
+                item.quality.base_sha === owner.current_sha &&
+                item.quality.head_sha === headSha &&
+                stable(item.quality.pr) === stable(target.pr) &&
                 ledger.events.some(
                   (event) =>
                     event.type === "fact_observed" &&
@@ -3215,8 +3225,8 @@ export function execute(
                     event.data.base_sha === owner.current_sha,
                 ),
             ),
-          "REVIEW_REQUIRED",
-          "Delivery-unit review for the exact child head and current parent base is required",
+          "QUALITY_REQUIRED",
+          "Task Agent quality proof for the exact child head and current parent base is required",
           4,
         );
         requireCondition(
@@ -3803,12 +3813,12 @@ export function execute(
       requireCondition(
         ![
           "pr_merged",
-          "child_review",
+          "task_quality",
           "branch_published",
           "pr_published",
         ].includes(observed.kind),
         "INVALID_FACT",
-        "Merge, review and publication facts require their dedicated operation",
+        "Quality, merge and publication facts require their dedicated operation",
         3,
       );
       requireCondition(
