@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
+import { createDemoLedger, createPlanningDemoLedger } from "../examples/orchestration-viewer/ledger";
 import { plan, validateSchedulablePlan } from "../scripts/schema";
 import { actualIntervals, buildView, planWarnings, plannedIntervals } from "../scripts/view";
 import { initialOutput } from "../web/agent-output";
@@ -40,6 +40,18 @@ describe("timeline projections", () => {
     expect(view.active_plan_id).toBe(view.execution_plan_id);
     expect(view.plan_state).toMatchObject({ approval_pending: false, lifecycle: "approved" });
     expect((view.semantic_context as { field_metadata: Record<string, unknown> }).field_metadata).toHaveProperty("execution_phase");
+  });
+
+  test("warns when a running group has no formal contribution dispatch", () => {
+    const ledger = createPlanningDemoLedger(1_767_200_000_000);
+    ledger.groups.find((group) => group.id === "dashboard")!.coordination_execution.state = "running";
+    ledger.tasks.filter((task) => task.group_id === "dashboard").forEach((task) => { task.thread_id = null; });
+    const view = buildView(ledger) as { warnings: Array<Record<string, unknown>> };
+    expect(view.warnings).toContainEqual(expect.objectContaining({
+      code: "formal_execution_missing",
+      group_id: "dashboard",
+      task_ids: ["dashboard-ui", "server", "integration"],
+    }));
   });
 
   test("projects the supplied conversation snapshot without mutating the ledger", () => {

@@ -184,6 +184,44 @@ function legacyLedger(ledger: Ledger): boolean {
 function ensureSchedulable(ledger: Ledger, candidate: Plan): void {
   if (legacyLedger(ledger) || ledger.source_schema_version === 1) return;
   validateSchedulablePlan(candidate);
+  if (ledger.schema_version !== 2) return;
+  const contributionTasks = ledger.tasks.filter(
+    (item) => item.disposition === "active" && isContributionKind(item.kind),
+  );
+  const groupIds = new Set(contributionTasks.map((item) => item.group_id));
+  const missing: string[] = [];
+  for (const groupId of groupIds) {
+    for (const kind of ["publish_branch", "publish_pr"] as const) {
+      const planned = candidate.actions.some(
+        (action) =>
+          action.kind === kind &&
+          action.group_id === groupId &&
+          action.task_id === null,
+      );
+      if (!planned) missing.push(`${kind}:group:${groupId}`);
+    }
+  }
+  for (const task of contributionTasks) {
+    const hasTaskPublication = candidate.actions.some(
+      (action) => action.task_id === task.id,
+    );
+    if (!hasTaskPublication) continue;
+    for (const kind of ["publish_branch", "publish_pr"] as const) {
+      const planned = candidate.actions.some(
+        (action) =>
+          action.kind === kind &&
+          action.task_id === task.id &&
+          action.group_id === null,
+      );
+      if (!planned) missing.push(`${kind}:task:${task.id}`);
+    }
+  }
+  requireCondition(
+    missing.length === 0,
+    "PLAN_NOT_DISPATCHABLE",
+    `Contribution execution requires approved publication actions: ${missing.join(", ")}`,
+    3,
+  );
 }
 function lifecycleTarget(
   ledger: Ledger,

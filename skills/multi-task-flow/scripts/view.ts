@@ -33,6 +33,33 @@ export type PlannedInterval = {
 
 const RELATIVE_EPOCH = Date.parse("2000-01-01T00:00:00.000Z");
 
+function formalExecutionWarnings(ledger: Ledger): Record<string, unknown>[] {
+  return ledger.groups.flatMap((group) => {
+    if (group.state !== "active" || group.coordination_execution.state !== "running")
+      return [];
+    const tasks = ledger.tasks.filter(
+      (task) =>
+        task.group_id === group.id &&
+        isContributionKind(task.kind) &&
+        ["planned", "ready"].includes(task.state),
+    );
+    if (!tasks.length) return [];
+    const taskIds = new Set(tasks.map((task) => task.id));
+    const hasDispatch = ledger.operations.some(
+      (operation) =>
+        operation.kind === "dispatch" &&
+        [group.id, ...taskIds].includes(operation.target_id),
+    );
+    if (hasDispatch || tasks.some((task) => task.thread_id)) return [];
+    return [{
+      code: "formal_execution_missing",
+      group_id: group.id,
+      task_ids: tasks.map((task) => task.id),
+      reason: "交付单元正在运行，但没有正式 task dispatch 或任务对话记录。",
+    }];
+  });
+}
+
 export function plannedIntervals(plan: Plan, maxRunning: number): PlannedInterval[] {
   const start = 0;
   const order = new Map(plan.nodes.map((node, index) => [node.id, index]));
@@ -373,6 +400,7 @@ export function buildView(
     plan_warnings: planWarnings(plan),
     warnings: [
       ...profileMigrationWarnings(ledger),
+      ...formalExecutionWarnings(ledger),
       ...ledger.operations
         .filter((item) => item.status === "unknown")
         .map((item) => ({
