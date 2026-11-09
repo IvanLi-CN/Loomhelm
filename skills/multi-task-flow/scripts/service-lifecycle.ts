@@ -82,6 +82,11 @@ export async function ensureService(
     "Viewer is not installed; use explicit service install maintenance",
   );
   state.initialize();
+  const { discoverCandidate, switchRelease } = await import("./service-maintenance");
+  const candidate = discoverCandidate(state);
+  if (candidate) {
+    await switchRelease(state, join(state.paths.candidates, candidate.build_id));
+  }
   return withExclusiveLockAsync(
     join(state.paths.state, "startup.lock"),
     async () => {

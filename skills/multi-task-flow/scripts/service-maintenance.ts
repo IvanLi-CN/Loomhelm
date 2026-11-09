@@ -81,6 +81,28 @@ export function checkDataCompatibility(
   requireReport(compatibilityReport(state, manifest), approval);
 }
 
+function versionKey(value: string): number[] {
+  return value.replace(/^[^0-9]*/, "").split(/[.-]/).slice(0, 3).map((part) => Number(part) || 0);
+}
+
+export function discoverCandidate(state: ServiceState): ReleaseManifest | null {
+  if (!existsSync(state.paths.candidates)) return null;
+  const candidates = readdirSync(state.paths.candidates, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(state.paths.candidates, entry.name))
+    .map((path) => { try { return verifyRelease(path); } catch { return null; } })
+    .filter((manifest): manifest is ReleaseManifest => Boolean(manifest) && manifest!.schema_version === 2)
+    .filter((manifest) => manifest.platform === `${process.platform}-${process.arch}`)
+    .sort((left, right) => {
+      const a = versionKey(right.service_version);
+      const b = versionKey(left.service_version);
+      for (let index = 0; index < 3; index++) if (a[index] !== b[index]) return a[index] - b[index];
+      return right.build_id.localeCompare(left.build_id);
+    });
+  const current = state.config().current_build;
+  return candidates.find((manifest) => manifest.build_id !== current) ?? null;
+}
+
 export async function installRelease(
   state: ServiceState,
   source: string,

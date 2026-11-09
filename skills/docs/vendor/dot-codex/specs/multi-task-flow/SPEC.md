@@ -9,7 +9,7 @@
 ## 术语与接口
 
 - 领域术语定义在根目录 `GLOSSARY.md`。
-- 主 Agent 直接控制整个编排。交付单元是共享父分支和父 PR 路径的子任务虚拟整合单元；为兼容账本而保留的内部字段 `group_id` 只表达分类和验收范围，不表示原生会话父级或管理权转移。交付单元会话与任务会话仍是由主 Agent 直接管理的平级会话。交付协调 Agent 只承担获授权的协调职责，不是第二个主 Agent。
+- 主 Agent（main Agent） 直接控制整个编排。交付单元是共享父分支和父 PR 路径的子任务虚拟整合单元；为兼容账本而保留的内部字段 `group_id` 只表达分类和验收范围，不表示原生会话父级或管理权转移。交付单元会话与任务会话仍是由主 Agent（main Agent） 直接管理的平级会话。交付协调者（Delivery coordinator） 只承担获授权的协调职责，不是第二个主 Agent（main Agent）。
 - Skill 负责本地 Bun/TypeScript 命令接口、JSON 账本和账本投影的 loopback dashboard。共享 viewer 可以保存服务认证、使用租约和明确的全局 UI 主题偏好，但可通过认证 API 写入明确支持的执行配置及对话归档资源回执，其他编排事实保持只读。
 
 ## Requirements
@@ -67,7 +67,7 @@
 ### REQ-ORCH-004
 
 - 系统必须区分任务集成、任务收口、交付单元完成和资源清理，并保留需要调度处理的通知直到收到确认。
-- 普通任务或交付单元阻塞应记录在其所属会话中，只有影响调度时才需要通知主 Agent。
+- 普通任务或交付单元阻塞应记录在其所属会话中，只有影响调度时才需要通知主 Agent（main Agent）。
 
 ### REQ-ORCH-005
 
@@ -89,7 +89,7 @@
 ### REQ-ORCH-014
 
 - The runtime MUST model delivery-unit atoms independently from contribution-task atoms. A plan MAY define ordered `group_atoms`; a runtime `Group.atoms` preserves stable IDs, ownership, purpose, output, lifecycle bindings and `planned`/`running`/`blocked`/`completed` state, while the existing `Task.atoms` and task dependency semantics remain unchanged. New delivery units default to prepare parent branch, create parent PR, verify integration, merge parent PR and closeout, with lifecycle bindings for `workspace_ready`, `pr_created`, `pr_merged` and `closed`; release and deployment work MUST NOT be duplicated automatically.
-- `group-atom-update` MUST be idempotent, revision-checked and serialized like other mutations, and may be called only by the bound delivery coordinator or main Agent. Atoms execute in order; lifecycle-bound completion requires the matching passed lifecycle evidence, and generic `group-update` MUST NOT overwrite atom or coordination execution state. Closing a group MUST complete its final closeout atom in the same transaction. Dynamic cuts MUST create an independent planned atom list without copying execution history.
+- `group-atom-update` MUST be idempotent, revision-checked and serialized like other mutations, and may be called only by the bound 交付协调者（Delivery coordinator） or 主 Agent（main Agent）. Atoms execute in order; lifecycle-bound completion requires the matching passed lifecycle evidence, and generic `group-update` MUST NOT overwrite atom or coordination execution state. Closing a group MUST complete its final closeout atom in the same transaction. Dynamic cuts MUST create an independent planned atom list without copying execution history.
 - A delivery unit MUST expose separate `coordination_execution` state (`unknown`, `idle`, `running`, `waiting`, `blocked`), reason and waiting contribution-task IDs. `group-execution-update` MUST be explicit, owner-authorized and reject invalid task references; waiting on contribution work requires a valid task ID and reason, and the dashboard MUST NOT infer coordination state from unfinished-task counts. Merged units may perform closeout; closed units cannot execute again.
 - Delivery-unit cards and details MUST show only their own atom progress and existing delivery-unit fields, while task cards and details show their own atoms and output. Dependency tooltips MUST list dependency names and status with hover, focus and long-press access, viewport clamping, scrolling, Escape/outside-click close and accessible tooltip semantics. Waiting for contribution work MUST use a non-rotating hourglass with a 1.8s opacity pulse, static under reduced motion; only explicit coordination execution uses the running spinner.
 - New writes MUST use `schema_version=2`/`contract_version=2`; legacy contracts remain read-only until explicit migration. Plan selection MUST join execution facts by stable IDs and ownership, and missing atom configuration MUST remain an explicit unconfigured state rather than fabricating history.
@@ -155,8 +155,14 @@
 - dashboard 必须允许编辑尚未创建对话的交付单元和任务的完整执行配置，并显示当前解析值与默认值来源。详情面板只编辑当前对象；模型与思考强度放在可展开的 dropdown 面板内，分别使用模型列表下拉框与离散滑动选择器。运行默认配置使用详情外的独立入口。已有线程或已提交 native 创建请求的对象必须冻结编辑。
 - 已有未完成 dispatch claim 的对象发生配置修改时，系统必须取消旧 claim、记录旧值与原因并要求重新 claim；不得让旧 claim 使用过期配置。
 - 对话创建必须通过 multi-task-flow CLI 的领域命令完成。CLI 必须读取当前配置、调用受支持的 native 创建能力、记录 native request ID 与真实 thread ID，并以完整配置证据完成 dispatch resolve；Agent 内置会话创建工具不属于正式创建路径。
-- 创建请求必须使用账本绑定的 native request ID 作为 app-server RPC identity，并保留创建参数与最终结果；重复的同内容请求不得创建第二个对话，不同内容复用 ID 必须被拒绝。
+- 创建请求必须使用账本绑定的 native request ID 作为外部进程 attempt identity，并保留创建参数与最终结果；重复的同内容请求不得创建第二个对话，不同内容复用 ID 必须被拒绝，包括使用新 request_id 覆盖同一 native ID 的 transport、cwd、prompt、title 或配置。
 - CLI 与 dashboard 都必须根据当前能力验证完整模型/思考强度组合。创建结果为 `unknown` 时必须先按 native request ID 对账，禁止直接重复创建；创建失败保留配置事实，修正后才能重新 claim。
+- 本机创建使用独立 `codex exec --worktree --json` 进程，工作区由 Codex 创建；stdin 关闭，首轮只确认初始化，不执行正式任务。线程身份一经收到立即持久化，实际配置、归属、独立工作区、初始 HEAD、回合完成及正常退出全部核验后才绑定成功。`project_id` 空值不单独失败。
+- 创建、绑定、平台消息接受、基线就绪和实际开工分别记录。绑定后主对话通过内置 `send_message_to_thread` 发送正式任务与调度消息；CLI 不以 `thread/resume + turn/start` 发起这些回合。
+- 新 exec 请求只有未观察到线程且证明进程未启动、未创建资源的前置失败才可 failed；所有已持久化的线程、工作区、初始 HEAD 和执行事实必须单调保留；后续空 unknown 或历史 transport 回执不能遗忘它们或释放 claim。
+- 原生发送使用持久 attempt 领取、内置工具发送、真实回执对账三步。重放不得再次发送，unknown 必须先对账，旧发送的在途文件锁保护继续生效。原生 provider 不能通过兼容命令直接记录成功或失败，对账须匹配当前 attempt 和 provider，不能用原生回执对账历史 provider attempt。
+- 开工前组 fetch 已核验远端主干并固定 SHA；子任务继承组父分支 SHA。只在本次新建且归属可核验的干净工作区对齐基线，失败即阻塞。现有 workspace readiness 还须核验开发基线，初始 HEAD 不替代它；通过后才能 running。
+- 尚未发起的创建使用新方式；历史 `thread/start`、`create_thread` 证据继续可读，不重建已有对话、不打断在途回合。桌面接管须以当前候选真实交接实证验收，无法观察不得宣称通过。
 
 ## Verification
 
