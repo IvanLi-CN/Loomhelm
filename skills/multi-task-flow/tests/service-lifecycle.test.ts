@@ -2,7 +2,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { PortRegistry, RegistryError } from "../../bin/modules/workspace/port_registry";
-import { runDaemon } from "../scripts/service-lifecycle";
+import { runDaemon } from "../lib/service-lifecycle";
 import { serviceFixture, fixtureRelease } from "./service-fixture";
 
 const restores: Array<() => void> = [];

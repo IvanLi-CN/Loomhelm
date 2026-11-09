@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { PortRegistry } from "../../bin/modules/workspace/port_registry";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
-import { LedgerStore } from "../scripts/store";
+import { LedgerStore } from "../lib/store";
 
 async function freePort(): Promise<number> {
   const listener = createServer();

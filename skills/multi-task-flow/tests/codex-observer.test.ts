@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { framePayload, websocketFrame } from "../scripts/codex-socket";
+import { framePayload, websocketFrame } from "../lib/codex-socket";
 
 describe("Codex socket framing", () => {
   test("decodes masked frames across all length encodings without consuming the next frame", () => {

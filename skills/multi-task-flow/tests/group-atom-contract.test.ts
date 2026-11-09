@@ -1,15 +1,15 @@
-import { apply } from "../scripts/engine";
+import { apply } from "../lib/engine";
 import { expect, test } from "bun:test";
 import {
   createDemoLedger,
   createPlanningDemoLedger,
 } from "../examples/orchestration-viewer/ledger";
-import { defaultGroupAtoms, group, validateLedger } from "../scripts/schema";
-import { buildView } from "../scripts/view";
+import { defaultGroupAtoms, group, validateLedger } from "../lib/schema";
+import { buildView } from "../lib/view";
 import {
   contractJsonSchema,
   localSemanticProjection,
-} from "../scripts/contract";
+} from "../lib/contract";
 
 test("rejects runtime group atoms outside the configured stable identity", () => {
   const ledger = createDemoLedger();

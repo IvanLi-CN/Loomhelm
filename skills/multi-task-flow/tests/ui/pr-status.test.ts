@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { bindPRStatus, publishPRStatus } from "../../web/pr-status";
-import type { PRSnapshot } from "../../scripts/pr-details";
+import type { PRSnapshot } from "../../lib/pr-details";
 
 test("PR icons distinguish merge and CI states and share one request per URL", async () => {
   const original = globalThis.fetch;

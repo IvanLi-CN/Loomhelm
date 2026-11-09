@@ -1,5 +1,5 @@
 import { createDemoLedger } from "./ledger";
-import { validateLedger } from "../../scripts/schema";
+import { validateLedger } from "../../lib/schema";
 
 export const viewerValidationId = "orchestration-viewer";
 export const viewerValidationName = "编排展示与交互验收";
@@ -45,14 +45,14 @@ export function createIdleArchiveExample(referenceTime = Date.now()) {
   if (completed?.thread_id) ledger.resources.push({ id: "example-archive-success", kind: "conversation", target: completed.thread_id, status: "closed", evidence_ref: "example:archive-success", last_attempt_at: at });
   const archived = new Set<string>();
   const restored = new Set<string>();
-  const archiveProvider: import("../../scripts/conversation-archive").ArchiveProvider = {
+  const archiveProvider: import("../../lib/conversation-archive").ArchiveProvider = {
     archive: async (thread) => { archived.add(thread); return { outcome: "succeeded", evidence_ref: "example:archive-success" }; },
     unarchive: async thread => { archived.delete(thread); restored.add(thread); return { outcome: "succeeded", evidence_ref: "example:unarchive-success" }; },
     isUnarchived: async thread => restored.has(thread),
     // The unknown fixture models a lost receipt whose archive is already complete.
     isArchived: async thread => archived.has(thread) || thread === ledger.tasks.find(t => t.id === "ledger")!.thread_id,
   };
-  const connectObserver: import("../../scripts/conversation-output").ConnectObserver = async () => ({
+  const connectObserver: import("../../lib/conversation-output").ConnectObserver = async () => ({
     request: async (method, params) => {
       if (method === "thread/read") return { thread: { status: { type: params?.threadId === idle.thread_id ? "idle" : "active" } } };
       if (method === "thread/turns/list") return { data: [{ id: "example-terminal-turn", status: "completed", items: [] }] };

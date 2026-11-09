@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { runClientScript } from "../../scripts/service-pages";
+import { runClientScript } from "../../lib/service-pages";
 
 test("navigation and compatibility warnings stay inside the dashboard", async () => {
   const dom = new Window({
@@ -55,7 +55,7 @@ test("lease failures signal the dashboard without adding another banner", async 
 });
 
 test("unauthenticated task target survives the existing login flow", async () => {
-  const { resumeTaskScript, loginScript } = await import("../../scripts/service-pages");
+  const { resumeTaskScript, loginScript } = await import("../../lib/service-pages");
   const dom = new Window({ url: "http://localhost/runs/run-a/?selected=task%3AC2&detail=1&q=hidden" });
   dom.document.body.innerHTML = '<p id="status"></p>';
   dom.eval(resumeTaskScript);

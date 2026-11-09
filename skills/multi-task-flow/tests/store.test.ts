@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LedgerStore } from "../scripts/store";
+import { LedgerStore } from "../lib/store";
 
 const created: string[] = [];
 function temporaryRoot(): string {

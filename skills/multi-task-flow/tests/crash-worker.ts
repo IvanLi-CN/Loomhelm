@@ -1,4 +1,4 @@
-import { LedgerStore } from "../scripts/store";
+import { LedgerStore } from "../lib/store";
 
 const requestedStage = process.argv[3];
 const ledgerPath = process.argv[2];

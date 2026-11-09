@@ -1,18 +1,18 @@
-import { desktopHandoff } from "./desktop-handoff";
-import { createCliThread, verifyRepositoryIdentity } from "./codex-cli-create";
-import { sweepConversationArchives } from "./conversation-archive";
+import { desktopHandoff } from "../lib/desktop-handoff";
+import { createCliThread, verifyRepositoryIdentity } from "../lib/codex-cli-create";
+import { sweepConversationArchives } from "../lib/conversation-archive";
 import { Runtime } from "../../bin/modules/core/runtime";
 import {
   effectiveProfile,
   materializeRecommendation,
   validateProfileCapability,
-} from "./execution-profile";
-import { mutateExecutionProfile } from "./profile-mutation";
+} from "../lib/execution-profile";
+import { mutateExecutionProfile } from "../lib/profile-mutation";
 import { z, ZodError } from "zod";
 import { randomUUID } from "node:crypto";
-import { ContractError } from "./errors";
-import { apply, actorSchema, requestSchema } from "./engine";
-import { readCodexCapabilities } from "./codex-agent-api";
+import { ContractError } from "../lib/errors";
+import { apply, actorSchema, requestSchema } from "../lib/engine";
+import { readCodexCapabilities } from "../lib/codex-agent-api";
 import {
   group,
   id,
@@ -27,12 +27,12 @@ import {
   defaultGroupAtoms,
   executionProfile,
   DEFAULT_EXECUTION_PROFILE,
-} from "./schema";
-import { defaultRoot, LedgerStore } from "./store";
-import { prepareNativeNotification, reconcileNotification } from "./notification-delivery";
-import { migrationCanonicalInput } from "./store-migration";
-import { buildView } from "./view";
-import { checkViewerCompatibility, renewViewerUsage } from "./service-usage";
+} from "../lib/schema";
+import { defaultRoot, LedgerStore } from "../lib/store";
+import { prepareNativeNotification, reconcileNotification } from "../lib/notification-delivery";
+import { migrationCanonicalInput } from "../lib/store-migration";
+import { buildView } from "../lib/view";
+import { checkViewerCompatibility, renewViewerUsage } from "../lib/service-usage";
 
 const initialRequest = z
   .object({

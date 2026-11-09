@@ -9,9 +9,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { apply } from "../scripts/engine";
-import { validateLedger } from "../scripts/schema";
-import { LedgerStore } from "../scripts/store";
+import { apply } from "../lib/engine";
+import { validateLedger } from "../lib/schema";
+import { LedgerStore } from "../lib/store";
 
 const createdRoots: string[] = [];
 const initialInput = JSON.parse(

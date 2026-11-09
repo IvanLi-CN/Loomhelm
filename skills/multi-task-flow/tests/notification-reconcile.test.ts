@@ -8,8 +8,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { apply } from "../scripts/engine";
-import { LedgerStore } from "../scripts/store";
+import { apply } from "../lib/engine";
+import { LedgerStore } from "../lib/store";
 
 const createdRoots: string[] = [];
 const initialInput = JSON.parse(

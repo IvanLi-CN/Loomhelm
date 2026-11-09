@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCodexThread, sendCodexMessage, archiveCodexThread, archivedCodexThread, unarchiveCodexThread, unarchivedCodexThread } from "../scripts/codex-agent-api";
+import { createCodexThread, sendCodexMessage, archiveCodexThread, archivedCodexThread, unarchiveCodexThread, unarchivedCodexThread } from "../lib/codex-agent-api";
 
 async function withControlServer(scenario: "unarchive-success" | "unarchive-reject" | "unarchive-timeout" | "unarchive-list" | "archive-success" | "archive-active" | "archive-reject" | "archive-timeout" | "archive-list" | "success" | "mismatch" | "reject" | "timeout" | "missing-id" | "send" | "resume-reject" | "send-missing-id" | "send-resume-timeout", verify: (calls: any[], result: Awaited<ReturnType<typeof createCodexThread>> | Awaited<ReturnType<typeof sendCodexMessage>> | Awaited<ReturnType<typeof archiveCodexThread>> | boolean, completed: boolean) => void) {
   const dir = mkdtempSync(join(tmpdir(), "mtf-rpc-"));

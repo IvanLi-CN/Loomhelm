@@ -3,9 +3,9 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } fr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDemoLedger, createPlanningDemoLedger } from "../examples/orchestration-viewer/ledger";
-import { startDashboard } from "../scripts/server";
-import { LedgerStore } from "../scripts/store";
-import { actualIntervals, buildView } from "../scripts/view";
+import { startDashboard } from "../lib/server";
+import { LedgerStore } from "../lib/store";
+import { actualIntervals, buildView } from "../lib/view";
 import { conversationUrl } from "../web/links";
 
 describe("dashboard example", () => {
@@ -115,7 +115,7 @@ describe("dashboard example", () => {
 
 test("idle/archive example is synthetic and supports real archive reconciliation", async () => {
   const { createIdleArchiveExample } = await import("../examples/orchestration-viewer");
-  const { retryConversationArchive } = await import("../scripts/conversation-archive");
+  const { retryConversationArchive } = await import("../lib/conversation-archive");
   const example = createIdleArchiveExample();
   expect(example.ledger.tasks.find(t => t.id === "dashboard-ui")?.state).toBe("agent_idle");
   expect(example.ledger.tasks.every(t => !t.thread_id || t.thread_id.startsWith("example-thread-"))).toBe(true);

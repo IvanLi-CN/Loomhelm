@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { SkillsRuntime } from '../src/index.ts';
-import { LedgerStore } from '../toolkit/skills/multi-task-flow/scripts/store.ts';
-import { apply } from '../toolkit/skills/multi-task-flow/scripts/engine.ts';
-import { deliverClaimedNotification, reconcileNotification } from '../toolkit/skills/multi-task-flow/scripts/notification-delivery.ts';
+import { LedgerStore } from '../toolkit/skills/multi-task-flow/lib/store.ts';
+import { apply } from '../toolkit/skills/multi-task-flow/lib/engine.ts';
+import { deliverClaimedNotification, reconcileNotification } from '../toolkit/skills/multi-task-flow/lib/notification-delivery.ts';
 
 const accepted = { outcome: 'sent', provider_receipt: { provider: 'codex-app-server', evidence_ref: 'fixture:accepted', message_id: 'fixture-turn' } };
 async function fixture() {
