@@ -23,17 +23,25 @@ import {
 import { initialOutput, type AgentOutput } from "../web/agent-output";
 import { localSemanticProjection } from "./contract";
 
-type Interval = { node_id: string; start: string | null; end: string | null };
+export type PlannedInterval = {
+  node_id: string;
+  start: string | null;
+  end: string | null;
+  start_offset_minutes: number | null;
+  end_offset_minutes: number | null;
+};
 
-export function plannedIntervals(plan: Plan, maxRunning: number): Interval[] {
-  const start = plan.start_at ? Date.parse(plan.start_at) : null;
+const RELATIVE_EPOCH = Date.parse("2000-01-01T00:00:00.000Z");
+
+export function plannedIntervals(plan: Plan, maxRunning: number): PlannedInterval[] {
+  const start = 0;
   const order = new Map(plan.nodes.map((node, index) => [node.id, index]));
   const remaining = new Set(plan.nodes.map((node) => node.id));
   const results = new Map<
     string,
     { start: number | null; end: number | null }
   >();
-  const lanes = Array.from({ length: maxRunning }, () => start ?? Infinity);
+  const lanes = Array.from({ length: maxRunning }, () => start);
   const instant = new Set([
     "main_start",
     "main_end",
@@ -55,7 +63,7 @@ export function plannedIntervals(plan: Plan, maxRunning: number): Interval[] {
           .filter((edge) => edge.to_node_id === node.id)
           .map((edge) => results.get(edge.from_node_id)!.end);
         const predecessorEnd =
-          start === null || predecessors.some((time) => time === null)
+          predecessors.some((time) => time === null)
             ? null
             : Math.max(start, ...(predecessors as number[]));
         const lane =
@@ -64,9 +72,7 @@ export function plannedIntervals(plan: Plan, maxRunning: number): Interval[] {
         const available =
           lane < 0
             ? predecessorEnd
-            : predecessorEnd === null ||
-                laneStart === undefined ||
-                !Number.isFinite(laneStart)
+              : predecessorEnd === null || laneStart === undefined
               ? null
               : Math.max(predecessorEnd, laneStart);
         const priority = plan.edges.filter(
@@ -102,9 +108,10 @@ export function plannedIntervals(plan: Plan, maxRunning: number): Interval[] {
     const interval = results.get(node.id)!;
     return {
       node_id: node.id,
-      start:
-        interval.start === null ? null : new Date(interval.start).toISOString(),
-      end: interval.end === null ? null : new Date(interval.end).toISOString(),
+      start: interval.start === null ? null : new Date(RELATIVE_EPOCH + interval.start).toISOString(),
+      end: interval.end === null ? null : new Date(RELATIVE_EPOCH + interval.end).toISOString(),
+      start_offset_minutes: interval.start === null ? null : interval.start / 60000,
+      end_offset_minutes: interval.end === null ? null : interval.end / 60000,
     };
   });
 }

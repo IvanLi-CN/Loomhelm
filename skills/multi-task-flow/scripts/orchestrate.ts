@@ -23,6 +23,7 @@ import {
   validateInitialRuntimeState,
   validateLedger,
   validatePlan,
+  validateSchedulablePlan,
   defaultGroupAtoms,
   executionProfile,
   DEFAULT_EXECUTION_PROFILE,
@@ -202,6 +203,7 @@ try {
             ],
           };
     validatePlan(initialPlan);
+    validateSchedulablePlan(initialPlan);
     const groups = parsed.payload.groups.map((group) => {
       const plannedAtoms = initialPlan.group_atoms
         .filter((atom) => atom.group_id === group.id)
