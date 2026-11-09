@@ -454,8 +454,15 @@ function render(): void {
   $("operation-warning").hidden = data.warnings.length === 0; $("operation-warning").textContent = data.warnings.length ? `${data.warnings.length} 项外部操作结果待核实。` : "";
   const planWarnings = data.plan_warnings ?? [];
   const planWarning = $("plan-warning");
-  planWarning.hidden = viewState.tab !== "planned" || planWarnings.length === 0;
-  planWarning.textContent = planWarnings.map((warning) => warning.reason).join(" ");
+  const planState = data.plan_state;
+  const authorizationLabel = planState?.authorization_label ??
+    (planState?.approval_pending ? "Not approved" : "Schedulable");
+  planWarning.hidden = viewState.tab !== "planned" ||
+    (!planWarnings.length && !planState?.approval_pending);
+  planWarning.textContent = [
+    authorizationLabel,
+    ...(planWarnings.length ? planWarnings.map((warning) => warning.reason) : ["计划完整性检查通过。"]),
+  ].join(" · ");
   updateMenu("group-filter", data.groups.map((group) => ({ value: group.id, label: group.title })), "全部交付单元"); updateMenu("state-filter", [...defaultStates].filter((key) => !["active", "merged", "unknown", "idle"].includes(key)).map((value) => ({ value, label: value === "ready" ? "就绪" : labels[value] ?? value })), "全部状态"); updateMenu("kind-filter", ["contribution", "release", "deployment", "verification", "coordination"].map((value) => ({ value, label: taskKindLabel(value) })), "全部任务类型"); updateVersionMenu();
   setMenuValue("group-filter", viewState.group); setMenuValue("state-filter", viewState.state); setMenuValue("kind-filter", viewState.kind); $("graph-tools").hidden = viewState.tab !== "graph"; $("timeline-tools").hidden = viewState.tab === "graph"; applyStateToControls(); renderSummary(); const tasks = filteredTasks(); $("task-count").textContent = `${tasks.length} / ${data.tasks.length} 个任务`; $("view-context").textContent = viewState.tab === "graph" ? "依赖关系" : viewState.tab === "planned" ? "理论安排" : "实际运行"; $("view-count").textContent = `${tasks.length} 项任务 · ${data.groups.length} 个交付单元`; renderGroups(); renderList(tasks); syncStableGridCardWidth(); setTabAria(viewState.tab); if (viewState.tab === "graph") graphController.render(tasks); else timelineController.renderTimeline(tasks, viewState.tab); const focusDetails = focusDetailsOnNextRender; focusDetailsOnNextRender = false; updateDetailsSurface(viewState.detail, focusDetails); const selectedTaskData = selectedTask ? data.tasks.find((item) => item.id === selectedTask) : null; const selectedGroupData = selectedGroup ? data.groups.find((item) => item.id === selectedGroup) : null; if (selectedTaskData) showTask(selectedTaskData); else if (selectedGroupData) showGroup(selectedGroupData); else clearDetails(); createIcons({ icons: ICONS }); showCurrentSelectionPreview(); restoreListFocus(listFocus);
   restoreMenuFocus(menuFocus);
