@@ -104,7 +104,7 @@ def smoke(directory,record):
                     if not payload.is_file() or hashlib.sha256(payload.read_bytes()).hexdigest()!=resource['sha256']:
                         raise ReleaseError('incomplete or altered TS resource: '+str(relative))
                 print(json.dumps(dict(observation='typescript-resource-inventory',files=len(manifest['files']),candidate_sha=manifest['candidateSha'])),flush=True)
-                subprocess.run(['bun','--no-install',str(root/'toolkit/skills/multi-task-flow/scripts/maintenance/test-skills-native.ts')],check=True)
+                subprocess.run(['bun','--no-install',str(root/'toolkit/skills/multi-task-flow/scripts/test-skills-native.ts')],check=True)
                 run_version(['bun','--no-install',str(root/'src/cli.ts'),'--version'],record)
                 subprocess.run(['bun','--no-install',str(root/'src/cli.ts'),'skills','list'],check=True,stdout=subprocess.DEVNULL)
             elif path.name.startswith('web'):

@@ -8,7 +8,7 @@ import { checkSkillsInstallation } from './check-skills-installation.ts';
 
 test('a source-only skills installation runs official TS entrypoints and detects missing resources', () => {
   const isolated = realpathSync(mkdtempSync(join(tmpdir(), 'loomhelm-skills-only-')));
-  const source = resolve(import.meta.dirname, '../../..');
+  const source = resolve(import.meta.dirname, '../..');
   const manifest = JSON.parse(readFileSync(join(source,'source-manifest.json'),'utf8'));
   const sources = new Set([...manifest.files,...manifest.additions].map(file => resolve(source,'..',file.path)));
   try {

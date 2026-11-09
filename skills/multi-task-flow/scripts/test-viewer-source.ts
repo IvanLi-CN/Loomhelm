@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, realpathSync, rmSync, readFileSync, writeFileS
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-const root = resolve(import.meta.dirname, '../../../..');
+const root = resolve(import.meta.dirname, '../../..');
 const temporary = realpathSync(mkdtempSync(join(tmpdir(), 'viewer-source-test-')));
 const output = join(temporary, 'package');
 const env = { ...process.env, MULTI_TASK_FLOW_PROFILE:'test', MULTI_TASK_FLOW_ROOT:join(temporary,'state') };
