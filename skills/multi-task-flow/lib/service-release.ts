@@ -31,12 +31,15 @@ export function buildId(manifest: Omit<ReleaseManifest, "build_id">): string {
   if (body.skill_version === SKILL_VERSION) delete body.skill_version;
   if (body.ledger_contract === 2) delete body.ledger_contract;
   if (body.viewer_contract === VIEWER_CONTRACT) delete body.viewer_contract;
+  // The launcher embeds this identity and therefore cannot be part of its own
+  // identity. The bootstrap verifier applies the same rule before checking
+  // the immutable resource inventory.
+  const files = { ...(body.files as Record<string, string>) };
+  delete files.viewer;
   return digest(
     JSON.stringify({
       ...body,
-      files: Object.fromEntries(
-        Object.entries(body.files as Record<string, string>).sort(([a], [b]) => a.localeCompare(b)),
-      ),
+      files: Object.fromEntries(Object.entries(files).sort(([a], [b]) => a.localeCompare(b))),
     }),
   );
 }

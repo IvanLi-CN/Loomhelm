@@ -14447,7 +14447,7 @@
       "path": "skills/multi-task-flow/lib/service-release.ts",
       "sourceBlob": "69d5fa88eabdcfd0338050082646a712ca844239",
       "sourceSha256": "d61f73d30b13143517cdf0a5d84f87ff2d0333ac2fc433fb2af98cce49e678f2",
-      "installedSha256": "e6d5bf10d50e7b09dd83c91c8dde4a12a21808a3731d6c8b9eeea06ef29c4a6c",
+      "installedSha256": "56dfe49913e917c52ea8e8fadeb525551f2fdc07f614de1954aa47ce718def9a",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
