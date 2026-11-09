@@ -447,9 +447,16 @@
       "files": 161,
       "internalSkills": [
         "dev-plan",
-        "fast-flow"
+        "fast-flow",
+        "gui-escalation-gate"
       ],
-      "externalSkills": [],
+      "externalSkills": [
+        {
+          "skill": "ego-browser",
+          "strength": "required-when-applicable",
+          "condition": "browser operations and controlled visual evidence"
+        }
+      ],
       "externalCommands": [
         {
           "command": "launchctl",
