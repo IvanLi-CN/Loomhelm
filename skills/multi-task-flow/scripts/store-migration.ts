@@ -103,9 +103,16 @@ export function migrateLocked(
   // normalizes them into contract-2.
   if (raw?.schema_version !== 1) requireLedgerCompatibility(raw, "read");
 
+  const retiredReviews = Array.isArray(raw?.facts)
+    ? raw.facts.filter((item: any) => item?.kind === "child_review").length
+    : 0;
+  const migrationRaw = retireChildReviews(raw);
+  migrationRaw.__retired_child_reviews = retiredReviews;
+  const validatedMigrationRaw = structuredClone(migrationRaw);
+  delete validatedMigrationRaw.__retired_child_reviews;
   let current: Ledger;
   try {
-    current = validateLedger(raw);
+    current = validateLedger(validatedMigrationRaw);
   } catch (error) {
     if (error instanceof ContractError) throw error;
     throw new ContractError(
@@ -134,7 +141,8 @@ export function migrateLocked(
   }
   requireCondition(
     raw?.schema_version === 1 ||
-      (raw?.schema_version === 2 && raw?.contract_version === 1),
+      (raw?.schema_version === 2 &&
+        (raw?.contract_version === 1 || retiredReviews > 0)),
     "UNSUPPORTED_SCHEMA",
     "Only legacy and contract-1 ledgers can be explicitly migrated",
     4,
@@ -152,7 +160,7 @@ export function migrateLocked(
     3,
   );
 
-  const candidate = contractMigrationCandidate(raw);
+  const candidate = contractMigrationCandidate(migrationRaw);
   candidate.revision += 1;
   candidate.updated_at = new Date().toISOString();
   const backup = `ledger.migration-v1-${request.request_id}.json`;
@@ -163,6 +171,7 @@ export function migrateLocked(
     contract_version: 2,
     revision: candidate.revision,
     backup,
+    retired_child_review_count: retiredReviews,
   };
   candidate.requests.push({
     request_id: request.request_id,
@@ -177,15 +186,19 @@ export function migrateLocked(
 }
 
 export function contractMigrationCandidate(raw: any): Ledger {
+  const retiredReviews = Number(raw?.__retired_child_reviews ?? 0);
   requireCondition(
     raw?.schema_version === 1 ||
-      (raw?.schema_version === 2 && raw?.contract_version === 1),
+      (raw?.schema_version === 2 &&
+        (raw?.contract_version === 1 || retiredReviews > 0)),
     "MIGRATION_NOT_NEEDED",
     "Only legacy and contract-1 ledgers can migrate",
     4,
   );
   if (raw.schema_version !== 1) requireLedgerCompatibility(raw, "read");
-  const current = validateLedger(raw);
+  const candidateInput = structuredClone(raw);
+  delete candidateInput.__retired_child_reviews;
+  const current = validateLedger(candidateInput);
   const candidate = structuredClone(current);
   candidate.schema_version = 2;
   candidate.source_schema_version =
@@ -206,6 +219,13 @@ export function contractMigrationCandidate(raw: any): Ledger {
       : { ...task, lifecycle: structuredClone(unknownLifecycle) },
   );
   return validateLedger(candidate);
+}
+
+function retireChildReviews(raw: any): any {
+  const copy = structuredClone(raw);
+  if (Array.isArray(copy.facts))
+    copy.facts = copy.facts.filter((item: any) => item?.kind !== "child_review");
+  return copy;
 }
 
 export function commitMigration(
