@@ -208,6 +208,9 @@ function v2Fixture() {
   const ledger: any = structuredClone(fixture());
   ledger.schema_version = 2;
   ledger.source_schema_version = null;
+  ledger.plans[0].atoms = ["a", "b", "c"].map((id) => ({ id: `atom-${id}`, title: id, task_id: id, purpose: "fixture task", output: "fixture output" }));
+  ledger.plans[0].nodes.forEach((node: any) => { if (node.kind === "task") { node.estimate_minutes = 30; node.estimate_basis = "fixture estimate"; node.estimate_confidence = "medium"; } });
+  ledger.tasks.forEach((task: any) => { task.atoms = [{ id: `atom-${task.id}`, title: task.id, status: "completed" }]; });
   ledger.groups[0].lifecycle = {
     workspace_ready: "unknown",
     pr_created: "unknown",

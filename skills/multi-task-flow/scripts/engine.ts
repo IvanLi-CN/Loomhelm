@@ -28,6 +28,7 @@ import {
   validateDevPlanHandoff,
   validateInitialRuntimeState,
   validateLedger,
+  validateSchedulablePlan,
   validatePlan,
   defaultGroupAtoms,
   executionProfile,
@@ -181,6 +182,10 @@ function authorizedAction(ledger: Ledger, action: string): void {
 }
 function legacyLedger(ledger: Ledger): boolean {
   return ledger.source_schema_version === 1 && ledger.contract_version !== 2;
+}
+function ensureSchedulable(ledger: Ledger, candidate: Plan): void {
+  if (legacyLedger(ledger) || ledger.source_schema_version === 1) return;
+  validateSchedulablePlan(candidate);
 }
 function lifecycleTarget(
   ledger: Ledger,
@@ -876,6 +881,7 @@ export function execute(
     case "plan-propose": {
       onlyMain(request.actor);
       const proposed = parse(plan, payload.plan);
+    ensureSchedulable(ledger, proposed);
       requireCondition(
         proposed.approval_id === null,
         "INVALID_PLAN",
@@ -1129,6 +1135,7 @@ export function execute(
         "INVALID_PLAN",
         "Only the active proposed plan can be approved",
       );
+      ensureSchedulable(ledger, current);
       const previousExecution = current.supersedes_id
         ? (ledger.plans.find((item) => item.id === current.supersedes_id) ??
           null)
@@ -1315,6 +1322,7 @@ export function execute(
     case "dispatch-claim": {
       onlyMain(request.actor);
       authorizedAction(ledger, "dispatch");
+      ensureSchedulable(ledger, approved(ledger));
       const target = find(
         ledger.tasks,
         (item) => item.id === string(payload.task_id),
@@ -1434,6 +1442,7 @@ export function execute(
     case "dispatch-group-claim": {
       onlyMain(request.actor);
       authorizedAction(ledger, "dispatch");
+      ensureSchedulable(ledger, approved(ledger));
       const target = find(
         ledger.groups,
         (item) => item.id === string(payload.group_id),

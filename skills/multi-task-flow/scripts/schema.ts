@@ -1299,6 +1299,36 @@ export function validatePlan(candidate: Plan): void {
   }
 }
 
+export type PlanCompletenessIssue = {
+  code: string;
+  message: string;
+};
+
+/** Validate the content required before a plan may enter the formal flow. */
+export function planCompletenessIssues(candidate: Plan): PlanCompletenessIssue[] {
+  const issues: PlanCompletenessIssue[] = [];
+  const taskNodes = candidate.nodes.filter((node) => node.kind === "task");
+  if (taskNodes.length === 0)
+    issues.push({ code: "empty_tasks", message: "计划至少需要一个任务。" });
+  const atomTaskIds = new Set(candidate.atoms.map((atom) => atom.task_id));
+  for (const taskNode of taskNodes) {
+    if (!taskNode.ref_id || !atomTaskIds.has(taskNode.ref_id))
+      issues.push({ code: "missing_atom", message: `任务 ${taskNode.label} 缺少原子任务。` });
+    if (taskNode.estimate_minutes === null)
+      issues.push({ code: "missing_estimate", message: `任务 ${taskNode.label} 缺少估时。` });
+    if (!taskNode.estimate_basis)
+      issues.push({ code: "missing_estimate_basis", message: `任务 ${taskNode.label} 缺少估时依据。` });
+    if (!taskNode.estimate_confidence)
+      issues.push({ code: "missing_estimate_confidence", message: `任务 ${taskNode.label} 缺少估时置信度。` });
+  }
+  return issues;
+}
+
+export function validateSchedulablePlan(candidate: Plan): void {
+  const issue = planCompletenessIssues(candidate)[0];
+  requireCondition(!issue, "PLAN_INCOMPLETE", issue?.message ?? "计划内容不完整。", 3);
+}
+
 export type CutAssignmentEvidence = {
   assignments: Map<string, Set<string>>;
   dynamicGroupIds: Set<string>;
