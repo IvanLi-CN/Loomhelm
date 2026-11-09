@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { servicePaths, orchestrationRoot } from "../scripts/service-paths";
 import { requireApi, requireLedgerCompatibility } from "../scripts/service-contract";
 import { ServiceState } from "../scripts/service-state";
+import { serviceCommand } from "../scripts/service";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -72,6 +73,15 @@ test("schema2/contract2 ledgers without idle or archive diagnostics remain reada
   expect(validateLedger(ledger).schema_version).toBe(2);
   expect(validateLedger(ledger).contract_version).toBe(2);
   expect(() => requireLedgerCompatibility(ledger)).not.toThrow();
+});
+
+test("viewer reader commands validate and render without a mutation boundary", async () => {
+  const { createDemoLedger } = await import("../examples/orchestration-viewer/ledger");
+  const ledger = createDemoLedger();
+  const checked = await serviceCommand("reader-check", { ledger });
+  expect(checked).toMatchObject({ contract: "schema-2/contract-1", revision: ledger.revision });
+  const rendered = await serviceCommand("read-only-view", { ledger });
+  expect(rendered).toHaveProperty("view");
 });
 
 test("viewer labels use the Loomhelm namespace and maintenance retires the matching legacy profile", async () => {

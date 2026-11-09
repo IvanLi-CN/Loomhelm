@@ -1,6 +1,8 @@
 import type { ConnectObserver } from "./conversation-output";
 import { Runtime } from "../../bin/modules/core/runtime";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, writeFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
 import { createRunDashboard, dashboardHeaders } from "./server";
@@ -23,7 +25,8 @@ import {
   viewerPage,
   runClientScript,
 } from "./service-pages";
-import { readBodyWithinLimit } from "./server-files";
+import { readBodyWithinLimit, readSafeFile } from "./server-files";
+import { verifyRelease } from "./service-release";
 
 const json = (
   value: unknown,
@@ -122,6 +125,30 @@ export function selectAssets(root: string, runId: string, shared: string) {
   }
 }
 
+function readOnlyView(releaseRoot: string, ledger: unknown, planId?: string) {
+  const input = join(tmpdir(), `loomhelm-read-only-view-${randomUUID()}.json`);
+  writeFileSync(input, JSON.stringify({ ledger, ...(planId ? { plan_id: planId } : {}) }), { mode: 0o600 });
+  const result = Bun.spawnSync(
+    [join(releaseRoot, "viewer"), "read-only-view", "--input", "-"],
+    {
+      stdin: Bun.file(input),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" },
+    },
+  );
+  try {
+    if (result.exitCode !== 0) throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer could not read this run", 2);
+    const parsed = JSON.parse(result.stdout.toString());
+    if (!parsed?.ok || !parsed.result?.view) throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer returned no view", 2);
+    return parsed.result.view;
+  } finally { try { unlinkSync(input); } catch {} }
+}
+
+function pathIsLegacyView(pathname: string, method: string): boolean {
+  return method === "GET" && /\/legacy-view\/?$/.test(pathname);
+}
+
 export async function startSharedViewer(
   state: ServiceState,
   manifest: ReleaseManifest,
@@ -137,6 +164,18 @@ export async function startSharedViewer(
       "Source reload requires an isolated profile",
     );
   const auth = new ServiceAuth(state);
+  const fallbackViewer = (() => {
+    let previous: string | null = null;
+    try { if (!state.paths.isolated) previous = state.config().previous_build; } catch {}
+    if (!previous || previous === manifest.build_id) return null;
+    try {
+      const root = join(state.paths.releases, previous);
+      verifyRelease(root);
+      return root;
+    } catch {
+      return null;
+    }
+  })();
   const resources = new Map<string, ReturnType<typeof createRunDashboard>>();
   const warnings = new Map<string, string | null>();
   const getRun = (id: string) => {
@@ -267,6 +306,20 @@ export async function startSharedViewer(
         );
         if (!match) return json({ code: "NOT_FOUND" }, 404);
         const id = match[1]!;
+        if (pathIsLegacyView(url.pathname, request.method)) {
+          if (request.method !== "GET" || !fallbackViewer)
+            return json({ code: "LEGACY_VIEW_UNAVAILABLE" }, 404);
+          const bytes = readSafeFile(join(state.paths.data, "runs", safeId(id), "ledger.json"));
+          if (!bytes) return json({ code: "LEDGER_UNREADABLE" }, 503);
+          const raw = JSON.parse(new TextDecoder().decode(bytes));
+          return json({
+            run_id: id,
+            build_id: manifest.build_id,
+            fallback_build_id: state.config().previous_build,
+            read_only: true,
+            view: readOnlyView(fallbackViewer, raw, url.searchParams.get("plan") ?? undefined),
+          });
+        }
         const run = getRun(id);
         let path = "/" + match[2]!;
         if (url.pathname.startsWith("/api/v1/")) path = "/api/" + match[2]!;

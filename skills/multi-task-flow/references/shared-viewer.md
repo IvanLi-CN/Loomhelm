@@ -31,7 +31,7 @@ Re-running the exact command is idempotent. A prepared journal after source seal
 
 ## Compatibility preflight and ledger maintenance
 
-代码升级与持久迁移独立授权。`compatibility-check` 接受 `{ "source": "/absolute/bundle" }` 或 `{ "rollback": true }`，只读返回当前/目标构建、全部 run 的合同、revision、原始 SHA256、读写能力、错误、写入降级项和 `report_digest`。所有保留 run 必须由最新 reader 或明确隔离的旧 viewer 可读；完成、会话归档、无使用租约都不免除读取兼容，也不证明需要继续写入。已有只读 run 不要求迁移。损坏、不可读或自定义 view 不兼容不能确认绕过。
+代码升级与持久迁移独立授权。`compatibility-check` 接受 `{ "source": "/absolute/bundle" }` 或 `{ "rollback": true }`，只读返回当前/目标构建、全部 run 的合同、revision、原始 SHA256、读写能力、错误、写入降级项和 `report_digest`；预检会调用当前与候选 release 自身的 `reader-check`，不能只相信 manifest 的 `readable` 声明。所有保留 run 必须由最新 reader 或明确隔离的旧 viewer 可读；完成、会话归档、无使用租约都不免除读取兼容，也不证明需要继续写入。已有只读 run 不要求迁移。损坏、不可读或自定义 view 不兼容不能确认绕过。
 
 只有当前构建可写而目标不可写的新增降级需要主人逐次确认。展示准确报告后，`upgrade` 或 `rollback` 可附加 `write_downgrade_approval: { report_digest, approval_ref, maintenance_thread_id }`。应用持锁重算报告，run 内容或构建变化即拒绝旧确认；没有降级时不接受多余确认。`install` 无当前构建时只要求读取兼容。错误的 `details` 包含具体 run、能力及预检报告；不要根据通用错误盲目迁移所有 run。
 
@@ -41,7 +41,7 @@ Re-running the exact command is idempotent. A prepared journal after source seal
 
 获得主人对准确动作的批准、暂停旧写入器后，apply 传入同样动作参数，并添加 `expected_owner_thread_id`、`expected_revision`、`expected_ledger_sha256`、`operation_digest`、唯一 `request_id`、实际 `maintenance_thread_id`、`approval_ref`、`reason` 和 `writers_paused: true`。`approval_ref` 和暂停声明是同 OS 用户维护信任边界内的审计记录，不是独立认证或进程隔离证明。不要冒用原 owner。claimed/unknown 创建、合并和切割操作须由原业务流程对账，维护命令不会替它们收口；服务租约本身不阻塞。
 
-安全顺序是先显式升级至同时可读源/目标合同的 viewer，再批准单 run 合同迁移，再按需单独批准完整 profile 迁移。只有机械、无语义推断、幂等、可恢复且经过备份和 digest 验证的迁移可以自动执行；历史内容不自动清理。服务未安装或不支持目标时 apply 拒绝；不为历史展示补造模型或完成事实。维护锁、run 锁覆盖复核和原子提交，完整旧文件写入 `ledger.maintenance-<request_id>.json`，真实维护身份和批准引用保留于账本 request result。每次变更 revision 增加 1；同请求同内容重放，异内容拒绝。
+安全顺序是先显式升级至同时可读源/目标合同的 viewer，再批准单 run 合同迁移，再按需单独批准完整 profile 迁移。只有机械、无语义推断、幂等、可恢复且经过备份和 digest 验证的迁移可以自动执行；历史内容不自动清理。若最新 viewer 无法读取某个 run，已配置 `previous_build` 的 viewer 可通过 `GET /api/v1/runs/<run-id>/legacy-view` 请求明确的旧 viewer 只读投影；该端点不创建 lease、不接受 mutation、不推进 owner 或 revision。服务未安装或不支持目标时 apply 拒绝；不为历史展示补造模型或完成事实。维护锁、run 锁覆盖复核和原子提交，完整旧文件写入 `ledger.maintenance-<request_id>.json`，真实维护身份和批准引用保留于账本 request result。每次变更 revision 增加 1；同请求同内容重放，异内容拒绝。
 
 备份后中断可用相同请求恢复，提交后响应丢失可安全重放。冲突保留双方证据，不覆盖备份或账本。代码健康失败恢复原构建和租约期限；新数据不被旧备份覆盖。迁移后旧构建不可读时 rollback 拒绝，采用兼容过渡构建或向前修复。合作锁不能防止同用户手工改文件或不遵守协议的旧写入器，主人必须确认这些写入已暂停。
 

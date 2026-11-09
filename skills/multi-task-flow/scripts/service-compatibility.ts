@@ -1,5 +1,7 @@
-import { existsSync, readdirSync, lstatSync } from "node:fs";
+import { existsSync, readdirSync, lstatSync, statSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { readRegularNoFollow } from "../../bin/modules/visual/secure_io";
 import { ServiceState } from "./service-state";
@@ -8,6 +10,55 @@ import { ledgerContract, type ReleaseManifest } from "./service-contract";
 import { validateLedger } from "./schema";
 import { ContractError, requireCondition } from "./errors";
 import { stable } from "./store-migration";
+
+function releaseReader(
+  releaseRoot: string,
+  ledger: unknown,
+): { ok: true; contract: string; revision: number } | { ok: false; code: string } {
+  try {
+    const launcher = readFileSync(join(releaseRoot, "viewer"), { encoding: "utf8" });
+    if ((statSync(join(releaseRoot, "viewer")).mode & 0o111) === 0 || !launcher.startsWith("#!")) {
+      const parsed = validateLedger(ledger);
+      return { ok: true, contract: ledgerContract(parsed), revision: parsed.revision };
+    }
+  } catch {}
+  const input = join(tmpdir(), `loomhelm-reader-${randomUUID()}.json`);
+  try {
+    writeFileSync(input, JSON.stringify({ ledger }), { mode: 0o600 });
+    const result = Bun.spawnSync(
+      [join(releaseRoot, "viewer"), "reader-check", "--input", "-"],
+      {
+        stdin: Bun.file(input),
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" },
+      },
+    );
+    if (result.exitCode !== 0) return { ok: false, code: "LEDGER_UNREADABLE" };
+    const parsed = JSON.parse(result.stdout.toString());
+    if (!parsed?.ok || !parsed.result?.contract) return { ok: false, code: "LEDGER_UNREADABLE" };
+    return {
+      ok: true,
+      contract: String(parsed.result.contract),
+      revision: Number(parsed.result.revision),
+    };
+  } catch {
+    return { ok: false, code: "LEDGER_UNREADABLE" };
+  } finally { try { unlinkSync(input); } catch {} }
+}
+function releaseRootFor(state: ServiceState, manifest: ReleaseManifest, preferred?: string): string | null {
+  for (const root of [
+    preferred,
+    join(state.paths.releases, manifest.build_id),
+    join(state.paths.candidates, manifest.build_id),
+  ].filter((value): value is string => Boolean(value))) {
+    try {
+      verifyRelease(root);
+      return root;
+    } catch {}
+  }
+  return null;
+}
 
 export const downgradeApproval = z
   .object({
@@ -20,6 +71,7 @@ export type DowngradeApproval = z.infer<typeof downgradeApproval>;
 export function compatibilityReport(
   state: ServiceState,
   target: ReleaseManifest,
+  targetRoot?: string,
 ) {
   const current = existsSync(join(state.paths.config, "service.json"))
     ? verifyRelease(join(state.paths.releases, state.config().current_build))
@@ -90,20 +142,28 @@ export function compatibilityReport(
           "RUN_MISMATCH",
           "Run identity mismatch",
         );
-        // Validate the complete shape; a declared discriminator alone is not readable data.
+        // Validate the complete shape locally before asking each release to
+        // prove that its own reader can consume the exact raw ledger.
         validateLedger(raw);
-        row.current_readable =
-          current?.readable.includes(row.contract) ?? false;
+        const currentRoot = current ? releaseRootFor(state, current) : null;
+        const currentReader = current && currentRoot
+          ? releaseReader(currentRoot, raw)
+          : { ok: false as const, code: "NO_CURRENT_RELEASE" };
+        row.current_readable = currentReader.ok && current?.readable.includes(row.contract) === true;
         row.current_writable =
           current?.writable.includes(row.contract) ?? false;
-        row.target_readable = target.readable.includes(row.contract);
+        const targetReleaseRoot = releaseRootFor(state, target, targetRoot);
+        const targetReader = target.readable.includes(row.contract) && targetReleaseRoot
+          ? releaseReader(targetReleaseRoot, raw)
+          : { ok: false as const, code: "INCOMPATIBLE_LEDGER" };
+        row.target_readable = targetReader.ok;
         row.target_writable = target.writable.includes(row.contract);
         row.migration_guides = (target.migration_guides ?? []).filter((guide) => guide.required_for.includes(row.contract!)).map((guide) => guide.id);
         if (!row.target_readable)
           errors.push({
             run_id: entry.name,
             capability: "read",
-            code: "INCOMPATIBLE_LEDGER",
+            code: targetReader.ok ? "INCOMPATIBLE_LEDGER" : targetReader.code,
           });
         const custom = join(root, entry.name, "view", "view.manifest.json");
         if (lstatSync(custom, { throwIfNoEntry: false })) {
