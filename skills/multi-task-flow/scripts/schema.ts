@@ -417,6 +417,7 @@ export const fact = z
   .object({
     id,
     kind: z.enum([
+      "child_review",
       "task_quality",
       "pr_merged",
       "branch_published",
