@@ -25,7 +25,9 @@
   ],
   "informational_checks": [
     "Candidate Reproducibility",
-    "Skills Native macOS"
+    "Skills Native macOS",
+    "Go Race Tests",
+    "Go Shuffle Tests"
   ],
   "waivers": [],
   "expected_pr_workflows": [
@@ -36,6 +38,8 @@
         "Bootstrap Verification",
         "React Doctor",
         "Repository Verification",
+        "Go Race Tests",
+        "Go Shuffle Tests",
         "Candidate Build",
         "Skills Native macOS",
         "Candidate Reproducibility",
