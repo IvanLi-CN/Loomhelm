@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { installTaskContextMenu, taskPRs, taskUrl } from "../../web/task-context-menu";
-import { pendingTaskTarget } from "../../scripts/service-pages";
+import { pendingTaskTarget } from "../../lib/service-pages";
 import type { Task, View } from "../../web/model";
 import { parseViewState } from "../../web/view-state";
 const task = { id: "C2", title: "完整任务标题", thread_id: "thread-123", pr: { url: "https://github.com/example/repo/pull/1" } } as Task;

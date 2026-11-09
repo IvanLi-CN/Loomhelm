@@ -18,13 +18,13 @@ import {
   createIdleArchiveExample,
   viewerValidationName,
 } from "../examples/orchestration-viewer";
-import { ServiceState } from "./service-state";
-import { servicePaths } from "./service-paths";
-import { ServiceAuth } from "./service-auth";
-import { runDaemon } from "./service-lifecycle";
-import { compatibility, type ReleaseManifest } from "./service-contract";
-import { buildId, digest } from "./service-release";
-import { LedgerStore } from "./store";
+import { ServiceState } from "../lib/service-state";
+import { servicePaths } from "../lib/service-paths";
+import { ServiceAuth } from "../lib/service-auth";
+import { runDaemon } from "../lib/service-lifecycle";
+import { compatibility, type ReleaseManifest } from "../lib/service-contract";
+import { buildId, digest } from "../lib/service-release";
+import { LedgerStore } from "../lib/store";
 import {
   PortRegistry,
   defaultRegistryDir,

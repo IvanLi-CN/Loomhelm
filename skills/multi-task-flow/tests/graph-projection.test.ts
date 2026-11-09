@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
-import { buildView } from "../scripts/view";
+import { buildView } from "../lib/view";
 import type { View } from "../web/model";
 import { GRAPH_LABEL_LIMITS, GRAPH_SHAPES, MAX_GRAPH_PATHS, buildGraphProjection, fitGraphLabel } from "../web/graph-projection";
 

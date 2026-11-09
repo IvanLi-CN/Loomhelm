@@ -1,14 +1,14 @@
-import {switchRelease} from "../scripts/service-maintenance";
+import {switchRelease} from "../lib/service-maintenance";
 import {afterEach, expect, test} from "bun:test";
 import {cpSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync, unlinkSync, readdirSync} from "node:fs";
 import {join} from "node:path";
 import {serviceFixture, fixtureRelease, fixtureRun} from "./service-fixture";
-import {buildId} from "../scripts/service-release";
-import {compatibilityReport, requireReport} from "../scripts/service-compatibility";
-import {maintenanceCheck, maintenanceApply} from "../scripts/ledger-maintenance";
+import {buildId} from "../lib/service-release";
+import {compatibilityReport, requireReport} from "../lib/service-compatibility";
+import {maintenanceCheck, maintenanceApply} from "../lib/ledger-maintenance";
 import {serviceCommand} from "../scripts/service";
-import {LedgerStore} from "../scripts/store";
-import {type ServiceState} from "../scripts/service-state";
+import {LedgerStore} from "../lib/store";
+import {type ServiceState} from "../lib/service-state";
 
 const roots: string[] = [];
 afterEach(() => {for (const root of roots.splice(0)) rmSync(root,{recursive:true,force:true});});

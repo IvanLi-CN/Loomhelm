@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { archiveFixtureScript } from "../scripts/demo-archive";
+import { archiveFixtureScript } from "../lib/demo-archive";
 
 test("static archive fixture creates a resource and restores it without changing task state", async () => {
   const fixture = { revision: 1, view: { tasks: [{ id: "scheduler", thread_id: "demo-scheduler", state: "closed", conversation_resource: null }] } };

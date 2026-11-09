@@ -46,13 +46,63 @@ FFI 路径缓冲区 MUST 在完整系统调用期间保持所有权。文件读�
 
 ### REQ-SKILLS-009
 
-Viewer MUST use the compatibility lifecycle defined by ADR 0026: the newest reader MUST dual-read every supported historical ledger shape; an older viewer MAY be used only as an isolated read-only fallback; an unproven reader MUST block the upgrade. Writes MUST use the current contract and MUST NOT be performed by the fallback reader.
+Multi-task Flow MUST distinguish `proposal`, `initialized run`, `scheduled run` and `completed run` as separate lifecycle stages. A proposal MUST be visibly marked as unapproved and unschedulable; rendering a dependency graph, timeline or live dashboard MUST NOT imply that dispatch is authorized. Dispatch MUST require an explicit approval for the exact execution plan and authorized action set.
 
 ### REQ-SKILLS-010
 
-Automatic ledger migration MUST be limited to deterministic, lossless, idempotent and recoverable transformations with a verified backup and revision/digest fencing. Historical content MUST NOT be automatically cleaned up. Production compatibility code MAY be removed only through an independent release decision after the supported-state inventory, rollback window and maintenance documentation are updated; historical, migration, fallback and rejection tests MUST remain in the repository.
+Every task and delivery unit MUST carry a structured acceptance contract. The contract MUST identify the owner, completion state, observable criteria, required evidence kinds and required checks. An acceptance scope or digest MAY summarize the contract, but MUST NOT replace the contract when validating proposal completeness or presenting approval evidence.
+
+### REQ-SKILLS-011
+
+Every delivery unit MUST declare its complete closeout path before approval. The path MUST cover workspace readiness, parent branch and parent PR publication, merged-SHA CI, planned post-merge release/deployment/verification work when applicable, known follow-PR reconciliation and final closeout. A plan with implementation tasks but no applicable post-merge obligations MUST be rejected or explicitly record that those obligations are not applicable with evidence.
+
+### REQ-SKILLS-012
+
+Dependency edges MUST use milestone semantics that match the source and target lifecycle. `integrated` MUST mean a contribution PR was merged, `completed` MUST mean the task's work and evidence are complete, and `verified` MUST mean the declared verification evidence passed. Validation MUST reject a graph whose edge conditions rely on an undocumented conversion between task state and delivery-unit lifecycle.
+
+### REQ-SKILLS-013
+
+Proposal validation MUST report all material completeness issues together, including missing acceptance criteria, missing closeout obligations, ambiguous dependency semantics, missing coordinator readiness requirements and low-confidence estimates that exceed the configured decomposition threshold. The dashboard MUST expose these diagnostics before owner approval.
+
+### REQ-SKILLS-014
+
+Bootstrap delivery units MUST remain main-owned and may use the bound main conversation. Every regular delivery unit MUST bind an independent Delivery coordinator conversation before activation. The proposal MAY show the regular unit as unbound, but the approval and scheduling surfaces MUST show this as a pre-activation requirement rather than a satisfied fact.
+
+### REQ-SKILLS-015
+
+The dashboard MUST present proposal status, approval status, scheduling eligibility and completeness status as separate fields. It MUST use explicit labels such as `Proposal only`, `Not approved` and `Not schedulable` when applicable, and MUST NOT derive readiness from the presence of nodes, estimates, a plan ID or a live viewer lease.
+
+### REQ-SKILLS-016
+
+Estimates with low confidence MUST either be decomposed into independently verifiable atoms or carry a documented reason for remaining coarse. A low-confidence estimate MUST be visible in the approval review and MUST NOT be presented as a precise execution commitment.
+
+### REQ-SKILLS-017
+
+Viewer upgrades MUST execute the staged release's own reader against every retained run before stopping the current service. When the newest reader cannot read a run but the current release can prove read safety, the upgrade MAY proceed only with an explicit per-run read-only fallback; if neither reader can prove safety, the upgrade MUST remain blocked.
+
+### REQ-SKILLS-018
+
+Viewer compatibility maintenance MUST keep historical format, fallback, migration and rejection tests in the repository. Mechanical migration MAY be automatic only when it is deterministic, idempotent, recoverable and fenced by backup, digest and revision; historical content cleanup and compatibility-code removal are separate owner-approved release decisions.
 
 ## Verification
+
+### VER-SKILLS-009
+
+- covers: `REQ-SKILLS-009`, `REQ-SKILLS-013`, `REQ-SKILLS-015`
+- Method: Candidate proposal fixtures with and without approval, structured completeness diagnostics and dashboard projection checks.
+- Pass condition: Unapproved proposals remain visibly unschedulable; all material issues are reported; no dispatch command accepts the proposal.
+
+### VER-SKILLS-010
+
+- covers: `REQ-SKILLS-010`, `REQ-SKILLS-011`, `REQ-SKILLS-012`, `REQ-SKILLS-014`, `REQ-SKILLS-016`
+- Method: Schema, validator and runtime-gate tests covering acceptance contracts, bootstrap/regular ownership, lifecycle evidence, post-merge obligations, dependency conditions and low-confidence decomposition.
+- Pass condition: Invalid plans fail before approval; valid plans retain explicit evidence requirements; runtime gates still reject missing coordinator, branch, PR, CI, verification or closeout facts.
+
+### VER-SKILLS-011
+
+- covers: `REQ-SKILLS-017`, `REQ-SKILLS-018`
+- Method: Candidate reader subprocess checks, fallback read-only HTTP checks, migration interruption/replay tests and retained historical-format rejection tests.
+- Pass condition: Target-reader failures use a proven fallback without writes; dual-reader failures block before service control; mechanical migration remains recoverable and no historical test is removed.
 
 ### VER-SKILLS-001
 
@@ -102,18 +152,6 @@ Automatic ledger migration MUST be limited to deterministic, lossless, idempoten
 - Method: 依赖路由与边界测试、布局 URL 往返测试、合成快照一致性测试、隔离预览服务输出测试及受控示例视觉验收。
 - Pass condition: 节点不重叠，依赖正交且准确连接卡片边界；横向标题可读；单交付单元默认网格且显式选择可恢复；示例原子进度、对话输出和前驱时间一致，正式配置拒绝合成会话适配器。
 
-### VER-SKILLS-009
-
-- covers: `REQ-SKILLS-009`
-- Method: Candidate preflight against every retained run, dual-reader fixtures, isolated legacy-viewer mutation rejection and rollback-window checks.
-- Pass condition: The newest viewer reads every supported old and current shape, the legacy viewer cannot write or advance state, and an unsupported shape blocks before service control.
-
-### VER-SKILLS-010
-
-- covers: `REQ-SKILLS-010`
-- Method: Deterministic migration replay, backup/digest conflict tests, interruption recovery, explicit cleanup approval tests and retained historical-format regression tests.
-- Pass condition: Only mechanically safe migrations run automatically; cleanup remains explicit; removing production compatibility code does not remove historical or migration test evidence.
-
 ## Visual Evidence
 
 ![单交付单元的依赖图、任务网格与协调进度](assets/orchestration-example.png)
@@ -121,7 +159,7 @@ Automatic ledger migration MUST be limited to deterministic, lossless, idempoten
 ## Related ADRs
 
 - [Bun 直接运行客户端与 Skills](../../adr/0021-bun-source-runtime.md)
-- [Viewer 兼容生命周期与历史状态处置](../../adr/0026-viewer-compatibility-lifecycle.md)
+- [Multi-task Flow proposal quality gates and execution boundary](../../adr/0026-multi-task-flow-proposal-quality-gates.md)
 
 ## References
 

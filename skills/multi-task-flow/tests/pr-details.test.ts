@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { PRDetailsCache, summarizeChecks } from "../scripts/pr-details";
+import { PRDetailsCache, summarizeChecks } from "../lib/pr-details";
 const repo = { host: "github.com", owner: "owner", name: "repo" };
 const url = "https://github.com/owner/repo/pull/42";
 test("PR cache deduplicates flights, throttles manual refresh and preserves stale success", async () => {

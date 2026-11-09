@@ -1,5 +1,5 @@
-import type { Ledger } from "../../scripts/schema";
-import type { ConnectObserver } from "../../scripts/conversation-output";
+import type { Ledger } from "../../lib/schema";
+import type { ConnectObserver } from "../../lib/conversation-output";
 import { initialOutput, type AgentOutput } from "../../web/agent-output";
 
 const progress: Record<string, string> = {

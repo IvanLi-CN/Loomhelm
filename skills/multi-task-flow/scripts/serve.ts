@@ -2,9 +2,9 @@ import { fileURLToPath } from "node:url";
 import { Runtime } from "../../bin/modules/core/runtime";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ContractError, requireCondition } from "./errors";
-import { defaultRoot, safeId } from "./store";
-import { startDashboard } from "./server";
+import { ContractError, requireCondition } from "../lib/errors";
+import { defaultRoot, safeId } from "../lib/store";
+import { startDashboard } from "../lib/server";
 import {
   defaultRegistryDir,
   PortRegistry,

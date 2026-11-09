@@ -1,7 +1,7 @@
-import { serviceStatus } from "./service-lifecycle";
-import { ServiceAuth } from "./service-auth";
-import { compatibilityReport } from "./service-compatibility";
-import { maintenanceCheck, maintenanceApply } from "./ledger-maintenance";
+import { serviceStatus } from "../lib/service-lifecycle";
+import { ServiceAuth } from "../lib/service-auth";
+import { compatibilityReport } from "../lib/service-compatibility";
+import { maintenanceCheck, maintenanceApply } from "../lib/ledger-maintenance";
 // CI-only empirical acceptance: every target is an isolated user service.
 import {
   copyFileSync,
@@ -15,16 +15,16 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { servicePaths } from "./service-paths";
-import { ServiceState } from "./service-state";
+import { servicePaths } from "../lib/service-paths";
+import { ServiceState } from "../lib/service-state";
 import {
   buildId,
   verifyRelease,
   releaseFiles,
   digest,
-} from "./service-release";
-import { installRelease, switchRelease } from "./service-maintenance";
-import { unloadUserService, launchdTarget } from "./service-launchd";
+} from "../lib/service-release";
+import { installRelease, switchRelease } from "../lib/service-maintenance";
+import { unloadUserService, launchdTarget } from "../lib/service-launchd";
 import { fixtureRun } from "../tests/service-fixture";
 
 if (process.platform !== "darwin")

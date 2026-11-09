@@ -1,11 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { apply, ready, type Request } from "../scripts/engine";
+import { apply, ready, type Request } from "../lib/engine";
 import {
   validateLedger,
+  taskExecutionPolicyIssues,
   type Ledger,
   type Plan,
   type Task,
-} from "../scripts/schema";
+} from "../lib/schema";
+
+test("task execution policy rejects contradictory ownership and preserves legacy absence", () => {
+  expect(taskExecutionPolicyIssues({ execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "parent_pr" })).toEqual([]);
+  expect(taskExecutionPolicyIssues({ execution_owner: "delivery_agent", conversation_policy: "delivery_owned", delivery_policy: "child_pr" })).toHaveLength(1);
+  expect(taskExecutionPolicyIssues({ execution_owner: "task_agent", conversation_policy: "main_owned", delivery_policy: "parent_pr" })).toHaveLength(2);
+  expect(taskExecutionPolicyIssues({ execution_owner: null, conversation_policy: null, delivery_policy: null })).toEqual([]);
+  expect(taskExecutionPolicyIssues({ execution_owner: "main", conversation_policy: null, delivery_policy: null })[0]?.code).toBe("TASK_EXECUTION_POLICY_INCOMPLETE");
+});
 
 const base = "a".repeat(40),
   head = "b".repeat(40),

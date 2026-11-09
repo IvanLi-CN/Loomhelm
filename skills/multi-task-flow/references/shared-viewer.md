@@ -31,7 +31,7 @@ Re-running the exact command is idempotent. A prepared journal after source seal
 
 ## Compatibility preflight and ledger maintenance
 
-代码升级与持久迁移独立授权。`compatibility-check` 接受 `{ "source": "/absolute/bundle" }` 或 `{ "rollback": true }`，只读返回当前/目标构建、全部 run 的合同、revision、原始 SHA256、读写能力、错误、写入降级项和 `report_digest`；预检会调用当前与候选 release 自身的 `reader-check`，不能只相信 manifest 的 `readable` 声明。所有保留 run 必须由最新 reader 或明确隔离的旧 viewer 可读；完成、会话归档、无使用租约都不免除读取兼容，也不证明需要继续写入。已有只读 run 不要求迁移。损坏、不可读或自定义 view 不兼容不能确认绕过。
+代码升级与持久迁移独立授权。`compatibility-check` 接受 `{ "source": "/absolute/bundle" }` 或 `{ "rollback": true }`，只读返回当前/目标构建、全部 run 的合同、revision、原始 SHA256、读写能力、fallback build、错误、写入降级项和 `report_digest`；预检会调用当前与候选 release 自身的 `reader-check`，不能只相信 manifest 的 `readable` 声明。若候选 reader 失败但当前 reader 仍能证明该 run 可读，报告会标记 `fallback_readable` 并允许切换，网页通过旧 viewer 只读投影继续访问；只有两者都无法证明读取安全时才阻塞升级。完成、会话归档、无使用租约都不免除读取兼容，也不证明需要继续写入。已有只读 run 不要求迁移。损坏、不可读或自定义 view 不兼容不能确认绕过。
 
 只有当前构建可写而目标不可写的新增降级需要主人逐次确认。展示准确报告后，`upgrade` 或 `rollback` 可附加 `write_downgrade_approval: { report_digest, approval_ref, maintenance_thread_id }`。应用持锁重算报告，run 内容或构建变化即拒绝旧确认；没有降级时不接受多余确认。`install` 无当前构建时只要求读取兼容。错误的 `details` 包含具体 run、能力及预检报告；不要根据通用错误盲目迁移所有 run。
 

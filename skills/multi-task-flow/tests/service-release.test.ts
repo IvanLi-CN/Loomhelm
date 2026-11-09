@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fixtureRelease, fixtureLegacyRelease, serviceFixture } from "./service-fixture";
-import { buildId, digest, verifyRelease, requireSourceRelease } from "../scripts/service-release";
+import { buildId, digest, verifyRelease, requireSourceRelease } from "../lib/service-release";
 
 function update(source: string, manifest: any) {
   const { build_id, ...body } = manifest;
@@ -42,7 +42,7 @@ test("candidate discovery selects the newest verified build and ignores the curr
     cpSync(old.source, join(state.paths.candidates, oldManifest.build_id), { recursive: true });
     cpSync(newer.source, join(state.paths.candidates, newerManifest.build_id), { recursive: true });
     state.saveConfig({ schema_version: 1, port: 49152, registry_dir: join(root, "registry"), current_build: oldManifest.build_id, previous_build: null, agent_ttl_ms: 3600000 });
-    const { discoverCandidate } = await import("../scripts/service-maintenance");
+    const { discoverCandidate } = await import("../lib/service-maintenance");
     expect(discoverCandidate(state)?.service_version).toBe("1.10.0");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -75,7 +75,7 @@ test("rollback refuses a legacy package before touching config or service contro
     const before = readFileSync(join(state.paths.config,"service.json"),"utf8");
     let calls = 0;
     const control = {unload(){calls++;},start(){calls++;},async status(){calls++;return {} as any;}};
-    const {switchRelease} = await import("../scripts/service-maintenance");
+    const {switchRelease} = await import("../lib/service-maintenance");
     await expect(switchRelease(state,"",true,control)).rejects.toThrow("diagnostic-only");
     expect(calls).toBe(0); expect(readFileSync(join(state.paths.config,"service.json"),"utf8")).toBe(before);
   } finally { rmSync(root,{recursive:true,force:true}); }
@@ -90,7 +90,7 @@ test("failed v2 startup restores legacy config without restarting the legacy pro
     state.transaction(runtime => {runtime.pid=process.pid;runtime.phase="running";});
     let starts=0;
     const control={unload(){state.transaction(runtime=>{runtime.pid=null;runtime.phase="stopped";});}, start(){starts++;throw Error("controlled startup failure");}, async status(){return {} as any;}};
-    const {switchRelease}=await import("../scripts/service-maintenance");
+    const {switchRelease}=await import("../lib/service-maintenance");
     await expect(switchRelease(state,next.source,false,control)).rejects.toThrow("controlled startup failure");
     expect(starts).toBe(1); expect(state.config().current_build).toBe(legacy.manifest.build_id); expect(state.runtime().pid).toBeNull();
   } finally { rmSync(root,{recursive:true,force:true}); }

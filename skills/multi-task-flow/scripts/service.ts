@@ -3,22 +3,22 @@ import {
   compatibilityReport,
   selectedRelease,
   downgradeApproval,
-} from "./service-compatibility";
-import { maintenanceCheck, maintenanceApply } from "./ledger-maintenance";
+} from "../lib/service-compatibility";
+import { maintenanceCheck, maintenanceApply } from "../lib/ledger-maintenance";
 import { writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { servicePaths } from "./service-paths";
-import { ServiceState } from "./service-state";
-import { ServiceAuth } from "./service-auth";
-import { ensureService, runDaemon, serviceStatus } from "./service-lifecycle";
-import { agentLease } from "./service-http";
-import { installRelease, switchRelease } from "./service-maintenance";
-import { importRun } from "./service-import";
-import { ContractError, requireCondition } from "./errors";
-import { requireApi, ledgerContract } from "./service-contract";
-import { buildView } from "./view";
-import { validateLedger } from "./schema";
+import { servicePaths } from "../lib/service-paths";
+import { ServiceState } from "../lib/service-state";
+import { ServiceAuth } from "../lib/service-auth";
+import { ensureService, runDaemon, serviceStatus } from "../lib/service-lifecycle";
+import { agentLease } from "../lib/service-http";
+import { installRelease, switchRelease } from "../lib/service-maintenance";
+import { importRun } from "../lib/service-import";
+import { ContractError, requireCondition } from "../lib/errors";
+import { requireApi, ledgerContract } from "../lib/service-contract";
+import { buildView } from "../lib/view";
+import { validateLedger } from "../lib/schema";
 
 const actor = z
   .object({
@@ -155,10 +155,7 @@ export async function serviceCommand(
     return { contract: ledgerContract(ledger), revision: ledger.revision };
   }
   if (command === "read-only-view") {
-    const parsed = z
-      .object({ ledger: z.unknown(), plan_id: z.string().optional() })
-      .strict()
-      .parse(input);
+    const parsed = z.object({ ledger: z.unknown(), plan_id: z.string().optional() }).strict().parse(input);
     const ledger = validateLedger(parsed.ledger);
     return { view: buildView(ledger, parsed.plan_id) };
   }
@@ -185,9 +182,7 @@ if (import.meta.main) {
         "Usage: service.ts <command> --input -",
       );
       const text = await Runtime.stdin.text();
-      const inputLimit = command === "reader-check" || command === "read-only-view"
-        ? 64 * 1024 * 1024
-        : 16_384;
+      const inputLimit = command === "reader-check" || command === "read-only-view" ? 256 * 1024 * 1024 : 16_384;
       requireCondition(text.length <= inputLimit, "INPUT_TOO_LARGE", "Service command input is too large");
       const result = await serviceCommand(command, JSON.parse(text));
       console.log(JSON.stringify({ ok: true, code: "OK", result }));

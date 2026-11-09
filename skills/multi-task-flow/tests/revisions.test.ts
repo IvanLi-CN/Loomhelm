@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { apply, ready, type Request } from "../scripts/engine";
-import { contractJsonSchema, localSemanticProjection } from "../scripts/contract";
+import { apply, ready, type Request } from "../lib/engine";
+import { contractJsonSchema, localSemanticProjection } from "../lib/contract";
 import {
   buildPlanRevision,
   deriveExecutionPhase,
   diffPlan,
   validateRevisionInput,
-} from "../scripts/revisions";
-import { validateLedger } from "../scripts/schema";
+} from "../lib/revisions";
+import { validateLedger } from "../lib/schema";
 
 const base = "a".repeat(40);
 const at = "2026-01-01T00:00:00.000Z";

@@ -1,12 +1,12 @@
-import { mkdtempSync, realpathSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, realpathSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { servicePaths } from "../scripts/service-paths";
-import { ServiceAuth } from "../scripts/service-auth";
-import { ServiceState } from "../scripts/service-state";
-import { compatibility } from "../scripts/service-contract";
-import { buildId, digest, releaseFiles } from "../scripts/service-release";
-import { LedgerStore } from "../scripts/store";
+import { servicePaths } from "../lib/service-paths";
+import { ServiceAuth } from "../lib/service-auth";
+import { ServiceState } from "../lib/service-state";
+import { compatibility } from "../lib/service-contract";
+import { buildId, digest, releaseFiles } from "../lib/service-release";
+import { LedgerStore } from "../lib/store";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
 
 export function serviceFixture() {
@@ -17,8 +17,9 @@ export function serviceFixture() {
 }
 export function fixtureRelease(root: string, name = "bundle") {
   const source = join(root, name); mkdirSync(join(source, "dist"), { recursive: true });
-  for (const file of releaseFiles) { mkdirSync(dirname(join(source,file)),{recursive:true}); writeFileSync(join(source, file), file === "skills/multi-task-flow/dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name); }
-  const manifest = { schema_version: 2 as const, source_sha: "a".repeat(40), service_version: "0.0.0-test", platform: `${process.platform}-${process.arch}` as "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64", ...compatibility, files: Object.fromEntries(releaseFiles.map(file => [file, digest(file === "skills/multi-task-flow/dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name)])) };
+  for (const file of releaseFiles) { mkdirSync(dirname(join(source,file)),{recursive:true}); writeFileSync(join(source, file), file === "viewer" ? "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true,\"code\":\"OK\",\"result\":{\"contract\":\"schema-2/contract-1\",\"revision\":0}}\\n'\n" : file === "skills/multi-task-flow/dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name); }
+  chmodSync(join(source, "viewer"), 0o700);
+  const manifest = { schema_version: 2 as const, source_sha: "a".repeat(40), service_version: "0.0.0-test", platform: `${process.platform}-${process.arch}` as "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64", ...compatibility, files: Object.fromEntries(releaseFiles.map(file => [file, digest(file === "viewer" ? "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true,\"code\":\"OK\",\"result\":{\"contract\":\"schema-2/contract-1\",\"revision\":0}}\\n'\n" : file === "skills/multi-task-flow/dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name)])) };
   const result = { ...manifest, build_id: buildId(manifest) };
   writeFileSync(join(source, "manifest.json"), JSON.stringify(result));
   return { source, manifest: result };

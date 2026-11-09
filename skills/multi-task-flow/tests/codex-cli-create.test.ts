@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCliThread, runInitialization, INITIALIZATION_PROMPT, verifyRepositoryIdentity, type CliRun } from "../scripts/codex-cli-create";
+import { createCliThread, runInitialization, INITIALIZATION_PROMPT, verifyRepositoryIdentity, type CliRun } from "../lib/codex-cli-create";
 
 const input = { title: "test", prompt: "DO NOT EXECUTE THIS TASK", cwd: process.cwd(), model: "gpt-6.1-sol", thinking: "max" };
 const completed: CliRun = { thread_id: "thread-a", exit_code: 0, turn_completed: true, events: ["thread.started", "turn.completed"] };

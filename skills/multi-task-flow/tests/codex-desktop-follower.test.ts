@@ -3,8 +3,8 @@ import { createServer, type Socket } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CodexDesktopFollower } from "../scripts/codex-desktop-follower";
-import type { JsonRecord } from "../scripts/codex-socket";
+import { CodexDesktopFollower } from "../lib/codex-desktop-follower";
+import type { JsonRecord } from "../lib/codex-socket";
 const wait=async(condition:()=>boolean)=>{for(let i=0;i<100&&!condition();i++)await Bun.sleep(5);expect(condition()).toBe(true)};
 test("desktop follower receives fragmented snapshots, native text patches and completion without execution requests",async()=>{
  const root=mkdtempSync(join(tmpdir(),"desktop-follow-")),path=join(root,"ipc.sock");let socket!:Socket;const calls:JsonRecord[]=[],events:JsonRecord[]=[];let failures=0;

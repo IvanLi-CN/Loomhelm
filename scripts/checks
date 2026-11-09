@@ -16,7 +16,9 @@ Commands:
   quality      Check the quality declaration, Markdown/dprint, scripts and deployment config.
   bootstrap    Run the canonical worktree bootstrap entrypoint.
   generated    Check protocol, sqlc and module generated-state drift.
-  source       Run Go tests, race tests and vet.
+  source       Run the required Go tests and vet.
+  source-race  Run Go race tests.
+  source-shuffle Run Go tests with shuffled execution.
   database     Run the real PostgreSQL-backed database and job tests.
   web          Run client transport tests, frozen Web typecheck and production/Storybook builds.
   client       Install and verify the independent TypeScript client on Bun from TS sources.
@@ -242,9 +244,17 @@ check_sqlc() {
 
 check_source() {
 	run_command "Go unit and integration-capable tests" go test -p=1 ./...
-	run_command "Go race tests" go test -p=1 -race ./...
-	run_command "Go shuffled tests" go test -p=1 -shuffle=on ./...
 	run_command "Go vet" go vet ./...
+	finish_check
+}
+
+check_source_race() {
+	run_command "Go race tests" go test -p=1 -race ./...
+	finish_check
+}
+
+check_source_shuffle() {
+	run_command "Go shuffled tests" go test -p=1 -shuffle=on ./...
 	finish_check
 }
 
@@ -276,18 +286,18 @@ check_client() {
 	mkdir -p "$TMPDIR" "$HOME" "$CODEX_HOME" "$BUN_INSTALL_CACHE_DIR"
 	run_command "Skills frozen dependencies" bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy
 	run_command "Dashboard frozen dependencies" bun install --cwd skills/multi-task-flow --frozen-lockfile --ignore-scripts --backend=copy
-	run_command "Migrated source inventory" bun skills/scripts/check-client-skills.ts
+	run_command "Migrated source inventory" bun skills/multi-task-flow/scripts/check-client-skills.ts
 	run_command "Dashboard browser assets only" bun run skills:build
-	run_command "Pure-source installation regression" bun test ./skills/scripts/check-skills-installation.test.ts
-	run_command "All source modules and nonempty coverage" bun skills/scripts/verify-skills-modules.ts
-	run_command "Bun FFI cross-process safety" bun skills/scripts/test-skills-native.ts
+	run_command "Pure-source installation regression" bun test ./skills/multi-task-flow/tests/check-skills-installation.test.ts
+	run_command "All source modules and nonempty coverage" bun skills/multi-task-flow/scripts/verify-skills-modules.ts
+	run_command "Bun FFI cross-process safety" bun skills/multi-task-flow/scripts/test-skills-native.ts
 	run_command "Shared toolkit and system-library regression" bun test ./skills/bin/tests ./skills/bin/native-tests
 	run_command "Task flow and UI regression" bun run --cwd skills/multi-task-flow test:all
 	run_command "Client frozen dependency install" bun install --cwd clients/typescript --frozen-lockfile --ignore-scripts --backend=copy
 	run_command "Client typecheck without emit" bun run --cwd clients/typescript check
 	run_command "Client Bun source tests" bun run --cwd clients/typescript test
-	run_command "Independent source package isolation" bun skills/scripts/test-skills-artifact.ts
-	run_command "Viewer v2 source package and HTTP lifecycle" bun skills/scripts/test-viewer-source.ts
+	run_command "Independent source package isolation" bun skills/multi-task-flow/scripts/test-skills-artifact.ts
+	run_command "Viewer v2 source package and HTTP lifecycle" bun skills/multi-task-flow/scripts/test-viewer-source.ts
 	finish_check
 }
 
@@ -302,6 +312,8 @@ run_named_group() {
 		bootstrap) run_group "bootstrap" check_bootstrap ;;
 		generated) run_group "generated" check_generated ;;
 		source) run_group "source" check_source ;;
+		source-race) run_group "source-race" check_source_race ;;
+		source-shuffle) run_group "source-shuffle" check_source_shuffle ;;
 		database) run_group "database" check_database ;;
 		web) run_group "web" check_web ;;
 		client) run_group "TypeScript client" check_client ;;

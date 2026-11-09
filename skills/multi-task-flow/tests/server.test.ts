@@ -2,10 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LedgerStore } from "../scripts/store";
-import { apply } from "../scripts/engine";
-import { validateLedger } from "../scripts/schema";
-import { startDashboard } from "../scripts/server";
+import { LedgerStore } from "../lib/store";
+import { apply } from "../lib/engine";
+import { validateLedger } from "../lib/schema";
+import { startDashboard } from "../lib/server";
 
 const paths: string[] = [];
 const at = "2026-01-01T00:00:00.000Z";
@@ -121,7 +121,7 @@ test("authenticated loopback edits replace claims, emit revisions and freeze on 
   const { root, assets, store } = setup();
   store.update((raw) => {
     raw.groups = [{ id: "g", title: "Group", agent_thread_id: "group-thread", state: "active", parent_branch: null, parent_pr: null, cut_sha: null, current_sha: null, merge_sha: null, requirements_path: null }];
-    raw.tasks = ["a", "b"].map((id) => ({ id, title: id, kind: "coordination", group_id: "g", thread_id: null, state: "planned", atoms: [{ id: `atom-${id}`, title: id, status: "planned" }], owned_surfaces: [], base_sha: null, pr: null, requirements_path: null, started_at: null, finished_at: null, blocker: null, assignment_history: [] }));
+    raw.tasks = ["a", "b"].map((id) => ({ id, title: id, kind: "coordination", group_id: "g", thread_id: null, state: "planned", atoms: [{ id: `atom-${id}`, title: id, status: "planned" }], owned_surfaces: [], base_sha: null, pr: null, requirements_path: null, execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "evidence", started_at: null, finished_at: null, blocker: null, assignment_history: [] }));
     raw.plans[0].atoms = ["a", "b"].map((id) => ({ id: `atom-${id}`, title: id, task_id: id, purpose: "fixture task", output: "fixture output" }));
     raw.plans[0].nodes = ["a", "b"].map((id) => ({ id: `node-${id}`, kind: "task", ref_id: id, group_id: "g", label: id, estimate_minutes: 30, estimate_basis: "fixture estimate", estimate_confidence: "medium" }));
   });

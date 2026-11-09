@@ -48,7 +48,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
@@ -115,7 +115,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
@@ -137,6 +137,52 @@ jobs:
         with:
           purpose: repository
           operation: save
+
+  go-race-tests:
+    name: Go Race Tests
+    needs: quality-gates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Restore explicit Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          purpose: repository
+      - name: Run Go race tests
+        run: scripts/checks source-race
+
+  go-shuffle-tests:
+    name: Go Shuffle Tests
+    needs: quality-gates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Restore explicit Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          purpose: repository
+      - name: Run Go shuffled tests
+        run: scripts/checks source-shuffle
 
   repository-contracts:
     name: Repository Contracts
@@ -165,7 +211,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
@@ -199,7 +245,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
       - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
         with:
@@ -220,7 +266,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
       - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
         with:
@@ -230,7 +276,7 @@ jobs:
           export TMPDIR="$PWD/.tmp/ffi/tmp" HOME="$PWD/.tmp/ffi/home" BUN_INSTALL_CACHE_DIR="$PWD/.tmp/ffi/cache" BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
           mkdir -p "$TMPDIR" "$HOME" "$BUN_INSTALL_CACHE_DIR"
           bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy
-          bun skills/scripts/test-skills-native.ts
+          bun skills/multi-task-flow/scripts/test-skills-native.ts
           bun test ./skills/bin/native-tests/core ./skills/bin/native-tests/visual
 
       - name: Verify multi-task-flow contracts on macOS
@@ -256,7 +302,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
@@ -304,7 +350,7 @@ jobs:
 
   candidate-build:
     name: Candidate Build
-    needs: [quality-gates, bootstrap-verification, react-doctor, repository-verification, repository-contracts, typescript-client-bun, candidate-producer, skills-native-macos]
+    needs: [quality-gates, bootstrap-verification, react-doctor, repository-verification, repository-contracts, typescript-client-bun, candidate-producer]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -314,7 +360,7 @@ jobs:
         run: |
           python3 - <<'PYTHON'
           import json, os
-          expected = {"quality-gates", "bootstrap-verification", "react-doctor", "repository-verification", "repository-contracts", "typescript-client-bun", "candidate-producer", "skills-native-macos"}
+          expected = {"quality-gates", "bootstrap-verification", "react-doctor", "repository-verification", "repository-contracts", "typescript-client-bun", "candidate-producer"}
           results = json.loads(os.environ["CANDIDATE_RESULTS"])
           if set(results) != expected or any(value.get("result") != "success" for value in results.values()):
               raise SystemExit("candidate dependencies incomplete or unsuccessful")
@@ -330,7 +376,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
@@ -376,7 +422,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
-          fetch-depth: 0
+          fetch-depth: 1
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
           go-version-file: go.mod
