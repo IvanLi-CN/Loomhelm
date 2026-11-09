@@ -21,11 +21,11 @@
     "TypeScript Client (Bun)",
     "Product Release Contract",
     "Product Package (ubuntu-24.04)",
-    "Product Package (macos-15)",
-    "Skills Native macOS"
+    "Product Package (macos-15)"
   ],
   "informational_checks": [
     "Candidate Reproducibility",
+    "Skills Native macOS",
     "Go Race Tests",
     "Go Shuffle Tests"
   ],
