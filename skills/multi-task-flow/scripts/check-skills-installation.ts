@@ -69,7 +69,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const probe = process.argv.includes('--probe');
   const args = process.argv.slice(2).filter(arg => arg !== '--probe');
   if (args.length !== 0 && (args.length !== 2 || args[0] !== '--root')) {
-    console.error('Usage: bun skills/scripts/check-skills-installation.ts [--root PATH] [--probe]');
+    console.error('Usage: bun skills/multi-task-flow/scripts/check-skills-installation.ts [--root PATH] [--probe]');
     process.exitCode = 2;
   } else {
     try {
