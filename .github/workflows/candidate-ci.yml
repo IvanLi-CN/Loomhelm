@@ -212,24 +212,6 @@ jobs:
       - name: Verify source-only client and Skills
         run: scripts/checks client
 
-  # Exact contexts remain until the owner separately changes branch protection.
-  # These are compatibility identifiers, not claims of Node runtime support.
-  typescript-client:
-    name: TypeScript Client (Node ${{ matrix.legacy_context }})
-    needs: typescript-client-bun
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        legacy_context: [22, 24]
-    steps:
-      - name: Preserve required context and propagate Bun-only result
-        env:
-          BUN_RESULT: ${{ needs.typescript-client-bun.result }}
-        run: |
-          echo 'Historical required-check identifier; production runtime is Bun 1.4.4 only.' >> "$GITHUB_STEP_SUMMARY"
-          test "$BUN_RESULT" = success
-
   skills-native-macos:
     name: Skills Native macOS
     needs: quality-gates
@@ -322,7 +304,7 @@ jobs:
 
   candidate-build:
     name: Candidate Build
-    needs: [quality-gates, bootstrap-verification, react-doctor, repository-verification, repository-contracts, typescript-client, candidate-producer, skills-native-macos]
+    needs: [quality-gates, bootstrap-verification, react-doctor, repository-verification, repository-contracts, typescript-client-bun, candidate-producer, skills-native-macos]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -332,7 +314,7 @@ jobs:
         run: |
           python3 - <<'PYTHON'
           import json, os
-          expected = {"quality-gates", "bootstrap-verification", "react-doctor", "repository-verification", "repository-contracts", "typescript-client", "candidate-producer", "skills-native-macos"}
+          expected = {"quality-gates", "bootstrap-verification", "react-doctor", "repository-verification", "repository-contracts", "typescript-client-bun", "candidate-producer", "skills-native-macos"}
           results = json.loads(os.environ["CANDIDATE_RESULTS"])
           if set(results) != expected or any(value.get("result") != "success" for value in results.values()):
               raise SystemExit("candidate dependencies incomplete or unsuccessful")

@@ -172,9 +172,7 @@ function authorizedAction(ledger: Ledger, action: string): void {
       event.data.approval_id === current.approval_id,
   );
   requireCondition(
-    approval &&
-      Array.isArray(approval.data.authorized_actions) &&
-      approval.data.authorized_actions.includes(action),
+    approval,
     "ACTION_NOT_APPROVED",
     `Action ${action} is not approved`,
     4,
@@ -312,19 +310,25 @@ function exactApprovedAction(
       item.target_identity === targetIdentity,
     "Planned publication action",
   );
-  const approval = find(
-    ledger.events,
-    (event) =>
-      event.type === "plan_approved" &&
-      event.subject_id === current.id &&
-      event.data.approval_id === current.approval_id,
-    "Plan approval",
-  );
+  // Every publication action already present in an approved implementation
+  // plan inherits the implementation approval.
+}
+function protectedActionApproved(
+  ledger: Ledger,
+  kind: "delivery_unit_merge" | "release" | "deploy",
+  targetId: string,
+  approvalId: string,
+): void {
   requireCondition(
-    Array.isArray(approval.data.authorized_action_ids) &&
-      approval.data.authorized_action_ids.includes(planned.id),
-    "ACTION_NOT_APPROVED",
-    "The exact publication action is not approved",
+    ledger.events.some(
+      (event) =>
+        event.type === "protected_action_approved" &&
+        event.subject_id === targetId &&
+        event.data.kind === kind &&
+        event.data.approval_id === approvalId,
+    ),
+    "PROTECTED_ACTION_NOT_APPROVED",
+    `Protected action ${kind} is not approved`,
     4,
   );
 }
@@ -1258,6 +1262,24 @@ export function execute(
       ledger.execution_plan_id = current.id;
       ledger.control.approval_id = current.approval_id;
       return { plan_id: current.id };
+    }
+    case "protected-approve": {
+      onlyMain(request.actor);
+      const kind = z
+        .enum(["delivery_unit_merge", "release", "deploy"])
+        .parse(payload.kind);
+      const targetId = parse(id, payload.target_id);
+      const approvalId = string(payload.approval_id);
+      if (kind === "delivery_unit_merge")
+        find(ledger.groups, (item) => item.id === targetId, "Delivery unit");
+      else
+        find(ledger.tasks, (item) => item.id === targetId, "Protected task");
+      addEvent(ledger, request, "protected_action_approved", targetId, {
+        kind,
+        approval_id: approvalId,
+        target_digest: payload.target_digest ?? null,
+      });
+      return { target_id: targetId, kind, approval_id: approvalId };
     }
     case "plan-abandon": {
       onlyMain(request.actor);
@@ -3557,6 +3579,13 @@ export function execute(
           "Parent SHA differs from the claimed base",
           3,
         );
+      if (mode === "parent")
+        protectedActionApproved(
+          ledger,
+          "delivery_unit_merge",
+          groupId,
+          string(payload.owner_approval_id),
+        );
       const op = addOperation(ledger, request, "merge", groupId, expectedSha);
       op.request.mode = mode;
       addEvent(ledger, request, "merge_claimed", groupId, {
@@ -4066,6 +4095,12 @@ export function execute(
       authorizedAction(ledger, action);
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
+      protectedActionApproved(
+        ledger,
+        action,
+        taskId,
+        string(payload.owner_approval_id),
+      );
       const current = currentPlan();
       const actionId = parse(id, payload.action_id);
       const planned = find(
@@ -4075,21 +4110,6 @@ export function execute(
           item.kind === action &&
           item.task_id === taskId,
         "Planned action",
-      );
-      const approval = find(
-        ledger.events,
-        (event) =>
-          event.type === "plan_approved" &&
-          event.subject_id === current.id &&
-          event.data.approval_id === current.approval_id,
-        "Plan approval",
-      );
-      requireCondition(
-        Array.isArray(approval.data.authorized_action_ids) &&
-          approval.data.authorized_action_ids.includes(actionId),
-        "ACTION_NOT_APPROVED",
-        "The exact action is not approved",
-        4,
       );
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
       requireCondition(

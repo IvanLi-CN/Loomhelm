@@ -18,8 +18,7 @@
     "Repository Verification",
     "Candidate Build",
     "Blue-Green Control Contract",
-    "TypeScript Client (Node 22)",
-    "TypeScript Client (Node 24)",
+    "TypeScript Client (Bun)",
     "Product Release Contract",
     "Product Package (ubuntu-24.04)",
     "Product Package (macos-15)"
@@ -40,8 +39,7 @@
         "Candidate Build",
         "Skills Native macOS",
         "Candidate Reproducibility",
-        "TypeScript Client (Node 22)",
-        "TypeScript Client (Node 24)",
+        "TypeScript Client (Bun)",
         "Product Release Contract",
         "Product Package (ubuntu-24.04)",
         "Product Package (macos-15)"
