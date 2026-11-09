@@ -24,6 +24,7 @@ import {
   validateLedger,
   validatePlan,
   validateSchedulablePlan,
+  validateTaskExecutionPolicies,
   defaultGroupAtoms,
   executionProfile,
   DEFAULT_EXECUTION_PROFILE,
@@ -205,6 +206,7 @@ try {
           };
     validatePlan(initialPlan);
     validateSchedulablePlan(initialPlan);
+    validateTaskExecutionPolicies(parsed.payload.tasks, true);
     const groups = parsed.payload.groups.map((group) => {
       const plannedAtoms = initialPlan.group_atoms
         .filter((atom) => atom.group_id === group.id)

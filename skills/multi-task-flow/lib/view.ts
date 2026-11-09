@@ -345,6 +345,9 @@ export function buildView(
           : null,
       };
     });
+  const allTasksDispatchReady = tasks.every(
+    (task) => task.dispatch_readiness === "ready",
+  );
   const planSummary = ledger.plans.map((item) => ({
     id: item.id,
     created_at: item.created_at,
@@ -389,7 +392,7 @@ export function buildView(
         activePlan.id !== executionPlan.id ||
         activePlan.lifecycle !== "approved",
       scheduling_eligible: isApprovedExecution && completenessIssues.length === 0,
-      dispatch_readiness: ledger.groups.every((item) => item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id) && tasks.every((item) => (item.dispatch_diagnostics?.length ?? 0) === 0) ? "ready" : "blocked",
+      dispatch_readiness: ledger.groups.every((item) => item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id) && allTasksDispatchReady ? "ready" : "blocked",
       delivery_agent_readiness: ledger.groups.some((item) => item.delivery_unit_kind === "regular" && !item.agent_thread_id) ? "unbound" : "bound",
       completeness: {
         status: completenessIssues.length === 0 ? "complete" : "blocked",
