@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-const client = resolve(import.meta.dirname, '../../clients/typescript');
+const client = resolve(import.meta.dirname, '../../..', 'clients/typescript');
 const isolated = realpathSync(mkdtempSync(join(tmpdir(),'loomhelm-source-artifact-')));
 try {
   for (const file of ['package.json','bun.lock','src','toolkit']) cpSync(join(client,file),join(isolated,file),{recursive:true});

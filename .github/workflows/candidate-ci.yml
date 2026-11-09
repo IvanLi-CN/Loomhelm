@@ -230,7 +230,7 @@ jobs:
           export TMPDIR="$PWD/.tmp/ffi/tmp" HOME="$PWD/.tmp/ffi/home" BUN_INSTALL_CACHE_DIR="$PWD/.tmp/ffi/cache" BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
           mkdir -p "$TMPDIR" "$HOME" "$BUN_INSTALL_CACHE_DIR"
           bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy
-          bun skills/scripts/test-skills-native.ts
+          bun skills/multi-task-flow/scripts/test-skills-native.ts
           bun test ./skills/bin/native-tests/core ./skills/bin/native-tests/visual
 
       - name: Verify multi-task-flow contracts on macOS

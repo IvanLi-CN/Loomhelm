@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-const root = resolve(import.meta.dirname, '../..');
+const root = resolve(import.meta.dirname, '../../..');
 const path = resolve(root, 'skills/source-manifest.json');
 const manifest = JSON.parse(readFileSync(path, 'utf8'));
 const hash = data => createHash('sha256').update(data).digest('hex');

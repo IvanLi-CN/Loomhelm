@@ -14087,7 +14087,7 @@
       "path": "skills/multi-task-flow/scripts/build-service.ts",
       "sourceBlob": "ca672ad72649091d21a78504664d60e6060c88d5",
       "sourceSha256": "6161f53430c5bd6f5665a2f77129c87cfe937d5c244f3df0eab8533bbecf17c4",
-      "installedSha256": "c71861698ff33d7bd5b7aceeb5a775a1748171bfd060f05f2cd941f5882a2e0b",
+      "installedSha256": "056854f11b1e7101039a995fd2b9395cd9df2496355f6efa7ca7214fbca868a1",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15805,52 +15805,52 @@
       "installedSha256": "59300c7a4f7f13ca6d42c90dbf28a298d3c78760839f35fdd8f63349deec6f41"
     },
     {
-      "path": "skills/scripts/catalog-client-skills.ts",
+      "path": "skills/multi-task-flow/scripts/catalog-client-skills.ts",
       "installedSha256": "14b9b8abc5d934529b69041b24d22bf9101d9d78b26f788e255cb54a207c1a61"
     },
     {
-      "path": "skills/scripts/check-client-skills.ts",
-      "installedSha256": "83b623b6ba683fe6b38898c8021c41518ce5276f1af707a4b3336f487c41076c"
+      "path": "skills/multi-task-flow/scripts/check-client-skills.ts",
+      "installedSha256": "44be0dd2ebf78ad29e119634b8676bda22408682495e5f4eb7ce0ab9b2745248"
     },
     {
-      "path": "skills/scripts/check-skills-installation.test.ts",
-      "installedSha256": "c33a5a81f75df444ee03971ee4bd97427578a5e4b53d06236498d6cbe5ba1a69"
+      "path": "skills/multi-task-flow/scripts/check-skills-installation.test.ts",
+      "installedSha256": "5376e44768feeba1bf9a416bbaafdf550d85aec55f1880208c569438f49d6445"
     },
     {
-      "path": "skills/scripts/check-skills-installation.ts",
-      "installedSha256": "d3836022033cc081a4820548b61af6095500086e43e80fc9ac66ad173aab35f2"
+      "path": "skills/multi-task-flow/scripts/check-skills-installation.ts",
+      "installedSha256": "afb45e6a0748a20f2e750b57cc8d874529b0ba321f5285b9cd4962d4719bb81b"
     },
     {
-      "path": "skills/scripts/import-client-skills.ts",
-      "installedSha256": "314b621c8409c62443accc089e9f8c24e10a767e675979ee750d221a2f05e922"
+      "path": "skills/multi-task-flow/scripts/import-client-skills.ts",
+      "installedSha256": "cbb3fa992353237d4f0b4fb04e6447e85f3518afcdf19bbe5744236a28a3856e"
     },
     {
-      "path": "skills/scripts/package-client-skills.ts",
-      "installedSha256": "0956257c0482c7ecd9a4c0de233e35d70311d1cc104cee14dc5049da0ba9219d"
+      "path": "skills/multi-task-flow/scripts/package-client-skills.ts",
+      "installedSha256": "e4c0350952e2c339cd8110b4d1d487a0449713a0d8dc3fc499d3a4e628034d86"
     },
     {
-      "path": "skills/scripts/package-source.ts",
+      "path": "skills/multi-task-flow/scripts/package-source.ts",
       "installedSha256": "fd930d47dcface145c30c57f119f3227c60a741746ea10d05e5673c7dcf73578"
     },
     {
-      "path": "skills/scripts/test-skills-artifact.ts",
-      "installedSha256": "02cf9ac602ddd09c194cd57efad10da7a5103d5b272c6151fd66879d378469de"
+      "path": "skills/multi-task-flow/scripts/test-skills-artifact.ts",
+      "installedSha256": "9604c3d4384d68a0c3e9b73600e06be7a73b96dbdabcdbb8f523e203918322d1"
     },
     {
-      "path": "skills/scripts/test-skills-native.ts",
-      "installedSha256": "5308f87f6cc9909e3eabcb383cb4e21aef34237bf634f1481565346b295d9c70"
+      "path": "skills/multi-task-flow/scripts/test-skills-native.ts",
+      "installedSha256": "32d840edf5beb5393515390cc0bb6cde1bb403a2aaf0f92f32844b5a59e87955"
     },
     {
-      "path": "skills/scripts/test-viewer-source.ts",
-      "installedSha256": "d97929ac0194124a23de93c0a8e1185d531e444a6dba68c5f9dc1c550c34fcfb"
+      "path": "skills/multi-task-flow/scripts/test-viewer-source.ts",
+      "installedSha256": "90a13fe760341d58d8223818db4e47d00a1183f90d536e762c8cad845a7bc4dc"
     },
     {
-      "path": "skills/scripts/verify-skills-modules.ts",
+      "path": "skills/multi-task-flow/scripts/verify-skills-modules.ts",
       "installedSha256": "41e4134eef5f7d8c6cacdad5de2693e526eba172e7ca3c58fcef74114c2cb1a7"
     },
     {
       "path": "skills/support-manifest.json",
-      "installedSha256": "06fab223fb972c70f25b9fad3120a9a197564bf15dd2080a0e4f0c70ad01ddbe"
+      "installedSha256": "67fa9c7b865b5fffd775942e37c9bcf1d5af51ab3a02c69dcfc455b23298fb02"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/output-tooltip-boundary.png",

@@ -26,7 +26,7 @@ Multi-task Flow proposal quality gates, structured acceptance contracts and expl
 
 ## 验证边界
 
-vendor 源码安装只需保留 `skills/`。共享执行模块、合同资源、构建和检查支持分别位于 `skills/bin/`、`skills/docs/vendor/dot-codex/` 与 `skills/scripts/`；来源清单拒绝任何安装路径越出 `skills/`。隔离验证仅复制该目录并在其中安装声明依赖，验证原始 Skill 入口和生产脚本，不借用根 `bin/`、源码 checkout 或用户级全局程序。
+vendor 源码安装只需保留 `skills/`。共享执行模块、合同资源、构建和检查支持分别位于 `skills/bin/`、`skills/docs/vendor/dot-codex/` 与 `skills/multi-task-flow/scripts/`；来源清单拒绝任何安装路径越出 `skills/`。隔离验证仅复制该目录并在其中安装声明依赖，验证原始 Skill 入口和生产脚本，不借用根 `bin/`、源码 checkout 或用户级全局程序。
 
 原共享脚本回归、原 Multi-task Flow 与网页回归、原生安全回归、客户端双运行时测试及来源隔离测试分别运行。macOS 本地结果不能代替 Linux CI，模拟 socket 不能代替真实宿主接力，已有旧运行的测试副本不能授权写入真实账本。当前候选的精确提交、经验验收和正式审查证据由交付流程保管；没有完整证据时不宣称合并就绪。
 
