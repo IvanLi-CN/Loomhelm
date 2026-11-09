@@ -10,6 +10,7 @@ import {
 import { ContractError, requireCondition } from "./errors";
 import {
   isContributionKind,
+  planCompletenessIssues,
   validateLedger,
   type Ledger,
   type Plan,
@@ -250,6 +251,9 @@ export function buildView(
   const executionPlan = ledger.plans.find(
     (item) => item.id === ledger.execution_plan_id,
   )!;
+  const completenessIssues = planCompletenessIssues(plan);
+  const isApprovedExecution =
+    activePlan.id === executionPlan.id && activePlan.lifecycle === "approved";
   const nodeData = plan.nodes.map((node) => ({
     ...node,
     planned_group_id: node.group_id,
@@ -357,9 +361,20 @@ export function buildView(
       active_plan_id: ledger.active_plan_id,
       execution_plan_id: ledger.execution_plan_id,
       lifecycle: activePlan.lifecycle,
+      phase,
       approval_pending:
         activePlan.id !== executionPlan.id ||
         activePlan.lifecycle !== "approved",
+      scheduling_eligible: isApprovedExecution && completenessIssues.length === 0,
+      completeness: {
+        status: completenessIssues.length === 0 ? "complete" : "blocked",
+        issues: completenessIssues,
+      },
+      authorization_label: isApprovedExecution
+        ? completenessIssues.length === 0
+          ? "Schedulable"
+          : "Not schedulable"
+        : "Not approved",
       revision: activePlan.revision,
     },
     semantic_context: localSemanticProjection(ledger, "dashboard_view"),
@@ -397,7 +412,13 @@ export function buildView(
         );
         return { node_id: node.id, occurred_at: event?.occurred_at ?? null };
       }),
-    plan_warnings: planWarnings(plan),
+    plan_warnings: [
+      ...planWarnings(plan),
+      ...completenessIssues.map((issue) => ({
+        code: issue.code,
+        reason: issue.message,
+      })),
+    ],
     warnings: [
       ...profileMigrationWarnings(ledger),
       ...formalExecutionWarnings(ledger),

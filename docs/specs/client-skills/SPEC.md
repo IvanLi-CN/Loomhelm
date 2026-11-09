@@ -44,7 +44,51 @@ FFI 路径缓冲区 MUST 在完整系统调用期间保持所有权。文件读�
 
 本地编排网页 MUST 默认横向紧凑展示依赖，保留完整任务标题、交付单元边界、里程碑与全部投影依赖，按布局引擎生成的正交路径渲染；状态更新不得无故重排相同结构，旧异步结果不得覆盖新布局。默认阅读不得以自动缩小整图牺牲文字可读性，用户可主动适配全图或切换纵向。任务视图只有一个交付单元时 MUST 默认网格，其他数量默认看板，显式 URL 布局选择优先并可恢复。独立的单交付单元示例 MUST 使用合成数据，任务前驱、时间、对话、PR、原子步骤和生命周期事实必须一致；预览对话输出不得读取真实会话，注入适配器仅允许隔离开发配置。
 
+### REQ-SKILLS-009
+
+Multi-task Flow MUST distinguish `proposal`, `initialized run`, `scheduled run` and `completed run` as separate lifecycle stages. A proposal MUST be visibly marked as unapproved and unschedulable; rendering a dependency graph, timeline or live dashboard MUST NOT imply that dispatch is authorized. Dispatch MUST require an explicit approval for the exact execution plan and authorized action set.
+
+### REQ-SKILLS-010
+
+Every task and delivery unit MUST carry a structured acceptance contract. The contract MUST identify the owner, completion state, observable criteria, required evidence kinds and required checks. An acceptance scope or digest MAY summarize the contract, but MUST NOT replace the contract when validating proposal completeness or presenting approval evidence.
+
+### REQ-SKILLS-011
+
+Every delivery unit MUST declare its complete closeout path before approval. The path MUST cover workspace readiness, parent branch and parent PR publication, merged-SHA CI, planned post-merge release/deployment/verification work when applicable, known follow-PR reconciliation and final closeout. A plan with implementation tasks but no applicable post-merge obligations MUST be rejected or explicitly record that those obligations are not applicable with evidence.
+
+### REQ-SKILLS-012
+
+Dependency edges MUST use milestone semantics that match the source and target lifecycle. `integrated` MUST mean a contribution PR was merged, `completed` MUST mean the task's work and evidence are complete, and `verified` MUST mean the declared verification evidence passed. Validation MUST reject a graph whose edge conditions rely on an undocumented conversion between task state and delivery-unit lifecycle.
+
+### REQ-SKILLS-013
+
+Proposal validation MUST report all material completeness issues together, including missing acceptance criteria, missing closeout obligations, ambiguous dependency semantics, missing coordinator readiness requirements and low-confidence estimates that exceed the configured decomposition threshold. The dashboard MUST expose these diagnostics before owner approval.
+
+### REQ-SKILLS-014
+
+Bootstrap delivery units MUST remain main-owned and may use the bound main conversation. Every regular delivery unit MUST bind an independent Delivery coordinator conversation before activation. The proposal MAY show the regular unit as unbound, but the approval and scheduling surfaces MUST show this as a pre-activation requirement rather than a satisfied fact.
+
+### REQ-SKILLS-015
+
+The dashboard MUST present proposal status, approval status, scheduling eligibility and completeness status as separate fields. It MUST use explicit labels such as `Proposal only`, `Not approved` and `Not schedulable` when applicable, and MUST NOT derive readiness from the presence of nodes, estimates, a plan ID or a live viewer lease.
+
+### REQ-SKILLS-016
+
+Estimates with low confidence MUST either be decomposed into independently verifiable atoms or carry a documented reason for remaining coarse. A low-confidence estimate MUST be visible in the approval review and MUST NOT be presented as a precise execution commitment.
+
 ## Verification
+
+### VER-SKILLS-009
+
+- covers: `REQ-SKILLS-009`, `REQ-SKILLS-013`, `REQ-SKILLS-015`
+- Method: Candidate proposal fixtures with and without approval, structured completeness diagnostics and dashboard projection checks.
+- Pass condition: Unapproved proposals remain visibly unschedulable; all material issues are reported; no dispatch command accepts the proposal.
+
+### VER-SKILLS-010
+
+- covers: `REQ-SKILLS-010`, `REQ-SKILLS-011`, `REQ-SKILLS-012`, `REQ-SKILLS-014`, `REQ-SKILLS-016`
+- Method: Schema, validator and runtime-gate tests covering acceptance contracts, bootstrap/regular ownership, lifecycle evidence, post-merge obligations, dependency conditions and low-confidence decomposition.
+- Pass condition: Invalid plans fail before approval; valid plans retain explicit evidence requirements; runtime gates still reject missing coordinator, branch, PR, CI, verification or closeout facts.
 
 ### VER-SKILLS-001
 
@@ -101,6 +145,7 @@ FFI 路径缓冲区 MUST 在完整系统调用期间保持所有权。文件读�
 ## Related ADRs
 
 - [Bun 直接运行客户端与 Skills](../../adr/0021-bun-source-runtime.md)
+- [Multi-task Flow proposal quality gates and execution boundary](../../adr/0026-multi-task-flow-proposal-quality-gates.md)
 
 ## References
 

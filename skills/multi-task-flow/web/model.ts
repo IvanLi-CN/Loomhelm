@@ -124,7 +124,14 @@ export type View = {
     active_plan_id: string;
     execution_plan_id: string;
     lifecycle: string;
+    phase?: "planning" | "implementation";
     approval_pending: boolean;
+    scheduling_eligible?: boolean;
+    authorization_label?: string;
+    completeness?: {
+      status: "complete" | "blocked";
+      issues: { code: string; message: string }[];
+    };
     revision?: {
       change_class: string;
       approval_required: boolean;

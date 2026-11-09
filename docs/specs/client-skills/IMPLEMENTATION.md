@@ -2,6 +2,8 @@
 
 本主题覆盖完整 Skill 源包与脚本迁入；此前客户端的本地验证模块与简化任务图不满足该合同。源包存在、脚本可执行、Bun 源码运行时、旧运行兼容与受控原生闭环需要分别验证，不能将模块测试通过解释为整个迁移完成。
 
+Multi-task Flow proposal quality gates, structured acceptance contracts and explicit proposal-versus-scheduling presentation are currently design requirements recorded in the topic SPEC and ADR 0026. The existing validator and viewer have not been upgraded to satisfy them, so a proposal dashboard must not be cited as implementation evidence for these requirements.
+
 来源固定为 dot-codex `505961771a0d2496155d23132a8c0bd8beac0a24`。源码清单和迁移差异由项目拥有的资源清单保存；当前候选验收证据保存在工作流证据中，不写入本文件冒充长期实现事实。
 
 ## 模块边界
