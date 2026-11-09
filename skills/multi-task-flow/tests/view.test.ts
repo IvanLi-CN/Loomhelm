@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
-import { plan } from "../scripts/schema";
+import { plan, validateSchedulablePlan } from "../scripts/schema";
 import { actualIntervals, buildView, planWarnings, plannedIntervals } from "../scripts/view";
 import { initialOutput } from "../web/agent-output";
 import { rangeFromIntervals } from "../web/execution-range";
@@ -14,6 +14,11 @@ function fixture(nodes: unknown[], edges: unknown[], startAt: string | null = at
 }
 
 describe("timeline projections", () => {
+  test("rejects incomplete plans before formal scheduling", () => {
+    expect(() => validateSchedulablePlan(fixture([taskNode("a", null)], []))).toThrow("缺少原子任务");
+    const complete = plan.parse({ id: "complete", supersedes_id: null, approval_id: null, created_at: at, start_at: null, atoms: [{ id: "atom-a", title: "a", task_id: "a", purpose: "work", output: "done" }], atomic_edges: [], nodes: [{ ...taskNode("a", 30), estimate_basis: "fixture", estimate_confidence: "medium" }], edges: [], cut_rules: [], actions: [] });
+    expect(() => validateSchedulablePlan(complete)).not.toThrow();
+  });
   test("projects atom completion only from an event for the same owner and stable ID", () => {
     const ledger = createDemoLedger(1_767_200_000_000);
     const completed = ledger.events.find((event) => event.id === "atom-finish-model")!;
@@ -57,9 +62,9 @@ describe("timeline projections", () => {
   test("respects parallel capacity and prerequisite completion", () => {
     const input = fixture([taskNode("a", 60), taskNode("b", 30), taskNode("c", 10)], [{ id: "b-c", from_node_id: "b", to_node_id: "c", requires: "integrated" }]);
     const rows = plannedIntervals(input, 2);
-    expect(rows.find((item) => item.node_id === "a")!.start).toBe(at);
-    expect(rows.find((item) => item.node_id === "b")!.start).toBe(at);
-    expect(rows.find((item) => item.node_id === "c")!.start).toBe("2026-01-01T00:30:00.000Z");
+    expect(rows.find((item) => item.node_id === "a")!.start_offset_minutes).toBe(0);
+    expect(rows.find((item) => item.node_id === "b")!.start_offset_minutes).toBe(0);
+    expect(rows.find((item) => item.node_id === "c")!.start_offset_minutes).toBe(30);
   });
 
   test("keeps unknown time unknown rather than assuming zero duration", () => {
@@ -69,19 +74,19 @@ describe("timeline projections", () => {
     expect(rows.find((item) => item.node_id === "b")!.start).toBeNull();
     const unknownStart = plannedIntervals(fixture([taskNode("a", 30)], [], null), 3);
     expect(unknownStart).toHaveLength(1);
-    expect(unknownStart[0]!.start).toBeNull();
+    expect(unknownStart[0]!.start_offset_minutes).toBe(0);
   });
 
-  test("reports a missing plan start without inventing schedule dates", () => {
+  test("computes a relative schedule without a plan start", () => {
     const missingStart = fixture([taskNode("a", 30)], [], null);
-    expect(planWarnings(missingStart)).toEqual([{ code: "missing_start_at", reason: "The selected plan has no start time, so theoretical intervals cannot be calculated." }]);
-    expect(plannedIntervals(missingStart, 3)[0]).toMatchObject({ start: null, end: null });
-    expect(planWarnings(fixture([taskNode("a", 30)], []))).toEqual([]);
+    expect(planWarnings(missingStart)).toEqual([{ code: "legacy_invalid", reason: "任务 a 缺少原子任务，只读查看。" }]);
+    expect(plannedIntervals(missingStart, 3)[0]).toMatchObject({ start_offset_minutes: 0, end_offset_minutes: 30 });
+    expect(planWarnings(fixture([taskNode("a", 30)], []))).toEqual([{ code: "legacy_invalid", reason: "任务 a 缺少原子任务，只读查看。" }]);
 
     const ledger = createDemoLedger(1_767_200_000_000);
     ledger.plans[0]!.start_at = null;
     const view = buildView(ledger) as { plan_warnings: Array<{ code: string; reason: string }> };
-    expect(view.plan_warnings).toEqual([{ code: "missing_start_at", reason: "The selected plan has no start time, so theoretical intervals cannot be calculated." }]);
+    expect(view.plan_warnings).toEqual([]);
   });
 
   test("does not invent an end time for a running task", () => {

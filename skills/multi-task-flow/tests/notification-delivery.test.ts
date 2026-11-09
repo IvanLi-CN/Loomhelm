@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
 import { apply } from "../scripts/engine";
 import { LedgerStore } from "../scripts/store";
-import { deliverClaimedNotification, reconcileNotification } from "../scripts/notification-delivery";
+import { deliverClaimedNotification, reconcileNotification, prepareNativeNotification } from "../scripts/notification-delivery";
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mtf-delivery-")));
@@ -149,7 +149,92 @@ test("atomic claim rejects an intervening write after the caller's read", async 
   } finally { f.cleanup(); }
 });
 
+
+test("native delivery claims once without a provider process and requires the matching platform receipt", () => {
+  const f = fixture();
+  try {
+    const claim: any = prepareNativeNotification(f.store, f.parsed, f.id, "Native task");
+    expect(claim.should_send).toBe(true);
+    expect(claim.tool_request.prompt).toBe("Native task");
+    expect(f.store.read().notifications[0].delivery_status).toBe("unknown");
+    const replay: any = prepareNativeNotification(f.store, f.parsed, f.id, "Native task");
+    expect(replay.should_send).toBe(false); expect(replay.tool_request).toBeNull();
+    expect(() => prepareNativeNotification(f.store, f.parsed, f.id, "Changed task")).toThrow("different content");
+    expect(() => prepareNativeNotification(f.store, { ...f.parsed, request_id: "another-sender", expected_revision: f.store.read().revision }, f.id, "Native task")).toThrow("reconciled");
+    const receipt = { ...f.parsed, request_id: "native-receipt", expected_revision: f.store.read().revision,
+      payload: { notification_id: f.id, reconciliation_id: "native-result", outcome: "sent", provider_receipt: { provider: "codex-app-tools", evidence_ref: "native:accepted", message_id: "accepted-message", recipient_thread_id: claim.receipt_identity.recipient_thread_id, prompt_digest: claim.receipt_identity.prompt_digest } } };
+    expect(() => reconcileNotification(f.store, receipt)).toThrow("active delivery attempt");
+    expect(() => reconcileNotification(f.store, { ...receipt, payload: { ...receipt.payload, delivery_attempt_id: claim.delivery_attempt_id,
+      provider_receipt: { ...receipt.payload.provider_receipt, provider: "codex-app-server" } } })).toThrow("matching platform provider");
+    reconcileNotification(f.store, { ...receipt, payload: { ...receipt.payload, delivery_attempt_id: claim.delivery_attempt_id } });
+    expect(f.store.read().notifications[0].delivery_status).toBe("sent");
+    expect(f.store.read().notifications[0].ack_status).toBe("unacknowledged");
+    expect((prepareNativeNotification(f.store, f.parsed, f.id, "Native task") as any).should_send).toBe(false);
+  } finally { f.cleanup(); }
+});
+
+
+test("bound main can claim a task notification for native forwarding without impersonating its sender", () => {
+  const f = fixture();
+  try {
+    const actor = { role: "main" as const, thread_id: f.store.read().control.owner_thread_id };
+    const result: any = prepareNativeNotification(f.store, { ...f.parsed, actor }, f.id, "Forward task event");
+    expect(result.should_send).toBe(true);
+    expect(result.tool_request.threadId).toBe(actor.thread_id);
+  } finally { f.cleanup(); }
+});
+
+test("native compatibility commands cannot report delivery without a persistent attempt and receipt", () => {
+  const f = fixture();
+  try {
+    const before = JSON.stringify(f.store.read());
+    const actor = { role: "main" as const, thread_id: f.store.read().control.owner_thread_id };
+    for (const command of ["notification-deliver", "notification-sent"]) {
+      expect(() => f.store.update(raw => apply(raw, command, { ...f.parsed, actor, request_id: command,
+        expected_revision: raw.revision, payload: { notification_id: f.id, delivery_attempt_id: "bypass", outcome: "sent",
+          provider_receipt: { provider: "codex-app-tools", evidence_ref: "unclaimed:sent" } } }))).toThrow("Native delivery");
+      expect(JSON.stringify(f.store.read())).toBe(before);
+    }
+    const claim: any = prepareNativeNotification(f.store, { ...f.parsed, actor }, f.id, "Forward once");
+    expect(claim.should_send).toBe(true);
+    expect(f.store.read().notifications[0].delivery_status).toBe("unknown");
+  } finally { f.cleanup(); }
+});
+
+test("a legacy unknown attempt cannot be reinterpreted as a native platform receipt", async () => {
+  const f = fixture();
+  try {
+    await deliverClaimedNotification(f.store, f.parsed, f.id, "Legacy task", async () => ({
+      outcome: "unknown", provider_receipt: { provider: "codex-app-server", evidence_ref: "legacy:uncertain" },
+    }));
+    const before = JSON.stringify(f.store.read());
+    for (const identity of [{}, { delivery_attempt_id: f.store.read().notifications[0].last_attempt_id }]) {
+      expect(() => reconcileNotification(f.store, { ...f.parsed, request_id: `cross-provider-${Object.keys(identity).length}`,
+        expected_revision: f.store.read().revision, payload: { notification_id: f.id, reconciliation_id: "cross-provider",
+          outcome: "sent", ...identity, provider_receipt: { provider: "codex-app-tools", evidence_ref: "native:unmatched" } } })).toThrow("matching platform provider");
+      expect(JSON.stringify(f.store.read())).toBe(before);
+    }
+    reconcileNotification(f.store, { ...f.parsed, request_id: "legacy-reconcile", expected_revision: f.store.read().revision,
+      payload: { notification_id: f.id, reconciliation_id: "legacy-query", outcome: "failed",
+        provider_receipt: { provider: "codex-app-server", evidence_ref: "legacy:no-delivery" } } });
+    expect(f.store.read().notifications[0].delivery_status).toBe("failed");
+  } finally { f.cleanup(); }
+});
+
 for (const status of ["closed", "archive_unknown", "unarchive_unknown", "unarchive_failed"] as const) {
+  test(`native notification claim respects ${status} and resumes only after manual restore`, () => {
+    const f = fixture();
+    try {
+      f.store.update(raw => { raw.resources.push({ id: "native-recipient-archive", kind: "conversation", target: raw.notifications[0].recipient_thread_id, status, evidence_ref: "fixture:archive" }); });
+      const before = JSON.stringify(f.store.read());
+      expect(() => prepareNativeNotification(f.store, f.parsed, f.id, "Native notice")).toThrow("请先手动取消归档");
+      expect(JSON.stringify(f.store.read())).toBe(before);
+      f.store.update(raw => { raw.resources.find((r: any) => r.id === "native-recipient-archive").status = "active"; });
+      const claim: any = prepareNativeNotification(f.store, { ...f.parsed, expected_revision: f.store.read().revision }, f.id, "Native notice");
+      expect(claim.should_send).toBe(true);
+      expect(f.store.read().notifications[0].delivery_status).toBe("unknown");
+    } finally { f.cleanup(); }
+  });
   test(`notification ${status} recipient is rejected before provider delivery and after manual restore can send`, async () => {
     const f = fixture();
     try {
@@ -172,3 +257,33 @@ test("notification creation rejects an archived bound task recipient", () => {
   expect(() => apply(ledger, "task-update", { run_id: ledger.orchestration_id, actor: { role: "task", thread_id: sender.thread_id! }, request_id: "archived-recipient", expected_revision: ledger.revision, payload: { task_id: sender.id, state: "waiting", detail: "Notify archived recipient", notification: { mode: "deliver", recipient: { thread_id: target.thread_id } } } })).toThrow("请先手动取消归档");
   expect(ledger.notifications).toHaveLength(0);
 });
+
+for (const provenance of ["handoff", "prior-native-failure"]) {
+  test(`native provenance rejects provider omission and substitution: ${provenance}`, () => {
+    const f = fixture();
+    try {
+      f.store.update(raw => {
+        const event = raw.events.find(e => e.id === raw.notifications[0].event_id)!;
+        event.actor_id = raw.control.owner_thread_id;
+        if (provenance === "handoff") {
+          raw.operations[0].request.handoff_notification_id = f.id;
+        } else {
+          raw.events.push({ ...event, id: "native-failure", type: "notification_delivery_resolved",
+            data: { notification_id: f.id, provider: "codex-app-tools", outcome: "failed" } });
+          raw.notifications[0].delivery_status = "failed";
+          raw.notifications[0].status = "failed";
+        }
+      });
+      const before = JSON.stringify(f.store.read());
+      for (const provider_receipt of [undefined, {}, { provider: "legacy", evidence_ref: "substitution" }]) {
+        for (const command of ["notification-sent", "notification-deliver"]) {
+          expect(() => f.store.update(raw => apply(raw, command, { ...f.parsed,
+            actor: { role: "main", thread_id: raw.control.owner_thread_id }, request_id: `bypass-${command}`,
+            expected_revision: raw.revision, payload: { notification_id: f.id, outcome: "sent",
+              delivery_attempt_id: "unclaimed", provider_receipt } }))).toThrow();
+          expect(JSON.stringify(f.store.read())).toBe(before);
+        }
+      }
+    } finally { f.cleanup(); }
+  });
+}

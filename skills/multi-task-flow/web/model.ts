@@ -139,7 +139,7 @@ export type View = {
   nodes: Node[];
   edges: Edge[];
   atomic_edges?: { id: string; from_atom_id: string; to_atom_id: string }[];
-  planned_intervals: { node_id: string; start: string | null; end: string | null }[];
+  planned_intervals: { node_id: string; start: string | null; end: string | null; start_offset_minutes?: number | null; end_offset_minutes?: number | null }[];
   actual_intervals: { task_id: string; group_id: string; state: string; start: string; end: string | null }[];
   actual_milestones: { node_id: string; occurred_at: string | null }[];
   plan_warnings?: { code: string; reason: string }[];

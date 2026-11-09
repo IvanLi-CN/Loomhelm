@@ -6,6 +6,7 @@
 
 ## Lifecycle / Compatibility
 
+- 2026-11-07：本机新创建改用 Codex CLI 原生 worktree 和短初始化；正式消息由主对话内置工具发送。创建证据与开发基线分离，历史身份和在途发送不重写。ADR 0046 继承完整 execution_profile 规则并替代旧创建传输边界。
 - Viewer 注册表锁超时改为连续三次有界失败后关闭，成功心跳重置计数；未知错误与所有权变化继续立即停止。关闭原因与开始／完成时间可区分，不再将内部异常记为 signal。HTTP、账本与服务状态 schema 不变，已有数据无需迁移。
 
 - Dashboard 浏览器路由统一为当前宿主内置能力优先，补齐 ChatGPT Desktop 场景及通用 ego-browser 偏好的专用例外；无需账本迁移或 viewer 升级。

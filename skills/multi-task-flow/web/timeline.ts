@@ -7,6 +7,8 @@ import type { Task, View } from "./model";
 type TimelineMode = "planned" | "actual";
 type TimelineRange = { start?: Date; end?: Date };
 
+const RELATIVE_EPOCH = Date.parse("2000-01-01T00:00:00.000Z");
+
 type TimelineContext = {
   getData: () => View | null;
   getViewState: () => ViewState;
@@ -170,7 +172,7 @@ export function createTimelineController(context: TimelineContext) {
     if (!data) return;
     const renderSerial = mode === "planned" ? ++plannedRenderSerial : ++actualRenderSerial;
     const target = context.element<HTMLElement>(mode === "planned" ? "planned-timeline" : "actual-timeline");
-    target.parentElement!.querySelector<HTMLElement>(".axis-timezone")!.textContent = `时间轴时区：${Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown"}`;
+    target.parentElement!.querySelector<HTMLElement>(".axis-timezone")!.textContent = mode === "planned" ? "理论时间轴：相对偏移（T+分钟）" : `时间轴时区：${Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown"}`;
     const existing = mode === "planned" ? plannedTimeline : actualTimeline;
     existing?.destroy();
     target.replaceChildren();
@@ -185,12 +187,15 @@ export function createTimelineController(context: TimelineContext) {
       const planRow = data.planned_intervals.find((item) => item.node_id === node?.id);
       const actualRows = data.actual_intervals.filter((item) => item.task_id === task.id);
       if (mode === "planned") {
-        if (planRow?.start && planRow.end && node) entries.push({ id: `plan-${task.id}`, task_id: task.id, group: node.id, start: planRow.start, end: planRow.end, content: text("span", task.title), style: `background-color: ${context.groupColor(node.planned_group_id ?? task.group_id)}; border-color: ${context.groupColor(node.planned_group_id ?? task.group_id)}; color: white;`, editable: false });
+        if (planRow?.start && planRow.end && node) {
+          const offset = (value: number | null | undefined) => value == null ? "" : `T+${value}分`;
+          entries.push({ id: `plan-${task.id}`, task_id: task.id, group: node.id, start: planRow.start, end: planRow.end, content: text("span", `${task.title}（${offset(planRow.start_offset_minutes)}～${offset(planRow.end_offset_minutes)}）`), title: `${task.title} · ${offset(planRow.start_offset_minutes)}～${offset(planRow.end_offset_minutes)}`, style: `background-color: ${context.groupColor(node.planned_group_id ?? task.group_id)}; border-color: ${context.groupColor(node.planned_group_id ?? task.group_id)}; color: white;`, editable: false });
+        }
         else unknown.push(task.title);
       } else if (actualRows.length && node) actualRows.forEach((row, index) => { const color = context.stateColor(row.state); const group = data.groups.find((item) => item.id === row.group_id); const foreground = ["waiting", "planned"].includes(row.state) ? context.css("--text", "#172129") : "#ffffff"; entries.push({ id: `actual-${task.id}-${index}`, task_id: task.id, group: node.id, start: row.start, end: row.end ?? new Date().toISOString(), content: text("span", context.labels[row.state] ?? row.state), title: group?.title ?? row.group_id, style: `background-color: ${color}; border-color: ${color}; border-left: 4px solid ${context.groupColor(row.group_id)}; color: ${foreground};`, editable: false }); });
       else if (mode === "actual") unknown.push(task.title);
     }
-    for (const node of nodes.filter((item) => item.kind !== "task")) { const planned = data.planned_intervals.find((item) => item.node_id === node.id); const date = mode === "planned" ? planned?.start : data.actual_milestones.find((item) => item.node_id === node.id)?.occurred_at; if (date) entries.push({ id: `milestone-${node.id}`, group: node.id, start: date, content: text("span", node.label), type: "box", style: `border-color: ${context.groupColor(node.planned_group_id)};`, editable: false }); else unknown.push(node.label); }
+    for (const node of nodes.filter((item) => item.kind !== "task")) { const planned = data.planned_intervals.find((item) => item.node_id === node.id); const date = mode === "planned" ? planned?.start : data.actual_milestones.find((item) => item.node_id === node.id)?.occurred_at; if (date) { const label = mode === "planned" && planned?.start_offset_minutes != null ? `${node.label}（T+${planned.start_offset_minutes}分）` : node.label; entries.push({ id: `milestone-${node.id}`, group: node.id, start: date, content: text("span", label), type: "box", style: `border-color: ${context.groupColor(node.planned_group_id)};`, editable: false }); } else unknown.push(node.label); }
     const unknownElement = context.element(mode === "planned" ? "planned-unknown" : "actual-unknown");
     unknownElement.textContent = unknown.length ? `时间未知：${unknown.join("、")}` : "";
     for (const entry of entries) if (entry.task_id) entryTasks.set(entry.id, entry.task_id);
@@ -200,7 +205,7 @@ export function createTimelineController(context: TimelineContext) {
     const initialWindow = requestedWindow.start && requestedWindow.end ? { start: new Date(requestedWindow.start), end: new Date(requestedWindow.end) } : fittedWindow.start && fittedWindow.end ? { start: fittedWindow.start, end: fittedWindow.end } : null;
     if (mode === "planned") plannedWindow = initialWindow; else actualWindow = initialWindow;
     target.style.height = `${Math.max(284, nodes.length * 28 + 76)}px`;
-    const timeline = new Timeline(target, new DataSet(entries), groups, { editable: false, stack: false, groupOrder: "order", selectable: true, moveable: true, zoomable: true, horizontalScroll: false, zoomKey: "ctrlKey", ...(requestedWindow.start && requestedWindow.end ? requestedWindow : fittedWindow) });
+    const timeline = new Timeline(target, new DataSet(entries), groups, { editable: false, stack: false, groupOrder: "order", selectable: true, moveable: true, zoomable: true, horizontalScroll: false, zoomKey: "ctrlKey", ...(mode === "planned" ? { format: { minorLabels: { minute: "T+mm分", hour: "T+HH时" }, majorLabels: { day: "理论时间" } } } : {}), ...(requestedWindow.start && requestedWindow.end ? requestedWindow : fittedWindow) });
     if (mode === "planned") plannedTimeline = timeline; else actualTimeline = timeline;
     bindWheel(target, timeline, mode);
     bindPan(target, timeline, mode, renderSerial);

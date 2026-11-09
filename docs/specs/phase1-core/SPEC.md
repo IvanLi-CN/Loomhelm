@@ -6,7 +6,7 @@ Loomhelm connects project management with human-supervised Codex conversations r
 
 The [product requirements](../../PRD.md) define the complete phase-one scope, user journeys, acceptance and product decision process. This specification records established engineering constraints; product suggestions require explicit confirmation before becoming implementation contracts.
 
-The topic owns projects, tasks and their relationships, user-owned Hosts and explicit Host shares, Codex sessions and runs, approvals, conversation-associated original files, shared drafts, recovery and the initial product interface. Autonomous master/project/task Agent orchestration, automated multi-Host fleet management, remote filesystem browsing, arbitrary plugin view hosting, rich document conversion and production release operations are outside this topic.
+The topic owns projects, tasks and their relationships, user-owned Hosts and explicit Host shares, Codex sessions and runs, approvals, conversation-associated original files, shared drafts, recovery and the initial product interface. Autonomous 主 Agent（main Agent）/项目 Agent（project Agent）/任务 Agent（Task Agent） orchestration, automated multi-Host fleet management, remote filesystem browsing, arbitrary plugin view hosting, rich document conversion and production release operations are outside this topic.
 
 ## Terms and Interfaces
 

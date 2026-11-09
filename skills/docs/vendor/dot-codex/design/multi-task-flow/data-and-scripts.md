@@ -4,7 +4,7 @@
 
 ## 设计目标
 
-同一编排中的主 Agent、交付协调 Agent 和任务 Agent 共享可读、可恢复的本机 JSON 账本。任务图、状态、事件和操作占用必须来自同一个权威账本；HTML 和 Markdown 要求文档不作为第二份调度状态。范围仅限一个编排，不为其他编排提供全局锁。
+同一编排中的主 Agent（main Agent）、交付协调者（Delivery coordinator） 和任务 Agent（Task Agent） 共享可读、可恢复的本机 JSON 账本。任务图、状态、事件和操作占用必须来自同一个权威账本；HTML 和 Markdown 要求文档不作为第二份调度状态。范围仅限一个编排，不为其他编排提供全局锁。
 
 Skill 自带 Bun + TypeScript 固定脚本，所有账本操作通过脚本完成。Agent 不直接编辑 JSON；要求 Markdown 可由 Agent 普通编辑，不强制生成或硬校验。脚本接口须支持机器可读的成功、等待、冲突与错误结果，并附可读原因。
 
@@ -48,7 +48,7 @@ Skill 自带 Bun + TypeScript 固定脚本，所有账本操作通过脚本完�
 
 ## 账本格式与脚本命令
 
-采用 UTF-8 JSON 对象，新的 ledger 使用 `schema_version: 2`；不认识的版本或必需语义拒绝写入。schema v1 默认只能通过规范化读取为内存中的 v2 视图；需要持久升级时，主 Agent 必须显式调用 `orchestrate.ts migrate --input -`，指定准确 `run_id`、owner-only actor、唯一 `request_id` 和当前 `expected_revision`。迁移在维护锁和 run 锁内校验完整 v1 ledger，先保存 `ledger.migration-v1-<request_id>.json` 完整旧快照，再原子替换为 `schema_version: 2`、`contract_version: 1`；迁移新增 request record，因此 `revision` 单调增加 1，记录的 `committed_revision` 与返回 revision 相同。相同 request ID 和 canonical input 只返回已提交结果；不同内容、版本冲突、损坏或不安全路径拒绝写入。缺失的生命周期事实保持 `unknown`，不得伪造 publication 或 merge 通过，也不得由普通更新回写旧文件。所有持久身份为非空 ASCII 稳定 ID，使用字母、数字、`-`、`_`；文件名不得直接使用未经校验的 ID 或用户路径。时间是带 `Z` 的 UTC RFC 3339 字符串；实际发生时间和记账时间分开，未知为 `null`，禁止用当前时间替代未知事实。未知 SHA、链接和会话 ID 一律为 `null`，不生成占位值。
+采用 UTF-8 JSON 对象，新的 ledger 使用 `schema_version: 2`；不认识的版本或必需语义拒绝写入。schema v1 默认只能通过规范化读取为内存中的 v2 视图；需要持久升级时，主 Agent（main Agent） 必须显式调用 `orchestrate.ts migrate --input -`，指定准确 `run_id`、owner-only actor、唯一 `request_id` 和当前 `expected_revision`。迁移在维护锁和 run 锁内校验完整 v1 ledger，先保存 `ledger.migration-v1-<request_id>.json` 完整旧快照，再原子替换为 `schema_version: 2`、`contract_version: 1`；迁移新增 request record，因此 `revision` 单调增加 1，记录的 `committed_revision` 与返回 revision 相同。相同 request ID 和 canonical input 只返回已提交结果；不同内容、版本冲突、损坏或不安全路径拒绝写入。缺失的生命周期事实保持 `unknown`，不得伪造 publication 或 merge 通过，也不得由普通更新回写旧文件。所有持久身份为非空 ASCII 稳定 ID，使用字母、数字、`-`、`_`；文件名不得直接使用未经校验的 ID 或用户路径。时间是带 `Z` 的 UTC RFC 3339 字符串；实际发生时间和记账时间分开，未知为 `null`，禁止用当前时间替代未知事实。未知 SHA、链接和会话 ID 一律为 `null`，不生成占位值。
 
 账本顶层字段固定为：
 
@@ -166,33 +166,35 @@ type Ledger = {
 | - | - | - |
 | `init` | `repository`, `config`, `initial_plan`, `groups`, `tasks`，主会话来自 `actor` | 仅接受未绑定且 `planned` 的 group/task（atom 也必须为 `planned`），并要求分支、PR、SHA、时间、阻塞、requirements path 和 assignment history 等运行时身份字段为空；拒绝 dev-plan handoff、digest 或外部计划字段，失败返回 `INVALID_INITIAL_STATE` 或 `INVALID_INPUT` 且不产生 run 目录、锁或 ledger；成功只创建唯一 run 和初始 revision，不创建任务会话 |
 | `binding-resolve` | `owner_decision`, `previous_owner_observation` | 根据主人明确决定和前任会话的停止事实转移控制权；未知 fork 不能自行接管 |
-| `link-verification` | `verified`, `evidence` | 主 Agent 可记录当前候选的一次性会话跳转实测结果及证据引用；证据覆盖且页面合同未变时复用，不重复测试。真实会话 ID 或 canonical anchor 合同缺失时阻塞；缺少可选原生观察本身不阻塞 |
+| `link-verification` | `verified`, `evidence` | 主 Agent（main Agent） 可记录当前候选的一次性会话跳转实测结果及证据引用；证据覆盖且页面合同未变时复用，不重复测试。真实会话 ID 或 canonical anchor 合同缺失时阻塞；缺少可选原生观察本身不阻塞 |
 | `show` | `section`，可为 `summary`、`plan`、`tasks`、`operations`、`notifications`、`full` | 返回一致快照及 revision；无需 `request_id` 或预期 revision |
 | `plan-propose` / `plan-approve` | 前者 `plan`；后者 `plan_id`, `approval_id`, `authorized_actions` | 新增计划版本 / 记录对应主人确认；不自动更改未授权范围 |
 | `dispatch-claim` / `dispatch-group-claim` / `dispatch-bind-request` / `dispatch-resolve` | `task_id` 或 `group_id`, `operation_id`；resolve 另带原生结果或失败证据 | 原子检查依赖和容量、登记原生请求身份并绑定真实 thread ID；未知时保留占用 |
 | `lifecycle-record` / `milestone-record` | 目标类型、目标 ID、阶段或 milestone、资源/证据 | 记录交付单元和贡献任务的 `workspace_ready`，或追加不具备门禁权限的自由 milestone |
 | `publish-branch-claim` / `publish-branch-resolve` | `target_type`, `target_id`, `branch`, `expected_head_sha`, `action_id`, `operation_id`；resolve 加精确 Provider receipt | 独立占用并记录远端分支存在性；必须先有 workspace-ready |
 | `publish-pr-claim` / `publish-pr-resolve` | `target_type`, `target_id`, `branch`, `pr`, `target_branch`, `expected_base_sha`, `expected_head_sha`, `action_id`, `operation_id`；resolve 加精确 Provider receipt | 独立占用并记录远端 PR identity/base/head；必须先有成功 branch receipt |
-| `task-update` | `task_id`, `state`, `occurred_at`, `detail`, `evidence`, 可选 `notification: { mode: 'auto' \| 'deliver' \| 'none', recipient: 'owner' \| { thread_id } }` 或兼容字段 `notify_main: true` | 按状态前提记事件和状态；`auto` 保留 completed/closed 的原默认规则，`deliver` 创建主动通知意图，`none` 不创建，普通阻塞不默认通知主 Agent |
+| `task-update` | `task_id`, `state`, `occurred_at`, `detail`, `evidence`, 可选 `notification: { mode: 'auto' \| 'deliver' \| 'none', recipient: 'owner' \| { thread_id } }` 或兼容字段 `notify_main: true` | 按状态前提记事件和状态；`auto` 保留 completed/closed 的原默认规则，`deliver` 创建主动通知意图，`none` 不创建，普通阻塞不默认通知主 Agent（main Agent） |
 | `atom-update` | `task_id`, `atom_id`, `state` | 由任务会话按数组顺序更新原子任务状态 |
-| `group-atom-update` | `group_id`, `atom_id`, `state` | 由绑定交付协调 Agent 或主 Agent 按顺序更新交付单元原子状态；生命周期绑定步骤必须有对应通过证据 |
+| `group-atom-update` | `group_id`, `atom_id`, `state` | 由绑定交付协调者（Delivery coordinator） 或主 Agent（main Agent） 按顺序更新交付单元原子状态；生命周期绑定步骤必须有对应通过证据 |
 | `group-execution-update` | `group_id`, `state`, `reason`, `waiting_for_task_ids` | 明确记录交付协调实际执行、等待、恢复和阻塞；等待贡献任务必须引用同组有效任务 |
 | `group-update` / `group-base` | 前者 `group`，后者 `group_id`, `provider_observation` | 更新交付单元信息或记录首次/同 SHA 的核实分支基线；已建立 SHA 的推进必须使用 `group-base-reconcile` |
 | `group-base-reconcile` | `group_id`, `provider_observation`（`operation: "update-branch"`, `previous_sha`, `sha`, `branch`, `parent_pr`, `source`, `evidence_ref`） | 在无未决 merge/cut operation 时，使用精确 provider 证据原子记录同一父分支的外部 update-branch SHA 推进；不表示 PR 合并 |
+
 | `task-pr` / `task-base` / `task-quality-record` | `task_id` 和 PR、基线或任务 Agent 自证 | v2 下只允许绑定已有 PR publication receipt；任务 Agent 自己记录当前 head/base、验收引用和 checks，不需要交付协调 Agent 审核 child PR |
+
 | `merge-claim` / `merge-resolve` | `operation_id`, `pr`, `target_branch`, `expected_head_sha`, `expected_base_sha`；resolve 加 `outcome`, `provider_evidence`，可选 `notification` 或 `notify_main` | 登记合并占用 / 记录可验证结果；未经核实的结果为 `unknown`；`auto` 只在成功时按原规则创建通知意图 |
 | `cut-claim` / `cut-apply` | `operation_id`, `group_id`, `rule_id`；apply 加 `cut_sha`, `included_task_ids`, `next_group`, `provider_evidence` | 阻止新合入、等待已有操作 / 原子固定归属、创建下一交付单元及任务归属历史 |
 | `action-claim` / `action-resolve` | `operation_id`, `kind`, `target`, `expected_identity`；resolve 加 `outcome`, `provider_evidence` | 为已授权发布或部署登记持久占用并记录结果，未知时先核实，不盲目重试 |
 | `follow-pr-update` | `follow_pr_id`, `origin_task_id`, `origin_group_id`, `pr`, `target_branch`, `affected_task_ids` | 登记 follow PR；后续合并结果通过 `merge-resolve` 记账并保留原交付单元归属 |
 | `fact-record` | `fact` | 记录核实的非合并、非子 PR 验收事实 |
 | `notification-deliver` | `notification_id`, `delivery_attempt_id`, `outcome: 'sent' \| 'failed' \| 'unknown'`, `provider_receipt`，失败可带 `error` | 由 CLI 在 Codex Agent API 返回后写回真实结果；`ledger_status` 已提交后，失败不得回滚通知意图；同一 attempt 不得重复记账 |
-| `notification-send` | 普通请求信封，`payload.notification_id` | CLI 通过 Codex Agent API 的 `send_message_to_thread` 发送一条新尝试，并自动调用 `notification-deliver` 写回真实结果；只允许 `pending` 或明确 `failed`，`unknown` 必须先对账 |
+| `notification-send` | 普通请求信封，`payload.notification_id` | `notification-prepare` 的兼容名称：持久领取一条新尝试，返回原生发送参数；主对话发送后显式写回平台回执。只允许 `pending` 或明确 `failed`，`unknown` 必须先对账 |
 | `notification-reconcile` | 查询形式带 `run_id`, `actor`, 可选 `status`；写入形式另带 `request_id`, `expected_revision`, `notification_id`, `reconciliation_id`, `outcome`, `provider_receipt` | 查询形式列出待处理通知；写入形式只允许核对 `unknown`，不得发送消息，必须由发送方或 `main` 提交平台查询证据 |
 | `notification-ack` | `notification_id`, `handling_evidence` | 只有 `recipient_thread_id` 对应会话可以确认；`sent` 不自动变成 `acknowledged` |
 | `view` | 可选 `plan_id` | 生成只读视图，不改变调度状态 |
 | `group-close` / `run-complete` / `resource-update` | `group_id`、完成证据或 `resource`；`group-close` 可选 `notification` 或 `notify_main` | 核查交付单元和编排的完成条件，分别记录各资源收口；`group-close` 默认按原规则创建通知意图 |
 
-复合通知能力由 CLI 直接调用 Codex app-server：先执行带 `notification.mode` 的记账命令，提交 `pending` 意图；若命令产生通知请求，CLI 使用返回的 `recipient_thread_id`，通过 Unix WebSocket 控制面调用 `turn/start`；最后用 `notification-deliver` 写入带 `provider`、`evidence_ref` 和可选 `message_id` 的真实结果。CLI 不把写入 `pending` 报告为“已通知”，也不把 `sent` 报告为“已读”。`notification-send` 是恢复期间的显式新尝试入口；`notification-reconcile` 只查询或核对未知结果。对未列明的命令拒绝执行；计划、状态机和具体事件结构随 Skill 同时提供可执行 JSON Schema 和测试，而不是让 Agent 自由修改 JSON。
+复合通知通过持久领取、原生发送、回执对账完成。记账命令提交 pending 意图后领取唯一 attempt 并设 unknown，返回 should_send、tool_request 和回执 identity；只有新领取者可调用桌面内置 send_message_to_thread。随后 notification-reconcile 必须带相同 delivery_attempt_id 和真实 provider/evidence_ref/message_id，区分 sent、failed、unknown。重放 should_send=false，不重复调用平台；未知结果先对账。历史 CLI 发送的在途文件锁继续保护，原生领取不跨工具调用持有文件锁。通知发送接受不代表已读或实际开工。
 
 ### 状态与就绪判定
 
@@ -200,7 +202,7 @@ type Ledger = {
 
 同一编排的 `merge-claim` 对同一目标父分支与 `cut-claim` 互斥；切割期间新合入返回等待，已有合入处于未知状态时不能切割。切割 SHA 是归属交接点；后续 follow PR 使原父分支前进时，追加事实、更新 `current_sha` 并刷新合并证据，不更改已切出的归属。新交付单元任务可以继续推进，目标分支和合入须按上一批合入主干后的规则更新。
 
-`cut-claim` 首次成功时即持久登记切割占用，并返回 `APPLIED` 与 `result.drained: false`（有未完成合并）或 `true`（没有未完成合并）；这一步不得返回声称“无写入”的等待错误。已登记的合并仍能写入 `merge-resolve`，新 `merge-claim` 返回等待。主 Agent 在已有占用结束后使用最新 revision 执行 `cut-apply`；若仍有未知合并，则返回等待且不改变归属。`cut-apply` 必须核对平台当前 SHA，并把切割点、已合入集合、下一交付单元及未合入任务重新分配作为一个账本变更提交。
+`cut-claim` 首次成功时即持久登记切割占用，并返回 `APPLIED` 与 `result.drained: false`（有未完成合并）或 `true`（没有未完成合并）；这一步不得返回声称“无写入”的等待错误。已登记的合并仍能写入 `merge-resolve`，新 `merge-claim` 返回等待。主 Agent（main Agent） 在已有占用结束后使用最新 revision 执行 `cut-apply`；若仍有未知合并，则返回等待且不改变归属。`cut-apply` 必须核对平台当前 SHA，并把切割点、已合入集合、下一交付单元及未合入任务重新分配作为一个账本变更提交。
 
 计算理论甘特图时，按依赖拓扑和预计耗时模拟最多 `max_running_tasks` 个任务；同一时刻就绪任务先按解锁后继数量降序，再按计划声明顺序、稳定 ID 排序。没有起点、耗时或必要前驱时间时，对受影响节点保留未知，不将未知按零分钟处理；模拟结果不是外部事实。
 
@@ -226,7 +228,7 @@ type Ledger = {
 
 每项写操作都携带编排 ID、调用者身份、稳定操作或事件 ID 及预期账本版本。版本不符时返回冲突，由调用者重新读取当前版本并判断；不得以旧内存快照覆盖新状态。重试同一 ID 且内容一致应返回已有结果；同一 ID 不同内容应拒绝。
 
-脚本只裁决账本中的协调条件，不能替代交付协调 Agent 对子 PR 的验收，也不能将缺失平台事实视为通过。外部 PR、CI、发布和部署事实须由对应平台操作或查询核实；计划外行为须经过主人决定。
+脚本只裁决账本中的协调条件，不能替代交付协调者（Delivery coordinator） 对子 PR 的验收，也不能将缺失平台事实视为通过。外部 PR、CI、发布和部署事实须由对应平台操作或查询核实；计划外行为须经过主人决定。
 
 ## 写入、锁与崩溃恢复
 
@@ -296,7 +298,7 @@ flowchart TD
 
 `execution-profile-update`、`execution-profile-default-update`、`execution-profile-recommend` 与 `execution-profile-migrate` 使用标准 request/revision/owner envelope。CLI 与认证 dashboard 的 `/api/execution-profile` 共用 mutation contract，能力组合来自 app-server `model/list`。缺失默认 pair 的旧运行可以读取，写入须先显式迁移。
 
-`dispatch-claim` / `dispatch-group-claim` 捕获完整有效 profile，`conversation-create` 绑定唯一 native request ID，再调用 app-server 创建、命名和初始化线程。创建 adapter 必须核对返回的实际模型与思考强度；返回值不是请求配置的自我回显。只有真实 thread ID 与匹配 request/operation/profile 的 CLI 证据才能成功绑定。unknown 保留 claim 和已观察到的 thread ID，对账通过 `dispatch-resolve` 记录匹配证据；禁止自动重复创建。初始化首条消息应确认并等待绑定，CLI 当前等待初始化 turn 完成后结束连接。
+`dispatch-claim` / `dispatch-group-claim` 捕获完整有效 profile，`conversation-create` 绑定唯一 native request ID，再通过独立的 `codex exec --worktree --json` 进程创建、命名和初始化线程。创建 adapter 必须核对返回的实际模型与思考强度；返回值不是请求配置的自我回显。只有真实 thread ID 与匹配 request/operation/profile 的 CLI 证据才能成功绑定。unknown 保留 claim 和已观察到的 thread ID，对账通过 `dispatch-resolve` 记录匹配证据；禁止自动重复创建。初始化首条消息只确认握手并在进程退出后由主对话通过内置 `send_message_to_thread` 发送正式任务。
 
 已有 thread 或尚未明确失败的 native request ID 都冻结对象配置。编辑无 native request 的 claim 时保留旧 pair 与原因、终止旧 claim，并要求重新 claim；运行默认值更新保留已冻结对象的原有效配置。对话创建后的会话内模型调整不进入该账本。
 
