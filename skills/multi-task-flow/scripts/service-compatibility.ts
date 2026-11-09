@@ -11,15 +11,22 @@ import { validateLedger } from "./schema";
 import { ContractError, requireCondition } from "./errors";
 import { stable } from "./store-migration";
 
+const readerCache = new Map<string, { ok: true; contract: string; revision: number } | { ok: false; code: string }>();
+
 function releaseReader(
   releaseRoot: string,
   ledger: unknown,
 ): { ok: true; contract: string; revision: number } | { ok: false; code: string } {
+  const cacheKey = `${releaseRoot}:${digest(stable(ledger))}`;
+  const cached = readerCache.get(cacheKey);
+  if (cached) return cached;
   try {
     const launcher = readFileSync(join(releaseRoot, "viewer"), { encoding: "utf8" });
     if ((statSync(join(releaseRoot, "viewer")).mode & 0o111) === 0 || !launcher.startsWith("#!")) {
       const parsed = validateLedger(ledger);
-      return { ok: true, contract: ledgerContract(parsed), revision: parsed.revision };
+      const result = { ok: true as const, contract: ledgerContract(parsed), revision: parsed.revision };
+      readerCache.set(cacheKey, result);
+      return result;
     }
   } catch {}
   const input = join(tmpdir(), `loomhelm-reader-${randomUUID()}.json`);
@@ -34,16 +41,28 @@ function releaseReader(
         env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" },
       },
     );
-    if (result.exitCode !== 0) return { ok: false, code: "LEDGER_UNREADABLE" };
+    if (result.exitCode !== 0) {
+      const failure = { ok: false as const, code: "LEDGER_UNREADABLE" };
+      readerCache.set(cacheKey, failure);
+      return failure;
+    }
     const parsed = JSON.parse(result.stdout.toString());
-    if (!parsed?.ok || !parsed.result?.contract) return { ok: false, code: "LEDGER_UNREADABLE" };
-    return {
-      ok: true,
+    if (!parsed?.ok || !parsed.result?.contract) {
+      const failure = { ok: false as const, code: "LEDGER_UNREADABLE" };
+      readerCache.set(cacheKey, failure);
+      return failure;
+    }
+    const success = {
+      ok: true as const,
       contract: String(parsed.result.contract),
       revision: Number(parsed.result.revision),
     };
+    readerCache.set(cacheKey, success);
+    return success;
   } catch {
-    return { ok: false, code: "LEDGER_UNREADABLE" };
+    const failure = { ok: false as const, code: "LEDGER_UNREADABLE" };
+    readerCache.set(cacheKey, failure);
+    return failure;
   } finally { try { unlinkSync(input); } catch {} }
 }
 function releaseRootFor(state: ServiceState, manifest: ReleaseManifest, preferred?: string): string | null {

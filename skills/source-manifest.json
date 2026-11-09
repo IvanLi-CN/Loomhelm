@@ -14359,7 +14359,7 @@
       "path": "skills/multi-task-flow/scripts/service-compatibility.ts",
       "sourceBlob": "bcb767fdffc0a94cbf0ed01243d42ab16108b730",
       "sourceSha256": "2c062bfd14caa59cadd0a81feef02e8bfe5d9961c933717d4d41ac3211c2a9c8",
-      "installedSha256": "5f7f9de42a3e7aa8c5282c412b751504a4d4b9bf2e2f4f4f6eca038840ac7e19",
+      "installedSha256": "dd2cdb8b72f7870f605653e7a21348aea6092ab8f8384a04e5d94d4fbebc901c",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
