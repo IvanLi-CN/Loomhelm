@@ -837,6 +837,22 @@ describe("orchestration state", () => {
     expect(ledger.milestones).toHaveLength(1);
     expect(ledger.groups[0].lifecycle.pr_created).toBe("unknown");
   });
+  test("rejects v2 contribution plans without publication actions", () => {
+    const ledger = v2Fixture();
+    ledger.plans[0].actions = [];
+    expect(() =>
+      apply(
+        ledger,
+        "plan-approve",
+        request(ledger, "approve-without-publication-actions", {
+          plan_id: "plan",
+          approval_id: "approved-v2",
+          authorized_actions: ["dispatch"],
+          authorized_action_ids: [],
+        }),
+      ),
+    ).toThrow("approved publication actions");
+  });
   test("publication resolve rejects stale lineage", () => {
     const ledger = v2Fixture();
     approveV2(ledger);
