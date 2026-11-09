@@ -44,7 +44,7 @@ runtime 根据规范化 diff 推导变更级别，调用方不得在请求中自
 
 ## 自解释合同
 
-`skills/multi-task-flow/scripts/schema.ts` 是唯一执行合同源。相邻的 `contract.ts` 只提供该合同的元数据、JSON Schema 和按操作裁剪的 `localSemanticProjection`，不建立第二套字段解析器。
+`skills/multi-task-flow/lib/schema.ts` 是唯一执行合同源。相邻的 `contract.ts` 只提供该合同的元数据、JSON Schema 和按操作裁剪的 `localSemanticProjection`，不建立第二套字段解析器。
 
 同一合同提供：
 

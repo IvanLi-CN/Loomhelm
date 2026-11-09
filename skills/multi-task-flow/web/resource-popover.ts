@@ -2,7 +2,7 @@ import { publishPRStatus } from "./pr-status";
 import type { AgentOutput } from "./agent-output";
 import type { View } from "./model";
 import { formatDuration, fullLocalTime } from "./time";
-import type { PRSnapshot } from "../scripts/pr-details";
+import type { PRSnapshot } from "../lib/pr-details";
 import { attachTooltip } from "./tooltip";
 import { unboundPRHint } from "./unbound-pr-hint";
 let serial = 0;

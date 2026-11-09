@@ -5,8 +5,8 @@ import { createSingleDeliveryUnitLedger } from "../examples/single-delivery-unit
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
 import type { AgentOutput } from "../web/agent-output";
 import type { Task } from "../web/model";
-import { buildView } from "./view";
-import { archiveFixtureScript } from "./demo-archive";
+import { buildView } from "../lib/view";
+import { archiveFixtureScript } from "../lib/demo-archive";
 
 const output = join(import.meta.dir, "..", "dist");
 const archiveDemo = process.argv.includes("--archive-fixture");

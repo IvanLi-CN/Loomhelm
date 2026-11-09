@@ -1,4 +1,4 @@
-import { defaultGroupAtoms, validateLedger, type Ledger } from "../../scripts/schema";
+import { defaultGroupAtoms, validateLedger, type Ledger } from "../../lib/schema";
 
 export const singleDeliveryUnitId = "single-delivery-unit";
 export const singleDeliveryUnitName = "文档检索服务 · 单交付单元示例";

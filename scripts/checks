@@ -288,7 +288,7 @@ check_client() {
 	run_command "Dashboard frozen dependencies" bun install --cwd skills/multi-task-flow --frozen-lockfile --ignore-scripts --backend=copy
 	run_command "Migrated source inventory" bun skills/multi-task-flow/scripts/check-client-skills.ts
 	run_command "Dashboard browser assets only" bun run skills:build
-	run_command "Pure-source installation regression" bun test ./skills/multi-task-flow/scripts/check-skills-installation.test.ts
+	run_command "Pure-source installation regression" bun test ./skills/multi-task-flow/tests/check-skills-installation.test.ts
 	run_command "All source modules and nonempty coverage" bun skills/multi-task-flow/scripts/verify-skills-modules.ts
 	run_command "Bun FFI cross-process safety" bun skills/multi-task-flow/scripts/test-skills-native.ts
 	run_command "Shared toolkit and system-library regression" bun test ./skills/bin/tests ./skills/bin/native-tests

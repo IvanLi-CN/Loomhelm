@@ -1,8 +1,8 @@
 import { test, expect } from "bun:test";
-import { apply } from "../scripts/engine";
+import { apply } from "../lib/engine";
 import { rmSync } from "node:fs";
 import { fixtureRun, serviceFixture } from "./service-fixture";
-import { retryConversationArchive, retryConversationUnarchive, sweepConversationArchives, type ArchiveProvider } from "../scripts/conversation-archive";
+import { retryConversationArchive, retryConversationUnarchive, sweepConversationArchives, type ArchiveProvider } from "../lib/conversation-archive";
 
 function fixture() {
   const { root, state } = serviceFixture();
@@ -156,7 +156,7 @@ for (const claimed of [false, true]) {
 test("integrated tasks stay ineligible in the view and manual archive path", async () => {
   const f = fixture();
   try {
-    const { buildView } = await import("../scripts/view");
+    const { buildView } = await import("../lib/view");
     f.store.update(raw => { raw.tasks.find((t: any) => t.id === f.task.id).state = "integrated"; });
     expect(buildView(f.store.read()).tasks.find(t => t.id === f.task.id)?.conversation_archive.eligible).toBe(false);
     await expect(retryConversationArchive(f.store, f.task.id, success)).rejects.toMatchObject({ code: "TASK_NOT_TERMINAL" });
@@ -166,7 +166,7 @@ test("integrated tasks stay ineligible in the view and manual archive path", asy
 test("eligible terminal task projects first archive without a conversation resource", async () => {
   const f = fixture();
   try {
-    const { buildView } = await import("../scripts/view");
+    const { buildView } = await import("../lib/view");
     const task = buildView(f.store.read()).tasks.find(t => t.id === f.task.id)!;
     expect(task.conversation_resource).toBeNull();
     expect(task.conversation_archive).toEqual({ eligible: true, reason: null });

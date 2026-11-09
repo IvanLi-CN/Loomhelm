@@ -2,12 +2,12 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { PortRegistry } from "../../bin/modules/workspace/port_registry";
-import { LedgerStore } from "../scripts/store";
-import { ServiceAuth } from "../scripts/service-auth";
-import { startSharedViewer, listRuns, selectAssets } from "../scripts/service-http";
-import { installRelease, switchRelease, nativeServiceControl } from "../scripts/service-maintenance";
-import { verifyRelease } from "../scripts/service-release";
-import { importRun } from "../scripts/service-import";
+import { LedgerStore } from "../lib/store";
+import { ServiceAuth } from "../lib/service-auth";
+import { startSharedViewer, listRuns, selectAssets } from "../lib/service-http";
+import { installRelease, switchRelease, nativeServiceControl } from "../lib/service-maintenance";
+import { verifyRelease } from "../lib/service-release";
+import { importRun } from "../lib/service-import";
 import { serviceFixture, fixtureRelease, fixtureRun } from "./service-fixture";
 
 const roots: string[] = [];
@@ -249,7 +249,7 @@ test("future ledger contracts are refused before read or write", () => {
 
 
 test("launchd definition preserves the installing caller PATH without assuming tool locations", async () => {
-  const { writeLaunchdDefinition } = await import("../scripts/service-launchd");
+  const { writeLaunchdDefinition } = await import("../lib/service-launchd");
   const { readFileSync } = await import("node:fs");
   const { root, state } = fixture();
   await installRelease(state, fixtureRelease(root).source);

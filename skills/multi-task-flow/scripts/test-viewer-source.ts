@@ -21,7 +21,7 @@ try {
   const gh=join(tools,'gh');
   writeFileSync(gh, `#!/bin/sh\nprintf '%s' '{"number":42,"title":"fixture","url":"https://github.com/owner/repo/pull/42","state":"MERGED","mergedAt":null,"statusCheckRollup":[]}'\n`); chmodSync(gh,0o700);
   const preload=join(temporary,'preload.ts');
-  writeFileSync(preload,`import {PRDetailsCache} from ${JSON.stringify(join(output,'skills/multi-task-flow/scripts/pr-details.ts'))}; const snapshot=await new PRDetailsCache().read({host:"github.com",owner:"owner",name:"repo"},"https://github.com/owner/repo/pull/42"); await Bun.write(${JSON.stringify(marker)},JSON.stringify({snapshot,path:process.env.PATH,option:process.env.NODE_OPTIONS}));`);
+  writeFileSync(preload,`import {PRDetailsCache} from ${JSON.stringify(join(output,'skills/multi-task-flow/lib/pr-details.ts'))}; const snapshot=await new PRDetailsCache().read({host:"github.com",owner:"owner",name:"repo"},"https://github.com/owner/repo/pull/42"); await Bun.write(${JSON.stringify(marker)},JSON.stringify({snapshot,path:process.env.PATH,option:process.env.NODE_OPTIONS}));`);
   const callerPath=tools+':'+process.env.PATH;
   const invoke=spawnSync(join(output,'viewer'),['invalid','--input','-'],{cwd:temporary,env:{...env,PATH:callerPath,NODE_OPTIONS:'--trace-warnings',BUN_OPTIONS:'--preload='+preload},input:'{}',encoding:'utf8',timeout:30000});
   assert.notEqual(invoke.status,0); assert.equal(JSON.parse(invoke.stderr).code,'INVALID_COMMAND');
@@ -40,18 +40,18 @@ try {
     assert.notEqual(rejected.status,0); assert.match(rejected.stderr,/VIEWER_RESOURCE_CHECKSUM/); assert.equal(existsSync(marker),false);
     writeFileSync(path,original);
   }
-  const shadow=join(output,'skills/multi-task-flow/scripts/service-state.tsx');
-  writeFileSync(shadow,`import {writeFileSync as __writeMarker} from 'node:fs'; __writeMarker(${JSON.stringify(marker)},'unsafe');\n`+readFileSync(join(output,'skills/multi-task-flow/scripts/service-state.ts'),'utf8'));
+  const shadow=join(output,'skills/multi-task-flow/lib/service-state.tsx');
+  writeFileSync(shadow,`import {writeFileSync as __writeMarker} from 'node:fs'; __writeMarker(${JSON.stringify(marker)},'unsafe');\n`+readFileSync(join(output,'skills/multi-task-flow/lib/service-state.ts'),'utf8'));
   const shadowInvoke=spawnSync(join(output,'viewer'),['invalid','--input','-'],{env,input:'{}',encoding:'utf8',timeout:30000});
   assert.notEqual(shadowInvoke.status,0); assert.match(shadowInvoke.stderr,/VIEWER_RESOURCE_UNLISTED/); assert.equal(existsSync(marker),false);
   rmSync(shadow);
-  const { verifyRelease }=await import(pathToFileURL(join(output,'skills/multi-task-flow/scripts/service-release.ts')));
+  const { verifyRelease }=await import(pathToFileURL(join(output,'skills/multi-task-flow/lib/service-release.ts')));
   verifyRelease(output);
   // Actual packaged TS modules own an isolated HTTP lifecycle, never user services.
-  const { ServiceState }=await import(pathToFileURL(join(output,'skills/multi-task-flow/scripts/service-state.ts')));
-  const { servicePaths }=await import(pathToFileURL(join(output,'skills/multi-task-flow/scripts/service-paths.ts')));
-  const { ServiceAuth }=await import(pathToFileURL(join(output,'skills/multi-task-flow/scripts/service-auth.ts')));
-  const { startSharedViewer }=await import(pathToFileURL(join(output,'skills/multi-task-flow/scripts/service-http.ts')));
+  const { ServiceState }=await import(pathToFileURL(join(output,'skills/multi-task-flow/lib/service-state.ts')));
+  const { servicePaths }=await import(pathToFileURL(join(output,'skills/multi-task-flow/lib/service-paths.ts')));
+  const { ServiceAuth }=await import(pathToFileURL(join(output,'skills/multi-task-flow/lib/service-auth.ts')));
+  const { startSharedViewer }=await import(pathToFileURL(join(output,'skills/multi-task-flow/lib/service-http.ts')));
   const state=new ServiceState(servicePaths(env)); state.initialize(); const auth=new ServiceAuth(state); auth.initialize();
   const viewer=await startSharedViewer(state,manifest,join(output,'skills/multi-task-flow/dist'),0);
   try {

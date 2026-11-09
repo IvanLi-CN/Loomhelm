@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { validateLedger, type Ledger } from "../../scripts/schema";
+import { validateLedger, type Ledger } from "../../lib/schema";
 
 type LinkVerification = { schema_version: 1; method: string; verified_at: string; evidence_ref: string; results: { thread_id: string; navigated: boolean }[] };
 const linkVerification = JSON.parse(readFileSync(join(import.meta.dir, "link-verification.json"), "utf8")) as LinkVerification;

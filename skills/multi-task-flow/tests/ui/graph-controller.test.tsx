@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'bun:test';
 import React, { act } from 'react';
 import { createSingleDeliveryUnitLedger } from '../../examples/single-delivery-unit/ledger';
-import { buildView } from '../../scripts/view';
+import { buildView } from '../../lib/view';
 import type { GraphContext } from '../../web/graph';
 import type { GraphLayout } from '../../web/graph-layout';
 import type { GraphProjection } from '../../web/graph-projection';

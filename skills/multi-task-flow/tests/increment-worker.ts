@@ -1,4 +1,4 @@
-import { LedgerStore } from "../scripts/store";
+import { LedgerStore } from "../lib/store";
 
 const ledgerPath = process.argv[2];
 if (!ledgerPath) throw new Error("ledger path is required");

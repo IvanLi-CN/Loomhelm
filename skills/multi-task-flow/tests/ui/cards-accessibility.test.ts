@@ -20,7 +20,7 @@ test("synthetic task and unit conversations never expose native links", async ()
   const { createCardRenderer } = await import("../../web/cards");
   const { createDetailContent } = await import("../../web/details-content");
   const { createSingleDeliveryUnitLedger } = await import("../../examples/single-delivery-unit/ledger");
-  const { buildView } = await import("../../scripts/view");
+  const { buildView } = await import("../../lib/view");
   const view = buildView(createSingleDeliveryUnitLedger()) as import("../../web/model").View;
   document.body.innerHTML = '<div id="task-list"></div><div id="group-list"></div><div id="details-summary"></div><div id="details-content"></div>';
   const common = { getData: () => view, labels: {}, safeExternal: () => null };
@@ -44,7 +44,7 @@ test("synthetic task and unit conversations never expose native links", async ()
 test("grid and board groups expose time details from their own execution facts", async () => {
   const { createCardRenderer } = await import("../../web/cards");
   const { createSingleDeliveryUnitLedger } = await import("../../examples/single-delivery-unit/ledger");
-  const { buildView } = await import("../../scripts/view");
+  const { buildView } = await import("../../lib/view");
   const view = buildView(createSingleDeliveryUnitLedger()) as import("../../web/model").View;
   const group = view.groups[0]!;
   group.started_at = "2026-11-05T01:00:00Z";

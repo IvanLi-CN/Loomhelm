@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { LoadedThreadSubscriptions } from "../scripts/codex-subscription";
-import type { JsonRecord } from "../scripts/codex-socket";
+import { LoadedThreadSubscriptions } from "../lib/codex-subscription";
+import type { JsonRecord } from "../lib/codex-socket";
 
 test("only rejoins bound loaded threads, without overrides or turns, deduplicates and releases subscriptions", async () => {
   const calls: Array<[string, JsonRecord]> = [];
