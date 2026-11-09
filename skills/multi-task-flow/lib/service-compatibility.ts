@@ -1,7 +1,6 @@
-import { existsSync, readdirSync, lstatSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, lstatSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { readRegularNoFollow } from "../../bin/modules/visual/secure_io";
 import { ServiceState } from "../lib/service-state";
@@ -20,41 +19,39 @@ function releaseReader(
   const cacheKey = `${releaseRoot}:${digest(stable(ledger))}`;
   const cached = readerCache.get(cacheKey);
   if (cached) return cached;
-  const input = join(tmpdir(), `loomhelm-reader-${randomUUID()}.json`);
   try {
-    writeFileSync(input, JSON.stringify({ ledger }), { mode: 0o600 });
-    const result = Bun.spawnSync(
-      [join(releaseRoot, "viewer"), "reader-check", "--input", "-"],
+    const result = spawnSync(
+      join(releaseRoot, "viewer"), ["reader-check", "--input", "-"],
       {
-        stdin: Bun.file(input),
-        stdout: "pipe",
-        stderr: "pipe",
+        input: JSON.stringify({ ledger }), encoding: "utf8", timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
         env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" },
       },
     );
-    if (result.exitCode !== 0) {
+    if (result.status !== 0) {
       const failure = { ok: false as const, code: "LEDGER_UNREADABLE" };
       readerCache.set(cacheKey, failure);
       return failure;
     }
-    const parsed = JSON.parse(result.stdout.toString());
-    if (!parsed?.ok || !parsed.result?.contract) {
+    const parsed = z.object({
+      ok: z.literal(true),
+      code: z.literal("OK"),
+      result: z.object({ contract: z.string().min(1), revision: z.number().int().nonnegative() }).strict(),
+    }).strict().parse(JSON.parse(result.stdout.toString()));
+    const expectedContract = ledgerContract(ledger);
+    const expectedRevision = z.number().int().nonnegative().parse((ledger as { revision?: unknown }).revision);
+    if (parsed.result.contract !== expectedContract || parsed.result.revision !== expectedRevision) {
       const failure = { ok: false as const, code: "LEDGER_UNREADABLE" };
       readerCache.set(cacheKey, failure);
       return failure;
     }
-    const success = {
-      ok: true as const,
-      contract: String(parsed.result.contract),
-      revision: Number(parsed.result.revision),
-    };
+    const success = { ok: true as const, contract: parsed.result.contract, revision: parsed.result.revision };
     readerCache.set(cacheKey, success);
     return success;
   } catch {
     const failure = { ok: false as const, code: "LEDGER_UNREADABLE" };
     readerCache.set(cacheKey, failure);
     return failure;
-  } finally { try { unlinkSync(input); } catch {} }
+  }
 }
 function releaseRootFor(state: ServiceState, manifest: ReleaseManifest, preferred?: string): string | null {
   for (const root of [
@@ -63,17 +60,23 @@ function releaseRootFor(state: ServiceState, manifest: ReleaseManifest, preferre
     join(state.paths.candidates, manifest.build_id),
   ].filter((value): value is string => Boolean(value))) {
     try {
-      verifyRelease(root);
+      const verified = verifyRelease(root);
+      if (verified.build_id !== manifest.build_id) continue;
       return root;
     } catch {}
   }
   return null;
 }
-function supportsReadOnlyView(root: string): boolean {
-  for (const relative of ["skills/multi-task-flow/lib/service.ts", "skills/multi-task-flow/scripts/service.ts"]) {
-    try { if (readFileSync(join(root, relative), "utf8").includes('command === "read-only-view"')) return true; } catch {}
-  }
-  return false;
+function releaseReadOnlyView(root: string, ledger: unknown): boolean {
+  try {
+    const result = spawnSync(join(root, "viewer"), ["read-only-view", "--input", "-"], {
+      input: JSON.stringify({ ledger }), encoding: "utf8", timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" },
+    });
+    if (result.status !== 0) return false;
+    z.object({ ok: z.literal(true), code: z.literal("OK"), result: z.object({ view: z.record(z.string(), z.unknown()) }).strict() }).strict().parse(JSON.parse(result.stdout.toString()));
+    return true;
+  } catch { return false; }
 }
 
 export const downgradeApproval = z
@@ -178,7 +181,7 @@ export function compatibilityReport(
           : { ok: false as const, code: "INCOMPATIBLE_LEDGER" };
         row.target_readable = targetReader.ok;
         row.target_writable = target.writable.includes(row.contract);
-        row.fallback_build_id = !targetReader.ok && currentReader.ok && currentRoot && supportsReadOnlyView(currentRoot) ? current?.build_id ?? null : null;
+        row.fallback_build_id = !targetReader.ok && currentReader.ok && currentRoot && releaseReadOnlyView(currentRoot, raw) ? current?.build_id ?? null : null;
         row.fallback_readable = Boolean(row.fallback_build_id);
         row.migration_guides = (target.migration_guides ?? []).filter((guide) => guide.required_for.includes(row.contract!)).map((guide) => guide.id);
         if (!row.target_readable && !row.fallback_readable)

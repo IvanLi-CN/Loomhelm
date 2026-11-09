@@ -116,7 +116,7 @@ async function verifyMigrationRollback() {
       JSON.stringify({ ...item.run, contract_version: 1 }),
     );
     const manifest = verifyRelease(bundle);
-    const report = compatibilityReport(isolated, manifest);
+    const report = compatibilityReport(isolated, manifest, bundle);
     await switchRelease(isolated, bundle, false, undefined, {
       report_digest: report.report_digest,
       approval_ref: "ci-owner-approved-downgrade",

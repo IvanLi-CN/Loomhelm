@@ -1,8 +1,7 @@
 import type { ConnectObserver } from "../lib/conversation-output";
 import { Runtime } from "../../bin/modules/core/runtime";
-import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { z } from "zod";
 import { createRunDashboard, dashboardHeaders } from "../lib/server";
@@ -126,18 +125,15 @@ export function selectAssets(root: string, runId: string, shared: string) {
 }
 
 function readOnlyView(releaseRoot: string, ledger: unknown, planId?: string) {
-  const input = join(tmpdir(), `loomhelm-read-only-view-${randomUUID()}.json`);
-  writeFileSync(input, JSON.stringify({ ledger, ...(planId ? { plan_id: planId } : {}) }), { mode: 0o600 });
-  const result = Bun.spawnSync(
-    [join(releaseRoot, "viewer"), "read-only-view", "--input", "-"],
-    { stdin: Bun.file(input), stdout: "pipe", stderr: "pipe", env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" } },
+  const result = spawnSync(
+    join(releaseRoot, "viewer"), ["read-only-view", "--input", "-"],
+    { input: JSON.stringify({ ledger, ...(planId ? { plan_id: planId } : {}) }), encoding: "utf8", timeout: 30_000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" } },
   );
+  if (result.status !== 0) throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer could not read this run", 2);
   try {
-    if (result.exitCode !== 0) throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer could not read this run", 2);
-    const parsed = JSON.parse(result.stdout.toString());
-    if (!parsed?.ok || !parsed.result?.view) throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer returned no view", 2);
+    const parsed = z.object({ ok: z.literal(true), code: z.literal("OK"), result: z.object({ view: z.record(z.string(), z.unknown()) }).strict() }).strict().parse(JSON.parse(result.stdout));
     return parsed.result.view;
-  } finally { try { unlinkSync(input); } catch {} }
+  } catch { throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer returned no readable view", 2); }
 }
 
 function pathIsLegacyView(pathname: string, method: string): boolean {
@@ -305,7 +301,9 @@ export async function startSharedViewer(
         const id = match[1]!;
         if (pathIsLegacyView(url.pathname, request.method)) {
           if (!fallbackViewer) return json({ code: "LEGACY_VIEW_UNAVAILABLE" }, 404);
-          const raw = JSON.parse(new LedgerStore(state.paths.data, id).readRaw());
+          let raw: unknown;
+          try { raw = JSON.parse(new LedgerStore(state.paths.data, id).readRaw()); }
+          catch { throw new ContractError("LEDGER_UNREADABLE", "Stored run ledger is unreadable", 2); }
           return json({ run_id: id, build_id: manifest.build_id, fallback_build_id: state.config().previous_build, read_only: true, view: readOnlyView(fallbackViewer, raw, url.searchParams.get("plan") ?? undefined) });
         }
         const run = getRun(id);

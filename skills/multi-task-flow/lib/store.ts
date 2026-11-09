@@ -260,13 +260,13 @@ export class LedgerStore {
     return this.withLock(() => this.readUnlocked());
   }
 
-  readRaw(): string {
+  readRaw(maxBytes = 256 * 1024 * 1024): string {
     return this.withLock(() =>
       readRegularNoFollow(
         this.ledgerPath,
         this.rootPath,
         undefined,
-        Number.MAX_SAFE_INTEGER,
+        maxBytes,
         this.currentRunIdentity(),
       ).toString("utf8"),
     );
