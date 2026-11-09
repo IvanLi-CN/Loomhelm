@@ -11,6 +11,7 @@ import { ContractError, requireCondition } from "../lib/errors";
 import {
   isContributionKind,
   planCompletenessIssues,
+  taskExecutionPolicyIssues,
   validateLedger,
   type Ledger,
   type Plan,
@@ -308,16 +309,20 @@ export function buildView(
         : [];
       return {
         ...task,
+        dispatch_diagnostics: [
+          ...taskExecutionPolicyIssues(task),
+          ...(owner && owner.delivery_unit_kind === "regular" && !owner.agent_thread_id
+            ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }]
+            : []),
+        ],
         dispatch_readiness:
           task.execution_owner === null && task.conversation_policy === null && task.delivery_policy === null
             ? "unknown"
-            : owner && (owner.delivery_unit_kind === "bootstrap" || !!owner.agent_thread_id)
+            : taskExecutionPolicyIssues(task).length > 0
+              ? "blocked"
+              : owner && (owner.delivery_unit_kind === "bootstrap" || !!owner.agent_thread_id)
               ? "ready"
               : "blocked",
-        dispatch_diagnostics:
-          owner && owner.delivery_unit_kind === "regular" && !owner.agent_thread_id
-            ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }]
-            : [],
         state: runtimeTaskState(task, outputs[task.id]),
         ...(runtimeTaskState(task, outputs[task.id]) === "agent_idle" && task.state !== "agent_idle" ? { agent_resume_state: task.state } : {}),
         atoms: atoms.map((atom) => ({
@@ -377,7 +382,7 @@ export function buildView(
         activePlan.id !== executionPlan.id ||
         activePlan.lifecycle !== "approved",
       scheduling_eligible: isApprovedExecution && completenessIssues.length === 0,
-      dispatch_readiness: ledger.groups.every((item) => item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id) ? "ready" : "blocked",
+      dispatch_readiness: ledger.groups.every((item) => item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id) && tasks.every((item) => (item.dispatch_diagnostics?.length ?? 0) === 0) ? "ready" : "blocked",
       delivery_agent_readiness: ledger.groups.some((item) => item.delivery_unit_kind === "regular" && !item.agent_thread_id) ? "unbound" : "bound",
       completeness: {
         status: completenessIssues.length === 0 ? "complete" : "blocked",

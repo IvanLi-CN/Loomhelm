@@ -722,8 +722,10 @@ export function taskExecutionPolicyIssues(
   return issues;
 }
 
-export function validateTaskExecutionPolicies(tasks: readonly Task[]): void {
+export function validateTaskExecutionPolicies(tasks: readonly Task[], requireComplete = false): void {
   for (const candidate of tasks) {
+    if (requireComplete && candidate.execution_owner === null && candidate.conversation_policy === null && candidate.delivery_policy === null)
+      requireCondition(false, "TASK_EXECUTION_POLICY_INCOMPLETE", `${candidate.id}: 任务执行归属、对话策略和交付策略必须声明`, 3);
     const issues = taskExecutionPolicyIssues(candidate);
     requireCondition(issues.length === 0, issues[0]?.code ?? "TASK_EXECUTION_POLICY_INVALID", `${candidate.id}: ${issues.map((issue) => issue.message).join("；")}`, 3);
   }
