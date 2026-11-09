@@ -2,8 +2,8 @@ import { cpSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPlanningDemoLedger } from "../examples/orchestration-viewer/ledger";
-import { LedgerStore } from "../scripts/store";
-import { startDashboard } from "../scripts/server";
+import { LedgerStore } from "../lib/store";
+import { startDashboard } from "../lib/server";
 
 const port = Number(process.argv[2]);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("A leased port is required");

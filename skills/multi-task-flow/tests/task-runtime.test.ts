@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { serviceFixture, fixtureRun } from "./service-fixture";
-import { observeTaskRuntime } from "../scripts/task-runtime";
+import { observeTaskRuntime } from "../lib/task-runtime";
 import { runtimeTaskState } from "../web/task-state";
 import { initialOutput, type AgentOutput } from "../web/agent-output";
 

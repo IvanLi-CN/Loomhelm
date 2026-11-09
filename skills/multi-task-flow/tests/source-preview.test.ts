@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { cpSync, mkdirSync, rmSync } from "node:fs";
-import { startSharedViewer } from "../scripts/service-http";
-import { ServiceAuth } from "../scripts/service-auth";
-import { ServiceState } from "../scripts/service-state";
-import { servicePaths } from "../scripts/service-paths";
-import { runDaemon } from "../scripts/service-lifecycle";
+import { startSharedViewer } from "../lib/service-http";
+import { ServiceAuth } from "../lib/service-auth";
+import { ServiceState } from "../lib/service-state";
+import { servicePaths } from "../lib/service-paths";
+import { runDaemon } from "../lib/service-lifecycle";
 import { serviceFixture, fixtureRelease, fixtureLegacyRelease, fixtureRun } from "./service-fixture";
 
 test.each([
@@ -214,7 +214,7 @@ test("installed profile rejects synthetic conversation observers", () => {
 test("isolated single-unit preview projects synthetic conversations through the shared viewer", async () => {
   const { createSingleDeliveryUnitLedger } = await import("../examples/single-delivery-unit/ledger");
   const { singleDeliveryUnitObserver } = await import("../examples/single-delivery-unit/outputs");
-  const { LedgerStore } = await import("../scripts/store");
+  const { LedgerStore } = await import("../lib/store");
   const { root, state } = serviceFixture();
   const release = fixtureRelease(root);
   const ledger = createSingleDeliveryUnitLedger();

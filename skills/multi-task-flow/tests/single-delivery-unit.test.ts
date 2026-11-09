@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { createSingleDeliveryUnitOutputs, singleDeliveryUnitObserver } from "../examples/single-delivery-unit/outputs";
-import { latestConversationOutput } from "../scripts/conversation-history";
-import { ready } from "../scripts/engine";
+import { latestConversationOutput } from "../lib/conversation-history";
+import { ready } from "../lib/engine";
 import { createSingleDeliveryUnitLedger } from "../examples/single-delivery-unit/ledger";
-import { buildView } from "../scripts/view";
+import { buildView } from "../lib/view";
 import { buildGraphProjection } from "../web/graph-projection";
 import { layoutProjection } from "../web/graph-layout";
 import type { View } from "../web/model";

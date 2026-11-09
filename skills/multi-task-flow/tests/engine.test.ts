@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { apply, ready, type Request } from "../scripts/engine";
+import { apply, ready, type Request } from "../lib/engine";
 import {
   validateLedger,
   type Ledger,
   type Plan,
   type Task,
-} from "../scripts/schema";
+} from "../lib/schema";
 
 const base = "a".repeat(40),
   head = "b".repeat(40),

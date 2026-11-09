@@ -11,8 +11,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LedgerStore } from "../scripts/store";
-import { migrationCanonicalInput } from "../scripts/store-migration";
+import { LedgerStore } from "../lib/store";
+import { migrationCanonicalInput } from "../lib/store-migration";
 
 const roots: string[] = [];
 const initialInput = JSON.parse(

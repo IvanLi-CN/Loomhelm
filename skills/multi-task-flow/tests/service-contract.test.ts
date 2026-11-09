@@ -2,9 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { servicePaths, orchestrationRoot } from "../scripts/service-paths";
-import { requireApi, requireLedgerCompatibility } from "../scripts/service-contract";
-import { ServiceState } from "../scripts/service-state";
+import { servicePaths, orchestrationRoot } from "../lib/service-paths";
+import { requireApi, requireLedgerCompatibility } from "../lib/service-contract";
+import { ServiceState } from "../lib/service-state";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -64,7 +64,7 @@ test("expiry fences generations and refuses renewals during exit", () => {
 
 test("schema2/contract2 ledgers without idle or archive diagnostics remain readable", async () => {
   const { createDemoLedger } = await import("../examples/orchestration-viewer/ledger");
-  const { validateLedger } = await import("../scripts/schema");
+  const { validateLedger } = await import("../lib/schema");
   const ledger = JSON.parse(JSON.stringify(createDemoLedger()));
   ledger.contract_version = 2;
   for (const task of ledger.tasks) delete task.agent_resume_state;
@@ -75,7 +75,7 @@ test("schema2/contract2 ledgers without idle or archive diagnostics remain reada
 });
 
 test("viewer labels use the Loomhelm namespace and maintenance retires the matching legacy profile", async () => {
-  const { unloadUserService } = await import("../scripts/service-launchd");
+  const { unloadUserService } = await import("../lib/service-launchd");
   expect(servicePaths({}).label).toBe("cc.ivanli.loomhelm.multi-task-flow.viewer");
   const state = fixture();
   expect(state.paths.label).toStartWith("cc.ivanli.loomhelm.multi-task-flow.viewer.");
@@ -95,7 +95,7 @@ test("viewer labels use the Loomhelm namespace and maintenance retires the match
 
 test("ordinary startup rejects the legacy plist before calling launchctl", async () => {
   const { writeFileSync, mkdirSync } = await import("node:fs");
-  const { startUserService } = await import("../scripts/service-launchd");
+  const { startUserService } = await import("../lib/service-launchd");
   const state = fixture();
   mkdirSync(state.paths.config, { recursive: true });
   writeFileSync(join(state.paths.config, "viewer.plist"), '<key>Label</key><string>cn.ivan.multi-task-flow.viewer</string>');
@@ -103,7 +103,7 @@ test("ordinary startup rejects the legacy plist before calling launchctl", async
 });
 
 test("readiness tolerates delayed health but stops at a finite elapsed-time budget", async () => {
-  const { waitForServiceHealth } = await import("../scripts/service-lifecycle");
+  const { waitForServiceHealth } = await import("../lib/service-lifecycle");
   const started = performance.now();
   expect(await waitForServiceHealth(async () => {
     if (performance.now() - started < 20) throw new Error("still starting");
@@ -117,9 +117,9 @@ test("readiness tolerates delayed health but stops at a finite elapsed-time budg
 });
 
 test.skipIf(process.platform !== "darwin" || process.env.GITHUB_ACTIONS !== "true" || !process.env.LOOMHELM_VIEWER_LABEL_BEFORE || !process.env.LOOMHELM_VIEWER_LABEL_AFTER)("native launchd label transition preserves port and retires legacy registration", async () => {
-  const { installRelease, switchRelease, nativeServiceControl } = await import("../scripts/service-maintenance");
-  const { writeLaunchdDefinition, startUserService, unloadUserService, launchdDomain, launchctl } = await import("../scripts/service-launchd");
-  const { serviceStatus, waitForServiceHealth } = await import("../scripts/service-lifecycle");
+  const { installRelease, switchRelease, nativeServiceControl } = await import("../lib/service-maintenance");
+  const { writeLaunchdDefinition, startUserService, unloadUserService, launchdDomain, launchctl } = await import("../lib/service-launchd");
+  const { serviceStatus, waitForServiceHealth } = await import("../lib/service-lifecycle");
   const { processAlive } = await import("../../bin/modules/workspace/port_registry");
   const state = fixture();
   // Cleanup must wait for the actual launchd child, not just test completion.

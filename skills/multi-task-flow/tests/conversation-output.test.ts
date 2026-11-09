@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { ConversationOutputs, messageOutput, type ConnectObserver } from "../scripts/conversation-output";
-import type { JsonRecord } from "../scripts/codex-agent-api";
+import { ConversationOutputs, messageOutput, type ConnectObserver } from "../lib/conversation-output";
+import type { JsonRecord } from "../lib/codex-agent-api";
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const message = (id: string, text: string, phase = "commentary") => ({ turnId: "turn", item: { type: "agentMessage", id, text, phase } });
 function fixture(read: (method: string, params: JsonRecord) => Promise<JsonRecord> = async () => ({ data: [] })) {

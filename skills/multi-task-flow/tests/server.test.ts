@@ -2,10 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LedgerStore } from "../scripts/store";
-import { apply } from "../scripts/engine";
-import { validateLedger } from "../scripts/schema";
-import { startDashboard } from "../scripts/server";
+import { LedgerStore } from "../lib/store";
+import { apply } from "../lib/engine";
+import { validateLedger } from "../lib/schema";
+import { startDashboard } from "../lib/server";
 
 const paths: string[] = [];
 const at = "2026-01-01T00:00:00.000Z";

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { topologicalOrder, validateGrouping } from "../scripts/graph";
+import { topologicalOrder, validateGrouping } from "../lib/graph";
 
 describe("task dependencies", () => {
   test("independent tasks remain runnable while a dependent task waits", () => {

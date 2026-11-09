@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createDemoLedger, createPlanningDemoLedger } from "../examples/orchestration-viewer/ledger";
-import { plan, validateSchedulablePlan } from "../scripts/schema";
-import { actualIntervals, buildView, planWarnings, plannedIntervals } from "../scripts/view";
+import { plan, validateSchedulablePlan } from "../lib/schema";
+import { actualIntervals, buildView, planWarnings, plannedIntervals } from "../lib/view";
 import { initialOutput } from "../web/agent-output";
 import { rangeFromIntervals } from "../web/execution-range";
 

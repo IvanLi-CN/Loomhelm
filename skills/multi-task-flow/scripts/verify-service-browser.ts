@@ -3,16 +3,16 @@ import { chromium } from "playwright";
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
-import { buildView } from "./view";
+import { buildView } from "../lib/view";
 import {
   homePage,
   homeScript,
   loginPage,
   loginScript,
   runClientScript,
-} from "./service-pages";
-import { startSharedViewer } from "./service-http";
-import { ServiceAuth } from "./service-auth";
+} from "../lib/service-pages";
+import { startSharedViewer } from "../lib/service-http";
+import { ServiceAuth } from "../lib/service-auth";
 import {
   serviceFixture,
   fixtureRelease,

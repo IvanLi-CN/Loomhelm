@@ -3,9 +3,9 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
-import { apply } from "../scripts/engine";
-import { LedgerStore } from "../scripts/store";
-import { deliverClaimedNotification, reconcileNotification, prepareNativeNotification } from "../scripts/notification-delivery";
+import { apply } from "../lib/engine";
+import { LedgerStore } from "../lib/store";
+import { deliverClaimedNotification, reconcileNotification, prepareNativeNotification } from "../lib/notification-delivery";
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mtf-delivery-")));
@@ -67,7 +67,7 @@ test("an unexpected adapter exit leaves unknown and prohibits a new send", async
 test("SIGKILL after the provider boundary preserves the claim across restart", async () => {
   const f = fixture();
   try {
-    const script = `import {LedgerStore} from ${JSON.stringify(resolve(import.meta.dir, "../scripts/store.ts"))}; import {deliverClaimedNotification} from ${JSON.stringify(resolve(import.meta.dir, "../scripts/notification-delivery.ts"))}; await deliverClaimedNotification(new LedgerStore(${JSON.stringify(f.root)},${JSON.stringify(f.parsed.run_id)}),${JSON.stringify(f.parsed)},${JSON.stringify(f.id)},"Notice",async()=>{process.kill(process.pid,"SIGKILL"); return ${JSON.stringify(sent)};});`;
+    const script = `import {LedgerStore} from ${JSON.stringify(resolve(import.meta.dir, "../lib/store.ts"))}; import {deliverClaimedNotification} from ${JSON.stringify(resolve(import.meta.dir, "../lib/notification-delivery.ts"))}; await deliverClaimedNotification(new LedgerStore(${JSON.stringify(f.root)},${JSON.stringify(f.parsed.run_id)}),${JSON.stringify(f.parsed)},${JSON.stringify(f.id)},"Notice",async()=>{process.kill(process.pid,"SIGKILL"); return ${JSON.stringify(sent)};});`;
     const child = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
     expect(await child.exited).not.toBe(0);
     const recovered = new LedgerStore(f.root, f.parsed.run_id);

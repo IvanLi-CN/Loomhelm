@@ -1,12 +1,12 @@
 import { mkdtempSync, realpathSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { servicePaths } from "../scripts/service-paths";
-import { ServiceAuth } from "../scripts/service-auth";
-import { ServiceState } from "../scripts/service-state";
-import { compatibility } from "../scripts/service-contract";
-import { buildId, digest, releaseFiles } from "../scripts/service-release";
-import { LedgerStore } from "../scripts/store";
+import { servicePaths } from "../lib/service-paths";
+import { ServiceAuth } from "../lib/service-auth";
+import { ServiceState } from "../lib/service-state";
+import { compatibility } from "../lib/service-contract";
+import { buildId, digest, releaseFiles } from "../lib/service-release";
+import { LedgerStore } from "../lib/store";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
 
 export function serviceFixture() {

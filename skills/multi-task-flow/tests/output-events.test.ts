@@ -2,10 +2,10 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRunDashboard } from "../scripts/server";
-import { LedgerStore } from "../scripts/store";
+import { createRunDashboard } from "../lib/server";
+import { LedgerStore } from "../lib/store";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
-import type { JsonRecord } from "../scripts/codex-agent-api";
+import type { JsonRecord } from "../lib/codex-agent-api";
 
 test("SSE output and API snapshots update with an unchanged ledger; cancellation closes the observer", async () => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), "output-events-"));

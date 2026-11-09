@@ -3,20 +3,20 @@ import {
   compatibilityReport,
   selectedRelease,
   downgradeApproval,
-} from "./service-compatibility";
-import { maintenanceCheck, maintenanceApply } from "./ledger-maintenance";
+} from "../lib/service-compatibility";
+import { maintenanceCheck, maintenanceApply } from "../lib/ledger-maintenance";
 import { writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { servicePaths } from "./service-paths";
-import { ServiceState } from "./service-state";
-import { ServiceAuth } from "./service-auth";
-import { ensureService, runDaemon, serviceStatus } from "./service-lifecycle";
-import { agentLease } from "./service-http";
-import { installRelease, switchRelease } from "./service-maintenance";
-import { importRun } from "./service-import";
-import { ContractError, requireCondition } from "./errors";
-import { requireApi } from "./service-contract";
+import { servicePaths } from "../lib/service-paths";
+import { ServiceState } from "../lib/service-state";
+import { ServiceAuth } from "../lib/service-auth";
+import { ensureService, runDaemon, serviceStatus } from "../lib/service-lifecycle";
+import { agentLease } from "../lib/service-http";
+import { installRelease, switchRelease } from "../lib/service-maintenance";
+import { importRun } from "../lib/service-import";
+import { ContractError, requireCondition } from "../lib/errors";
+import { requireApi } from "../lib/service-contract";
 
 const actor = z
   .object({

@@ -1,4 +1,4 @@
-import type { PRSnapshot } from "../scripts/pr-details";
+import type { PRSnapshot } from "../lib/pr-details";
 
 const cache = new Map<string, { snapshot: PRSnapshot; at: number }>();
 const flights = new Map<string, Promise<PRSnapshot>>();
