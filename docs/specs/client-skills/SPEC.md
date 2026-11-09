@@ -44,6 +44,14 @@ FFI 路径缓冲区 MUST 在完整系统调用期间保持所有权。文件读�
 
 本地编排网页 MUST 默认横向紧凑展示依赖，保留完整任务标题、交付单元边界、里程碑与全部投影依赖，按布局引擎生成的正交路径渲染；状态更新不得无故重排相同结构，旧异步结果不得覆盖新布局。默认阅读不得以自动缩小整图牺牲文字可读性，用户可主动适配全图或切换纵向。任务视图只有一个交付单元时 MUST 默认网格，其他数量默认看板，显式 URL 布局选择优先并可恢复。独立的单交付单元示例 MUST 使用合成数据，任务前驱、时间、对话、PR、原子步骤和生命周期事实必须一致；预览对话输出不得读取真实会话，注入适配器仅允许隔离开发配置。
 
+### REQ-SKILLS-009
+
+Viewer MUST use the compatibility lifecycle defined by ADR 0026: the newest reader MUST dual-read every supported historical ledger shape; an older viewer MAY be used only as an isolated read-only fallback; an unproven reader MUST block the upgrade. Writes MUST use the current contract and MUST NOT be performed by the fallback reader.
+
+### REQ-SKILLS-010
+
+Automatic ledger migration MUST be limited to deterministic, lossless, idempotent and recoverable transformations with a verified backup and revision/digest fencing. Historical content MUST NOT be automatically cleaned up. Production compatibility code MAY be removed only through an independent release decision after the supported-state inventory, rollback window and maintenance documentation are updated; historical, migration, fallback and rejection tests MUST remain in the repository.
+
 ## Verification
 
 ### VER-SKILLS-001
@@ -94,6 +102,18 @@ FFI 路径缓冲区 MUST 在完整系统调用期间保持所有权。文件读�
 - Method: 依赖路由与边界测试、布局 URL 往返测试、合成快照一致性测试、隔离预览服务输出测试及受控示例视觉验收。
 - Pass condition: 节点不重叠，依赖正交且准确连接卡片边界；横向标题可读；单交付单元默认网格且显式选择可恢复；示例原子进度、对话输出和前驱时间一致，正式配置拒绝合成会话适配器。
 
+### VER-SKILLS-009
+
+- covers: `REQ-SKILLS-009`
+- Method: Candidate preflight against every retained run, dual-reader fixtures, isolated legacy-viewer mutation rejection and rollback-window checks.
+- Pass condition: The newest viewer reads every supported old and current shape, the legacy viewer cannot write or advance state, and an unsupported shape blocks before service control.
+
+### VER-SKILLS-010
+
+- covers: `REQ-SKILLS-010`
+- Method: Deterministic migration replay, backup/digest conflict tests, interruption recovery, explicit cleanup approval tests and retained historical-format regression tests.
+- Pass condition: Only mechanically safe migrations run automatically; cleanup remains explicit; removing production compatibility code does not remove historical or migration test evidence.
+
 ## Visual Evidence
 
 ![单交付单元的依赖图、任务网格与协调进度](assets/orchestration-example.png)
@@ -101,6 +121,7 @@ FFI 路径缓冲区 MUST 在完整系统调用期间保持所有权。文件读�
 ## Related ADRs
 
 - [Bun 直接运行客户端与 Skills](../../adr/0021-bun-source-runtime.md)
+- [Viewer 兼容生命周期与历史状态处置](../../adr/0026-viewer-compatibility-lifecycle.md)
 
 ## References
 
