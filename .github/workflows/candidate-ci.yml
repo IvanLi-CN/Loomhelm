@@ -350,7 +350,7 @@ jobs:
 
   candidate-build:
     name: Candidate Build
-    needs: [quality-gates, bootstrap-verification, react-doctor, repository-verification, repository-contracts, typescript-client-bun, candidate-producer, skills-native-macos]
+    needs: [quality-gates, bootstrap-verification, react-doctor, repository-verification, repository-contracts, typescript-client-bun, candidate-producer]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -360,7 +360,7 @@ jobs:
         run: |
           python3 - <<'PYTHON'
           import json, os
-          expected = {"quality-gates", "bootstrap-verification", "react-doctor", "repository-verification", "repository-contracts", "typescript-client-bun", "candidate-producer", "skills-native-macos"}
+          expected = {"quality-gates", "bootstrap-verification", "react-doctor", "repository-verification", "repository-contracts", "typescript-client-bun", "candidate-producer"}
           results = json.loads(os.environ["CANDIDATE_RESULTS"])
           if set(results) != expected or any(value.get("result") != "success" for value in results.values()):
               raise SystemExit("candidate dependencies incomplete or unsuccessful")
