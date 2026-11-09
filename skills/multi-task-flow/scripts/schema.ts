@@ -485,6 +485,7 @@ export const operation = z
   .strict();
 const eventType = z.enum([
   "plan_approved",
+  "protected_action_approved",
   "plan_revision_proposed",
   "plan_revision_approved",
   "plan_revision_superseded",
