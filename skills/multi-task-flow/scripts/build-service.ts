@@ -4,6 +4,7 @@ import { compatibility } from "../lib/service-contract";
 import { buildId, digest, verifyRelease } from "../lib/service-release";
 import { requireCondition } from "../lib/errors";
 import { copySkillSources } from "../lib/package-source.ts";
+import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
 
 const args = process.argv.slice(2);
 const option = (name: string) => args[args.indexOf(name) + 1];
@@ -24,7 +25,7 @@ mkdirSync(output, { recursive: true, mode: 0o700 });
 const files: Record<string,string> = copySkillSources(root, output, { dependencies: true });
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const runtimeSha = digest(readFileSync(executable));
-const manifest = { schema_version: 2 as const, source_sha: source.stdout.toString().trim(), service_version: version, platform: `${process.platform}-${process.arch}` as "darwin-arm64", api_versions: compatibility.api_versions, frontend_contracts: compatibility.frontend_contracts, readable: compatibility.readable, writable: compatibility.writable, readable_releases: [version], migration_guides: [], files };
+const manifest = { schema_version: 2 as const, source_sha: source.stdout.toString().trim(), skill_id: SKILL_ID, skill_version: SKILL_VERSION, ledger_contract: 2, viewer_contract: VIEWER_CONTRACT, service_version: version, platform: `${process.platform}-${process.arch}` as "darwin-arm64", api_versions: compatibility.api_versions, frontend_contracts: compatibility.frontend_contracts, readable: compatibility.readable, writable: compatibility.writable, readable_releases: [version], migration_guides: [], files };
 // Bind resource metadata before adding the launcher itself, avoiding a self-hash cycle.
 const resourceIdentity = buildId(manifest);
 const bootstrap = `import * as fs from "node:fs";import * as path from "node:path";import{createHash}from"node:crypto";

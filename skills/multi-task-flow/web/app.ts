@@ -451,6 +451,12 @@ function render(): void {
   $("project-name").textContent = `${data.orchestration.repository.owner} / ${data.orchestration.repository.name}`; $("updated").replaceChildren(document.createTextNode("数据更新 "), renderTimestamp(data.orchestration.updated_at));
   $("revision").textContent = `rev ${data.orchestration.revision}`;
   const currentPhase = derivePhase(data.tasks, data.execution_phase); phase = currentPhase;
+  if (data.orchestration.version) $("updated").append(document.createTextNode(` · Skill ${data.orchestration.version.skill_version} · Viewer contract ${data.orchestration.version.viewer_contract}`));
+  if (data.orchestration.version_status?.state !== "current") {
+    const reason = data.orchestration.version_status?.reason ?? "版本状态未知";
+    $("operation-warning").hidden = false;
+    $("operation-warning").textContent = `版本诊断：${reason}`;
+  }
   $("operation-warning").hidden = data.warnings.length === 0; $("operation-warning").textContent = data.warnings.length ? `${data.warnings.length} 项外部操作结果待核实。` : "";
   const planWarnings = data.plan_warnings ?? [];
   const planWarning = $("plan-warning");

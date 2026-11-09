@@ -1,17 +1,18 @@
 ---
 name: multi-task-flow
 description: Coordinate a dependency-driven Codex task through an isolated JSON ledger, on-demand delivery-unit and task conversations, PR coordination, and an authenticated local dashboard.
+version: 2.4.0
 ---
 
 # Multi-task flow
 
 ## 术语约定
 
-本文统一使用以下双语标准称谓：主 Agent（main Agent）负责整个编排；交付协调者（Delivery coordinator）负责所属交付单元；任务 Agent（Task Agent）负责所属子任务。英文名称是稳定的运行时角色标识，中文名称是面向读者的正式称谓，两者不得互相删减或替换为其他别名。
+本文统一使用以下双语标准称谓：主 Agent（main Agent）负责整个编排；交付 Agent（Delivery Agent）负责所属交付单元；任务 Agent（Task Agent）负责所属子任务。英文名称是稳定的运行时角色标识，中文名称是面向读者的正式称谓，两者不得互相删减或替换为其他别名。
 
-Use for an owner-approved multi-conversation flow with explicit task dependencies. This Skill has its own input contract and runtime lifecycle; it is independent from `$dev-plan` and does not migrate or modify existing runs. Initialization is a mutating runtime action: do not invoke this Skill for read-only review, diagnosis, code exploration, or plan-only work. The 主 Agent（main Agent） creates and manages peer delivery-unit and task conversations as needed. The 交付协调者（Delivery coordinator） owns its parent PR and child PR acceptance; the 任务 Agent（Task Agent） owns its subtask and follow PRs. The 主 Agent（main Agent） schedules; it accepts child PRs only for its own bootstrap delivery unit.
+Use for an owner-approved multi-conversation flow with explicit task dependencies. This Skill has its own input contract and runtime lifecycle; it is independent from `$dev-plan` and does not migrate or modify existing runs. Initialization is a mutating runtime action: do not invoke this Skill for read-only review, diagnosis, code exploration, or plan-only work. The 主 Agent（main Agent） creates and manages peer delivery-unit and task conversations as needed. The 交付 Agent（Delivery Agent） owns its parent PR and child PR acceptance; the 任务 Agent（Task Agent） owns its subtask and follow PRs. The 主 Agent（main Agent） schedules; it accepts child PRs only for its own bootstrap delivery unit.
 
-Each run may contain one `bootstrap` delivery unit followed by zero or more `regular` delivery units. Bootstrap is the only main-owned unit: the bound main conversation may commit the initial SPEC/ADR/plan documents and manage the first parent PR. It uses `owner_kind: "main"`, has no delivery-unit conversation binding, and must be first. Regular units retain the delivery-unit-owned contract and require an independent 交付协调者（Delivery coordinator） conversation before activation. Parent PRs are serial by default; regular units may run in parallel only when dependencies allow it. Delivery-unit kind, ownership and delivery-unit conversation binding cannot be rewritten through ordinary delivery-unit updates or plan revisions. This release provides no in-place ownership-transfer command; an existing run retains its current ownership. Initialize the planned bootstrap before publishing its parent PR, then record workspace and publication receipts in the same main-owned workspace.
+Each run may contain one `bootstrap` delivery unit followed by zero or more `regular` delivery units. Bootstrap is the only main-owned unit: the bound main conversation may commit the initial SPEC/ADR/plan documents and manage the first parent PR. It uses `owner_kind: "main"`, has no delivery-unit conversation binding, and must be first. Regular units retain the delivery-unit-owned contract and require an independent 交付 Agent（Delivery Agent） conversation before activation. Parent PRs are serial by default; regular units may run in parallel only when dependencies allow it. Delivery-unit kind, ownership and delivery-unit conversation binding cannot be rewritten through ordinary delivery-unit updates or plan revisions. This release provides no in-place ownership-transfer command; an existing run retains its current ownership. Initialize the planned bootstrap before publishing its parent PR, then record workspace and publication receipts in the same main-owned workspace.
 
 This remains an active top-level flow for dependency-driven delivery. An approved run requires at least two task nodes when its topology claims multiple tasks, and the authoritative runtime ledger is the source of truth for task, group, dependency, and closeout state.
 
@@ -83,7 +84,7 @@ native request ID 一旦绑定，完整创建参数（含 transport、cwd、prom
 
 ## 开工前基线
 
-创建时只记录 `native_evidence.initial_head`；它不是开发基线。正式派发包含 run/target、仓库、归属、范围、基线与验收要求。交付协调者（Delivery coordinator）必须 fetch 已核验远端的主干并记录真实 SHA 和 fetched_at，任务 Agent（Task Agent）继承所属交付单元当前父分支已核验 SHA。仅允许在本次新建、干净且 Codex 归属一致的工作区对齐并建立工作分支。fetch 失败、脏工作区或归属不明必须阻塞，不覆盖文件，不使用缓存替代 fetch。
+创建时只记录 `native_evidence.initial_head`；它不是开发基线。正式派发包含 run/target、仓库、归属、范围、基线与验收要求。交付 Agent（Delivery Agent）必须 fetch 已核验远端的主干并记录真实 SHA 和 fetched_at，任务 Agent（Task Agent）继承所属交付单元当前父分支已核验 SHA。仅允许在本次新建、干净且 Codex 归属一致的工作区对齐并建立工作分支。fetch 失败、脏工作区或归属不明必须阻塞，不覆盖文件，不使用缓存替代 fetch。
 
 Agent 提供资源证据，由主对话 `resource-update` 注册 active worktree/branch；目标 owner 调用 `lifecycle-record` 的 `workspace_ready`，新 CLI dispatch 还需 `baseline: { sha, head, clean: true, source, fetched_at? }`，SHA 必须与 HEAD 相同，交付单元 fetched_at 不早于 dispatch，任务 SHA 必须匹配交付单元 current_sha。开发基线存于 dispatch 的 `development_baseline`，独立保留创建初始 HEAD。任务和交付单元协调进入 running 均受此门禁保护；历史已绑定对话不追加此要求。
 

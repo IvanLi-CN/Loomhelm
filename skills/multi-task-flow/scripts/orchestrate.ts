@@ -31,6 +31,7 @@ import {
 import { defaultRoot, LedgerStore } from "../lib/store";
 import { prepareNativeNotification, reconcileNotification } from "../lib/notification-delivery";
 import { migrationCanonicalInput } from "../lib/store-migration";
+import { versionEnvelope } from "../lib/contract";
 import { buildView } from "../lib/view";
 import { checkViewerCompatibility, renewViewerUsage } from "../lib/service-usage";
 
@@ -225,6 +226,7 @@ try {
       schema_version: 2,
       source_schema_version: null,
       contract_version: 2,
+      version: versionEnvelope,
       orchestration_id: parsed.run_id,
       revision: 0,
       repository: parsed.payload.repository,
