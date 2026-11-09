@@ -79,7 +79,9 @@ function releaseReadOnlyView(root: string, ledger: unknown): boolean {
       env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" },
     });
     if (result.status !== 0) return false;
-    z.object({ ok: z.literal(true), code: z.literal("OK"), result: z.object({ view: z.record(z.string(), z.unknown()) }).strict() }).strict().parse(JSON.parse(result.stdout.toString()));
+    const parsed = z.object({ ok: z.literal(true), code: z.literal("OK"), result: z.object({ view: z.record(z.string(), z.unknown()) }).strict() }).strict().parse(JSON.parse(result.stdout.toString()));
+    const view = parsed.result.view as { orchestration?: { id?: unknown; revision?: unknown } };
+    if (view.orchestration?.id !== (ledger as { orchestration_id?: unknown }).orchestration_id || view.orchestration?.revision !== (ledger as { revision?: unknown }).revision) return false;
     return true;
   } catch { return false; }
 }
@@ -160,6 +162,8 @@ export function compatibilityReport(
         const bytes = readRegularNoFollow(
           join(root, entry.name, "ledger.json"),
           state.paths.root,
+          undefined,
+          256 * 1024 * 1024,
         );
         row.ledger_sha256 = digest(bytes);
         const raw = JSON.parse(bytes.toString("utf8"));

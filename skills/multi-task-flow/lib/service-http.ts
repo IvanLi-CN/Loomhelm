@@ -1,6 +1,6 @@
 import type { ConnectObserver } from "../lib/conversation-output";
 import { Runtime } from "../../bin/modules/core/runtime";
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { z } from "zod";
@@ -132,6 +132,8 @@ function readOnlyView(releaseRoot: string, ledger: unknown, planId?: string) {
   if (result.status !== 0) throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer could not read this run", 2);
   try {
     const parsed = z.object({ ok: z.literal(true), code: z.literal("OK"), result: z.object({ view: z.record(z.string(), z.unknown()) }).strict() }).strict().parse(JSON.parse(result.stdout));
+    const view = parsed.result.view as { orchestration?: { id?: unknown; revision?: unknown } };
+    if (view.orchestration?.id !== (ledger as { orchestration_id?: unknown }).orchestration_id || view.orchestration?.revision !== (ledger as { revision?: unknown }).revision) throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer returned a stale view", 2);
     return parsed.result.view;
   } catch { throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer returned no readable view", 2); }
 }
@@ -162,11 +164,8 @@ export async function startSharedViewer(
     try {
       const root = join(state.paths.releases, previous);
       const release = verifyRelease(root);
-      if (release.schema_version !== 2) return null;
-      for (const relative of ["skills/multi-task-flow/lib/service.ts", "skills/multi-task-flow/scripts/service.ts"]) {
-        try { if (readFileSync(join(root, relative), "utf8").includes('command === "read-only-view"')) return root; } catch {}
-      }
-      return null;
+      if (release.schema_version !== 2 || release.build_id !== previous) return null;
+      return root;
     } catch { return null; }
   })();
   const resources = new Map<string, ReturnType<typeof createRunDashboard>>();
