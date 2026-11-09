@@ -22,21 +22,21 @@
 
 交付单元在 parent PR 合并后完成合并 SHA 的 CI、适用的发布/部署/验证、已知 follow PR 对账及资源事实确认的终态。`integrated` 只表示贡献已合入，不能单独表示交付单元已收口。
 
-### 协调者就绪
+### 交付 Agent 就绪
 
-regular 交付单元在激活前已经绑定独立 Delivery coordinator conversation，并具备后续 parent branch/PR 协调所需的身份。Proposal 阶段可以是未绑定状态，但未绑定不是就绪事实。
+regular 交付单元在激活前已经绑定独立交付 Agent conversation，并具备后续 parent branch、parent PR 和收口所需的身份。Proposal 阶段可以是未绑定状态，但未绑定不是就绪事实。
 
 ### 任务 Agent
 
-拥有一个任务完整生命周期的唯一执行 Agent，负责实现、验收、自证、创建并合并 child PR，以及记录合并结果。
+拥有一个独立实现任务完整生命周期的唯一执行 Agent，负责任务实现、任务验收、自证、创建并合并自己的 child PR，以及记录合并结果。并非每个任务都需要 Task Agent；main-owned、交付 Agent-owned 和只产出验证证据的任务可以使用其他执行策略。
 
 _Avoid_: 子任务审核人、临时接管 Agent
 
-### 交付协调者
+### 交付 Agent
 
-拥有一个交付单元的 parent branch 和 parent PR 的协调 Agent，负责编排和集成，不审核正常路径中的 child PR。
+拥有一个 regular 交付单元的 parent branch 和 parent PR，对 parent PR、合并后的 CI、已声明的合并后交付义务和收口负责。不合并、rebase 或重新审核正常路径中的 child PR；bootstrap 由 Main Agent 直接兼任交付 Agent。
 
-_Avoid_: child PR 审核人、任务接管者
+_Avoid_: 交付协调者、child PR 审核人、任务接管者
 
 ### 主 Agent
 
@@ -49,6 +49,18 @@ _Avoid_: 总审查人
 任务 Agent 针对任务边界、验收条件、测试、PR head/base 和合并结果提交的结构化质量事实。
 
 _Avoid_: 交付协调者审核
+
+### 任务执行策略
+
+每个任务显式声明执行 owner、对话策略和交付方式，三者共同决定任务由谁执行、是否创建新对话以及如何交付结果；任务存在本身不等于必须创建 Task Agent 或 child PR。
+
+### 验证证据
+
+通过结构化报告、日志、CI 结果、演练结果或校验结果证明任务完成的交付方式，不创建 child PR；它不是 Agent 身份，也不是代码质量复核。
+
+### 合并后交付义务
+
+在 delivery unit 的 parent PR 合并后仍必须完成、且已在交付合同中预先声明的 CI、部署、验证、发布或 follow PR 对账事项；不得在合并后临时扩大范围。
 
 ### 异常升级
 

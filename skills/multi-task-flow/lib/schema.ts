@@ -356,6 +356,18 @@ export const task = z
     disposition: z
       .enum(["active", "superseded", "abandoned"])
       .default("active"),
+    execution_owner: z
+      .enum(["main", "delivery_agent", "task_agent"])
+      .nullable()
+      .default(null),
+    conversation_policy: z
+      .enum(["main_owned", "delivery_owned", "task_agent", "none"])
+      .nullable()
+      .default(null),
+    delivery_policy: z
+      .enum(["parent_pr", "child_pr", "evidence", "none"])
+      .nullable()
+      .default(null),
     superseded_by_task_id: nullableText.default(null),
     atoms: z.array(
       z
@@ -687,6 +699,37 @@ export const ledgerSchema = z
 export type Ledger = z.infer<typeof ledgerSchema>;
 export type Plan = z.infer<typeof plan>;
 export type Task = z.infer<typeof task>;
+
+export type TaskExecutionPolicyIssue = { code: string; message: string };
+
+export function taskExecutionPolicyIssues(
+  candidate: Pick<Task, "execution_owner" | "conversation_policy" | "delivery_policy">,
+): TaskExecutionPolicyIssue[] {
+  const { execution_owner: owner, conversation_policy: conversation, delivery_policy: delivery } = candidate;
+  if (owner === null && conversation === null && delivery === null) return [];
+  const issues: TaskExecutionPolicyIssue[] = [];
+  if (owner === null || conversation === null || delivery === null) {
+    issues.push({ code: "TASK_EXECUTION_POLICY_INCOMPLETE", message: "任务执行归属、对话策略和交付策略必须同时声明" });
+    return issues;
+  }
+  if (owner === "main" && conversation !== "main_owned") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "Main Agent 任务必须使用 main_owned 对话策略" });
+  if (owner === "task_agent" && conversation !== "task_agent") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "Task Agent 任务必须使用 task_agent 对话策略" });
+  if (owner === "delivery_agent" && conversation !== "delivery_owned") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "交付 Agent 任务必须使用 delivery_owned 对话策略" });
+  if (owner === "main" && delivery === "child_pr") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "Main Agent 不得拥有 child PR" });
+  if (owner === "delivery_agent" && delivery === "child_pr") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "交付 Agent 不得拥有 child PR" });
+  if (owner === "task_agent" && delivery === "parent_pr") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "Task Agent 不得拥有 parent PR" });
+  if (conversation === "none" && ["child_pr", "evidence"].includes(delivery)) issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "无对话任务不能声明 child PR 或验证证据" });
+  return issues;
+}
+
+export function validateTaskExecutionPolicies(tasks: readonly Task[], requireComplete = false): void {
+  for (const candidate of tasks) {
+    if (requireComplete && candidate.execution_owner === null && candidate.conversation_policy === null && candidate.delivery_policy === null)
+      requireCondition(false, "TASK_EXECUTION_POLICY_INCOMPLETE", `${candidate.id}: 任务执行归属、对话策略和交付策略必须声明`, 3);
+    const issues = taskExecutionPolicyIssues(candidate);
+    requireCondition(issues.length === 0, issues[0]?.code ?? "TASK_EXECUTION_POLICY_INVALID", `${candidate.id}: ${issues.map((issue) => issue.message).join("；")}`, 3);
+  }
+}
 export function isContributionKind(kind: Task["kind"]): boolean {
   return kind === "contribution" || kind === "development";
 }

@@ -36,6 +36,7 @@ import {
   type Ledger,
   type Plan,
   type Task,
+  validateTaskExecutionPolicies,
 } from "../lib/schema";
 import {
   buildPlanRevision,
@@ -183,6 +184,7 @@ function legacyLedger(ledger: Ledger): boolean {
 }
 function ensureSchedulable(ledger: Ledger, candidate: Plan): void {
   if (legacyLedger(ledger) || ledger.source_schema_version === 1) return;
+  validateTaskExecutionPolicies(ledger.tasks);
   validateSchedulablePlan(candidate);
   if (ledger.schema_version !== 2) return;
   const contributionTasks = ledger.tasks.filter(
@@ -815,6 +817,9 @@ function taskRuntimeState(task: Task): Record<string, unknown> {
     finished_at: task.finished_at,
     blocker: task.blocker,
     assignment_history: task.assignment_history,
+    execution_owner: task.execution_owner,
+    conversation_policy: task.conversation_policy,
+    delivery_policy: task.delivery_policy,
   };
 }
 
@@ -824,6 +829,9 @@ function taskBoundary(task: Task): Record<string, unknown> {
     group_id: task.group_id,
     owned_surfaces: task.owned_surfaces,
     atoms: task.atoms.map(({ id, title }) => ({ id, title })),
+    execution_owner: task.execution_owner,
+    conversation_policy: task.conversation_policy,
+    delivery_policy: task.delivery_policy,
   };
 }
 
@@ -959,6 +967,7 @@ export function execute(
       );
       const groups = parse(z.array(group), payload.groups);
       const tasks = parse(z.array(task), payload.tasks);
+      validateTaskExecutionPolicies(tasks, Boolean(proposed.plan_handoff));
       for (const item of groups)
         if (
           !ledger.groups.some((old) => old.id === item.id) &&

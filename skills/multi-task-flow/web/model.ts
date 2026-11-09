@@ -59,6 +59,11 @@ export type Task = {
   profile_freeze_reason?: string | null;
   execution_profile_source?: string | null;
   execution_profile_rule?: string | null;
+  execution_owner?: "main" | "delivery_agent" | "task_agent" | null;
+  conversation_policy?: "main_owned" | "delivery_owned" | "task_agent" | "none" | null;
+  delivery_policy?: "parent_pr" | "child_pr" | "evidence" | "none" | null;
+  dispatch_readiness?: "ready" | "blocked" | "unknown";
+  dispatch_diagnostics?: { code: string; message: string }[];
 };
 
 export type Group = {
@@ -83,6 +88,9 @@ export type Group = {
   profile_freeze_reason?: string | null;
   execution_profile_source?: string | null;
   execution_profile_rule?: string | null;
+  delivery_agent_readiness?: "bound" | "unbound" | "not_applicable" | "unknown";
+  dispatch_readiness?: "ready" | "blocked" | "unknown";
+  dispatch_diagnostics?: { code: string; message: string }[];
 };
 
 export type Node = {
@@ -127,6 +135,8 @@ export type View = {
     phase?: "planning" | "implementation";
     approval_pending: boolean;
     scheduling_eligible?: boolean;
+    dispatch_readiness?: "ready" | "blocked" | "unknown";
+    delivery_agent_readiness?: "bound" | "unbound" | "not_applicable" | "unknown";
     authorization_label?: string;
     completeness?: {
       status: "complete" | "blocked";

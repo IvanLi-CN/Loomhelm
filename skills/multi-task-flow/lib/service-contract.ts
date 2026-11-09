@@ -90,6 +90,20 @@ export function requireLedgerCompatibility(
     "INCOMPATIBLE_LEDGER",
     "Ledger schema/contract is not supported; explicit migration is required",
   );
+  if (mode === "write" && ledgerContract(value) === "schema-2/contract-2") {
+    const tasks = (value as { tasks?: unknown }).tasks;
+    const hasUndeclaredPolicy = Array.isArray(tasks) && tasks.some((item) => {
+      if (!item || typeof item !== "object") return false;
+      const task = item as Record<string, unknown>;
+      return !("execution_owner" in task) || !("conversation_policy" in task) || !("delivery_policy" in task);
+    });
+    requireCondition(
+      !hasUndeclaredPolicy,
+      "HISTORICAL_LEDGER_READ_ONLY",
+      "schema2/contract2 ledger without task execution policies is read-only; explicit migration is required",
+      4,
+    );
+  }
 }
 
 export function requireApi(version: number): void {
