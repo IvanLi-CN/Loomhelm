@@ -14759,7 +14759,7 @@
       "path": "skills/multi-task-flow/tests/service-fixture.ts",
       "sourceBlob": "7ad70a1feb5391af9b326c8a20db52e3f14a901b",
       "sourceSha256": "2059550a06f6ba196e4665eac1e93f1b561ccf4041b4fc8b816f18b106d53b80",
-      "installedSha256": "2252c3d6d4b541aa8bd493c547ddd95df36204047bf1a27dc5fb0a3bf4a24a6d",
+      "installedSha256": "c3efc5ffa7caecbe5b9a671f86cdbd20e20c8b734c13447910d1af06c7f3036a",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
