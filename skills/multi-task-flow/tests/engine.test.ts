@@ -168,6 +168,11 @@ function approve(ledger: ReturnType<typeof fixture>) {
       authorized_action_ids: [],
     }),
   );
+  apply(ledger, "protected-approve", request(ledger, "approve-parent", {
+    kind: "delivery_unit_merge",
+    target_id: "g",
+    approval_id: "parent-approved",
+  }));
 }
 
 test("runtime observation persists the formal agent_idle task state and restores it", () => {
@@ -316,6 +321,11 @@ function approveV2(ledger: ReturnType<typeof v2Fixture>) {
       ],
     }),
   );
+  apply(ledger, "protected-approve", request(ledger, "approve-v2-parent", {
+    kind: "delivery_unit_merge",
+    target_id: "g",
+    approval_id: "parent-approved-v2",
+  }));
 }
 function providerBranchReceipt(branch: string, sha: string) {
   return {
@@ -395,7 +405,7 @@ describe("orchestration state", () => {
     ledger.groups[0].parent_pr = pr;
     ledger.groups[0].current_sha = head;
     approve(ledger);
-    const payload = { mode: "parent", operation_id: "parent-merge", group_id: "g", target_branch: "main", expected_base_sha: base, expected_head_sha: head, pr };
+    const payload = { mode: "parent", operation_id: "parent-merge", group_id: "g", target_branch: "main", expected_base_sha: base, expected_head_sha: head, owner_approval_id: "parent-approved", pr };
     expect(() => apply(ledger, "merge-claim", request(ledger, "premature-parent", payload))).toThrow("Contribution tasks are not integrated");
     for (const task of ledger.tasks) task.state = "integrated";
     expect(() => apply(ledger, "merge-claim", request(ledger, "main-parent", payload))).not.toThrow();
