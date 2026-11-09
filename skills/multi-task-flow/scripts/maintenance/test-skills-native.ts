@@ -4,8 +4,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { tryLockFile, readRegularNoFollow } from '../bin/modules/core/security_file.ts';
-import { renameNoReplace } from '../bin/modules/visual/secure_io.ts';
+import { tryLockFile, readRegularNoFollow } from '../../../bin/modules/core/security_file.ts';
+import { renameNoReplace } from '../../../bin/modules/visual/secure_io.ts';
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'loomhelm-posix-')));
 try {
   writeFileSync(join(root, 'one'), 'one'); writeFileSync(join(root, 'two'), 'two');
