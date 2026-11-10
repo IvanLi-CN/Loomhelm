@@ -7,5 +7,6 @@ export * from './tasks/ledger.ts';
 export * from './git.ts';
 export * from './dispatch/index.ts';
 export * from './toolkit.ts';
+export * from './release.ts';
 
 export * from './version.ts';
