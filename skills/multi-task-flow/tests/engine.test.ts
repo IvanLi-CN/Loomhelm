@@ -215,6 +215,26 @@ test("idle during startup still requires the first task-start fact", () => {
   expect(ledger.tasks[1]!.agent_resume_state).toBeUndefined();
 });
 
+test("bound main conversation can record a main-owned task and its atom", () => {
+  const ledger = fixture();
+  ledger.plans[0]!.lifecycle = "approved";
+  ledger.plans[0]!.approval_id = "approved";
+  ledger.control.approval_id = "approved";
+  ledger.plans[0]!.atoms = [{ id: "atom-a", title: "a", task_id: "a", purpose: "fixture task", output: "fixture output" }];
+  const task = ledger.tasks[0]!;
+  task.execution_owner = "main";
+  task.conversation_policy = "main_owned";
+  task.delivery_policy = "parent_pr";
+  task.atoms = [{ id: "atom-a", title: "a", status: "planned" }];
+  apply(ledger, "task-update", request(ledger, "main-start", { task_id: task.id, state: "running", occurred_at: at }, main));
+  expect(ledger.tasks[0]!.state).toBe("running");
+  expect(ledger.tasks[0]!.started_at).toBe(at);
+  apply(ledger, "atom-update", request(ledger, "main-atom-start", { task_id: task.id, atom_id: "atom-a", state: "running" }, main));
+  apply(ledger, "atom-update", request(ledger, "main-atom", { task_id: task.id, atom_id: "atom-a", state: "completed" }, main));
+  expect(ledger.tasks[0]!.atoms[0]!.status).toBe("completed");
+  expect(ledger.events.at(-1)?.type).toBe("atom_updated");
+});
+
 test("terminal task creates a pending conversation archive resource", () => {
   const ledger = fixture();
   const task = ledger.tasks[1]!;

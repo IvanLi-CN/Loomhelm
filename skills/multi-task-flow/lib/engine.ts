@@ -2465,10 +2465,15 @@ export function execute(
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
+      const mainOwned = target.execution_owner === "main" &&
+        target.conversation_policy === "main_owned" &&
+        request.actor.role === "main" &&
+        request.actor.thread_id === ledger.control.owner_thread_id;
       const state = z
         .enum(["running", "waiting", "blocked", "completed", "closed"])
         .parse(payload.state);
       const allowed: Record<string, string[]> = {
+        planned: mainOwned ? ["running", "waiting", "blocked"] : [],
         starting: ["running", "waiting", "blocked"],
         running: ["waiting", "blocked"],
         agent_idle: ["running", "waiting", "blocked"],
@@ -2518,6 +2523,13 @@ export function execute(
           4,
         );
       }
+      if (state === "running" && previousState === "planned")
+        requireCondition(
+          mainOwned && ready(ledger, target.id),
+          "MAIN_TASK_REQUIRED",
+          "Only the bound main conversation can start a main-owned task directly",
+          3,
+        );
       if (state === "completed")
         requireCondition(
           typeof payload.evidence === "string" && payload.evidence.length > 0,
@@ -2557,7 +2569,7 @@ export function execute(
           : null;
       if (state === "closed" && target.lifecycle && !legacyLedger(ledger))
         target.lifecycle.closed = "passed";
-      if (state === "running" && previousState === "starting")
+      if (state === "running" && (previousState === "starting" || previousState === "planned"))
         target.started_at = z.iso
           .datetime({ offset: false })
           .parse(payload.occurred_at);
@@ -2629,8 +2641,12 @@ export function execute(
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
+      const mainOwned = target.execution_owner === "main" &&
+        target.conversation_policy === "main_owned" &&
+        request.actor.role === "main" &&
+        request.actor.thread_id === ledger.control.owner_thread_id;
       requireCondition(
-        request.actor.role === "task" && taskExecutionState(target) === "running",
+        (request.actor.role === "task" || mainOwned) && taskExecutionState(target) === "running",
         "FORBIDDEN",
         "The running task owner updates its atoms",
         3,
