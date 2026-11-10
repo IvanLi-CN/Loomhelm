@@ -3512,7 +3512,12 @@ export function execute(
               (item) =>
                 item.group_id === groupId && isContributionKind(item.kind),
             )
-            .every((item) => ["integrated", "closed"].includes(item.state)),
+            .every((item) =>
+              ["integrated", "closed"].includes(item.state) ||
+              (item.execution_owner === "main" &&
+                item.conversation_policy === "main_owned" &&
+                item.state === "running" &&
+                item.atoms.every((atom) => atom.status === "completed"))),
           "TASKS_PENDING",
           "Contribution tasks are not integrated",
           4,
@@ -3710,6 +3715,18 @@ export function execute(
           owner.merge_sha = evidence.sha;
           if (owner.lifecycle && !legacyLedger(ledger))
             owner.lifecycle.pr_merged = "passed";
+          for (const task of ledger.tasks.filter(
+            (item) =>
+              item.group_id === owner.id &&
+              item.execution_owner === "main" &&
+              item.conversation_policy === "main_owned" &&
+              item.state === "running",
+          )) {
+            task.state = "integrated";
+            task.finished_at = evidence.observed_at;
+            if (task.lifecycle && !legacyLedger(ledger))
+              task.lifecycle.pr_merged = "passed";
+          }
         } else if (op.request.mode === "follow") {
           const follow = find(
             ledger.follow_prs,
