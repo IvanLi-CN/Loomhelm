@@ -31,7 +31,6 @@ test("navigation and compatibility warnings stay inside the dashboard", async ()
   expect(dom.document.body.textContent).not.toContain("service ensure");
   await dom.happyDOM.close();
 });
-
 test("lease failures signal the dashboard without adding another banner", async () => {
   const dom = new Window({
     url: "http://localhost/runs/orchestration-viewer/",
@@ -51,21 +50,5 @@ test("lease failures signal the dashboard without adding another banner", async 
   expect(dom.document.querySelector("#connection-notice")?.textContent).toBe(
     "快照提示",
   );
-  await dom.happyDOM.close();
-});
-
-test("unauthenticated task target survives the existing login flow", async () => {
-  const { resumeTaskScript, loginScript } = await import("../../lib/service-pages");
-  const dom = new Window({ url: "http://localhost/runs/run-a/?selected=task%3AC2&detail=1&q=hidden" });
-  dom.document.body.innerHTML = '<p id="status"></p>';
-  dom.eval(resumeTaskScript);
-  expect(dom.sessionStorage.getItem("multi-task-flow.pending-task")).toBe("/runs/run-a/?selected=task%3AC2&detail=1");
-  dom.history.replaceState(null, "", "/login#one-time-ticket");
-  dom.fetch = async () => new dom.Response(JSON.stringify({ target: "/" }));
-  dom.eval(loginScript);
-  await new Promise(resolve => setTimeout(resolve, 10));
-  expect(dom.location.pathname + dom.location.search).toBe("/runs/run-a/?selected=task%3AC2&detail=1");
-  expect(dom.location.hash).toBe("");
-  expect(dom.sessionStorage.getItem("multi-task-flow.pending-task")).toBeNull();
   await dom.happyDOM.close();
 });

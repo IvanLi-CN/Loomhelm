@@ -25,7 +25,7 @@ export const DEFAULT_VIEW_STATE: ViewState = {
   actualStart: null, actualEnd: null,
 };
 
-const idPattern = /^[A-Za-z0-9_-]{1,128}$/;
+const idPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const tabs = new Set<DashboardTab>(["graph", "planned", "actual"]);
 const taskLayouts = new Set<TaskLayout>(["board", "grid"]);
 
@@ -74,7 +74,7 @@ function validDateRange(start: string | null, end: string | null): [string | nul
 
 function parseSelection(value: string | null, validation: ViewStateValidation): Selection | null {
   if (!value) return null;
-  const match = /^(task|group):([A-Za-z0-9_-]{1,128})$/.exec(value);
+  const match = /^(task|group):([A-Za-z0-9][A-Za-z0-9_.-]{0,127})$/.exec(value);
   if (!match) return null;
   const id = validId(match[2] ?? null);
   if (!id) return null;

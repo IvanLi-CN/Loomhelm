@@ -28,6 +28,15 @@ describe("shareable dashboard view state", () => {
     expect(valid.detail).toBe(true);
   });
 
+  test("restores dotted public IDs from authenticated target URLs", () => {
+    const validation = { plans: new Set(["plan.v2"]), tasks: new Set(["task.v2"]) };
+    const state = parseViewState("?selected=task%3Atask.v2&detail=1&plan=plan.v2", validation);
+    expect(state.plan).toBe("plan.v2");
+    expect(state.selected).toEqual({ kind: "task", id: "task.v2" });
+    expect(state.detail).toBe(true);
+    expect(serializeViewState(state)).toContain("selected=task%3Atask.v2");
+  });
+
   test("rewrites the URL from the allowlisted view state only", () => {
     const url = canonicalViewUrl("http://user:pass@localhost/dashboard?token=secret&task_data=private#fragment", { ...DEFAULT_VIEW_STATE, query: "deploy" });
     const parsed = new URL(url);
