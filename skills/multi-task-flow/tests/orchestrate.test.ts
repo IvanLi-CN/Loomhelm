@@ -125,6 +125,33 @@ describe("orchestrate init", () => {
     ).toBe(true);
   });
 
+  test("preserves registered requirements paths during initialisation", async () => {
+    const root = temporaryRoot();
+    const input = structuredClone(initialInput);
+    input.payload.groups[0].requirements_path = "requirements/group-core.md";
+    input.payload.tasks[0].requirements_path = "requirements/task-core.md";
+    const result = await runInit(root, input);
+
+    expect(result.exitCode).toBe(0);
+    const ledger = JSON.parse(readFileSync(join(root, "runs", input.run_id, "ledger.json"), "utf8"));
+    expect(ledger.groups[0].requirements_path).toBe("requirements/group-core.md");
+    expect(ledger.tasks[0].requirements_path).toBe("requirements/task-core.md");
+  });
+
+  test("rejects unsafe initial requirements paths", async () => {
+    const cases = ["../outside.md", "requirements/../outside.md", "requirements/task-core.txt"];
+    for (const requirements_path of cases) {
+      const root = temporaryRoot();
+      const input = structuredClone(initialInput);
+      input.payload.tasks[0].requirements_path = requirements_path;
+      const result = await runInit(root, input);
+
+      expect(result.exitCode).toBe(2);
+      expect(result.output).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+      expect(existsSync(join(root, "runs", input.run_id))).toBe(false);
+    }
+  });
+
   test("defaults a new delivery unit to its independent five-step atom plan", async () => {
     const root = temporaryRoot();
     const input = structuredClone(initialInput);
