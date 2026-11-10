@@ -9,6 +9,7 @@ const manifest = JSON.parse(readFileSync(resolve(root, 'skills/source-manifest.j
 const packageMetadata = JSON.parse(readFileSync(resolve(root, 'clients/typescript/package.json'), 'utf8'));
 const packageConfig = packageMetadata.loomhelm;
 const requireDependencies = process.argv.includes('--require-dependencies');
+const productPartitionBuild = Boolean(process.env.LOOMHELM_PRODUCT_BUILD_VERSION?.trim());
 const exactSemver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 const sha1 = /^[a-f0-9]{40}$/;
 const sha256 = /^[a-f0-9]{64}$/;
@@ -95,6 +96,11 @@ const copyDependencies = (path: string): boolean => {
     writeFileSync(outputPath, launcher, { mode: 0o755 });
     record(`${path}/${child}`, Buffer.from(launcher));
   };
+  const recordPreparedFile = (destination: string, source: string): void => {
+    const stat = lstatSync(source);
+    if (!stat.isFile() || stat.isSymbolicLink() || realpathSync(source) !== source) throw new Error('Unsafe prepared dependency: ' + destination);
+    record(destination, readFileSync(source));
+  };
   const walk = (relativePath: string): void => {
     for (const entry of readdirSync(resolve(sourceRoot, relativePath), { withFileTypes: true })) {
       if (entry.name === '.cache') continue;
@@ -102,8 +108,10 @@ const copyDependencies = (path: string): boolean => {
       const source = resolve(sourceRoot, child);
       if (entry.isSymbolicLink()) {
         if (relativePath !== '.bin' && !relativePath.startsWith(`.bin${sep}`)) throw new Error('Unsafe dependency symlink: ' + `${path}/${child}`);
-        copyBinLauncher(child, source);
+        if (productPartitionBuild) recordPreparedFile(`${path}/${child}`, realpathSync(source));
+        else copyBinLauncher(child, source);
       } else if (entry.isDirectory()) walk(child);
+      else if (productPartitionBuild) recordPreparedFile(`${path}/${child}`, source);
       else copy(`${path}/${child}`, undefined, true);
     }
   };
