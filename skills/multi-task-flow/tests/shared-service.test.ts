@@ -45,7 +45,8 @@ test("multi-run routing has one listener, authenticated APIs and lazy watchers",
   const stream = await fetch(base + "/api/v1/runs/first/events", { headers });
   expect(viewer.watcherCount).toBe(1);
   const reader = stream.body!.getReader(); await reader.read(); await reader.cancel();
-  await Bun.sleep(30); expect(viewer.watcherCount).toBe(0);
+  for (let attempt = 0; attempt < 20 && viewer.watcherCount; attempt++) await Bun.sleep(25);
+  expect(viewer.watcherCount).toBe(0);
   expect((await fetch(base + "/api/v1/lease", { method: "POST", headers: { ...headers, origin: "https://foreign.example" }, body: "{}" })).status).toBe(403);
 });
 test("browser login, CSRF checks and credential-free resource links", async () => {

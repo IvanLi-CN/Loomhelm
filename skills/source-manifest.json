@@ -14767,7 +14767,7 @@
       "path": "skills/multi-task-flow/tests/shared-service.test.ts",
       "sourceBlob": "ec1f11437aae62a1a95ee37da6aba33726b4095b",
       "sourceSha256": "ec28a45c302aaa4acfa4b8cf25a8e7fbf6079b72ab7afdc38e1bc5280d17bba7",
-      "installedSha256": "0b99e68d19047cf30a287dc9686140ab663500896a21407c07f93eaa68b34a55",
+      "installedSha256": "2c054d4d36b7efeef6c5fa44f5c3cc6f47a0270a98869162c7a3adb674c22d9c",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
