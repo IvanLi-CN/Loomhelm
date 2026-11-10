@@ -14199,7 +14199,7 @@
       "path": "skills/multi-task-flow/lib/engine.ts",
       "sourceBlob": "ffd435e1e2211f7aecadab3004a909ff2828df07",
       "sourceSha256": "a4d00c849601abdbe2e08ccb26978fba04ca4042b33213e46c1206aa47273a8b",
-      "installedSha256": "1afd58b73412370565c7a4b7233460317099902be61f3a64480d3c7fe2a8afd5",
+      "installedSha256": "cf7410a01eedf6b2cf0a7a3f0b9cf36b2d56a9d71be78742a83eacf91a38f144",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
