@@ -28,8 +28,8 @@
     "check": "bun x --no-install tsc -p tsconfig.json --noEmit",
     "test": "bun run build && bun test test/*.test.ts",
     "pack:check": "bun run build && bun pm pack --dry-run",
-    "publish:exact": "bun --no-install src/cli.ts release validate --version \"$npm_package_version\" --dist-tag \"$npm_package_version\" && bun pm publish",
-    "publish:compat": "bun --no-install src/cli.ts release validate --version \"$npm_package_version\" --dist-tag \"${npm_config_compat_tag:?set npm_config_compat_tag=compat-vN}\" && bun pm publish --tag \"$npm_config_compat_tag\""
+    "publish:exact": "bun run build && bun --no-install src/cli.ts release validate --version \"$npm_package_version\" --dist-tag \"$npm_package_version\" --require-provenance && bun pm publish",
+    "publish:compat": "bun run build && bun --no-install src/cli.ts release validate --version \"$npm_package_version\" --dist-tag \"${npm_config_compat_tag:?set npm_config_compat_tag=compat-vN}\" --require-provenance && bun pm publish --tag \"$npm_config_compat_tag\""
   },
   "devDependencies": {
     "typescript": "5.9.3",

@@ -1,29 +1,37 @@
-import { buildInfo } from '../build-info.ts';
-import { isCompatibilityDistTag, parseCompatibilityDistTag, validatePublication } from '../release.ts';
+import { buildInfoFromArtifact, requirePublishableArtifact } from '../runtime-identity.ts';
+import { SkillsRuntime } from '../toolkit.ts';
+import { parseCompatibilityDistTag, validatePublication } from '../release.ts';
 
 export async function runReleaseCommand(args: string[]): Promise<void> {
   if (args[0] === 'help' || !args.length) {
-    console.log('release identity | validate --version VERSION [--dist-tag VERSION|compat-vN] [--compatibility-line compat-vN]');
+    console.log('release identity | validate --version VERSION [--dist-tag VERSION|compat-vN] [--compatibility-line compat-vN] [--require-provenance]');
     return;
   }
+  const artifact = await new SkillsRuntime().validate();
+  const buildInfo = buildInfoFromArtifact(artifact);
   if (args[0] === 'identity' && args.length === 1) {
     console.log(JSON.stringify(buildInfo));
     return;
   }
-  if (args[0] !== 'validate') throw new Error('Usage: release identity | validate --version VERSION [--dist-tag VERSION|compat-vN] [--compatibility-line compat-vN]');
+  if (args[0] !== 'validate') throw new Error('Usage: release identity | validate --version VERSION [--dist-tag VERSION|compat-vN] [--compatibility-line compat-vN] [--require-provenance]');
   let version: string | undefined;
   let distTag: string | undefined;
   let compatibilityLine: string | undefined;
+  let requireProvenance = false;
   for (let index = 1; index < args.length; index += 1) {
     const option = args[index];
     if (option === '--version') version = args[++index];
     else if (option === '--dist-tag') distTag = args[++index];
     else if (option === '--compatibility-line') compatibilityLine = args[++index];
+    else if (option === '--require-provenance') requireProvenance = true;
     else throw new Error(`Unknown release option: ${option}`);
   }
   if (!version) throw new Error('Missing --version');
+  if (version !== buildInfo.version) throw new Error(`Publication version does not match artifact version: ${version}`);
+  if (compatibilityLine !== undefined && compatibilityLine !== buildInfo.compatibility_line) throw new Error('Declared compatibility line does not match artifact identity');
+  if (requireProvenance) requirePublishableArtifact(artifact);
   const publication = validatePublication(version, distTag);
-  const declaredLine = compatibilityLine ?? (isCompatibilityDistTag(buildInfo.compatibility_line) ? buildInfo.compatibility_line : undefined);
+  const declaredLine = buildInfo.compatibility_line;
   if (declaredLine) {
     parseCompatibilityDistTag(declaredLine);
     if (distTag && distTag !== version && distTag !== declaredLine) throw new Error('Publication dist-tag does not match the declared compatibility line');
@@ -31,7 +39,7 @@ export async function runReleaseCommand(args: string[]): Promise<void> {
   console.log(JSON.stringify({
     ...publication,
     packageName: buildInfo.package_name,
-    compatibilityLine: declaredLine ?? null,
+    compatibilityLine: declaredLine,
     sourceSha: buildInfo.source_sha,
     mergeSha: buildInfo.merge_sha,
     buildId: buildInfo.build_id,

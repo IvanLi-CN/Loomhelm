@@ -8,5 +8,6 @@ export * from './git.ts';
 export * from './dispatch/index.ts';
 export * from './toolkit.ts';
 export * from './release.ts';
+export * from './runtime-identity.ts';
 
 export * from './version.ts';
