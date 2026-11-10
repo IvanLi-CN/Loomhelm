@@ -83,6 +83,23 @@ test("project text tooltips preserve control IDs and cover disabled and dynamica
   } finally { dispose(); }
 });
 
+test("ordinary control tooltips do not change an owning aria-expanded state", async () => {
+  const trigger = document.createElement("button");
+  trigger.className = "icon-button";
+  trigger.dataset.tooltip = "查看信息";
+  trigger.setAttribute("aria-expanded", "true");
+  const outside = document.createElement("button");
+  document.body.append(trigger, outside);
+  const dispose = installTextTooltips();
+  try {
+    trigger.focus();
+    expect(document.querySelector(".control-tooltip.is-open")).not.toBeNull();
+    pointer(outside, "pointerdown", 0, 0, "mouse");
+    await pause(10);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  } finally { dispose(); }
+});
+
 
 test("plain text never gains a tooltip even if it carries a legacy hint", async () => {
   const output = document.createElement("p"); output.dataset.tooltip = "Agent answer";

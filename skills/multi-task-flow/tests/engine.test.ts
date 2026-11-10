@@ -1097,6 +1097,30 @@ describe("orchestration state", () => {
     ).toThrow("dependencies");
   });
 
+  test("regular delivery units fail closed before coordinator binding", () => {
+    const ledger = fixture();
+    approve(ledger);
+    ledger.groups[0].agent_thread_id = null;
+    const before = JSON.stringify(ledger);
+
+    expect(() =>
+      apply(
+        ledger,
+        "dispatch-claim",
+        request(ledger, "unbound-task", { task_id: "a", operation_id: "unbound-task" }),
+      ),
+    ).toThrow("Task group is not bound");
+    expect(JSON.stringify(ledger)).toBe(before);
+    expect(() =>
+      apply(
+        ledger,
+        "group-execution-update",
+        request(ledger, "unbound-runtime", { group_id: "g", state: "running" }),
+      ),
+    ).toThrow("bound Delivery coordinator");
+    expect(ledger.groups[0].coordination_execution.state).toBe("unknown");
+  });
+
   test("group-start dependencies wait for the parent merge fact", () => {
     const ledger = fixture();
     ledger.plans[0].nodes.push(

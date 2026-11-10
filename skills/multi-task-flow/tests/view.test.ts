@@ -42,6 +42,48 @@ describe("timeline projections", () => {
     expect((view.semantic_context as { field_metadata: Record<string, unknown> }).field_metadata).toHaveProperty("execution_phase");
   });
 
+  test("separates proposal approval from runtime readiness for an unbound regular unit", () => {
+    const ledger = createPlanningDemoLedger(1_767_200_000_000);
+    ledger.groups.find((group) => group.id === "dashboard")!.agent_thread_id = null;
+    const before = JSON.stringify(ledger);
+    const view = buildView(ledger) as any;
+
+    expect(view.plan_state).toMatchObject({
+      proposal: { status: "complete" },
+      approval: { status: "approved" },
+      scheduling: { status: "blocked" },
+      runtime_readiness: { status: "blocked" },
+      scheduling_eligible: false,
+      authorization_label: "Not schedulable",
+    });
+    expect(view.plan_state.runtime_readiness.blockers).toContainEqual(expect.objectContaining({
+      code: "COORDINATOR_NOT_BOUND",
+      group_id: "dashboard",
+      resource: { kind: "conversation", status: "not_created", target_id: "dashboard" },
+    }));
+    expect(view.groups.find((group: any) => group.id === "dashboard")).toMatchObject({
+      coordinator: { status: "not_created", thread_id: null },
+      runtime_readiness: { status: "blocked" },
+    });
+    expect(JSON.stringify(ledger)).toBe(before);
+  });
+
+  test("projects schema2 contract2 readiness without rewriting the historical ledger", () => {
+    const ledger = structuredClone(createPlanningDemoLedger(1_767_200_000_000));
+    ledger.contract_version = 2;
+    ledger.source_schema_version = null;
+    const before = JSON.stringify(ledger);
+    const view = buildView(ledger) as any;
+
+    expect(view.plan_state).toMatchObject({
+      proposal: { status: "complete" },
+      approval: { status: "approved" },
+      scheduling: { status: "eligible" },
+      runtime_readiness: { status: "ready" },
+    });
+    expect(JSON.stringify(ledger)).toBe(before);
+  });
+
   test("warns when a running group has no formal contribution dispatch", () => {
     const ledger = createPlanningDemoLedger(1_767_200_000_000);
     ledger.groups.find((group) => group.id === "dashboard")!.coordination_execution.state = "running";

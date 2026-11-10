@@ -63,6 +63,125 @@ function formalExecutionWarnings(ledger: Ledger): Record<string, unknown>[] {
   });
 }
 
+type ReadinessBlocker = {
+  code: string;
+  group_id: string | null;
+  message: string;
+  resource: {
+    kind: "conversation" | "worktree" | "branch" | "pr";
+    status: "not_created" | "unknown";
+    target_id: string | null;
+  } | null;
+};
+
+type RuntimeReadiness = {
+  status: "ready" | "blocked" | "unknown";
+  blockers: ReadinessBlocker[];
+};
+
+function planGroupIds(ledger: Ledger, plan: Plan): Set<string> {
+  const taskIds = new Set(
+    plan.nodes
+      .filter((node) => node.kind === "task" && node.ref_id)
+      .map((node) => node.ref_id),
+  );
+  const groupIds = new Set(
+    plan.nodes
+      .map((node) => node.group_id)
+      .filter((groupId): groupId is string => groupId !== null),
+  );
+  for (const task of ledger.tasks) {
+    if (taskIds.has(task.id)) groupIds.add(task.group_id);
+  }
+  return groupIds;
+}
+
+function coordinatorProjection(ledger: Ledger, group: Ledger["groups"][number]) {
+  if (group.delivery_unit_kind === "bootstrap") {
+    return ledger.control.owner_thread_id
+      ? { status: "bound" as const, thread_id: ledger.control.owner_thread_id }
+      : { status: "unknown" as const, thread_id: null };
+  }
+  return group.agent_thread_id
+    ? { status: "bound" as const, thread_id: group.agent_thread_id }
+    : { status: "not_created" as const, thread_id: null };
+}
+
+function groupRuntimeReadiness(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+  relevant: boolean,
+): RuntimeReadiness {
+  if (!relevant) return { status: "unknown", blockers: [] };
+  const coordinator = coordinatorProjection(ledger, group);
+  if (coordinator.status === "not_created") {
+    return {
+      status: "blocked",
+      blockers: [{
+        code: "COORDINATOR_NOT_BOUND",
+        group_id: group.id,
+        message: `普通交付单元「${group.title}」尚未绑定交付协调者，运行时派发保持阻断。`,
+        resource: { kind: "conversation", status: "not_created", target_id: group.id },
+      }],
+    };
+  }
+  if (coordinator.status === "unknown") {
+    return {
+      status: "unknown",
+      blockers: [{
+        code: "COORDINATOR_UNKNOWN",
+        group_id: group.id,
+        message: `交付单元「${group.title}」的交付协调者绑定未知。`,
+        resource: { kind: "conversation", status: "unknown", target_id: group.id },
+      }],
+    };
+  }
+  if (group.state === "planned") {
+    return {
+      status: "blocked",
+      blockers: [{
+        code: "GROUP_NOT_ACTIVE",
+        group_id: group.id,
+        message: `交付单元「${group.title}」尚未激活，任务运行时派发保持阻断。`,
+        resource: null,
+      }],
+    };
+  }
+  if (group.state === "blocked") {
+    return {
+      status: "blocked",
+      blockers: [{
+        code: "GROUP_BLOCKED",
+        group_id: group.id,
+        message: `交付单元「${group.title}」当前处于阻塞状态。`,
+        resource: null,
+      }],
+    };
+  }
+  return { status: "ready", blockers: [] };
+}
+
+function runtimeReadinessProjection(ledger: Ledger, plan: Plan): {
+  summary: RuntimeReadiness;
+  byGroup: Map<string, RuntimeReadiness>;
+} {
+  const groupIds = planGroupIds(ledger, plan);
+  const byGroup = new Map(
+    ledger.groups.map((group) => [group.id, groupRuntimeReadiness(ledger, group, groupIds.has(group.id))]),
+  );
+  const summaries = [...byGroup.values()].filter((item) => item.blockers.length > 0);
+  const blockers = summaries.flatMap((item) => item.blockers);
+  return {
+    summary: {
+      status: blockers.some((item) => item.code.endsWith("UNKNOWN"))
+        ? blockers.some((item) => !item.code.endsWith("UNKNOWN")) ? "blocked" : "unknown"
+        : blockers.length ? "blocked" : "ready",
+      blockers,
+    },
+    byGroup,
+  };
+}
+
 export function plannedIntervals(plan: Plan, maxRunning: number): PlannedInterval[] {
   const start = 0;
   const order = new Map(plan.nodes.map((node, index) => [node.id, index]));
@@ -256,6 +375,31 @@ export function buildView(
   const completenessIssues = planCompletenessIssues(plan);
   const isApprovedExecution =
     activePlan.id === executionPlan.id && activePlan.lifecycle === "approved";
+  const runtimeProjection = runtimeReadinessProjection(ledger, plan);
+  const approvalPending =
+    activePlan.id !== executionPlan.id || activePlan.lifecycle !== "approved";
+  const schedulingBlockers: ReadinessBlocker[] = [
+    ...(approvalPending
+      ? [{
+          code: "OWNER_APPROVAL_PENDING",
+          group_id: null,
+          message: "Owner approval 尚未完成，运行时派发保持阻断。",
+          resource: null,
+        }]
+      : []),
+    ...completenessIssues.map((issue) => ({
+      code: issue.code,
+      group_id: null,
+      message: issue.message,
+      resource: null,
+    })),
+    ...runtimeProjection.summary.blockers,
+  ];
+  const schedulingStatus = approvalPending || completenessIssues.length
+    ? "blocked"
+    : runtimeProjection.summary.status === "ready"
+      ? "eligible"
+      : runtimeProjection.summary.status;
   const nodeData = plan.nodes.map((node) => ({
     ...node,
     planned_group_id: node.group_id,
@@ -391,15 +535,28 @@ export function buildView(
       approval_pending:
         activePlan.id !== executionPlan.id ||
         activePlan.lifecycle !== "approved",
-      scheduling_eligible: isApprovedExecution && completenessIssues.length === 0,
+      scheduling_eligible: schedulingStatus === "eligible",
       dispatch_readiness: ledger.groups.every((item) => item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id) && allTasksDispatchReady ? "ready" : "blocked",
       delivery_agent_readiness: ledger.groups.some((item) => item.delivery_unit_kind === "regular" && !item.agent_thread_id) ? "unbound" : "bound",
+      proposal: {
+        status: completenessIssues.length === 0 ? "complete" : "blocked",
+        issues: completenessIssues,
+      },
+      approval: {
+        status: isApprovedExecution ? "approved" : "not_approved",
+        approval_id: isApprovedExecution ? activePlan.approval_id : null,
+      },
+      scheduling: {
+        status: schedulingStatus,
+        blockers: schedulingBlockers,
+      },
+      runtime_readiness: runtimeProjection.summary,
       completeness: {
         status: completenessIssues.length === 0 ? "complete" : "blocked",
         issues: completenessIssues,
       },
       authorization_label: isApprovedExecution
-        ? completenessIssues.length === 0
+        ? schedulingStatus === "eligible"
           ? "Schedulable"
           : "Not schedulable"
         : "Not approved",
@@ -412,6 +569,8 @@ export function buildView(
       dispatch_readiness: item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id ? "ready" : "blocked",
       dispatch_diagnostics: item.delivery_unit_kind === "regular" && !item.agent_thread_id ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }] : [],
       ...profileProjection(ledger, "group", item),
+      coordinator: coordinatorProjection(ledger, item),
+      runtime_readiness: runtimeProjection.byGroup.get(item.id) ?? { status: "unknown", blockers: [] },
       latest_agent_output: outputs[`group:${item.id}`] ?? initialOutput(item.delivery_unit_kind === "bootstrap" ? ledger.control.owner_thread_id : item.agent_thread_id),
       started_at: ledger.events.find(e => e.type === "group_execution_updated" && e.data.group_id === item.id && e.data.state === "running")?.occurred_at ?? null,
       finished_at: ledger.events.find(e => e.type === "group_updated" && e.subject_id === item.id && e.data.state === "closed")?.occurred_at ?? null,
@@ -448,6 +607,10 @@ export function buildView(
       ...completenessIssues.map((issue) => ({
         code: issue.code,
         reason: issue.message,
+      })),
+      ...runtimeProjection.summary.blockers.map((blocker) => ({
+        code: blocker.code,
+        reason: blocker.message,
       })),
     ],
     warnings: [

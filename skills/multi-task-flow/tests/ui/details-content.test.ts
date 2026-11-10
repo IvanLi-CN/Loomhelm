@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createDetailContent } from "../../web/details-content";
 import type { Group, View } from "../../web/model";
+import { planStateSeverity, renderPlanInfoContent, renderPlanState } from "../../web/status-row";
 
 beforeEach(() => {
   document.body.innerHTML = `<div id="details-summary"></div><div id="details-content"></div>`;
@@ -54,6 +55,90 @@ describe("dashboard details content", () => {
     expect(empty.className).toBe("details-empty");
     expect(empty.querySelector("strong")?.textContent).toBe("选择交付单元或任务");
     expect(empty.textContent).toContain("查看依赖、运行时间和原生会话链接");
+  });
+
+  test("renders proposal, approval, scheduling, and runtime readiness separately", () => {
+    const container = document.createElement("section");
+    document.body.append(container);
+    renderPlanState(container, {
+      active_plan_id: "plan",
+      execution_plan_id: "plan",
+      lifecycle: "approved",
+      approval_pending: false,
+      proposal: { status: "complete", issues: [] },
+      approval: { status: "approved", approval_id: "owner-approval" },
+      scheduling: {
+        status: "blocked",
+        blockers: [{ code: "COORDINATOR_NOT_BOUND", group_id: "group", message: "普通交付单元尚未绑定交付协调者。", resource: { kind: "conversation", status: "not_created", target_id: "group" } }],
+      },
+      runtime_readiness: {
+        status: "blocked",
+        blockers: [{ code: "COORDINATOR_NOT_BOUND", group_id: "group", message: "普通交付单元尚未绑定交付协调者。", resource: { kind: "conversation", status: "not_created", target_id: "group" } }],
+      },
+    });
+
+    expect(container.querySelectorAll("[data-plan-state-key]")).toHaveLength(4);
+    expect(container.querySelector('[data-plan-state-key="proposal"]')?.textContent).toContain("Complete");
+    expect(container.querySelector('[data-plan-state-key="approval"]')?.textContent).toContain("Approved");
+    expect(container.querySelector('[data-plan-state-key="scheduling"]')?.textContent).toContain("Not schedulable");
+    expect(container.querySelector('[data-plan-state-key="runtime"]')?.textContent).toContain("尚未创建");
+  });
+
+  test("hides healthy status space and keeps the same facts available in plan info", () => {
+    const healthy = {
+      active_plan_id: "plan",
+      execution_plan_id: "plan",
+      lifecycle: "approved",
+      approval_pending: false,
+      proposal: { status: "complete" as const, issues: [] },
+      approval: { status: "approved" as const, approval_id: "owner-approval" },
+      scheduling: { status: "eligible" as const, blockers: [] },
+      runtime_readiness: { status: "ready" as const, blockers: [] },
+    };
+    const state = document.createElement("section");
+    const info = document.createElement("section");
+    document.body.append(state, info);
+    renderPlanState(state, healthy);
+    renderPlanInfoContent(info, {
+      orchestration: { id: "run", repository: { owner: "example", name: "repo", host: "github.com" }, revision: 4, updated_at: "2026-01-01T00:00:00Z", display_timezone: "UTC", max_running_tasks: 1, conversation_links_verified: true },
+      groups: [],
+      tasks: [],
+      selected_plan_id: "plan",
+      execution_phase: "planning",
+      plan_state: healthy,
+    });
+
+    expect(planStateSeverity(healthy)).toBe("ok");
+    expect(state.hidden).toBe(true);
+    expect(state.childElementCount).toBe(0);
+    expect(info.textContent).toContain("example / repo");
+    expect(info.textContent).toContain("当前没有待处理问题。");
+  });
+
+  test("puts blocked runtime facts in the plan info problem section", () => {
+    const blocked = {
+      active_plan_id: "plan",
+      execution_plan_id: "plan",
+      lifecycle: "approved",
+      approval_pending: false,
+      proposal: { status: "complete" as const, issues: [] },
+      approval: { status: "approved" as const, approval_id: "owner-approval" },
+      scheduling: { status: "blocked" as const, blockers: [{ code: "COORDINATOR_NOT_BOUND", group_id: "group", message: "普通交付单元尚未绑定交付协调者。", resource: { kind: "conversation" as const, status: "not_created" as const, target_id: "group" } }] },
+      runtime_readiness: { status: "blocked" as const, blockers: [{ code: "COORDINATOR_NOT_BOUND", group_id: "group", message: "普通交付单元尚未绑定交付协调者。", resource: { kind: "conversation" as const, status: "not_created" as const, target_id: "group" } }] },
+    };
+    const info = document.createElement("section");
+    renderPlanInfoContent(info, {
+      orchestration: { id: "run", repository: { owner: "example", name: "repo", host: "github.com" }, revision: 4, updated_at: "2026-01-01T00:00:00Z", display_timezone: "UTC", max_running_tasks: 1, conversation_links_verified: true },
+      groups: [{ id: "group", title: "交付单元", state: "running", agent_thread_id: null, parent_pr: { url: null }, requirements_path: null }],
+      tasks: [],
+      selected_plan_id: "plan",
+      execution_phase: "planning",
+      plan_state: blocked,
+    });
+
+    expect(planStateSeverity(blocked)).toBe("blocked");
+    expect(info.querySelectorAll(".plan-info-issues li")).toHaveLength(1);
+    expect(info.textContent).toContain("资源：尚未创建");
   });
 
   test("removes empty-state layout from a selected task", () => {
