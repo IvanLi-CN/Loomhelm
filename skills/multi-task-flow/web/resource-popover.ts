@@ -16,6 +16,17 @@ function icon(name: "copy" | "refresh" | "external" | "message"): SVGElement {
   for (const d of paths[name]!) { const path = document.createElementNS(svg.namespaceURI, "path"); path.setAttribute("d", d); path.setAttribute("fill", "none"); path.setAttribute("stroke", "currentColor"); path.setAttribute("stroke-width", "2"); path.setAttribute("stroke-linecap", "round"); path.setAttribute("stroke-linejoin", "round"); svg.append(path); } return svg;
 }
 export type ResourceSource = { kind: "task" | "group"; id: string; thread: string | null; output: () => AgentOutput | undefined; start: string | null; end: string | null; view: View };
+function boundPR(source: ResourceSource): { url: string; number: number } | null {
+  const bound = source.kind === "task" ? source.view.tasks.find(t => t.id === source.id)?.pr : source.view.groups.find(g => g.id === source.id)?.parent_pr;
+  const url = bound?.url;
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    const match = /\/pull\/([1-9]\d*)\/?$/.exec(parsed.pathname);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port || parsed.search || parsed.hash || !match) return null;
+    return { url: parsed.href.replace(/\/$/, ""), number: Number(match[1]) };
+  } catch { return null; }
+}
 type Tone = "neutral" | "live" | "positive" | "warning" | "negative";
 function badge(value: string, tone: Tone): HTMLElement {
   const element = node("span", value, "resource-badge"); element.dataset.tone = tone; return element;
@@ -34,7 +45,7 @@ function copyRow(label: string, value: string | null, href: string | null = null
   content.append(node("span", label, "resource-label"));
   const valueNode = href && value ? document.createElement("a") : node("span", value || "不可用", "resource-value");
   valueNode.className = "resource-value"; valueNode.textContent = value || "不可用";
-  if (href && valueNode instanceof HTMLAnchorElement) { valueNode.href = href; valueNode.target = "_blank"; valueNode.rel = "noopener noreferrer"; }
+  if (href && valueNode.tagName === "A") { const link = valueNode as HTMLAnchorElement; link.href = href; link.target = "_blank"; link.rel = "noopener noreferrer"; }
   content.append(valueNode);
   row.append(content);
   if (value) {
@@ -45,6 +56,13 @@ function copyRow(label: string, value: string | null, href: string | null = null
     button.addEventListener("click", async () => { try { await navigator.clipboard.writeText(value); button.dataset.feedback = "已复制"; button.setAttribute("aria-label", `${action}：已复制`); } catch { button.dataset.feedback = "复制失败"; button.setAttribute("aria-label", `${action}：复制失败`); } });
   }
   return row;
+}
+function skeleton(className: string): HTMLElement { const element = node("span", "", `resource-skeleton ${className}`); element.setAttribute("aria-hidden", "true"); return element; }
+function loadingSkeleton(data: PRSnapshot["data"]): HTMLElement {
+  const loading = node("div", "", "resource-loading-skeleton");
+  loading.append(skeleton("resource-skeleton-state"), skeleton("resource-skeleton-conflict"), skeleton("resource-skeleton-checks"), skeleton("resource-skeleton-updated"));
+  if (data) loading.dataset.refreshing = "true";
+  return loading;
 }
 export function timingText(source: ResourceSource, now = Date.now()): string {
   const planned = source.kind === "task" ? source.view.planned_intervals.find(p => source.view.nodes.some(n => n.id === p.node_id && n.kind === "task" && n.ref_id === source.id)) : null;
@@ -73,6 +91,14 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
   let pr: PRSnapshot | null = null;
   const identity = node("div", "", "resource-identity"), body = node("div", "", "resource-body");
   panel.append(identity, body);
+  const initialBoundPR = boundPR(source);
+  const renderPRIdentity = (override?: { url: string; number: number }) => {
+    const bound = override ?? initialBoundPR;
+    if (!bound) { identity.replaceChildren(); return; }
+    const urlRow = copyRow("链接", bound.url, bound.url);
+    const link = document.createElement("a"); link.href = bound.url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.className = "resource-link-button"; link.setAttribute("aria-label", "打开 PR"); link.append(icon("external")); urlRow.append(link, attachTooltip(link, node("span", "打开 PR"), "打开 PR"));
+    identity.replaceChildren(copyRow("PR", `#${bound.number}`, null, "复制 PR 编号"), urlRow);
+  };
   const position = () => {
     if (panel.hidden) return;
     const r = trigger.getBoundingClientRect(), height = window.innerHeight;
@@ -126,26 +152,30 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
   const loadPR = async (force = false) => {
     clearTimeout(refreshTimer);
     panel.className = "resource-popover"; panel.replaceChildren(identity, body);
+    const bound = initialBoundPR;
+    if (!bound) {
+      panel.setAttribute("aria-busy", "false");
+      identity.replaceChildren();
+      body.replaceChildren(node("span", "尚未关联 PR", "resource-empty-label"));
+      position();
+      return;
+    }
     const current = ++requestId;
+    panel.setAttribute("aria-busy", "true");
     const loadingHeading = node("div", "", "resource-section-heading");
-    loadingHeading.append(node("h3", pr?.data?.title || "PR 信息", "resource-pr-title"));
+    loadingHeading.append(pr?.data?.title ? node("h3", pr.data.title, "resource-pr-title") : skeleton("resource-skeleton-title"));
     const loadingRefresh = document.createElement("button"); loadingRefresh.type = "button"; loadingRefresh.className = "resource-icon-button resource-refresh-button"; loadingRefresh.setAttribute("aria-label", "刷新 PR 信息"); loadingRefresh.append(icon("refresh")); loadingHeading.append(loadingRefresh, attachTooltip(loadingRefresh, node("span", "刷新 PR 信息"), "刷新 PR 信息"));
     loadingRefresh.addEventListener("click", () => void loadPR(true));
-    body.replaceChildren(loadingHeading, node("p", pr?.data ? `${pr.data.state} · CI ${pr.data.ci}\n刷新中…` : "加载中…", "resource-message"));
+    body.replaceChildren(loadingHeading, loadingSkeleton(pr?.data));
     try {
       const response = await fetch(`api/resource-details?kind=${source.kind}&id=${encodeURIComponent(source.id)}${force ? "&refresh=1" : ""}`, { cache: "no-store" });
       if (!response.ok) throw new Error("读取失败");
       const next = await response.json() as PRSnapshot;
       if (current !== requestId || panel.hidden) return;
-      pr = next; identity.replaceChildren();
-      const bound = source.kind === "task" ? source.view.tasks.find(t => t.id === source.id)?.pr : source.view.groups.find(g => g.id === source.id)?.parent_pr;
-      if (bound?.url) publishPRStatus(bound.url, next);
+      pr = next; panel.setAttribute("aria-busy", next.loading ? "true" : "false"); renderPRIdentity(next.data ? { number: next.data.number, url: next.data.url } : bound);
+      if (bound.url) publishPRStatus(bound.url, next);
       if (next.loading) refreshTimer = setTimeout(() => { if (!panel.hidden) void loadPR(); }, 1000);
       if (next.data) {
-        const numberRow = copyRow("PR", `#${next.data.number}`, null, "复制 PR 编号");
-        const urlRow = copyRow("链接", next.data.url, next.data.url);
-        const link = document.createElement("a"); link.href = next.data.url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.className = "resource-link-button"; link.setAttribute("aria-label", "打开 PR"); link.append(icon("external")); const linkHint = attachTooltip(link, node("span", "打开 PR"), "打开 PR"); urlRow.append(link, linkHint);
-        identity.append(numberRow, urlRow);
         const data = next.data;
         const heading = node("div", "", "resource-section-heading");
         heading.append(node("h3", data.title, "resource-pr-title"));
@@ -182,7 +212,7 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
         if (next.error) body.append(node("p", next.error, "resource-error"));
       }
 
-    } catch { if (current === requestId && !panel.hidden) { body.textContent = `${pr?.data ? `${pr.data.title}\n${pr.data.state} · CI ${pr.data.ci}\n数据已过期\n` : ""}读取失败，请稍后重试`;
+    } catch { if (current === requestId && !panel.hidden) { panel.setAttribute("aria-busy", "false"); body.textContent = pr?.data ? `${pr.data.title}\n${pr.data.state} · CI ${pr.data.ci}\n数据已过期\n读取失败，请稍后重试` : "详情加载失败，请稍后重试";
       if (!identity.querySelector("button[data-retry]")) { const retry = document.createElement("button"); retry.type = "button"; retry.dataset.retry = "true"; retry.textContent = "重试"; retry.addEventListener("click", () => void loadPR(true)); identity.append(retry); } } }
     position();
   };
@@ -199,7 +229,7 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
     cancel(); if (!trigger.isConnected || !panel.hidden) return;
     document.dispatchEvent(new Event("resource-popover-open"));
     active?.close(); active = { close, refresh }; panel.hidden = false; document.body.append(panel); trigger.setAttribute("aria-expanded", "true");
-    refresh(); if (type === "pr") void loadPR();
+    refresh(); if (type === "pr") { renderPRIdentity(); void loadPR(); }
     window.addEventListener("resize", position); window.addEventListener("scroll", position, true);
     document.addEventListener("pointerdown", outside, true); document.addEventListener("keydown", keys, true);
     if (typeof ResizeObserver !== "undefined") { observer = new ResizeObserver(position); observer.observe(panel); }

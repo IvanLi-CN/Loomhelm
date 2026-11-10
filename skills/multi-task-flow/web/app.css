@@ -583,6 +583,15 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .task-card-duration { pointer-events: auto; border: 0; padding: 0; background: transparent; cursor: help; }
 .resource-popover { position: fixed; z-index: 1000; width: min(480px, calc(100vw - 16px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-sheet); background: var(--raised); color: var(--text); box-shadow: var(--shadow); font-size: 13px; font-weight: 400; line-height: 1.6; text-align: left; }
 .resource-popover[hidden] { display: none; }
+.resource-popover[aria-busy="true"] .resource-loading-skeleton { display: grid; gap: 10px; }
+.resource-skeleton { display: block; min-height: 14px; border-radius: 5px; background: linear-gradient(90deg, color-mix(in srgb, var(--muted) 14%, transparent) 25%, color-mix(in srgb, var(--text) 18%, transparent) 50%, color-mix(in srgb, var(--muted) 14%, transparent) 75%); background-size: 200% 100%; animation: resource-skeleton-shimmer 1.4s ease-in-out infinite; }
+.resource-skeleton-title { width: min(260px, 70%); min-height: 18px; }
+.resource-skeleton-state { width: 48%; }
+.resource-skeleton-conflict { width: 72%; }
+.resource-skeleton-checks { width: 92%; min-height: 56px; }
+.resource-skeleton-updated { width: 58%; }
+@keyframes resource-skeleton-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .resource-skeleton { animation: none; } }
 .resource-identity { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 16px; background: var(--surface); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .resource-popover[data-placement=above] .resource-identity { order: 2; border-top: 1px solid var(--border); border-bottom: 0; }
 .resource-body { min-height: 0; overflow: auto; padding: 16px; overflow-wrap: anywhere; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--control) transparent; }
