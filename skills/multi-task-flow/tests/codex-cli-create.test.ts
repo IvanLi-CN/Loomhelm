@@ -9,6 +9,14 @@ const input = { title: "test", prompt: "DO NOT EXECUTE THIS TASK", cwd: process.
 const completed: CliRun = { thread_id: "thread-a", exit_code: 0, turn_completed: true, events: ["thread.started", "turn.completed"] };
 const read = async () => ({ id: "thread-a", cwd: "/codex/owned", model: input.model, reasoningEffort: input.thinking });
 
+test("initialization prompt gives the creation phase enough context without authorizing work", () => {
+  expect(INITIALIZATION_PROMPT).toContain("multi-task-flow 创建阶段");
+  expect(INITIALIZATION_PROMPT).toContain("交付 Agent 或任务 Agent");
+  expect(INITIALIZATION_PROMPT).toContain("不是项目初始化，也不是正式任务完成");
+  expect(INITIALIZATION_PROMPT).toContain("主 Agent 会另行发送正式派发消息");
+  expect(INITIALIZATION_PROMPT).toContain("不要调用工具、读取或修改文件、执行命令");
+});
+
 test("bind requires both process exit and initialization completion, preserving identity on every ambiguous result", async () => {
   for (const result of [ { ...completed, exit_code: 1 }, { ...completed, exit_code: null }, { ...completed, turn_completed: false }, { ...completed, error: "timeout" } ]) {
     let reads = 0;

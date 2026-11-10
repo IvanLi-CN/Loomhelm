@@ -13895,7 +13895,7 @@
       "path": "skills/multi-task-flow/SKILL.md",
       "sourceBlob": "708e77c1572d4c7271e294984151eae1e11c0894",
       "sourceSha256": "e3ec7fceef4c5cbd8650e17603ed261e59fc06dafa9d18c85a0e2966b0d9a298",
-      "installedSha256": "3aad1b26755227663d5e52fb9e2ce2b8c7f191471ed14612fd0195b3bcadd454",
+      "installedSha256": "d9fd146251be95dfd72ffacd1d8c2123f275bc9bd7d599b468ce69ff934a817d",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14119,7 +14119,7 @@
       "path": "skills/multi-task-flow/lib/contract.ts",
       "sourceBlob": "2b8f25c6bbb59d20f7a85a08b57ed86b35c50687",
       "sourceSha256": "830424a1dd3420f8279db5db7cd3bb71600acc05bccfd36d8d41c2b18bc834b8",
-      "installedSha256": "17231713c6c1bc827aab925addfea32dfa40a90cf5bed1b8beef53bb8b599996",
+      "installedSha256": "d27044938d0b7fdab4b8782fd3442abc87dbc3ec0269d508276618efcf5567d8",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15722,7 +15722,7 @@
     },
     {
       "path": "skills/multi-task-flow/lib/codex-cli-create.ts",
-      "installedSha256": "1e8874d66496224646d11521285603c83addb48624357e06abee1e9d73519bb6"
+      "installedSha256": "cb3f14eaa001851869c9a9e4dc289f3a81b0938aabde8d4450d4d2b6f9bae958"
     },
     {
       "path": "skills/multi-task-flow/lib/conversation-eligibility.ts",
@@ -15742,7 +15742,7 @@
     },
     {
       "path": "skills/multi-task-flow/tests/codex-cli-create.test.ts",
-      "installedSha256": "6e6f263d7273968a4efa6f0a001d7b3a6168cc03fef6a4096c3deb2d95281cf7"
+      "installedSha256": "37bc3b7d839748d619f6270e388b6e9c6cab9f74d5883c5a2e0eba7eb6de0f23"
     },
     {
       "path": "skills/multi-task-flow/tests/conversation-archive.test.ts",

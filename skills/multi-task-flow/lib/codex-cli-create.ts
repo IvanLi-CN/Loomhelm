@@ -5,7 +5,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { connectSocket, record, rpc, socketPath } from "../lib/codex-rpc";
 
-export const INITIALIZATION_PROMPT = "这是对话初始化握手。只回复‘初始化完成’，然后立即结束本轮。不要调用工具、读取文件、修改文件、执行任务或等待后续消息。正式任务将在创建进程退出并完成账本绑定后另行发送。";
+export const INITIALIZATION_PROMPT = "这是 multi-task-flow 创建阶段的初始化握手。你已被创建为交付 Agent 或任务 Agent 的独立工作区；当前只确认会话创建，不是项目初始化，也不是正式任务完成。请简短回复‘初始化完成’，然后结束本轮。不要调用工具、读取或修改文件、执行命令、开始实现、等待后续消息，或自行推断任务范围。创建进程退出并完成账本绑定后，主 Agent 会另行发送正式派发消息，其中包含 run/task 身份、仓库、开发基线、负责范围、验收要求和阻塞规则；在收到该消息前不要开工。";
 export type CliRun = {
   thread_id?: string; exit_code: number | null; turn_completed: boolean;
   events: string[]; error?: string;
