@@ -712,6 +712,19 @@ export const TASK_EXECUTION_POLICY_FIELDS = [
   "conversation_policy",
   "delivery_policy",
 ] as const;
+const taskExecutionPolicyDeclaration = z
+  .object({
+    execution_owner: z
+      .enum(["main", "delivery_agent", "task_agent"])
+      .nullable(),
+    conversation_policy: z
+      .enum(["main_owned", "delivery_owned", "task_agent", "none"])
+      .nullable(),
+    delivery_policy: z
+      .enum(["parent_pr", "child_pr", "evidence", "none"])
+      .nullable(),
+  })
+  .strict();
 export type TaskExecutionPolicyField = (typeof TASK_EXECUTION_POLICY_FIELDS)[number];
 export type TaskExecutionPolicyDeclarationGap = {
   task_id: string;
@@ -762,9 +775,20 @@ export function taskExecutionPolicyIssues(
 
 export function validateTaskExecutionPolicies(tasks: readonly Task[], requireComplete = false): void {
   for (const candidate of tasks) {
-    if (requireComplete && candidate.execution_owner === null && candidate.conversation_policy === null && candidate.delivery_policy === null)
+    const parsed = taskExecutionPolicyDeclaration.safeParse({
+      execution_owner: candidate.execution_owner,
+      conversation_policy: candidate.conversation_policy,
+      delivery_policy: candidate.delivery_policy,
+    });
+    requireCondition(
+      parsed.success,
+      "TASK_EXECUTION_POLICY_INVALID",
+      `${candidate.id}: 任务执行策略值无效`,
+      3,
+    );
+    if (requireComplete && parsed.data.execution_owner === null && parsed.data.conversation_policy === null && parsed.data.delivery_policy === null)
       requireCondition(false, "TASK_EXECUTION_POLICY_INCOMPLETE", `${candidate.id}: 任务执行归属、对话策略和交付策略必须声明`, 3);
-    const issues = taskExecutionPolicyIssues(candidate);
+    const issues = taskExecutionPolicyIssues(parsed.data);
     requireCondition(issues.length === 0, issues[0]?.code ?? "TASK_EXECUTION_POLICY_INVALID", `${candidate.id}: ${issues.map((issue) => issue.message).join("；")}`, 3);
   }
 }
