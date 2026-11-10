@@ -92,6 +92,7 @@ function requireMatchingMigrationRequestIdentity(
   identityPath: string,
   requestIdentity: MigrationRequestIdentity,
   sourceDigest?: string,
+  requireSourceDigest = false,
 ): void {
   requireCondition(
     existsSync(identityPath),
@@ -108,6 +109,13 @@ function requireMatchingMigrationRequestIdentity(
     "Migration backup belongs to a different request",
     3,
   );
+  if (requireSourceDigest)
+    requireCondition(
+      typeof existingIdentity.source_ledger_sha256 === "string",
+      "MIGRATION_CONFLICT",
+      "Migration backup source identity is missing",
+      3,
+    );
   if (sourceDigest !== undefined && existingIdentity.source_ledger_sha256 !== undefined)
     requireCondition(
       existingIdentity.source_ledger_sha256 === sourceDigest,
@@ -134,6 +142,7 @@ export function verifyMigrationBackup(
   backup: unknown,
   requestIdentity: MigrationRequestIdentity,
   expectedSourceDigest?: string,
+  requireSourceDigest = false,
 ): void {
   const expectedBackup = migrationBackupName(
     requestIdentity.command,
@@ -175,8 +184,15 @@ export function verifyMigrationBackup(
       identityPath,
       requestIdentity,
       actualSourceDigest,
+      requireSourceDigest,
     );
   else {
+    requireCondition(
+      !requireSourceDigest,
+      "MIGRATION_CONFLICT",
+      "Migration backup request identity is missing",
+      3,
+    );
     writeExclusiveNoFollow(
       identityPath,
       migrationIdentityContent(requestIdentity, actualSourceDigest),
@@ -266,6 +282,23 @@ export function migrateLocked(
     "schema2/contract2 ledger with incomplete task execution policies requires explicit maintenance",
     4,
   );
+  if (
+    raw?.schema_version === 2 &&
+    raw?.contract_version === 2 &&
+    historicalPolicyGaps.length === 0
+  ) {
+    try {
+      validateTaskExecutionPolicies(raw.tasks ?? []);
+    } catch (error) {
+      if (error instanceof ContractError)
+        throw new ContractError(
+          "HISTORICAL_LEDGER_READ_ONLY",
+          "Historical task execution policies are semantically invalid; explicit recovery is required",
+          4,
+        );
+      throw error;
+    }
+  }
   // Schema-1 ledgers predate the contract discriminator. Treat them as the
   // legacy read-only shape even when a hand-written fixture retained a newer
   // discriminator field; the explicit migration is the boundary that
@@ -313,6 +346,7 @@ export function migrateLocked(
       typeof priorResult.source_ledger_sha256 === "string"
         ? priorResult.source_ledger_sha256
         : undefined,
+      true,
     );
     return {
       ok: true,
