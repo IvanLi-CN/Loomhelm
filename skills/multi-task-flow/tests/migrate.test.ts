@@ -135,6 +135,63 @@ afterEach(() => {
 });
 
 describe("orchestrate migrate", () => {
+  test("ordinary migrate cannot repair historical policy gaps through child-review retirement", async () => {
+    const dataRoot = root();
+    const { ledgerPath } = await createLegacyRun(dataRoot);
+    const historical = JSON.parse(readFileSync(ledgerPath, "utf8"));
+    historical.schema_version = 2;
+    historical.contract_version = 2;
+    historical.facts.push({ kind: "child_review" });
+    for (const task of historical.tasks) {
+      delete task.execution_owner;
+      delete task.conversation_policy;
+      delete task.delivery_policy;
+    }
+    writeFileSync(ledgerPath, JSON.stringify(historical, null, 2) + "\n");
+    const before = readFileSync(ledgerPath, "utf8");
+    const result = await runOrchestrate(
+      dataRoot,
+      "migrate",
+      migrateInput("legacy-run", 7),
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 4,
+      output: { ok: false, code: "HISTORICAL_LEDGER_READ_ONLY" },
+    });
+    expect(readFileSync(ledgerPath, "utf8")).toBe(before);
+    expect(existsSync(join(dataRoot, "runs", "legacy-run", "ledger.migration-v1-migration-1.json"))).toBe(false);
+  });
+
+  test("ordinary migrate keeps complete but semantically invalid historical policies read-only", async () => {
+    const dataRoot = root();
+    const { ledgerPath } = await createLegacyRun(dataRoot);
+    const historical = JSON.parse(readFileSync(ledgerPath, "utf8"));
+    historical.schema_version = 2;
+    historical.contract_version = 2;
+    historical.facts.push({ kind: "child_review" });
+    for (const task of historical.tasks)
+      Object.assign(task, {
+        execution_owner: "main",
+        conversation_policy: "main_owned",
+        delivery_policy: "none",
+      });
+    historical.tasks[0].conversation_policy = "task_agent";
+    writeFileSync(ledgerPath, JSON.stringify(historical, null, 2) + "\n");
+    const before = readFileSync(ledgerPath, "utf8");
+    const result = await runOrchestrate(
+      dataRoot,
+      "migrate",
+      migrateInput("legacy-run", 7),
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 4,
+      output: { ok: false, code: "HISTORICAL_LEDGER_READ_ONLY" },
+    });
+    expect(readFileSync(ledgerPath, "utf8")).toBe(before);
+  });
+
   test("migrates a valid v1 ledger with an incremented revision and complete backup", async () => {
     const dataRoot = root();
     const { ledgerPath, legacy } = await createLegacyRun(dataRoot);
@@ -187,6 +244,67 @@ describe("orchestrate migrate", () => {
     expect(readFileSync(backupPath, "utf8")).toBe(
       JSON.stringify(legacy, null, 2) + "\n",
     );
+  });
+
+  test("recovers a legacy backup without a request identity sidecar", async () => {
+    const dataRoot = root();
+    const { legacy } = await createLegacyRun(dataRoot);
+    const runPath = join(dataRoot, "runs", "legacy-run");
+    const backupPath = join(runPath, "ledger.migration-v1-migration-1.json");
+    writeFileSync(backupPath, JSON.stringify(legacy, null, 2) + "\n");
+    const result = await runOrchestrate(
+      dataRoot,
+      "migrate",
+      migrateInput("legacy-run", 7),
+    );
+
+    expect(result).toMatchObject({ exitCode: 0, output: { code: "APPLIED" } });
+    expect(existsSync(`${backupPath}.request.json`)).toBe(true);
+  });
+
+  test("migration replay verifies committed backup artifacts", async () => {
+    for (const artifact of ["backup", "identity"]) {
+      const dataRoot = root();
+      const { legacy } = await createLegacyRun(dataRoot, `legacy-${artifact}`);
+      const request = migrateInput(`legacy-${artifact}`, 7, `migration-${artifact}`);
+      const applied = await runOrchestrate(dataRoot, "migrate", request);
+      const backupPath = join(
+        dataRoot,
+        "runs",
+        `legacy-${artifact}`,
+        applied.output.result.backup,
+      );
+      if (artifact === "backup") writeFileSync(backupPath, "corrupted");
+      else writeFileSync(`${backupPath}.request.json`, "{}");
+      const replay = await runOrchestrate(dataRoot, "migrate", request);
+      expect(replay).toMatchObject({
+        exitCode: 3,
+        output: { ok: false, code: "MIGRATION_CONFLICT" },
+      });
+      expect(legacy.schema_version).toBe(1);
+    }
+  });
+
+  test("legacy migration replay requires a digest-bearing identity", async () => {
+    const dataRoot = root();
+    const { ledgerPath } = await createLegacyRun(dataRoot);
+    const request = migrateInput("legacy-run", 7);
+    const applied = await runOrchestrate(dataRoot, "migrate", request);
+    const runPath = join(dataRoot, "runs", "legacy-run");
+    const identityPath = join(runPath, `${applied.output.result.backup}.request.json`);
+    const saved = JSON.parse(readFileSync(ledgerPath, "utf8"));
+    delete saved.requests.at(-1).result.source_ledger_sha256;
+    writeFileSync(ledgerPath, JSON.stringify(saved, null, 2) + "\n");
+    const identity = JSON.parse(readFileSync(identityPath, "utf8"));
+    delete identity.source_ledger_sha256;
+    writeFileSync(identityPath, JSON.stringify(identity) + "\n");
+
+    const replay = await runOrchestrate(dataRoot, "migrate", request);
+    expect(replay).toMatchObject({
+      exitCode: 3,
+      output: { ok: false, code: "MIGRATION_CONFLICT" },
+    });
+    expect(replay.output.message).toContain("explicit recovery is required");
   });
 
   test("replays the same request and lets the next normal command use the new revision", async () => {

@@ -1,13 +1,15 @@
 import {switchRelease} from "../lib/service-maintenance";
 import {afterEach, expect, test} from "bun:test";
-import {cpSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync, unlinkSync, readdirSync} from "node:fs";
+import {cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync, unlinkSync, readdirSync} from "node:fs";
 import {join} from "node:path";
 import {serviceFixture, fixtureRelease, fixtureRun} from "./service-fixture";
 import {buildId} from "../lib/service-release";
 import {compatibilityReport, requireReport} from "../lib/service-compatibility";
 import {maintenanceCheck, maintenanceApply} from "../lib/ledger-maintenance";
+import {requireLedgerCompatibility} from "../lib/service-contract";
 import {serviceCommand} from "../scripts/service";
 import {LedgerStore} from "../lib/store";
+import {contractMigrationCandidate} from "../lib/store-migration";
 import {type ServiceState} from "../lib/service-state";
 
 const roots: string[] = [];
@@ -20,6 +22,21 @@ function setup() {
   const raw=JSON.parse(readFileSync(store.ledgerPath,"utf8")); raw.operations=raw.operations.filter((op:any)=>op.status!=="claimed"&&op.status!=="unknown"); raw.contract_version=1; raw.config.execution_profile=null;
   writeFileSync(store.ledgerPath,JSON.stringify(raw));
   return {...f,store,raw,release};
+}
+function historicalPolicySetup() {
+  const f=setup();
+  const raw=JSON.parse(readFileSync(f.store.ledgerPath,"utf8"));
+  raw.contract_version=2;
+  raw.version=null;
+  raw.config.execution_profile={model:"gpt-6.1-sol",thinking:"medium"};
+  raw.events.push({id:"branch-repair",type:"publish_branch_repaired",subject_id:raw.groups[0].id,actor_id:raw.control.owner_thread_id,occurred_at:"2026-01-01T00:00:00.000Z",recorded_at:"2026-01-01T00:00:00.000Z",data:{evidence_ref:"branch-repair"}});
+  for(const task of raw.tasks) {
+    delete task.execution_owner;
+    delete task.conversation_policy;
+    delete task.delivery_policy;
+  }
+  writeFileSync(f.store.ledgerPath,JSON.stringify(raw));
+  return {...f,raw};
 }
 function releaseFor(state: ServiceState,name: string,patch: object={}) {
   const release=fixtureRelease(state.paths.root,name);
@@ -97,6 +114,57 @@ test("public compatibility and maintenance checks leave state byte-identical",as
   expect(snap()).toEqual(before);
   await expect(serviceCommand("compatibility-check",{source:f.release.source,rollback:true},f.state)).rejects.toThrow();
 });
+test("contract maintenance repairs historical policy declarations with an auditable replay",async()=>{
+  const f=historicalPolicySetup();
+  const before=readFileSync(f.store.ledgerPath,"utf8");
+  const report:any=maintenanceCheck(f.state,{run_id:"demo-run",action:"contract"});
+  expect(report.source_contract).toBe("schema-2/contract-2");
+  expect(report.target_contract).toBe("schema-2/contract-2");
+  expect(report.task_execution_policy_migration).toMatchObject({mode:"declare-null"});
+  expect(report.task_execution_policy_migration.tasks).toHaveLength(f.raw.tasks.length);
+  expect(()=>contractMigrationCandidate(f.raw)).toThrow("Only legacy and contract-1 ledgers can migrate");
+  const req=request(f.state);
+  const applied:any=await maintenanceApply(f.state,req);
+  expect(applied.code).toBe("APPLIED");
+  const saved=JSON.parse(readFileSync(f.store.ledgerPath,"utf8"));
+  expect(saved.revision).toBe(f.raw.revision+1);
+  expect(saved.control).toEqual(f.raw.control);
+  expect(saved.groups).toEqual(f.raw.groups);
+  expect(saved.events).toEqual(f.raw.events);
+  expect(saved.facts).toEqual(f.raw.facts);
+  expect(saved.operations).toEqual(f.raw.operations);
+  for(const [index,task] of f.raw.tasks.entries()) {
+    const savedTask=saved.tasks[index];
+    for(const key of Object.keys(task)) expect(savedTask[key]).toEqual(task[key]);
+    expect(savedTask.execution_owner).toBeNull();
+    expect(savedTask.conversation_policy).toBeNull();
+    expect(savedTask.delivery_policy).toBeNull();
+  }
+  expect(saved.requests.at(-1)).toMatchObject({command:"ledger-maintenance-apply",committed_revision:f.raw.revision+1});
+  expect(saved.requests.at(-1).result.task_execution_policy_migration).toEqual(report.task_execution_policy_migration);
+  expect(readFileSync(join(f.store.runPath,applied.result.backup),"utf8")).toBe(before);
+  expect(()=>requireLedgerCompatibility(saved,"write")).not.toThrow();
+  const committed=readFileSync(f.store.ledgerPath,"utf8");
+  expect((await maintenanceApply(f.state,req) as any).code).toBe("REPLAYED");
+  expect(readFileSync(f.store.ledgerPath,"utf8")).toBe(committed);
+});
+test("partial historical policy declarations remain read-only without a backup",()=>{
+  for (const patch of [
+    {execution_owner:"main"},
+    {execution_owner:null,conversation_policy:null},
+  ]) {
+    const f=historicalPolicySetup();
+    Object.assign(f.raw.tasks[0],patch);
+    writeFileSync(f.store.ledgerPath,JSON.stringify(f.raw));
+    const before=readFileSync(f.store.ledgerPath,"utf8");
+    const beforeEntries=readdirSync(f.store.runPath).sort();
+    let error:any;
+    try { maintenanceCheck(f.state,{run_id:"demo-run",action:"contract"}); } catch (caught) { error=caught; }
+    expect(error).toMatchObject({code:"TASK_EXECUTION_POLICY_INCOMPLETE"});
+    expect(readFileSync(f.store.ledgerPath,"utf8")).toBe(before);
+    expect(readdirSync(f.store.runPath).sort()).toEqual(beforeEntries);
+  }
+});
 test("maintenance commits one backup and audit without impersonation, then profiles independently",async()=>{
   const f=setup();const before=readFileSync(f.store.ledgerPath,"utf8");const req=request(f.state);
   const result:any=await maintenanceApply(f.state,req);expect(result.code).toBe("APPLIED");
@@ -109,6 +177,15 @@ test("maintenance commits one backup and audit without impersonation, then profi
   await maintenanceApply(f.state,profile,caps);saved=JSON.parse(readFileSync(f.store.ledgerPath,"utf8"));expect(saved.config.execution_profile).toEqual({model:"gpt-6-luna",thinking:"high"});expect(saved.revision).toBe(f.raw.revision+2);
   expect((await maintenanceApply(f.state,profile,async()=>{throw Error("offline")}) as any).code).toBe("REPLAYED");
 });
+test("semantically invalid historical policy declarations remain read-only",()=>{
+  const f=historicalPolicySetup();
+  for(const task of f.raw.tasks) Object.assign(task,{execution_owner:"main",conversation_policy:"main_owned",delivery_policy:"none"});
+  f.raw.tasks[0].conversation_policy="task_agent";
+  writeFileSync(f.store.ledgerPath,JSON.stringify(f.raw));
+  const before=readFileSync(f.store.ledgerPath,"utf8");
+  expect(()=>maintenanceCheck(f.state,{run_id:"demo-run",action:"contract"})).toThrow("semantically invalid");
+  expect(readFileSync(f.store.ledgerPath,"utf8")).toBe(before);
+});
 test("maintenance rejects stale targets, owner, revision, digest and incompatible viewer",async()=>{
   const f=setup();const req=request(f.state);
   for(const patch of [{expected_owner_thread_id:"other"},{expected_revision:-1},{expected_ledger_sha256:"a".repeat(64)},{operation_digest:"a".repeat(64)},{writers_paused:false}]) await expect(maintenanceApply(f.state,{...req,...patch})).rejects.toThrow();
@@ -118,13 +195,46 @@ test("maintenance rejects stale targets, owner, revision, digest and incompatibl
   expect(readFileSync(f.store.ledgerPath,"utf8")).toBe(JSON.stringify(f.raw));
 });
 test("backup interruption recovers and commit-response loss replays; conflicting backup is retained",async()=>{
-  for(const stage of ["migration_backup_committed","migration_candidate_synced","migration_committed"]) {
+  for(const stage of ["migration_backup_identity_committed","migration_backup_committed","migration_candidate_synced","migration_committed"]) {
     const f=setup();const req=request(f.state);const store=new LedgerStore(f.state.paths.data,"demo-run",at=>{if(at===stage)throw Error("interrupted");});
     await expect(maintenanceApply(f.state,req,caps,store)).rejects.toThrow("interrupted");
+    if(stage==="migration_backup_identity_committed") {
+      expect(existsSync(join(f.store.runPath,"ledger.maintenance-maint-1.json"))).toBe(false);
+      expect(existsSync(join(f.store.runPath,"ledger.maintenance-maint-1.json.request.json"))).toBe(true);
+    }
     const retried:any=await maintenanceApply(f.state,req);expect(retried.code).toBe(stage==="migration_committed"?"REPLAYED":"APPLIED");
     expect(JSON.parse(readFileSync(f.store.ledgerPath,"utf8")).revision).toBe(f.raw.revision+1);
   }
   const f=setup();const req=request(f.state);const path=join(f.store.runPath,"ledger.maintenance-maint-1.json");writeFileSync(path,"conflict");await expect(maintenanceApply(f.state,req)).rejects.toThrow("different content");expect(readFileSync(path,"utf8")).toBe("conflict");
+});
+test("identity-only interruption rejects a changed request identity",async()=>{
+  const f=setup();const req=request(f.state);const store=new LedgerStore(f.state.paths.data,"demo-run",at=>{if(at==="migration_backup_identity_committed")throw Error("interrupted");});
+  await expect(maintenanceApply(f.state,req,caps,store)).rejects.toThrow("interrupted");
+  await expect(maintenanceApply(f.state,{...req,reason:"different"})).rejects.toThrow("different request");
+  expect(JSON.parse(readFileSync(f.store.ledgerPath,"utf8"))).toEqual(f.raw);
+});
+test("legacy backup-only interruption is recovered and bound to the request",async()=>{
+  const f=setup();const req=request(f.state);const before=readFileSync(f.store.ledgerPath,"utf8");
+  const backup=join(f.store.runPath,"ledger.maintenance-maint-1.json");
+  writeFileSync(backup,before);
+  const applied:any=await maintenanceApply(f.state,req);
+  expect(applied.code).toBe("APPLIED");
+  expect(existsSync(`${backup}.request.json`)).toBe(true);
+});
+test("replay verifies committed backup and request identity",async()=>{
+  for(const artifact of ["backup","identity"]) {
+    const f=setup();const req=request(f.state);const applied:any=await maintenanceApply(f.state,req);
+    const path=join(f.store.runPath,artifact==="backup"?applied.result.backup:`${applied.result.backup}.request.json`);
+    if(artifact==="backup") writeFileSync(path,"corrupted"); else writeFileSync(path,"{}");
+    await expect(maintenanceApply(f.state,req)).rejects.toThrow();
+  }
+});
+test("replay preserves the original committed revision after a later write",async()=>{
+  const f=setup();const req=request(f.state);const applied:any=await maintenanceApply(f.state,req);
+  f.store.update((ledger:any)=>{ledger.revision+=1;});
+  const replayed:any=await maintenanceApply(f.state,req);
+  expect(replayed.code).toBe("REPLAYED");
+  expect(replayed.revision).toBe(applied.revision);
 });
 test("a concurrent writer during capability lookup invalidates the profile request",async()=>{
   const f=setup();await maintenanceApply(f.state,request(f.state));const req=request(f.state,"execution-profile",{execution_profile:{model:"gpt-6-luna",thinking:"high"}});req.request_id="profile-2";
