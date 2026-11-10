@@ -34,6 +34,7 @@ Business feature implementation and public business contract finalization requir
 - Durable database, journal, queue or artifact state: `.agents/skills/persistent-state-migrations/SKILL.md`.
 - Public interface or persistent-state compatibility changes: `.agents/skills/semver-change-governance/SKILL.md`.
 - Expected-success workflow failures: `.agents/skills/release-failure-notification/SKILL.md`; installing this Policy does not select a notification provider, destination or credential.
+- Viewer 兼容维护遵循 `docs/adr/0026-viewer-compatibility-lifecycle.md`：最新 viewer 双读受支持历史格式，旧 viewer 仅作隔离只读兜底；自动迁移仅限机械、无语义推断且可恢复的转换，历史内容不自动清理。兼容代码清理是独立的 release-level 决策，历史格式、迁移、兜底和拒绝路径测试必须保留。
 
 ## Verification and runtime
 

@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { ContractError } from "../lib/errors";
 import { withExclusiveLockAsync } from "../../bin/modules/flow/storage";
 import {
   PortRegistry,
@@ -77,8 +78,12 @@ export function checkDataCompatibility(
   state: ServiceState,
   manifest: ReleaseManifest,
   approval?: DowngradeApproval,
+  strictTargetReadable = false,
 ): void {
-  requireReport(compatibilityReport(state, manifest), approval);
+  const report = compatibilityReport(state, manifest);
+  requireReport(report, approval);
+  if (strictTargetReadable && report.runs.some((run) => !run.target_readable))
+    throw new ContractError("INCOMPATIBLE_RELEASE", "Rollback target cannot read every retained run", 2);
 }
 
 function versionKey(value: string): number[] {
@@ -187,7 +192,7 @@ export async function switchRelease(
           ? verifyRelease(join(state.paths.releases, selected!))
           : stageRelease(state, resolve(source));
         requireSourceRelease(manifest);
-        checkDataCompatibility(state, manifest, approval);
+        checkDataCompatibility(state, manifest, approval, rollback);
         if (manifest.build_id === old.current_build)
           return { build_id: manifest.build_id, changed: false };
         const runtime = state.runtime();

@@ -1,6 +1,7 @@
 import type { ConnectObserver } from "../lib/conversation-output";
 import { Runtime } from "../../bin/modules/core/runtime";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { z } from "zod";
 import { createRunDashboard, dashboardHeaders } from "../lib/server";
@@ -24,6 +25,7 @@ import {
   runClientScript,
 } from "../lib/service-pages";
 import { readBodyWithinLimit } from "../lib/server-files";
+import { verifyRelease } from "../lib/service-release";
 
 const json = (
   value: unknown,
@@ -122,6 +124,24 @@ export function selectAssets(root: string, runId: string, shared: string) {
   }
 }
 
+function readOnlyView(releaseRoot: string, ledger: unknown, planId?: string) {
+  const result = spawnSync(
+    join(releaseRoot, "viewer"), ["read-only-view", "--input", "-"],
+    { input: JSON.stringify({ ledger, ...(planId ? { plan_id: planId } : {}) }), encoding: "utf8", timeout: 30_000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" } },
+  );
+  if (result.status !== 0) throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer could not read this run", 2);
+  try {
+    const parsed = z.object({ ok: z.literal(true), code: z.literal("OK"), result: z.object({ view: z.record(z.string(), z.unknown()) }).strict() }).strict().parse(JSON.parse(result.stdout));
+    const view = parsed.result.view as { orchestration?: { id?: unknown; revision?: unknown } };
+    if (view.orchestration?.id !== (ledger as { orchestration_id?: unknown }).orchestration_id || view.orchestration?.revision !== (ledger as { revision?: unknown }).revision) throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer returned a stale view", 2);
+    return parsed.result.view;
+  } catch { throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer returned no readable view", 2); }
+}
+
+function pathIsLegacyView(pathname: string, method: string): boolean {
+  return method === "GET" && /\/legacy-view\/?$/.test(pathname);
+}
+
 export async function startSharedViewer(
   state: ServiceState,
   manifest: ReleaseManifest,
@@ -137,6 +157,17 @@ export async function startSharedViewer(
       "Source reload requires an isolated profile",
     );
   const auth = new ServiceAuth(state);
+  const fallbackViewer = (() => {
+    let previous: string | null = null;
+    try { if (!sourceRevision && !demoHooks) previous = state.config().previous_build; } catch {}
+    if (!previous || previous === manifest.build_id) return null;
+    try {
+      const root = join(state.paths.releases, previous);
+      const release = verifyRelease(root);
+      if (release.schema_version !== 2 || release.build_id !== previous) return null;
+      return root;
+    } catch { return null; }
+  })();
   const resources = new Map<string, ReturnType<typeof createRunDashboard>>();
   const warnings = new Map<string, string | null>();
   const getRun = (id: string) => {
@@ -271,6 +302,13 @@ export async function startSharedViewer(
         );
         if (!match) return json({ code: "NOT_FOUND" }, 404);
         const id = match[1]!;
+        if (pathIsLegacyView(url.pathname, request.method)) {
+          if (!fallbackViewer) return json({ code: "LEGACY_VIEW_UNAVAILABLE" }, 404);
+          let raw: unknown;
+          try { raw = JSON.parse(new LedgerStore(state.paths.data, id).readRaw()); }
+          catch { throw new ContractError("LEDGER_UNREADABLE", "Stored run ledger is unreadable", 2); }
+          return json({ run_id: id, build_id: manifest.build_id, fallback_build_id: state.config().previous_build, read_only: true, view: readOnlyView(fallbackViewer, raw, url.searchParams.get("plan") ?? undefined) });
+        }
         const run = getRun(id);
         let path = "/" + match[2]!;
         if (url.pathname.startsWith("/api/v1/")) path = "/api/" + match[2]!;

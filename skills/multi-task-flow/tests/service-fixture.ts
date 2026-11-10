@@ -1,25 +1,26 @@
-import { mkdtempSync, realpathSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, realpathSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { servicePaths } from "../lib/service-paths";
 import { ServiceAuth } from "../lib/service-auth";
 import { ServiceState } from "../lib/service-state";
 import { compatibility } from "../lib/service-contract";
-import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
 import { buildId, digest, releaseFiles } from "../lib/service-release";
 import { LedgerStore } from "../lib/store";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
 
-export function serviceFixture() {
+export function serviceFixture(profile: "test" | "production" = "test") {
   const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "mtf-service-")));
-  const state = new ServiceState(servicePaths({ MULTI_TASK_FLOW_PROFILE: "test", MULTI_TASK_FLOW_ROOT: root }));
+  const state = new ServiceState(servicePaths({ MULTI_TASK_FLOW_PROFILE: profile, MULTI_TASK_FLOW_ROOT: root }));
   state.initialize(); new ServiceAuth(state).initialize();
   return { root, state };
 }
-export function fixtureRelease(root: string, name = "bundle") {
+export function fixtureRelease(root: string, name = "bundle", options: { readOnly?: boolean } = {}) {
   const source = join(root, name); mkdirSync(join(source, "dist"), { recursive: true });
-  for (const file of releaseFiles) { mkdirSync(dirname(join(source,file)),{recursive:true}); writeFileSync(join(source, file), file === "skills/multi-task-flow/dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name); }
-  const manifest = { schema_version: 2 as const, source_sha: "a".repeat(40), skill_id: SKILL_ID, skill_version: SKILL_VERSION, ledger_contract: 2, viewer_contract: VIEWER_CONTRACT, service_version: "0.0.0-test", platform: `${process.platform}-${process.arch}` as "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64", ...compatibility, files: Object.fromEntries(releaseFiles.map(file => [file, digest(file === "skills/multi-task-flow/dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name)])) };
+  const viewer = `#!/usr/bin/env bun\nconst input = await new Response(Bun.stdin.stream()).json();\nconst ledger = input.ledger;\nif (Bun.argv[2] === "read-only-view") ${options.readOnly ? 'console.log(JSON.stringify({ok:true,code:"OK",result:{view:{orchestration:{id:ledger.orchestration_id,revision:ledger.revision}}}}));' : 'process.exit(2);'}\nelse console.log(JSON.stringify({ok:true,code:"OK",result:{contract:\`schema-2/contract-\${ledger.contract_version === 2 ? 2 : 1}\`,revision:ledger.revision}}));\n`;
+  for (const file of releaseFiles) { mkdirSync(dirname(join(source,file)),{recursive:true}); writeFileSync(join(source, file), file === "viewer" ? viewer : file === "skills/multi-task-flow/dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name); }
+  chmodSync(join(source, "viewer"), 0o700);
+  const manifest = { schema_version: 2 as const, source_sha: "a".repeat(40), service_version: "0.0.0-test", platform: `${process.platform}-${process.arch}` as "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64", ...compatibility, files: Object.fromEntries(releaseFiles.map(file => [file, digest(file === "viewer" ? viewer : file === "skills/multi-task-flow/dist/index.html" ? "<!doctype html><html><body><h1>Run</h1></body></html>" : "// " + file + name)])) };
   const result = { ...manifest, build_id: buildId(manifest) };
   writeFileSync(join(source, "manifest.json"), JSON.stringify(result));
   return { source, manifest: result };
@@ -29,7 +30,6 @@ export function fixtureRun(root: string, id = "demo-run") {
   run.schema_version = 2;
   run.source_schema_version = null;
   run.contract_version = 2;
-  run.version = { skill_id: SKILL_ID, skill_version: SKILL_VERSION, viewer_contract: VIEWER_CONTRACT };
   const store = new LedgerStore(root, id); store.create(run);
   return { run, store };
 }

@@ -76,6 +76,14 @@ The dashboard MUST present proposal status, approval status, scheduling eligibil
 
 Estimates with low confidence MUST either be decomposed into independently verifiable atoms or carry a documented reason for remaining coarse. A low-confidence estimate MUST be visible in the approval review and MUST NOT be presented as a precise execution commitment.
 
+### REQ-SKILLS-017
+
+Viewer upgrades MUST execute the staged release's own reader against every retained run before stopping the current service. When the newest reader cannot read a run but the current release can prove read safety, the upgrade MAY proceed only with an explicit per-run read-only fallback; if neither reader can prove safety, the upgrade MUST remain blocked.
+
+### REQ-SKILLS-018
+
+Viewer compatibility maintenance MUST keep historical format, fallback, migration and rejection tests in the repository. Mechanical migration MAY be automatic only when it is deterministic, idempotent, recoverable and fenced by backup, digest and revision; historical content cleanup and compatibility-code removal are separate owner-approved release decisions.
+
 ## Verification
 
 ### VER-SKILLS-009
@@ -89,6 +97,12 @@ Estimates with low confidence MUST either be decomposed into independently verif
 - covers: `REQ-SKILLS-010`, `REQ-SKILLS-011`, `REQ-SKILLS-012`, `REQ-SKILLS-014`, `REQ-SKILLS-016`
 - Method: Schema, validator and runtime-gate tests covering acceptance contracts, bootstrap/regular ownership, lifecycle evidence, post-merge obligations, dependency conditions and low-confidence decomposition.
 - Pass condition: Invalid plans fail before approval; valid plans retain explicit evidence requirements; runtime gates still reject missing coordinator, branch, PR, CI, verification or closeout facts.
+
+### VER-SKILLS-011
+
+- covers: `REQ-SKILLS-017`, `REQ-SKILLS-018`
+- Method: Candidate reader subprocess checks, fallback read-only HTTP checks, migration interruption/replay tests and retained historical-format rejection tests.
+- Pass condition: Target-reader failures use a proven fallback without writes; dual-reader failures block before service control; mechanical migration remains recoverable and no historical test is removed.
 
 ### VER-SKILLS-001
 

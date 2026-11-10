@@ -56,6 +56,22 @@ test("compatibility report exposes migration guides for affected contracts",()=>
   const report=compatibilityReport(f.state,target.manifest);
   expect(report.runs[0]?.migration_guides).toEqual([guide.id]);
 });
+test("candidate reader failure uses an executed previous viewer read-only proof",()=>{
+  const f=setup();
+  const old=fixtureRelease(f.root,"old",{readOnly:true});
+  const {build_id: _oldBuild, ...oldBody}=old.manifest;
+  const oldManifest={...oldBody,writable:["schema-2/contract-2"]};
+  const oldId=buildId(oldManifest); writeFileSync(join(old.source,"manifest.json"),JSON.stringify({...oldManifest,build_id:oldId})); cpSync(old.source,join(f.state.paths.releases,oldId),{recursive:true});
+  f.state.saveConfig({...f.state.config(),current_build:oldId});
+  const target=releaseFor(f.state,"target",{readable:["schema-2/contract-2"]});
+  const report=compatibilityReport(f.state,target.manifest,target.source);
+  expect(report.errors).toEqual([]);
+  expect(report.runs[0]).toMatchObject({fallback_build_id:oldId,fallback_readable:true,target_readable:false});
+  const noFallback=fixtureRelease(f.root,"no-fallback");
+  const noId=noFallback.manifest.build_id; cpSync(noFallback.source,join(f.state.paths.releases,noId),{recursive:true});
+  f.state.saveConfig({...f.state.config(),current_build:noId});
+  expect(compatibilityReport(f.state,target.manifest,target.source).errors[0]).toMatchObject({capability:"read"});
+});
 test("new write loss needs exact approval; changes invalidate it",()=>{
   const f=setup();const old=releaseFor(f.state,"old",{writable:["schema-2/contract-1"]});f.state.saveConfig({...f.state.config(),current_build:old.manifest.build_id});
   const report=compatibilityReport(f.state,f.release.manifest);expect(report.write_downgrades).toEqual(["demo-run"]);

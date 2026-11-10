@@ -93,3 +93,15 @@ _Avoid_: 原任务代修
 ### 归档闭环
 
 对已完成子任务的绑定对话发起归档、记录明确结果，并在失败或未知时保留可重试或可对账事实的过程。
+
+### Viewer 双读
+
+同一个最新 viewer 根据 run 的格式选择当前 reader 或受支持的历史 reader，并继续以当前格式写入。
+
+### 旧 viewer 只读兜底
+
+最新 reader 无法证明某个 run 可读时，使用已验证的 previous build 生成只读投影；该路径不得写入、改变 owner 或推进 revision。
+
+### 机械迁移
+
+不推断业务事实、可重复执行、可恢复且由备份、内容 digest 和 revision fencing 保护的格式转换。

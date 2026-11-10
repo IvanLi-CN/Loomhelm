@@ -16,7 +16,9 @@ import { agentLease } from "../lib/service-http";
 import { installRelease, switchRelease } from "../lib/service-maintenance";
 import { importRun } from "../lib/service-import";
 import { ContractError, requireCondition } from "../lib/errors";
-import { requireApi } from "../lib/service-contract";
+import { requireApi, ledgerContract } from "../lib/service-contract";
+import { buildView } from "../lib/view";
+import { validateLedger } from "../lib/schema";
 
 const actor = z
   .object({
@@ -43,7 +45,7 @@ export async function serviceCommand(
     const parsed = z
       .union([source, z.object({ rollback: z.literal(true) }).strict()])
       .parse(input);
-    return compatibilityReport(state, selectedRelease(state, parsed));
+    return compatibilityReport(state, selectedRelease(state, parsed), parsed.source);
   }
   if (command === "ledger-maintenance-check")
     return maintenanceCheck(state, input);
@@ -147,6 +149,16 @@ export async function serviceCommand(
     });
     return { sessions_revoked: true };
   }
+  if (command === "reader-check") {
+    const parsed = z.object({ ledger: z.unknown() }).strict().parse(input);
+    const ledger = validateLedger(parsed.ledger);
+    return { contract: ledgerContract(ledger), revision: ledger.revision };
+  }
+  if (command === "read-only-view") {
+    const parsed = z.object({ ledger: z.unknown(), plan_id: z.string().optional() }).strict().parse(input);
+    const ledger = validateLedger(parsed.ledger);
+    return { view: buildView(ledger, parsed.plan_id) };
+  }
   throw new ContractError("INVALID_COMMAND", "Unknown viewer service command");
 }
 
@@ -170,11 +182,8 @@ if (import.meta.main) {
         "Usage: service.ts <command> --input -",
       );
       const text = await Runtime.stdin.text();
-      requireCondition(
-        text.length <= 16_384,
-        "INPUT_TOO_LARGE",
-        "Service command input is too large",
-      );
+      const inputLimit = command === "reader-check" || command === "read-only-view" ? 256 * 1024 * 1024 : 16_384;
+      requireCondition(text.length <= inputLimit, "INPUT_TOO_LARGE", "Service command input is too large");
       const result = await serviceCommand(command, JSON.parse(text));
       console.log(JSON.stringify({ ok: true, code: "OK", result }));
     }
