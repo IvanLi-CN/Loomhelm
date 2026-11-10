@@ -130,7 +130,7 @@ def contract_semantics_changed(base, head, files):
     after = read_at(head, "skills/multi-task-flow/lib/contract.ts")
     if before is None or after is None:
         return True
-    marker = re.compile(r"export const SKILL_VERSION = (?:\"[^\"]+\"|\d+)")
+    marker = re.compile(r"export const (?:SKILL_VERSION|VIEWER_CONTRACT) = (?:\"[^\"]+\"|\d+)")
     return marker.sub("", before) != marker.sub("", after)
 
 
