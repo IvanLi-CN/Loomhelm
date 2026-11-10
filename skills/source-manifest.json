@@ -14119,7 +14119,7 @@
       "path": "skills/multi-task-flow/lib/contract.ts",
       "sourceBlob": "2b8f25c6bbb59d20f7a85a08b57ed86b35c50687",
       "sourceSha256": "830424a1dd3420f8279db5db7cd3bb71600acc05bccfd36d8d41c2b18bc834b8",
-      "installedSha256": "86d226a4e099c246d2f75b66638724d440d1a64c3e8b3a3c47f0020fc6a49f29",
+      "installedSha256": "23ee1063027eb30fa28d06c961e673cb0a97794f3e14348dfc0bafd9c92e98d2",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
