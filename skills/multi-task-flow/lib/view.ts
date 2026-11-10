@@ -100,6 +100,42 @@ function requiresRuntimeEvidence(ledger: Ledger): boolean {
   return !(ledger.source_schema_version === 1 && ledger.contract_version !== 2);
 }
 
+function planSchedulingIssues(ledger: Ledger, plan: Plan): PlanCompletenessIssue[] {
+  if (ledger.source_schema_version === 1 || ledger.contract_version !== 2) return [];
+  const contributionTasks = ledger.tasks.filter(
+    (task) => task.disposition === "active" && isContributionKind(task.kind),
+  );
+  const groupIds = new Set(contributionTasks.map((task) => task.group_id));
+  const missing: string[] = [];
+  for (const groupId of groupIds) {
+    for (const kind of ["publish_branch", "publish_pr"] as const) {
+      if (!plan.actions.some(
+        (action) =>
+          action.kind === kind &&
+          action.group_id === groupId &&
+          action.task_id === null,
+      )) missing.push(`${kind}:group:${groupId}`);
+    }
+  }
+  for (const task of contributionTasks) {
+    if (!plan.actions.some((action) => action.task_id === task.id)) continue;
+    for (const kind of ["publish_branch", "publish_pr"] as const) {
+      if (!plan.actions.some(
+        (action) =>
+          action.kind === kind &&
+          action.task_id === task.id &&
+          action.group_id === null,
+      )) missing.push(`${kind}:task:${task.id}`);
+    }
+  }
+  return missing.length
+    ? [{
+        code: "PLAN_NOT_DISPATCHABLE",
+        message: `贡献任务执行需要批准的发布动作：${missing.join(", ")}`,
+      }]
+    : [];
+}
+
 function activeGroupDispatch(
   ledger: Ledger,
   groupId: string,
@@ -557,6 +593,7 @@ export function buildView(
     (item) => item.id === ledger.execution_plan_id,
   )!;
   const completenessIssues = planCompletenessIssues(plan);
+  const schedulingPlanIssues = planSchedulingIssues(ledger, plan);
   const isApprovedExecution =
     activePlan.id === executionPlan.id && activePlan.lifecycle === "approved";
   const runtimeProjection = runtimeReadinessProjection(ledger, plan);
@@ -577,9 +614,15 @@ export function buildView(
       message: issue.message,
       resource: null,
     })),
+    ...schedulingPlanIssues.map((issue) => ({
+      code: issue.code,
+      group_id: null,
+      message: issue.message,
+      resource: null,
+    })),
     ...runtimeProjection.summary.blockers,
   ];
-  const schedulingStatus = approvalPending || completenessIssues.length
+  const schedulingStatus = approvalPending || completenessIssues.length || schedulingPlanIssues.length
     ? "blocked"
     : runtimeProjection.summary.status === "ready"
       ? "eligible"

@@ -2803,6 +2803,12 @@ export function execute(
         .enum(["unknown", "idle", "running", "waiting", "blocked"])
         .parse(payload.state);
       requireCondition(
+        state === "unknown" || owner.state === "active",
+        "GROUP_NOT_ACTIVE",
+        "Only active delivery units can record runtime execution",
+        4,
+      );
+      requireCondition(
         state === "unknown" || owner.delivery_unit_kind === "bootstrap" || !!owner.agent_thread_id,
         "GROUP_NOT_READY",
         "Regular delivery unit requires a bound Delivery coordinator before runtime execution",

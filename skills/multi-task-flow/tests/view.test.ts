@@ -13,6 +13,10 @@ function fixture(nodes: unknown[], edges: unknown[], startAt: string | null = at
   return plan.parse({ id: "plan", supersedes_id: null, approval_id: null, created_at: at, start_at: startAt, atoms: [], atomic_edges: [], nodes, edges, cut_rules: [], actions: [] });
 }
 function withRuntimeEvidence<T extends ReturnType<typeof createPlanningDemoLedger>>(ledger: T): T {
+  ledger.plans[0]!.actions = ledger.groups.flatMap((group) => [
+    { id: `${group.id}-publish-branch`, kind: "publish_branch" as const, task_id: null, group_id: group.id, target_identity: `branch:${group.id}` },
+    { id: `${group.id}-publish-pr`, kind: "publish_pr" as const, task_id: null, group_id: group.id, target_identity: `pr:${group.id}` },
+  ]);
   ledger.groups.forEach((group) => {
     group.lifecycle.workspace_ready = "passed";
     ledger.events.push({
@@ -127,6 +131,9 @@ describe("timeline projections", () => {
     expect(view.plan_state.runtime_readiness.blockers).toContainEqual(expect.objectContaining({
       code: "WORKSPACE_NOT_READY",
       group_id: "dashboard",
+    }));
+    expect(view.plan_state.scheduling.blockers).toContainEqual(expect.objectContaining({
+      code: "PLAN_NOT_DISPATCHABLE",
     }));
     expect(JSON.stringify(ledger)).toBe(before);
   });

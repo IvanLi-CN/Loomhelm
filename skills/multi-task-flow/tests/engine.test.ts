@@ -184,6 +184,16 @@ function approve(ledger: ReturnType<typeof fixture>) {
   }));
 }
 
+test("planned delivery units cannot record running execution", () => {
+  const ledger = fixture();
+  ledger.groups[0]!.state = "planned";
+  expect(() => apply(ledger, "group-execution-update", request(ledger, "planned-running", {
+    group_id: "g",
+    state: "running",
+    observed_at: at,
+  }, groupActor))).toThrow("Only active delivery units can record runtime execution");
+});
+
 test("runtime observation persists the formal agent_idle task state and restores it", () => {
   const ledger = fixture();
   const task = ledger.tasks[1]!;
@@ -2973,6 +2983,7 @@ test("native group retry ignores a failed attempt and still requires a fresh mai
   expect(ledger.operations.at(-1)!.status).toBe("unknown");
   invoke("dispatch-progress", "group-observed", { operation_id: "group-cli", native_request_id: "group-native", thread_id: "group-thread" });
   invoke("dispatch-resolve", "group-resolved", { operation_id: "group-cli", thread_id: "group-thread", outcome: "succeeded", native_evidence: { source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "group-cli", native_request_id: "group-native", ...ledger.config.execution_profile, evidence_ref: "codex:group", created_at: at, thread_id: "group-thread", workspace_path: "/owned", initial_head: base, exit_code: 0, turn_completed: true } });
+  ledger.groups[0]!.state = "active";
   expect(() => invoke("group-execution-update", "early-group", { group_id: "g", state: "running" }, groupActor)).toThrow("baseline");
   ledger.resources = [{ id: "gwt", kind: "worktree", target: "g", status: "active", evidence_ref: "owned" }, { id: "gbr", kind: "branch", target: "parent", status: "active", evidence_ref: "branch" }];
   const payload = { target_type: "group", target_id: "g", stage: "workspace_ready", branch: "parent", resource_ids: ["gwt", "gbr"], evidence_ref: "fresh-fetch" };
