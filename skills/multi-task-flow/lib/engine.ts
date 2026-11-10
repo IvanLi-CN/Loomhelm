@@ -3724,8 +3724,6 @@ export function execute(
           )) {
             task.state = "integrated";
             task.finished_at = evidence.observed_at;
-            if (task.lifecycle && !legacyLedger(ledger))
-              task.lifecycle.pr_merged = "passed";
           }
         } else if (op.request.mode === "follow") {
           const follow = find(
