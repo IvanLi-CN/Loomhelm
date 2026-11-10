@@ -15882,7 +15882,7 @@
     },
     {
       "path": "skills/multi-task-flow/tests/service-release.test.ts",
-      "installedSha256": "10ea2c69d5c2f32e1bd0d3c3e822a6c45a7927d78934f08e858ac926a0e5bec8"
+      "installedSha256": "5ae061c459237e4ba9bb3f237e6c1fa9cf24c66b54d270e8b3e4a88596e6cc80"
     },
     {
       "path": "skills/multi-task-flow/lib/notification-delivery.ts",

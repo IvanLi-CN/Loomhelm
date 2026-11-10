@@ -3,6 +3,7 @@ import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path";
 import { fixtureRelease, fixtureLegacyRelease, serviceFixture } from "./service-fixture";
 import { buildId, digest, verifyRelease, requireSourceRelease } from "../lib/service-release";
+import { SKILL_VERSION } from "../lib/contract";
 
 function update(source: string, manifest: any) {
   const { build_id, ...body } = manifest;
@@ -38,7 +39,7 @@ test("viewer contract upgrades keep old release identity verification compatible
     const { build_id: _buildId, ...legacyBody } = legacy;
     const oldIdentity = digest(JSON.stringify({
       ...Object.fromEntries(Object.entries(legacyBody).filter(([key, value]) =>
-        key !== "viewer_contract" && !(key === "skill_id" && value === "multi-task-flow") && !(key === "skill_version" && value === "2.4.0") && !(key === "ledger_contract" && value === 2),
+        key !== "viewer_contract" && !(key === "skill_id" && value === "multi-task-flow") && !(key === "skill_version" && value === SKILL_VERSION) && !(key === "ledger_contract" && value === 2),
       )),
       files: Object.fromEntries(Object.entries(legacy.files).filter(([key]) => key !== "viewer").sort(([a], [b]) => a.localeCompare(b))),
     }));
