@@ -100,6 +100,17 @@ describe("conversation output projection", () => {
       try { await tick(); expect(f.provider.snapshot().outputs.a?.agent_state).toBe(type === "active" ? "active" : "unknown"); } finally { f.provider.stop(); }
     }
   });
+  test("confirms idle for an unloaded thread with a terminal latest turn", async () => {
+    const f = fixture(async method => method === "thread/read"
+      ? { thread: { status: { type: "notLoaded" } } }
+      : method === "thread/turns/list"
+        ? { data: [{ id: "latest-turn", status: "completed", items: [] }] }
+        : { data: [{ ...message("done", "final"), completedAtMs: 1 }] });
+    try {
+      await tick();
+      expect(f.provider.snapshot().outputs.a).toMatchObject({ agent_state: "idle", runtime_turn_id: "latest-turn" });
+    } finally { f.provider.stop(); }
+  });
   test("full turn fallback happens only on an explicit unsupported-method error", async () => {
     const calls: string[] = [];
     const f = fixture(async (method, params) => { if (method === "thread/read") return {}; calls.push(method); if (method === "thread/items/list") throw new Error("method not found"); expect(params.itemsView).toBe("full"); return { data: [{ id: "turn", status: "completed", items: [message("old", "old").item, message("new", "final", "final_answer").item] }] }; });
