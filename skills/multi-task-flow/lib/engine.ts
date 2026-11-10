@@ -2802,6 +2802,25 @@ export function execute(
       const state = z
         .enum(["unknown", "idle", "running", "waiting", "blocked"])
         .parse(payload.state);
+      requireCondition(
+        state === "unknown" || ledger.control.ownership === "bound",
+        "CONTROL_OWNERSHIP_UNKNOWN",
+        "Runtime execution requires bound orchestration control ownership",
+        4,
+      );
+      requireCondition(
+        state === "unknown" || owner.state === "active" ||
+          (owner.state === "merged" && state === "idle"),
+        "GROUP_NOT_ACTIVE",
+        "Only active delivery units can record runtime execution, except merged closeout idle",
+        4,
+      );
+      requireCondition(
+        state === "unknown" || owner.delivery_unit_kind === "bootstrap" || !!owner.agent_thread_id,
+        "GROUP_NOT_READY",
+        "Regular delivery unit requires a bound Delivery coordinator before runtime execution",
+        4,
+      );
       const cliDispatches = ledger.operations.filter(op => op.kind === "dispatch" && op.target_id === groupId &&
         op.request.target_type === "group" && (op.request.creation_parameters as any)?.transport === "codex-exec");
       const cliDispatch = cliDispatches.find(op => op.status === "succeeded");

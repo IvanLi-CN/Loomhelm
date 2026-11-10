@@ -73,6 +73,27 @@ function durationValue(start: string | null, end: string | null): HTMLElement {
   return value;
 }
 
+function coordinatorValue(group: Group): string {
+  const status = group.coordinator?.status ?? (group.delivery_unit_kind === "bootstrap"
+    ? group.agent_thread_id ? "bound" : "unknown"
+    : group.agent_thread_id ? "bound" : "not_created");
+  if (status === "bound") return group.delivery_unit_kind === "bootstrap" ? "主对话已绑定" : "已绑定";
+  return status === "not_created" ? "尚未创建" : "未知";
+}
+
+function readinessValue(group: Group): string {
+  const readiness = group.runtime_readiness;
+  if (!readiness) return "未知";
+  const status = readiness.status === "ready" ? "Ready" : readiness.status === "blocked" ? "Blocked" : "Unknown";
+  const blockers = readiness.blockers.map((blocker) => {
+    const resource = blocker.resource
+      ? ` · 资源：${blocker.resource.status === "not_created" ? "尚未创建" : "未知"}`
+      : "";
+    return `${blocker.message}${resource}`;
+  });
+  return [status, ...blockers].join(" · ");
+}
+
 function atomList(atoms: Task["atoms"] | Group["atoms"], dependencies: (index: number) => DependencyTooltipItem[]): HTMLElement | string {
   if (!atoms?.length) return "未配置原子任务";
   const list = document.createElement("ol");
@@ -229,6 +250,8 @@ export function createDetailContent(context: DetailContentContext) {
     }));
     if (group.coordination_execution?.state === "waiting") field(container, "协调等待", group.coordination_execution.reason ?? "等待贡献任务");
     if (group.coordination_execution?.state === "blocked") field(container, "协调阻塞", group.coordination_execution.reason ?? "未知原因");
+    field(container, "交付协调者", coordinatorValue(group));
+    field(container, "运行就绪", readinessValue(group));
     field(container, "任务数", `${tasks.length} 个任务`);
     if (historicalTaskIds.length) field(container, "历史执行任务", historicalTaskIds.map((id) => data.tasks.find((task) => task.id === id)?.title ?? id).join("、"));
     field(container, "持续时间", durationValue(group.started_at ?? null, group.finished_at ?? null));

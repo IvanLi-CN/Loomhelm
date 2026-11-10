@@ -184,6 +184,16 @@ function approve(ledger: ReturnType<typeof fixture>) {
   }));
 }
 
+test("planned delivery units cannot record running execution", () => {
+  const ledger = fixture();
+  ledger.groups[0]!.state = "planned";
+  expect(() => apply(ledger, "group-execution-update", request(ledger, "planned-running", {
+    group_id: "g",
+    state: "running",
+    observed_at: at,
+  }, groupActor))).toThrow("Only active delivery units can record runtime execution");
+});
+
 test("runtime observation persists the formal agent_idle task state and restores it", () => {
   const ledger = fixture();
   const task = ledger.tasks[1]!;
@@ -1097,6 +1107,30 @@ describe("orchestration state", () => {
     ).toThrow("dependencies");
   });
 
+  test("regular delivery units fail closed before coordinator binding", () => {
+    const ledger = fixture();
+    approve(ledger);
+    ledger.groups[0].agent_thread_id = null;
+    const before = JSON.stringify(ledger);
+
+    expect(() =>
+      apply(
+        ledger,
+        "dispatch-claim",
+        request(ledger, "unbound-task", { task_id: "a", operation_id: "unbound-task" }),
+      ),
+    ).toThrow("Task group is not bound");
+    expect(JSON.stringify(ledger)).toBe(before);
+    expect(() =>
+      apply(
+        ledger,
+        "group-execution-update",
+        request(ledger, "unbound-runtime", { group_id: "g", state: "running" }),
+      ),
+    ).toThrow("bound Delivery coordinator");
+    expect(ledger.groups[0].coordination_execution.state).toBe("unknown");
+  });
+
   test("group-start dependencies wait for the parent merge fact", () => {
     const ledger = fixture();
     ledger.plans[0].nodes.push(
@@ -1491,6 +1525,14 @@ describe("orchestration state", () => {
     expect(() => apply(ledger, "group-execution-update", request(ledger, "group-bad-wait", { group_id: "g", state: "waiting", reason: "missing", waiting_for_task_ids: ["missing"] }, groupActor))).toThrow("contribution tasks");
   });
 
+  test("runtime execution requires bound orchestration ownership", () => {
+    const ledger = fixture();
+    ledger.control.ownership = "uncertain";
+    expect(() => apply(ledger, "group-execution-update", request(ledger, "uncertain-runtime", {
+      group_id: "g", state: "running", reason: null, waiting_for_task_ids: [],
+    }, groupActor))).toThrow("ownership is not resolved");
+  });
+
   test("active delivery units cannot become idle while a contribution task is ready", () => {
     const ledger = fixture();
     approve(ledger);
@@ -1563,10 +1605,13 @@ describe("orchestration state", () => {
       { id: "group-atom-two", title: "Close", purpose: "Close", output: "Closed", lifecycle_stage: "closed", status: "running" },
     ];
     ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
-    ledger.groups[0].coordination_execution = { state: "idle", reason: null, waiting_for_task_ids: [] };
+    ledger.groups[0].coordination_execution = { state: "waiting", reason: "merged closeout", waiting_for_task_ids: [] };
     ledger.tasks.forEach((task: Task) => { task.state = "integrated"; });
     ledger.facts.push({ id: "group-merged", kind: "pr_merged", subject_id: "g", status: "passed", source: "github", observed_at: at, sha: merge, evidence_ref: "merge" });
     ledger.facts.push({ id: "group-ci", kind: "ci_passed", subject_id: "g", status: "passed", source: "github", observed_at: at, sha: merge, evidence_ref: "ci" });
+    apply(ledger, "group-execution-update", request(ledger, "merged-closeout-idle", {
+      group_id: "g", state: "idle", reason: null, waiting_for_task_ids: [],
+    }, coordinator));
     apply(ledger, "group-close", request(ledger, "group-closeout", { group_id: "g" }, coordinator));
     expect(ledger.groups[0].state).toBe("closed");
     expect(ledger.groups[0].atoms.at(-1)?.status).toBe("completed");
@@ -2949,6 +2994,7 @@ test("native group retry ignores a failed attempt and still requires a fresh mai
   expect(ledger.operations.at(-1)!.status).toBe("unknown");
   invoke("dispatch-progress", "group-observed", { operation_id: "group-cli", native_request_id: "group-native", thread_id: "group-thread" });
   invoke("dispatch-resolve", "group-resolved", { operation_id: "group-cli", thread_id: "group-thread", outcome: "succeeded", native_evidence: { source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "group-cli", native_request_id: "group-native", ...ledger.config.execution_profile, evidence_ref: "codex:group", created_at: at, thread_id: "group-thread", workspace_path: "/owned", initial_head: base, exit_code: 0, turn_completed: true } });
+  ledger.groups[0]!.state = "active";
   expect(() => invoke("group-execution-update", "early-group", { group_id: "g", state: "running" }, groupActor)).toThrow("baseline");
   ledger.resources = [{ id: "gwt", kind: "worktree", target: "g", status: "active", evidence_ref: "owned" }, { id: "gbr", kind: "branch", target: "parent", status: "active", evidence_ref: "branch" }];
   const payload = { target_type: "group", target_id: "g", stage: "workspace_ready", branch: "parent", resource_ids: ["gwt", "gbr"], evidence_ref: "fresh-fetch" };

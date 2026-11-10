@@ -13,23 +13,22 @@
       <div class="identity">
         <div class="brand-mark" aria-hidden="true"><i data-lucide="network"></i></div>
         <div class="identity-copy"><div class="product-name">任务编排</div><div id="project-name" class="project-name">正在加载</div></div>
+        <button id="plan-info-trigger" type="button" class="icon-button plan-info-trigger" data-tooltip="查看编排信息" aria-label="查看编排信息" aria-haspopup="dialog" aria-expanded="false" aria-controls="plan-info-panel"><i id="plan-info-icon" data-lucide="info" aria-hidden="true"></i></button>
+        <div id="run-profile-control" class="run-profile-control"></div>
       </div>
       <div class="top-actions">
-        <div id="run-profile-control" class="run-profile-control"></div>
-      <div class="top-meta"><span id="connection" class="connection" role="status"><span class="connection-dot"></span>连接中</span><span id="revision" class="revision"></span><span id="updated" class="updated"></span></div>
+        <div class="top-meta"><span id="connection" class="connection" role="status"><span class="connection-dot"></span>连接中</span><span id="revision" class="revision"></span><span id="updated" class="updated"></span></div>
         <div class="version-control dropdown dropdown-end" data-menu="version">
           <span class="version-label">版本</span>
           <button id="version-trigger" type="button" class="version-trigger menu-trigger btn btn-ghost btn-sm" aria-label="选择计划版本" aria-haspopup="listbox" aria-expanded="false" aria-controls="version-menu"><span id="version-value">当前版本</span><i data-lucide="chevron-down" aria-hidden="true"></i></button>
           <ul id="version-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="计划版本"></ul>
         </div>
         <div class="theme-control dropdown dropdown-end" data-menu="theme">
-          <i data-lucide="contrast" aria-hidden="true"></i>
-          <span class="sr-only">主题</span>
-          <button id="theme-trigger" type="button" class="theme-trigger btn btn-ghost btn-sm" aria-label="主题" aria-haspopup="listbox" aria-expanded="false" aria-controls="theme-menu"><span id="theme-value">深色</span><i data-lucide="chevron-down" aria-hidden="true"></i></button>
+          <button id="theme-trigger" type="button" class="theme-trigger icon-button" data-tooltip="选择主题" aria-label="选择主题" aria-haspopup="listbox" aria-expanded="false" aria-controls="theme-menu"><span id="theme-value" class="sr-only">深色</span><i data-lucide="contrast" aria-hidden="true"></i></button>
           <ul id="theme-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="主题选项">
-            <li><button type="button" role="option" data-menu-value="system">跟随系统</button></li>
-            <li><button type="button" role="option" data-menu-value="light">浅色</button></li>
-            <li><button type="button" role="option" data-menu-value="dark">深色</button></li>
+            <li><button type="button" role="option" data-menu-value="system"><i data-lucide="sun-moon" aria-hidden="true"></i><span>跟随系统</span></button></li>
+            <li><button type="button" role="option" data-menu-value="light"><i data-lucide="sun" aria-hidden="true"></i><span>浅色</span></button></li>
+            <li><button type="button" role="option" data-menu-value="dark"><i data-lucide="moon" aria-hidden="true"></i><span>深色</span></button></li>
           </ul>
         </div>
       </div>
@@ -69,6 +68,7 @@
             <div id="connection-notice" class="notice" role="status" hidden></div>
             <div id="phase-notice" class="notice notice-neutral" role="status" hidden><span id="phase-notice-text"></span><button type="button" id="phase-jump" class="text-button">查看实际进度</button></div>
             <div id="operation-warning" class="notice" role="status" hidden></div>
+            <div id="plan-state" class="notice plan-state" aria-label="计划与运行状态" hidden></div>
             <div id="plan-warning" class="notice notice-warning" role="status" hidden></div>
             <div id="load-error" class="notice notice-error" role="alert" hidden></div>
             <div id="graph-view" class="canvas-view" role="tabpanel" aria-labelledby="tab-graph"><div id="graph-projection-warning" class="notice notice-warning" role="status" hidden></div><div id="graph" aria-label="任务依赖图"></div><div id="graph-a11y" class="graph-a11y" role="list" aria-label="依赖图节点列表"></div><div id="graph-empty" class="empty" hidden>暂无任务</div></div>
@@ -86,5 +86,10 @@
     </main>
   </div>
   <div id="hover-preview" class="hover-preview" role="status" aria-live="polite" hidden></div>
+  <div id="plan-info-backdrop" class="plan-info-backdrop" hidden></div>
+  <aside id="plan-info-panel" class="plan-info-panel" role="dialog" aria-label="编排信息" aria-hidden="true" tabindex="-1" hidden>
+    <div class="plan-info-heading"><div><span class="plan-info-kicker">编排信息</span><strong id="plan-info-title">当前编排</strong></div><button id="close-plan-info" type="button" class="icon-button" data-tooltip="关闭编排信息" aria-label="关闭编排信息"><i data-lucide="x"></i></button></div>
+    <div id="plan-info-content" class="plan-info-content"></div>
+  </aside>
 </body>
 </html>
