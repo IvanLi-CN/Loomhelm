@@ -63,6 +63,25 @@ test("browser login, CSRF checks and credential-free resource links", async () =
   expect(page).toContain("/service-client.js"); expect(page).not.toContain(ticket);
   expect((await fetch(base + "/runs/demo-run/api/document/../../state/auth.json", { headers: { cookie } })).status).not.toBe(200);
 });
+test("legacy-view uses the previous viewer as an isolated read-only fallback", async () => {
+  const { root, state } = fixture();
+  const previous = fixtureRelease(root, "previous", { readOnly: true });
+  const installed = await installRelease(state, previous.source);
+  const target = fixtureRelease(root, "target");
+  const { store } = fixtureRun(state.paths.data, "demo-run");
+  const before = readFileSync(store.ledgerPath);
+  state.saveConfig({ ...state.config(), current_build: target.manifest.build_id, previous_build: installed.build_id });
+  const viewer = await startSharedViewer(state, target.manifest, join(target.source, "skills/multi-task-flow/dist"), 0); servers.push(viewer);
+  const base = `http://127.0.0.1:${viewer.port}`;
+  const headers = { authorization: "Bearer " + new ServiceAuth(state).credential() };
+  const response = await fetch(base + "/api/v1/runs/demo-run/legacy-view", { headers });
+  expect(response.status).toBe(200);
+  const body = await response.json() as { read_only: boolean; run_id: string; fallback_build_id: string; view: { orchestration: { id: string; revision: number } } };
+  expect(body).toMatchObject({ read_only: true, run_id: "demo-run", fallback_build_id: installed.build_id });
+  expect(body.view.orchestration).toEqual({ id: "demo-run", revision: 18 });
+  expect(readFileSync(store.ledgerPath)).toEqual(before);
+  expect((await fetch(base + "/api/v1/runs/demo-run/legacy-view", { method: "POST", headers })).status).not.toBe(200);
+});
 test("custom views require declared compatibility and malformed runs do not break discovery", () => {
   const { root, state } = fixture(); const { store } = fixtureRun(state.paths.data);
   const custom = join(store.runPath, "view"); mkdirSync(custom);

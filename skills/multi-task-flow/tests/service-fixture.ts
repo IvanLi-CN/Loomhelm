@@ -9,9 +9,9 @@ import { buildId, digest, releaseFiles } from "../lib/service-release";
 import { LedgerStore } from "../lib/store";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
 
-export function serviceFixture() {
+export function serviceFixture(profile: "test" | "production" = "test") {
   const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "mtf-service-")));
-  const state = new ServiceState(servicePaths({ MULTI_TASK_FLOW_PROFILE: "test", MULTI_TASK_FLOW_ROOT: root }));
+  const state = new ServiceState(servicePaths({ MULTI_TASK_FLOW_PROFILE: profile, MULTI_TASK_FLOW_ROOT: root }));
   state.initialize(); new ServiceAuth(state).initialize();
   return { root, state };
 }

@@ -159,7 +159,7 @@ export async function startSharedViewer(
   const auth = new ServiceAuth(state);
   const fallbackViewer = (() => {
     let previous: string | null = null;
-    try { if (!state.paths.isolated) previous = state.config().previous_build; } catch {}
+    try { if (!sourceRevision && !demoHooks) previous = state.config().previous_build; } catch {}
     if (!previous || previous === manifest.build_id) return null;
     try {
       const root = join(state.paths.releases, previous);
