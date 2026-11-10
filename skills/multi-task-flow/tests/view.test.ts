@@ -135,6 +135,9 @@ describe("timeline projections", () => {
     expect(view.plan_state.scheduling.blockers).toContainEqual(expect.objectContaining({
       code: "PLAN_NOT_DISPATCHABLE",
     }));
+    expect(view.plan_warnings).toContainEqual(expect.objectContaining({
+      code: "PLAN_NOT_DISPATCHABLE",
+    }));
     expect(JSON.stringify(ledger)).toBe(before);
   });
 
@@ -158,12 +161,18 @@ describe("timeline projections", () => {
     ledger.contract_version = 2;
     ledger.source_schema_version = null;
     ledger.groups.find((group) => group.id === "dashboard")!.state = "closed";
+    ledger.groups.find((group) => group.id === "core")!.state = "blocked";
     const view = buildView(ledger) as any;
 
-    expect(view.plan_state.scheduling.status).toBe("blocked");
-    expect(view.plan_state.runtime_readiness.blockers).toContainEqual(expect.objectContaining({
+    expect(view.plan_state.scheduling.status).toBe("eligible");
+    expect(view.plan_state.runtime_readiness.status).toBe("ready");
+    expect(view.groups.find((group: any) => group.id === "dashboard").runtime_readiness.blockers).toContainEqual(expect.objectContaining({
       code: "GROUP_CLOSED",
       group_id: "dashboard",
+    }));
+    expect(view.groups.find((group: any) => group.id === "core").runtime_readiness.blockers).toContainEqual(expect.objectContaining({
+      code: "GROUP_BLOCKED",
+      group_id: "core",
     }));
   });
 
@@ -212,6 +221,28 @@ describe("timeline projections", () => {
     });
     expect(view.plan_state.runtime_readiness.blockers).toContainEqual(expect.objectContaining({
       code: "CONTROL_OWNERSHIP_UNKNOWN",
+    }));
+  });
+
+  test("projects task execution policy conflicts as scheduling blockers", () => {
+    const ledger = withRuntimeEvidence(structuredClone(createPlanningDemoLedger(1_767_200_000_000)));
+    ledger.contract_version = 2;
+    ledger.source_schema_version = null;
+    Object.assign(ledger.tasks[0]!, {
+      execution_owner: "main",
+      conversation_policy: "task_agent",
+      delivery_policy: "parent_pr",
+    });
+    const view = buildView(ledger) as any;
+
+    expect(view.plan_state).toMatchObject({
+      scheduling: { status: "blocked" },
+      scheduling_eligible: false,
+      authorization_label: "Not schedulable",
+    });
+    expect(view.plan_state.scheduling.blockers).toContainEqual(expect.objectContaining({
+      code: "TASK_EXECUTION_POLICY_CONFLICT",
+      group_id: ledger.tasks[0]!.group_id,
     }));
   });
 

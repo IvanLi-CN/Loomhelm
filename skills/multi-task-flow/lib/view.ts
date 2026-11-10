@@ -136,6 +136,13 @@ function planSchedulingIssues(ledger: Ledger, plan: Plan): PlanCompletenessIssue
     : [];
 }
 
+function taskSchedulingIssues(ledger: Ledger): Array<PlanCompletenessIssue & { group_id: string }> {
+  if (ledger.source_schema_version === 1) return [];
+  return ledger.tasks.flatMap((task) =>
+    taskExecutionPolicyIssues(task).map((issue) => ({ ...issue, group_id: task.group_id })),
+  );
+}
+
 function activeGroupDispatch(
   ledger: Ledger,
   groupId: string,
@@ -390,7 +397,12 @@ function runtimeReadinessProjection(ledger: Ledger, plan: Plan): {
     ledger.groups.map((group) => [group.id, groupRuntimeReadiness(ledger, group, groupIds.has(group.id))]),
   );
   const summaries = [...byGroup.values()].filter((item) => item.blockers.length > 0);
-  const blockers = summaries.flatMap((item) => item.blockers);
+  const blockers = summaries
+    .filter((item) => {
+      const group = ledger.groups.find((candidate) => candidate.id === item.blockers[0]?.group_id);
+      return group?.state !== "closed" && group?.state !== "blocked";
+    })
+    .flatMap((item) => item.blockers);
   return {
     summary: {
       status: blockers.some((item) => item.code.endsWith("UNKNOWN"))
@@ -594,6 +606,7 @@ export function buildView(
   )!;
   const completenessIssues = planCompletenessIssues(plan);
   const schedulingPlanIssues = planSchedulingIssues(ledger, plan);
+  const schedulingTaskIssues = taskSchedulingIssues(ledger);
   const isApprovedExecution =
     activePlan.id === executionPlan.id && activePlan.lifecycle === "approved";
   const runtimeProjection = runtimeReadinessProjection(ledger, plan);
@@ -620,9 +633,15 @@ export function buildView(
       message: issue.message,
       resource: null,
     })),
+    ...schedulingTaskIssues.map((issue) => ({
+      code: issue.code,
+      group_id: issue.group_id,
+      message: issue.message,
+      resource: null,
+    })),
     ...runtimeProjection.summary.blockers,
   ];
-  const schedulingStatus = approvalPending || completenessIssues.length || schedulingPlanIssues.length
+  const schedulingStatus = approvalPending || completenessIssues.length || schedulingPlanIssues.length || schedulingTaskIssues.length
     ? "blocked"
     : runtimeProjection.summary.status === "ready"
       ? "eligible"
@@ -832,6 +851,14 @@ export function buildView(
     plan_warnings: [
       ...planWarnings(plan),
       ...completenessIssues.map((issue) => ({
+        code: issue.code,
+        reason: issue.message,
+      })),
+      ...schedulingPlanIssues.map((issue) => ({
+        code: issue.code,
+        reason: issue.message,
+      })),
+      ...schedulingTaskIssues.map((issue) => ({
         code: issue.code,
         reason: issue.message,
       })),
