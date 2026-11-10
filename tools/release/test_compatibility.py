@@ -69,6 +69,15 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(result["required_labels"], ["release:skill"])
         self.assertEqual(result["skill_version"], "2.5.0")
 
+    def test_viewer_marker_does_not_change_ledger_contract(self):
+        path = "skills/multi-task-flow/lib/contract.ts"
+        before = 'export const CONTRACT_VERSION = 2; export const VIEWER_CONTRACT = 3;'
+        after = before.replace('VIEWER_CONTRACT = 3', 'VIEWER_CONTRACT = 4')
+        with patch.object(compatibility, "read_at", side_effect=[before, after]):
+            self.assertFalse(compatibility.contract_semantics_changed("base", "head", [path]))
+        with patch.object(compatibility, "read_at", side_effect=[before, after + '\nexport const changed = true;']):
+            self.assertTrue(compatibility.contract_semantics_changed("base", "head", [path]))
+
     def test_private_package_cannot_publish(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
