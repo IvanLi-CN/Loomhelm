@@ -5,9 +5,11 @@ import { PortRegistry } from "../../bin/modules/workspace/port_registry";
 import { LedgerStore } from "../lib/store";
 import { ServiceAuth } from "../lib/service-auth";
 import { startSharedViewer, listRuns, selectAssets } from "../lib/service-http";
+import { runDaemon } from "../lib/service-lifecycle";
 import { installRelease, switchRelease, nativeServiceControl } from "../lib/service-maintenance";
 import { verifyRelease } from "../lib/service-release";
 import { importRun } from "../lib/service-import";
+import { serviceCommand } from "../scripts/service";
 import { serviceFixture, fixtureRelease, fixtureRun } from "./service-fixture";
 
 const roots: string[] = [];
@@ -28,6 +30,34 @@ test("one-time login persists sessions and explicit rotation revokes them", () =
   expect(new ServiceAuth(state).authorize(request)?.kind).toBe("browser");
   expect(new ServiceAuth(state).credential()).toBe(credential);
   auth.rotate(); expect(auth.authorize(request)).toBeNull();
+});
+test("service login emits browser-ready target tickets", async () => {
+  const { root, state } = fixture();
+  const release = fixtureRelease(root);
+  const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  const port = probe.port!;
+  await probe.stop(true);
+  mkdirSync(join(root, "registry"), { recursive: true });
+  state.saveConfig({ schema_version: 1, port, registry_dir: join(root, "registry"), current_build: release.manifest.build_id, previous_build: null, agent_ttl_ms: 60_000 });
+  let daemon: Awaited<ReturnType<typeof runDaemon>> | undefined;
+  try {
+    daemon = await runDaemon(state, { manifest: release.manifest, assetsDir: join(release.source, "skills/multi-task-flow/dist"), revision: () => "test" });
+    const check = async (input: { run_id?: string }, target: string) => {
+      const result = await serviceCommand("login", input, state) as { login_url: string; expires_in_seconds: number; single_use: boolean };
+      const url = new URL(result.login_url);
+      expect(url.origin).toBe(`http://127.0.0.1:${port}`);
+      expect(url.pathname).toBe(target);
+      expect(url.hash).toBe("");
+      expect(url.searchParams.getAll("ticket")).toHaveLength(1);
+      expect(url.searchParams.get("ticket")).toMatch(/^[A-Za-z0-9_-]+$/);
+      expect(result).toMatchObject({ expires_in_seconds: 60, single_use: true });
+      expect(new ServiceAuth(state).exchange(url.searchParams.get("ticket")!, target).target).toBe(target);
+    };
+    await check({}, "/");
+    await check({ run_id: "demo.run" }, "/runs/demo.run/");
+  } finally {
+    await daemon?.stop();
+  }
 });
 test("multi-run routing has one listener, authenticated APIs and lazy watchers", async () => {
   const { root, state } = fixture(); const release = fixtureRelease(root);

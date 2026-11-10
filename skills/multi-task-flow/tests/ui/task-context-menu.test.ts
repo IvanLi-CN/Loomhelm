@@ -45,6 +45,6 @@ test("keyboard opening, navigation and Escape; blank space retains native menu",
   const event = new window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }); document.body.dispatchEvent(event); expect(event.defaultPrevented).toBe(false);
 });
 test("authentication redirects only accept same-service run links and legal view state", () => {
-  expect(parseViewerTarget('/runs/run-a/?selected=task%3AC2&detail=1&q=hidden', 'http://localhost', { allowHome: false })?.target).toBe('/runs/run-a/?selected=task%3AC2&detail=1&q=hidden');
+  expect(parseViewerTarget('/runs/run-a/?selected=task%3Atask.v2&detail=1&plan=plan.v2&q=hidden', 'http://localhost', { allowHome: false })?.target).toBe('/runs/run-a/?selected=task%3Atask.v2&detail=1&plan=plan.v2&q=hidden');
   for (const value of ['https://evil.test/runs/run-a/?selected=task:C2', '//evil.test/runs/run-a/?selected=task:C2', '/login?selected=task:C2', '/runs/run-a/../', '/runs/%2e%2e/', '/runs\\run-a/', '/runs/run-a/?selected=other:C2', '/runs/run-a/?selected=task:<script>', 'http://user:pass@localhost/runs/run-a/?selected=task:C2', '/runs/run-a/?ticket=secret', '/runs/run-a/?selected=task:C2&selected=task:C3', '/runs/run-a/?q=%0d%0aLocation:%20https://evil.test']) expect(parseViewerTarget(value, 'http://localhost', { allowHome: false })).toBeNull();
 });
