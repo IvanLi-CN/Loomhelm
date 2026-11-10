@@ -8,6 +8,7 @@ import { compatibility } from "../lib/service-contract";
 import { buildId, digest, releaseFiles } from "../lib/service-release";
 import { LedgerStore } from "../lib/store";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
+import type { View } from "../web/model";
 
 export function serviceFixture(profile: "test" | "production" = "test") {
   const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "mtf-service-")));
@@ -42,4 +43,38 @@ export function fixtureLegacyRelease(root: string) {
   const manifest = {...body,build_id:buildId(body)};
   writeFileSync(join(source,"manifest.json"),JSON.stringify(manifest));
   return {source,manifest};
+}
+
+export function emptyBootstrapView(): View {
+  const groups: View["groups"] = [
+    { id: "bootstrap", title: "版本化 Skill 发布合同", delivery_unit_kind: "bootstrap", owner_kind: "main", agent_thread_id: null, state: "active", parent_pr: null, requirements_path: null },
+    { id: "regular", title: "后续交付", delivery_unit_kind: "regular", owner_kind: "group", agent_thread_id: null, state: "active", parent_pr: null, requirements_path: null },
+  ];
+  const tasks: View["tasks"] = [{
+    id: "later-task", title: "后续实现任务", kind: "contribution", group_id: "regular", thread_id: null, state: "planned", is_ready: false,
+    pr: null, requirements_path: null, started_at: null, finished_at: null, blocker: null,
+  }];
+  const nodes: View["nodes"] = [
+    { id: "main-start", kind: "main_start", ref_id: null, group_id: null, planned_group_id: null, label: "主任务开始" },
+    { id: "bootstrap-start", kind: "group_start", ref_id: "bootstrap", group_id: "bootstrap", planned_group_id: "bootstrap", label: "bootstrap 开始" },
+    { id: "bootstrap-end", kind: "group_end", ref_id: "bootstrap", group_id: "bootstrap", planned_group_id: "bootstrap", label: "bootstrap 收口" },
+    { id: "regular-start", kind: "group_start", ref_id: "regular", group_id: "regular", planned_group_id: "regular", label: "regular 开始" },
+    { id: "later-task-node", kind: "task", ref_id: "later-task", group_id: "regular", planned_group_id: "regular", label: "后续实现任务" },
+    { id: "regular-end", kind: "group_end", ref_id: "regular", group_id: "regular", planned_group_id: "regular", label: "regular 收口" },
+    { id: "main-end", kind: "main_end", ref_id: null, group_id: null, planned_group_id: null, label: "主任务完成" },
+  ];
+  const edge = (id: string, from_node_id: string, to_node_id: string, requires: string): View["edges"][number] => ({ id, from_node_id, to_node_id, requires });
+  return {
+    orchestration: { id: "empty-bootstrap-run", repository: { owner: "example", name: "loomhelm", host: "github.com" }, revision: 1, updated_at: "2026-01-01T00:00:00.000Z", display_timezone: "UTC", max_running_tasks: 1, conversation_links_verified: true },
+    groups, tasks, plans: [], selected_plan_id: "", follow_prs: [], nodes,
+    edges: [
+      edge("main-to-bootstrap", "main-start", "bootstrap-start", "completed"),
+      edge("bootstrap-through", "bootstrap-start", "bootstrap-end", "completed"),
+      edge("bootstrap-to-regular", "bootstrap-end", "regular-start", "merged"),
+      edge("regular-to-task", "regular-start", "later-task-node", "completed"),
+      edge("task-to-regular-end", "later-task-node", "regular-end", "completed"),
+      edge("regular-to-main-end", "regular-end", "main-end", "completed"),
+    ],
+    planned_intervals: [], actual_intervals: [], actual_milestones: [], warnings: [],
+  };
 }

@@ -146,6 +146,12 @@ function uniqueId(candidate: string, usedIds: Set<string>): string {
 
 type WalkState = { nodeId: string; path: GraphDependencyPath; visited: Set<string> };
 
+type DisplayDependencyOptions = {
+  boundaryEndpointIds?: ReadonlyMap<string, string>;
+  syntheticOutgoing?: ReadonlyMap<string, View["edges"]>;
+  syntheticBoundaryStarts?: ReadonlyMap<string, string>;
+};
+
 function walkHiddenPaths(
   initial: WalkState,
   outgoing: Map<string, View["edges"]>,
@@ -153,6 +159,7 @@ function walkHiddenPaths(
   nodeById: Map<string, Node>,
   onVisible: (nodeId: string, path: GraphDependencyPath) => void,
   onTerminal: (path: GraphDependencyPath) => void,
+  boundaryEndpointIds: ReadonlyMap<string, string> = new Map(),
 ): boolean {
   const queue: WalkState[] = [initial];
   let processed = 0;
@@ -168,8 +175,11 @@ function walkHiddenPaths(
     let advanced = false;
     let blocked = false;
     for (const edge of outgoing.get(current.nodeId) ?? []) {
-      if (visibleNodeIds.has(edge.to_node_id)) {
-        if (edge.to_node_id === current.nodeId || edge.to_node_id === initial.nodeId) {
+      const visibleTargetId = visibleNodeIds.has(edge.to_node_id)
+        ? edge.to_node_id
+        : boundaryEndpointIds.get(edge.to_node_id);
+      if (visibleTargetId !== undefined) {
+        if (visibleTargetId === current.nodeId || visibleTargetId === initial.nodeId) {
           blocked = true;
           continue;
         }
@@ -179,7 +189,7 @@ function walkHiddenPaths(
         }
         emitted += 1;
         advanced = true;
-        onVisible(edge.to_node_id, appendPath(current.path, edge));
+        onVisible(visibleTargetId, appendPath(current.path, edge, visibleTargetId === edge.to_node_id ? undefined : edge.to_node_id));
         continue;
       }
       const hiddenTarget = nodeById.get(edge.to_node_id);
@@ -196,7 +206,7 @@ function walkHiddenPaths(
   return overflow;
 }
 
-function findVisibleWitnesses(initial: WalkState, outgoing: Map<string, View["edges"]>, visibleNodeIds: Set<string>, nodeById: Map<string, Node>): Map<string, GraphDependencyPath> {
+function findVisibleWitnesses(initial: WalkState, outgoing: Map<string, View["edges"]>, visibleNodeIds: Set<string>, nodeById: Map<string, Node>, boundaryEndpointIds: ReadonlyMap<string, string> = new Map()): Map<string, GraphDependencyPath> {
   const queue: WalkState[] = [initial];
   const visited = new Set(initial.visited);
   const witnesses = new Map<string, GraphDependencyPath>();
@@ -206,8 +216,11 @@ function findVisibleWitnesses(initial: WalkState, outgoing: Map<string, View["ed
     processed += 1;
     for (const edge of outgoing.get(current.nodeId) ?? []) {
       if (witnesses.size >= MAX_GRAPH_PATHS) break;
-      if (visibleNodeIds.has(edge.to_node_id)) {
-        if (edge.to_node_id !== initial.nodeId && !witnesses.has(edge.to_node_id)) witnesses.set(edge.to_node_id, appendPath(current.path, edge));
+      const visibleTargetId = visibleNodeIds.has(edge.to_node_id)
+        ? edge.to_node_id
+        : boundaryEndpointIds.get(edge.to_node_id);
+      if (visibleTargetId !== undefined) {
+        if (visibleTargetId !== initial.nodeId && !witnesses.has(visibleTargetId)) witnesses.set(visibleTargetId, appendPath(current.path, edge, visibleTargetId === edge.to_node_id ? undefined : edge.to_node_id));
         continue;
       }
       const hiddenTarget = nodeById.get(edge.to_node_id);
@@ -219,7 +232,7 @@ function findVisibleWitnesses(initial: WalkState, outgoing: Map<string, View["ed
   return witnesses;
 }
 
-function findTerminalWitnesses(initial: WalkState, outgoing: Map<string, View["edges"]>, visibleNodeIds: Set<string>, nodeById: Map<string, Node>): GraphDependencyPath[] {
+function findTerminalWitnesses(initial: WalkState, outgoing: Map<string, View["edges"]>, visibleNodeIds: Set<string>, nodeById: Map<string, Node>, boundaryEndpointIds: ReadonlyMap<string, string> = new Map()): GraphDependencyPath[] {
   const queue: WalkState[] = [initial];
   const visited = new Set(initial.visited);
   const terminals: GraphDependencyPath[] = [];
@@ -230,7 +243,7 @@ function findTerminalWitnesses(initial: WalkState, outgoing: Map<string, View["e
     let advanced = false;
     let blocked = false;
     for (const edge of outgoing.get(current.nodeId) ?? []) {
-      if (visibleNodeIds.has(edge.to_node_id)) {
+      if (visibleNodeIds.has(edge.to_node_id) || boundaryEndpointIds.has(edge.to_node_id)) {
         blocked = true;
         continue;
       }
@@ -248,9 +261,10 @@ function findTerminalWitnesses(initial: WalkState, outgoing: Map<string, View["e
   return terminals;
 }
 
-function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeIds: Set<string>, nodeById: Map<string, Node>, tasks: Map<string, Task>, usedIds: Set<string>): { edges: GraphProjectionEdge[]; boundaryDependencies: GraphBoundaryDependency[]; warnings: string[] } {
+function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeIds: Set<string>, nodeById: Map<string, Node>, tasks: Map<string, Task>, usedIds: Set<string>, options: DisplayDependencyOptions = {}): { edges: GraphProjectionEdge[]; boundaryDependencies: GraphBoundaryDependency[]; warnings: string[] } {
   const outgoing = new Map<string, View["edges"]>();
   for (const edge of view.edges) outgoing.set(edge.from_node_id, [...(outgoing.get(edge.from_node_id) ?? []), edge]);
+  for (const [sourceId, edges] of options.syntheticOutgoing ?? []) outgoing.set(sourceId, edges);
   const collapsed = new Map<string, GraphProjectionEdge>();
   const edgeIds = new Map<string, string>();
   const boundary = new Map<string, GraphBoundaryDependency>();
@@ -268,7 +282,8 @@ function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeId
   };
 
   for (const source of visibleNodes) {
-    const initial: WalkState = { nodeId: source.id, path: { requires: [], sourceEdgeIds: [], boundaryNodeIds: [] }, visited: new Set([source.id]) };
+    const syntheticBoundaryStart = options.syntheticBoundaryStarts?.get(source.id);
+    const initial: WalkState = { nodeId: source.id, path: { requires: [], sourceEdgeIds: [], boundaryNodeIds: syntheticBoundaryStart ? [syntheticBoundaryStart] : [] }, visited: new Set([source.id]) };
     const pathBudget = { value: 0 };
     const addVisiblePath = (targetId: string, path: GraphDependencyPath): void => {
       const target = nodeById.get(targetId);
@@ -305,14 +320,15 @@ function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeId
       nodeById,
       addVisiblePath,
       addOutgoingPath,
+      options.boundaryEndpointIds,
     );
     if (overflow) {
       warn(`节点 ${source.id}`);
-      for (const [targetId, path] of findVisibleWitnesses(initial, outgoing, visibleNodeIds, nodeById)) {
+      for (const [targetId, path] of findVisibleWitnesses(initial, outgoing, visibleNodeIds, nodeById, options.boundaryEndpointIds)) {
         const edge = collapsed.get(displayEdgeKey(source.id, targetId));
         if (!edge?.paths.some((item) => item.truncated)) addVisiblePath(targetId, { ...path, truncated: true });
       }
-      for (const path of findTerminalWitnesses(initial, outgoing, visibleNodeIds, nodeById)) addOutgoingPath({ ...path, truncated: true });
+      for (const path of findTerminalWitnesses(initial, outgoing, visibleNodeIds, nodeById, options.boundaryEndpointIds)) addOutgoingPath({ ...path, truncated: true });
     }
   }
 
@@ -339,10 +355,11 @@ function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeId
       nodeById,
       addIncomingPath,
       () => undefined,
+      options.boundaryEndpointIds,
     );
     if (overflow) {
       warn(`计划入口 ${root}`);
-      for (const [targetId, path] of findVisibleWitnesses(initial, outgoing, visibleNodeIds, nodeById)) {
+      for (const [targetId, path] of findVisibleWitnesses(initial, outgoing, visibleNodeIds, nodeById, options.boundaryEndpointIds)) {
         const dependency = boundary.get(`incoming\u0000${targetId}`);
         if (!dependency?.paths.some((item) => item.truncated)) addIncomingPath(targetId, { ...path, truncated: true });
       }
@@ -352,13 +369,15 @@ function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeId
   return { edges: [...collapsed.values()], boundaryDependencies: [...boundary.values()], warnings };
 }
 
-export function buildGraphProjection(view: View, visibleTaskIds?: ReadonlySet<string>): GraphProjection {
+export function buildGraphProjection(view: View, visibleTaskIds?: ReadonlySet<string>, visibleGroupIds?: ReadonlySet<string>): GraphProjection {
   const taskById = new Map(view.tasks.map((task) => [task.id, task]));
   const nodeById = new Map(view.nodes.map((node) => [node.id, node]));
   const includedTasks = visibleTaskIds ?? new Set(view.tasks.map((task) => task.id));
   const visibleNodes = view.nodes.filter((node) => !HIDDEN_BOUNDARY_KINDS.has(node.kind) && (node.kind !== "task" || (!!node.ref_id && includedTasks.has(node.ref_id))));
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
   const groupIds = new Set(visibleNodes.map((node) => currentGroupId(node, taskForNode(node, taskById))).filter((id): id is string => !!id));
+  if (visibleGroupIds) for (const groupId of visibleGroupIds) groupIds.add(groupId);
+  else if (visibleTaskIds === undefined || view.tasks.every((task) => includedTasks.has(task.id))) for (const group of view.groups) groupIds.add(group.id);
   const usedNodeIds = new Set(visibleNodes.map((node) => node.id));
   const groupNodeIds = new Map<string, string>();
 
@@ -406,7 +425,27 @@ export function buildGraphProjection(view: View, visibleTaskIds?: ReadonlySet<st
   });
 
   const nodes = [...groupNodes, ...graphNodes];
-  const dependencies = makeDisplayDependencies(view, visibleNodes, visibleNodeIds, nodeById, taskById, new Set(nodes.map((node) => node.id)));
+  // Empty delivery units need a synthetic endpoint so hidden boundaries still form visible relations.
+  const syntheticSources: Node[] = [];
+  const syntheticOutgoing = new Map<string, View["edges"]>();
+  const syntheticBoundaryStarts = new Map<string, string>();
+  const boundaryEndpointIds = new Map<string, string>();
+  for (const group of view.groups) {
+    const groupNodeId = groupNodeIds.get(group.id);
+    if (!groupNodeId || visibleNodes.some((node) => currentGroupId(node, taskForNode(node, taskById)) === group.id)) continue;
+    const boundaries = view.nodes.filter((node) => HIDDEN_BOUNDARY_KINDS.has(node.kind) && currentGroupId(node, taskForNode(node, taskById)) === group.id);
+    for (const boundary of boundaries) boundaryEndpointIds.set(boundary.id, groupNodeId);
+    const exit = boundaries.find((node) => node.kind === "group_end") ?? boundaries.find((node) => node.kind === "group_start");
+    if (!exit) continue;
+    const source: Node = { id: groupNodeId, kind: "milestone", ref_id: null, group_id: group.id, planned_group_id: group.id, label: group.title };
+    syntheticSources.push(source);
+    nodeById.set(source.id, source);
+    syntheticOutgoing.set(source.id, view.edges.filter((edge) => edge.from_node_id === exit.id));
+    syntheticBoundaryStarts.set(source.id, exit.id);
+  }
+  const dependencyNodes = [...visibleNodes, ...syntheticSources];
+  const dependencyNodeIds = new Set(dependencyNodes.map((node) => node.id));
+  const dependencies = makeDisplayDependencies(view, dependencyNodes, dependencyNodeIds, nodeById, taskById, new Set(nodes.map((node) => node.id)), { boundaryEndpointIds, syntheticOutgoing, syntheticBoundaryStarts });
   return { nodes, ...dependencies };
 }
 
