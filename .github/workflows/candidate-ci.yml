@@ -39,6 +39,30 @@ jobs:
       - name: Run quality and deployment checks
         run: scripts/checks quality
 
+  compatibility-release-gate:
+    name: Compatibility Release Gate
+    needs: quality-gates
+    runs-on: ubuntu-24.04
+    env:
+      CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
+      CANDIDATE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+      RELEASE_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+      REQUIRE_RELEASE_LABELS: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Enforce compatibility labels and version markers
+        run: |
+          if [ "$REQUIRE_RELEASE_LABELS" = true ]; then
+            python3 tools/release/compatibility.py check --base "$CANDIDATE_BASE_SHA" --head "$CANDIDATE_SOURCE_SHA" --labels "$RELEASE_LABELS"
+          else
+            python3 tools/release/compatibility.py check --base "$CANDIDATE_BASE_SHA" --head "$CANDIDATE_SOURCE_SHA" --skip-labels
+          fi
+
   bootstrap-verification:
     name: Bootstrap Verification
     needs: quality-gates
@@ -350,7 +374,7 @@ jobs:
 
   candidate-build:
     name: Candidate Build
-    needs: [quality-gates, bootstrap-verification, react-doctor, repository-verification, repository-contracts, typescript-client-bun, candidate-producer]
+    needs: [quality-gates, compatibility-release-gate, bootstrap-verification, react-doctor, repository-verification, repository-contracts, typescript-client-bun, candidate-producer]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -360,7 +384,7 @@ jobs:
         run: |
           python3 - <<'PYTHON'
           import json, os
-          expected = {"quality-gates", "bootstrap-verification", "react-doctor", "repository-verification", "repository-contracts", "typescript-client-bun", "candidate-producer"}
+          expected = {"quality-gates", "compatibility-release-gate", "bootstrap-verification", "react-doctor", "repository-verification", "repository-contracts", "typescript-client-bun", "candidate-producer"}
           results = json.loads(os.environ["CANDIDATE_RESULTS"])
           if set(results) != expected or any(value.get("result") != "success" for value in results.values()):
               raise SystemExit("candidate dependencies incomplete or unsuccessful")
