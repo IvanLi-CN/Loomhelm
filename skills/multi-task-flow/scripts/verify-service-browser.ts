@@ -5,10 +5,9 @@ import { join, resolve } from "node:path";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
 import { buildView } from "../lib/view";
 import {
+  authFailedPage,
   homePage,
   homeScript,
-  loginPage,
-  loginScript,
   runClientScript,
 } from "../lib/service-pages";
 import { startSharedViewer } from "../lib/service-http";
@@ -32,9 +31,9 @@ const scenarios: string[] = [];
 try {
   const live = await browser.newContext();
   const page = await live.newPage();
-  await page.goto(base + "/login#" + new ServiceAuth(fixture.state).ticket());
-  await page.waitForURL(base + "/");
-  await page.getByRole("link", { name: "demo-run", exact: true }).click();
+  const loginUrl = new URL(base + "/runs/demo-run/");
+  loginUrl.searchParams.set("ticket", new ServiceAuth(fixture.state).ticket("/runs/demo-run/"));
+  await page.goto(loginUrl.toString());
   await page.waitForURL(base + "/runs/demo-run/");
   await page.waitForFunction(() =>
     document.querySelector("#connection")?.textContent?.includes("实时"),
@@ -43,7 +42,7 @@ try {
   if (!response.ok())
     throw new Error("Browser login did not retain its session");
   scenarios.push(
-    "single-use login, run navigation and authenticated browser session",
+    "single-use target ticket, URL cleanup and authenticated browser session",
   );
   await live.close();
 
@@ -72,23 +71,16 @@ try {
     });
     await context.route("http://mtf.test/**", async (route) => {
       const url = new URL(route.request().url());
-      if (url.pathname === "/api/v1/login") {
-        await route.fulfill({ status: 401, body: "{}" });
-        return;
-      }
       let body: string;
       let contentType = "application/json";
       if (url.pathname === "/") {
         body = homePage;
         contentType = "text/html";
-      } else if (url.pathname === "/login") {
-        body = loginPage;
+      } else if (url.pathname === "/auth/failed") {
+        body = authFailedPage;
         contentType = "text/html";
       } else if (url.pathname === "/home.js") {
         body = homeScript;
-        contentType = "text/javascript";
-      } else if (url.pathname === "/login.js") {
-        body = loginScript;
         contentType = "text/javascript";
       } else if (url.pathname === "/service-client.js") {
         body = runClientScript;
@@ -152,19 +144,19 @@ try {
     const runImage = `run-${viewport.width}.png`;
     await demo.screenshot({ path: join(output, runImage), fullPage: true });
     images.push(runImage);
-    await demo.goto("http://mtf.test/login");
+    await demo.goto("http://mtf.test/auth/failed?redirect=%2Fruns%2Fdemo-run%2F");
     await demo
-      .getByText("入口已过期或已使用。请通过 service login 重新获取。", {
+      .getByText("一次性登录入口已过期或已使用。", {
         exact: true,
       })
       .waitFor();
-    const loginImage = `login-${viewport.width}.png`;
-    await demo.screenshot({ path: join(output, loginImage), fullPage: true });
-    images.push(loginImage);
+    const authFailedImage = `auth-failed-${viewport.width}.png`;
+    await demo.screenshot({ path: join(output, authFailedImage), fullPage: true });
+    images.push(authFailedImage);
     await context.close();
   }
   scenarios.push(
-    "pure frontend desktop and 393x852 mobile runs, compatibility fallback and login expiry",
+    "pure frontend desktop and 393x852 mobile runs, compatibility fallback and authentication failure",
   );
   writeFileSync(
     join(output, "evidence.json"),

@@ -49,15 +49,60 @@ test("multi-run routing has one listener, authenticated APIs and lazy watchers",
   expect(viewer.watcherCount).toBe(0);
   expect((await fetch(base + "/api/v1/lease", { method: "POST", headers: { ...headers, origin: "https://foreign.example" }, body: "{}" })).status).toBe(403);
 });
-test("browser login, CSRF checks and credential-free resource links", async () => {
+test("target tickets authenticate on the run route and recover safely", async () => {
   const { root, state } = fixture(); const release = fixtureRelease(root); fixtureRun(state.paths.data);
   const viewer = await startSharedViewer(state, release.manifest, join(release.source, "skills/multi-task-flow/dist"), 0); servers.push(viewer);
   const base = `http://127.0.0.1:${viewer.port}`;
-  const ticket = new ServiceAuth(state).ticket();
-  const exchange = () => fetch(base + "/api/v1/login", { method: "POST", headers: { origin: base, "content-type": "application/json" }, body: JSON.stringify({ ticket }) });
-  const response = await exchange(); expect(response.status).toBe(200);
+  const noFollow = (url: string, init: RequestInit = {}) => fetch(url, { ...init, redirect: "manual" });
+  const targetLocation = (response: Response) => {
+    const location = response.headers.get("location");
+    expect(location).not.toBeNull();
+    const url = new URL(location!, base);
+    return url.pathname + url.search;
+  };
+  const ticket = new ServiceAuth(state).ticket("/runs/demo-run/");
+  const response = await noFollow(base + "/runs/demo-run/?ticket=" + encodeURIComponent(ticket));
+  expect(response.status).toBe(302);
+  expect(targetLocation(response)).toBe("/runs/demo-run/");
   const cookie = response.headers.get("set-cookie")!.split(";")[0]!;
-  expect((await exchange()).status).toBe(401);
+  const replay = await noFollow(base + "/runs/demo-run/?ticket=" + encodeURIComponent(ticket));
+  expect(replay.status).toBe(302);
+  const failedLocation = targetLocation(replay);
+  expect(new URL(failedLocation, base).pathname).toBe("/auth/failed");
+  const failedPage = await noFollow(base + failedLocation);
+  expect(failedPage.status).toBe(401);
+  expect(await failedPage.text()).toContain("一次性登录入口已过期或已使用。");
+  const recovered = await noFollow(base + failedLocation, { headers: { cookie } });
+  expect(recovered.status).toBe(302);
+  expect(targetLocation(recovered)).toBe("/runs/demo-run/");
+  const stale = await noFollow(base + "/runs/demo-run/?ticket=stale-ticket", { headers: { cookie } });
+  expect(stale.status).toBe(302);
+  expect(targetLocation(stale)).toBe("/runs/demo-run/");
+  const retainedTicket = new ServiceAuth(state).ticket("/runs/demo-run/");
+  const retained = await noFollow(base + "/runs/demo-run/?ticket=" + encodeURIComponent(retainedTicket), { headers: { cookie } });
+  expect(retained.status).toBe(302);
+  expect(targetLocation(retained)).toBe("/runs/demo-run/");
+  expect((await noFollow(base + "/runs/demo-run/?ticket=" + encodeURIComponent(retainedTicket))).status).toBe(302);
+  const viewTicket = new ServiceAuth(state).ticket("/runs/demo-run/");
+  const withView = await noFollow(base + "/runs/demo-run/?selected=task%3AC2&detail=1&tab=actual&ticket=" + encodeURIComponent(viewTicket));
+  expect(withView.status).toBe(302);
+  expect(targetLocation(withView)).toBe("/runs/demo-run/?selected=task%3AC2&detail=1&tab=actual");
+  for (const path of ["/login", "/login.js", "/resume-task.js", "/api/v1/login"]) expect((await noFollow(base + path)).status).toBe(404);
+  for (const value of ["https://evil.test/runs/demo-run/", "http://user:pass@127.0.0.1/runs/demo-run/", "/login"]) {
+    const invalid = await noFollow(base + "/auth/failed?redirect=" + encodeURIComponent(value));
+    expect(invalid.status).toBe(400);
+    expect(invalid.headers.get("location")).toBeNull();
+  }
+});
+
+test("browser session keeps CSRF checks and credential-free resource links", async () => {
+  const { root, state } = fixture(); const release = fixtureRelease(root); fixtureRun(state.paths.data);
+  const viewer = await startSharedViewer(state, release.manifest, join(release.source, "skills/multi-task-flow/dist"), 0); servers.push(viewer);
+  const base = `http://127.0.0.1:${viewer.port}`;
+  const ticket = new ServiceAuth(state).ticket("/runs/demo-run/");
+  const response = await fetch(base + "/runs/demo-run/?ticket=" + encodeURIComponent(ticket), { redirect: "manual" });
+  expect(response.status).toBe(302);
+  const cookie = response.headers.get("set-cookie")!.split(";")[0]!;
   expect((await fetch(base + "/api/v1/lease", { method: "POST", headers: { cookie } })).status).toBe(403);
   expect((await fetch(base + "/api/v1/lease", { method: "POST", headers: { cookie, origin: base } })).status).toBe(200);
   const page = await (await fetch(base + "/runs/demo-run/", { headers: { cookie } })).text();

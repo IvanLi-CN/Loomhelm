@@ -132,8 +132,13 @@ export async function serviceCommand(
     await serviceStatus(state);
     const target = parsed.run_id ? `/runs/${parsed.run_id}/` : "/";
     const ticket = new ServiceAuth(state).ticket(target);
+    const loginUrl = new URL(
+      target,
+      `http://127.0.0.1:${state.config().port}`,
+    );
+    loginUrl.searchParams.set("ticket", ticket);
     return {
-      login_url: `http://127.0.0.1:${state.config().port}/login#${ticket}`,
+      login_url: loginUrl.toString(),
       expires_in_seconds: 60,
       single_use: true,
     };

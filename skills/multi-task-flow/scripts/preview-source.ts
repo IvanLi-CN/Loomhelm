@@ -195,6 +195,9 @@ const stop = () => {
   clearInterval(renew);
   void daemon.stop();
 };
+const target = `/runs/${run.orchestration_id}/`;
+const previewUrl = new URL(target, `http://127.0.0.1:${port}`);
+previewUrl.searchParams.set("ticket", auth.ticket(target));
 process.once("SIGTERM", stop);
 process.once("SIGINT", stop);
 console.log(
@@ -206,7 +209,7 @@ console.log(
     pid: process.pid,
     port,
     scope: state.paths.scope,
-    url: `http://127.0.0.1:${port}/login#${auth.ticket(`/runs/${run.orchestration_id}/`)}`,
+    url: previewUrl.toString(),
     source_commit: manifest.source_sha,
   }),
 );
