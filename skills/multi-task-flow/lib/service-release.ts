@@ -9,7 +9,7 @@ import {
   releaseManifestSchema,
   type ReleaseManifest,
 } from "../lib/service-contract";
-import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
+import { SKILL_ID, SKILL_VERSION } from "../lib/contract";
 
 export const releaseFiles = [
   "viewer",
@@ -25,23 +25,30 @@ export function requireSourceRelease(manifest: ReleaseManifest): void {
 }
 export const digest = (value: Uint8Array | string) =>
   createHash("sha256").update(value).digest("hex");
-export function buildId(manifest: Omit<ReleaseManifest, "build_id">): string {
+function identityBody(
+  manifest: Omit<ReleaseManifest, "build_id">,
+  includeViewerContract: boolean,
+): Record<string, unknown> {
   const body = { ...manifest } as Record<string, unknown>;
   if (body.skill_id === SKILL_ID) delete body.skill_id;
   if (body.skill_version === SKILL_VERSION) delete body.skill_version;
   if (body.ledger_contract === 2) delete body.ledger_contract;
-  if (body.viewer_contract === VIEWER_CONTRACT) delete body.viewer_contract;
+  if (!includeViewerContract) delete body.viewer_contract;
   // The launcher embeds this identity and therefore cannot be part of its own
   // identity. The bootstrap verifier applies the same rule before checking
   // the immutable resource inventory.
   const files = { ...(body.files as Record<string, string>) };
   delete files.viewer;
-  return digest(
-    JSON.stringify({
-      ...body,
-      files: Object.fromEntries(Object.entries(files).sort(([a], [b]) => a.localeCompare(b))),
-    }),
-  );
+  return {
+    ...body,
+    files: Object.fromEntries(Object.entries(files).sort(([a], [b]) => a.localeCompare(b))),
+  };
+}
+export function buildId(manifest: Omit<ReleaseManifest, "build_id">): string {
+  return digest(JSON.stringify(identityBody(manifest, false)));
+}
+function versionedBuildId(manifest: Omit<ReleaseManifest, "build_id">): string {
+  return digest(JSON.stringify(identityBody(manifest, true)));
 }
 export function verifyRelease(root: string): ReleaseManifest {
   requireCondition(
@@ -49,12 +56,17 @@ export function verifyRelease(root: string): ReleaseManifest {
     "UNSAFE_RELEASE",
     "Release directory must be canonical",
   );
-  const manifest = releaseManifestSchema.parse(
-    JSON.parse(readRegular(join(root, "manifest.json"))),
-  );
+  const raw = JSON.parse(readRegular(join(root, "manifest.json")));
+  const manifest = releaseManifestSchema.parse(raw);
   const { build_id, ...body } = manifest;
+  const { build_id: _rawBuildId, ...rawBody } = raw as Record<string, unknown>;
+  const identityMatches =
+    buildId(body) === build_id ||
+    versionedBuildId(body) === build_id ||
+    buildId(rawBody as Omit<ReleaseManifest, "build_id">) === build_id ||
+    versionedBuildId(rawBody as Omit<ReleaseManifest, "build_id">) === build_id;
   requireCondition(
-    buildId(body) === build_id,
+    identityMatches,
     "INVALID_RELEASE",
     "Release identity mismatch",
   );

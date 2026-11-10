@@ -14087,7 +14087,7 @@
       "path": "skills/multi-task-flow/scripts/build-service.ts",
       "sourceBlob": "ca672ad72649091d21a78504664d60e6060c88d5",
       "sourceSha256": "6161f53430c5bd6f5665a2f77129c87cfe937d5c244f3df0eab8533bbecf17c4",
-      "installedSha256": "cc099654df762fbb7b0ffbf02d7724ec44b8755e8d1575d53b6ec9f0d5fe50de",
+      "installedSha256": "8d05874fbd6984481dda901f487396831d5d3ba973f91d0acbea71a70d61df48",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14447,7 +14447,7 @@
       "path": "skills/multi-task-flow/lib/service-release.ts",
       "sourceBlob": "69d5fa88eabdcfd0338050082646a712ca844239",
       "sourceSha256": "d61f73d30b13143517cdf0a5d84f87ff2d0333ac2fc433fb2af98cce49e678f2",
-      "installedSha256": "56dfe49913e917c52ea8e8fadeb525551f2fdc07f614de1954aa47ce718def9a",
+      "installedSha256": "b774a36ce33e1492a2b611e4d97f47f743a28098576ab5c3473ae3529557eaa3",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14759,7 +14759,7 @@
       "path": "skills/multi-task-flow/tests/service-fixture.ts",
       "sourceBlob": "7ad70a1feb5391af9b326c8a20db52e3f14a901b",
       "sourceSha256": "2059550a06f6ba196e4665eac1e93f1b561ccf4041b4fc8b816f18b106d53b80",
-      "installedSha256": "13b72c3ada721cd9d21783c61e6c9af3fafec5461f1b0313d0b7d5d24495d4aa",
+      "installedSha256": "45f14b79125c35268ec84df5d524f405f291ba023b3407fdd063d705e1a620e6",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15008,7 +15008,7 @@
       "sourceBlob": "807a4281f183ca5539ebbf4183056f5fab2cc68e",
       "sourceSha256": "2245b7f90f7a81be1f97617fcb85aad2bf06c47ea0a32eb72f69d94d4d0d01f9",
       "installedSha256": "4e633c01b064dbb1c7879fdc90056f6be86c94bfa02d8ee24998b3d2e67ae19d",
-      "adaptation": "unchanged"
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "skills/multi-task-flow/web/graph.ts",
@@ -15874,7 +15874,7 @@
     },
     {
       "path": "skills/multi-task-flow/tests/service-release.test.ts",
-      "installedSha256": "fa62e7decfed7053aa4c65841af797e66387e49837cd7c6eaff386e484fee664"
+      "installedSha256": "10ea2c69d5c2f32e1bd0d3c3e822a6c45a7927d78934f08e858ac926a0e5bec8"
     },
     {
       "path": "skills/multi-task-flow/lib/notification-delivery.ts",
