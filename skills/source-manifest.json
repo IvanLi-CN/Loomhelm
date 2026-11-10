@@ -15862,7 +15862,7 @@
     },
     {
       "path": "skills/multi-task-flow/tests/ui/task-context-menu.test.ts",
-      "installedSha256": "fa22a53516f482f56312c9d27be5aec343eb1f90567909d39169559ce653e58e"
+      "installedSha256": "3bb613c54f8059693104924ae2d97fceee26a4cfebe88079380aefc329688f49"
     },
     {
       "path": "skills/bin/modules/core/runtime.ts",
