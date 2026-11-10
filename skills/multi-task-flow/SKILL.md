@@ -1,7 +1,7 @@
 ---
 name: multi-task-flow
 description: Coordinate a dependency-driven Codex task through an isolated JSON ledger, on-demand delivery-unit and task conversations, PR coordination, and an authenticated local dashboard.
-version: 2.4.0
+version: 2.5.0
 ---
 
 # Multi-task flow
