@@ -18,7 +18,8 @@ export type GraphContext = {
   recordPointerType: (pointerType: string | null) => void;
   selectTask: (id: string) => void;
   selectGroup: (id: string) => void;
-  getSelected: () => { task: string | null; group: string | null };
+  selectMilestone: (id: string) => void;
+  getSelected: () => { task: string | null; group: string | null; milestone: string | null };
 };
 
 function nodeKindLabel(node: GraphProjectionNode): string {
@@ -61,7 +62,8 @@ export function accessibleNodeLabel(node: GraphProjectionNode, projection: Graph
 function selectedProjectionNode(node: GraphProjectionNode, context: GraphContext): void {
   if (!node.refId) return;
   if (node.nodeKind === "task") context.selectTask(node.refId);
-  else if (node.nodeKind === "group" || node.nodeKind === "milestone") context.selectGroup(node.refId);
+  else if (node.nodeKind === "group") context.selectGroup(node.refId);
+  else if (node.nodeKind === "milestone") context.selectMilestone(node.id);
 }
 
 export function renderAccessibleNodes(projection: GraphProjection, context: GraphContext): void {
@@ -73,7 +75,11 @@ export function renderAccessibleNodes(projection: GraphProjection, context: Grap
     button.type = "button";
     button.className = "graph-a11y-node";
     button.dataset.graphNodeId = node.id;
-    if (node.nodeKind === "task" && node.refId) button.dataset.contextTask = node.refId;
+    if ((node.nodeKind === "task" || node.nodeKind === "group" || node.nodeKind === "milestone") && node.refId) {
+      button.dataset.contextKind = node.nodeKind === "task" ? "task" : node.nodeKind === "milestone" ? "milestone" : "group";
+      button.dataset.contextId = node.nodeKind === "milestone" ? node.id : node.refId;
+      if (node.nodeKind === "task") button.dataset.contextTask = node.refId;
+    }
     button.setAttribute("aria-pressed", "false");
     button.setAttribute("aria-label", accessibleNodeLabel(node, projection));
     button.textContent = `${node.title}${node.stateLabel ? ` · ${node.stateLabel}` : ""}`;
@@ -89,7 +95,7 @@ export function highlightAccessibleSelection(projection: GraphProjection | null,
   const selected = context.getSelected();
   for (const button of context.element("graph-a11y").querySelectorAll<HTMLButtonElement>("[data-graph-node-id]")) {
     const node = projection?.nodes.find((item) => item.id === button.dataset.graphNodeId);
-    const active = Boolean(node && ((node.nodeKind === "task" && node.refId === selected.task) || ((node.nodeKind === "group" || node.nodeKind === "milestone") && node.refId === selected.group)));
+    const active = Boolean(node && ((node.nodeKind === "task" && node.refId === selected.task) || (node.nodeKind === "group" && node.refId === selected.group) || (node.nodeKind === "milestone" && node.id === selected.milestone)));
     button.setAttribute("aria-pressed", String(active));
   }
 }

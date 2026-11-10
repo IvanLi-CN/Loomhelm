@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { installTaskContextMenu, taskPRs, taskUrl } from "../../web/task-context-menu";
+import { atomUrl, groupUrl, installTaskContextMenu, milestoneUrl, taskPRs, taskUrl } from "../../web/task-context-menu";
 import { parseViewerTarget } from "../../lib/service-pages";
 import type { Task, View } from "../../web/model";
 import { parseViewState } from "../../web/view-state";
 const task = { id: "C2", title: "完整任务标题", thread_id: "thread-123", pr: { url: "https://github.com/example/repo/pull/1" } } as Task;
 const view = { tasks: [task], follow_prs: [{ origin_task_id: "C2", pr: { url: "https://github.com/example/repo/pull/2" } }] } as View;
+const group = { id: "G2", title: "交付单元二" };
 let controller: ReturnType<typeof installTaskContextMenu> | undefined;
 afterEach(() => { controller?.destroy(); document.body.replaceChildren(); });
 function setup(value = view, reject = false) {
@@ -22,6 +23,18 @@ test("task URL drops credentials, history and filters; restores task details", (
   expect(url.pathname).toBe("/runs/run-a/"); expect([...url.searchParams.keys()]).toEqual(["selected", "detail"]); expect(url.username + url.password + url.hash).toBe("");
   const state = parseViewState(url.search); expect(state.selected).toEqual({ kind: "task", id: "C2" }); expect(state.detail).toBe(true); expect(state.plan).toBeNull(); expect(state.query).toBe("");
 });
+test("group URL selects the delivery unit and preserves only canonical detail state", () => {
+  const url = new URL(groupUrl("http://user:secret@localhost:12000/runs/run-a/?plan=old&q=hidden#token", group.id));
+  expect(url.pathname).toBe("/runs/run-a/");
+  expect([...url.searchParams.keys()]).toEqual(["selected", "detail"]);
+  expect(parseViewState(url.search).selected).toEqual({ kind: "group", id: group.id });
+});
+test("milestone and atom URLs preserve their focus targets", () => {
+  const milestone = new URL(milestoneUrl("http://localhost:12000/runs/run-a/?q=hidden", "core-merge", "group-atom-core-4"));
+  expect(parseViewState(milestone.search)).toMatchObject({ selected: { kind: "milestone", id: "core-merge" }, atom: "group-atom-core-4", detail: true });
+  const atom = new URL(atomUrl("http://localhost:12000/runs/run-a/", { kind: "task", id: "C2" }, "atom-C2"));
+  expect(parseViewState(atom.search)).toMatchObject({ selected: { kind: "task", id: "C2" }, atom: "atom-C2", detail: true });
+});
 test("five copy actions use full title, raw ID and canonical conversation URL", async () => {
   let copied = setup(); expect(document.querySelectorAll('.task-context-menu > [role=menuitem]')).toHaveLength(5);
   button("复制任务名").click(); await Promise.resolve(); expect(copied).toEqual([task.title]);
@@ -36,6 +49,17 @@ test("multiple PRs require explicit selection", async () => {
 test("missing resource actions are disabled, copy rejection is visible", async () => {
   setup({ ...view, tasks: [{ ...task, thread_id: null, pr: null }], follow_prs: [] }); expect(document.querySelectorAll('[aria-disabled=true]')).toHaveLength(2); expect(document.querySelector('.task-context-menu')?.textContent).toContain("尚未绑定对话");
   setup(view, true); button("复制任务名").click(); await Promise.resolve(); await Promise.resolve(); expect(document.querySelector('[role=status]')?.textContent).toContain("复制失败");
+});
+test("delivery unit menu copies its stable ID and URL", async () => {
+  const copied: string[] = [];
+  document.body.innerHTML = '<article data-context-kind="group" data-context-id="G2"><button>交付单元</button></article>';
+  controller = installTaskContextMenu({ getData: () => ({ ...view, groups: [group] } as View), writeText: async text => { copied.push(text); } });
+  const target = document.querySelector<HTMLElement>("[data-context-kind=group]")!;
+  target.dispatchEvent(new window.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+  expect([...document.querySelectorAll<HTMLButtonElement>(".task-context-menu button")].map(button => button.textContent)).toEqual(["复制交付单元 ID", "复制交付单元链接"]);
+  document.querySelector<HTMLButtonElement>(".task-context-menu button")!.click();
+  await Promise.resolve();
+  expect(copied).toEqual([group.id]);
 });
 test("keyboard opening, navigation and Escape; blank space retains native menu", () => {
   setup(); controller!.close(); const target = document.querySelector('button')!; target.focus();

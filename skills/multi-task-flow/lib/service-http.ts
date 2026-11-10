@@ -156,7 +156,7 @@ export async function startSharedViewer(
   port: number,
   sourceRevision?: () => string,
   sourceName?: string,
-  demoHooks?: ConnectObserver | Pick<import("../lib/server-contract").DashboardOptions, "connectObserver" | "archiveProvider" | "getProfileCapabilities">,
+  demoHooks?: ConnectObserver | Pick<import("../lib/server-contract").DashboardOptions, "connectObserver" | "archiveProvider" | "getProfileCapabilities">
 ) {
   if ((sourceRevision || demoHooks) && !state.paths.isolated)
     throw new ContractError(

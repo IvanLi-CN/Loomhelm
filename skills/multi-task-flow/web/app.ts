@@ -67,6 +67,7 @@ function applyOutputs(next: OutputSnapshot, requestEpoch?: string | null): void 
 let viewState: ViewState = parseViewState(window.location.search);
 let selectedTask: string | null = viewState.selected?.kind === "task" ? viewState.selected.id : null;
 let selectedGroup: string | null = viewState.selected?.kind === "group" ? viewState.selected.id : null;
+let selectedMilestone: string | null = viewState.selected?.kind === "milestone" ? viewState.selected.id : null;
 let activePlan = viewState.plan ?? "";
 let activePlanId = "";
 let connected = false;
@@ -127,7 +128,7 @@ function connection(status: "live" | "stale" | "connecting"): void {
   if (status === "stale") notice.textContent = serviceSessionExpired ? "登录已过期，请重新连接。当前显示最后一次有效快照。" : data ? "连接中断，当前显示最后一次有效快照。恢复连接后会重新获取视图。" : "首次加载失败，暂时无法读取编排视图。";
 }
 function stateValidation() {
-  return { groups: new Set(data?.groups.map((item) => item.id) ?? []), states: defaultStates, kinds: defaultKinds, plans: new Set(data?.plans.map((item) => item.id) ?? []), tasks: new Set(data?.tasks.map((item) => item.id) ?? []) };
+  return { groups: new Set(data?.groups.map((item) => item.id) ?? []), states: defaultStates, kinds: defaultKinds, plans: new Set(data?.plans.map((item) => item.id) ?? []), tasks: new Set(data?.tasks.map((item) => item.id) ?? []), milestones: new Set(data?.nodes.filter((item) => item.kind === "milestone").map((item) => item.id) ?? []) };
 }
 function syncUrl(): void {
   const phaseDefaultTab = phase === "execution" ? "actual" : DEFAULT_VIEW_STATE.tab;
@@ -294,10 +295,11 @@ async function updateProfile(targetType: ProfileTarget, targetId: string, profil
   await refresh();
 }
 const detailContent = createDetailContent({ getData: () => data, labels, labelTask: label, time, safeExternal, archiveConversation, profileContext: () => ({ capabilities: profileCapabilities, capabilityError: profileCapabilityError, update: updateProfile }) });
-const { clearDetails, showTask, showGroup, taskPreview, groupPreview } = detailContent;
+const { clearDetails, showTask, showGroup, showMilestone, taskPreview, groupPreview } = detailContent;
 const hasSelectedObject = (): boolean => Boolean(
   (selectedTask && data?.tasks.some((task) => task.id === selectedTask))
-  || (selectedGroup && data?.groups.some((group) => group.id === selectedGroup)),
+  || (selectedGroup && data?.groups.some((group) => group.id === selectedGroup))
+  || (selectedMilestone && data?.nodes.some((node) => node.kind === "milestone" && node.id === selectedMilestone)),
 );
 function canUseDetailsPanel(): boolean {
   const workspace = document.querySelector<HTMLElement>(".workspace");
@@ -307,7 +309,7 @@ const hoverController = createHoverController({
   element: $,
   getData: () => data,
   getViewState: () => viewState,
-  getSelected: () => ({ task: selectedTask, group: selectedGroup }),
+  getSelected: () => ({ task: selectedTask, group: selectedGroup, milestone: selectedMilestone }),
   getKeyboardSelection: () => keyboardSelection,
   getBridge: () => hoverBridge,
   getAnyHover: () => anyHoverCapability.matches,
@@ -358,7 +360,8 @@ const graphController = createGraphController({
   recordPointerType,
   selectTask,
   selectGroup,
-  getSelected: () => ({ task: selectedTask, group: selectedGroup }),
+  selectMilestone,
+  getSelected: () => ({ task: selectedTask, group: selectedGroup, milestone: selectedMilestone }),
 });
 function openDetails(): void { updateDetailsSurface(true, true); }
 function restoreClosedDetails(): void {
@@ -456,17 +459,18 @@ function refreshResponsiveDetails(): void {
   if (!data) return;
   const surface = updateDetailsSurface(viewState.detail);
   if (surface === "hover-preview" && viewState.detail) {
-    const selection = selectedTask ? { kind: "task" as const, id: selectedTask } : selectedGroup ? { kind: "group" as const, id: selectedGroup } : null;
+    const selection = selectedTask ? { kind: "task" as const, id: selectedTask } : selectedGroup ? { kind: "group" as const, id: selectedGroup } : selectedMilestone ? { kind: "milestone" as const, id: selectedMilestone } : null;
     const selector = selectedObjectFocusSelector(selection);
     const selectedTarget = selector ? firstVisibleElement(document, selector) : null;
     focusAfterRerender(null, selectedTarget ?? firstVisibleElement(document, ".task-card-select, .task-column-select") ?? $("search"));
     showCurrentSelectionPreview();
   }
 }
-function restoreSelectedFocus(selection: { kind: "task" | "group"; id: string }): void { const selector = selectedObjectFocusSelector(selection); focusAfterRerender(lastFocus, selector ? firstVisibleElement(document, selector) : null); }
+function restoreSelectedFocus(selection: { kind: "task" | "group" | "milestone"; id: string }): void { const selector = selectedObjectFocusSelector(selection); focusAfterRerender(lastFocus, selector ? firstVisibleElement(document, selector) : null); }
 function dismissTaskLinkNotice(): void { missingLinkedTask = null; const notice = document.getElementById("task-link-notice"); if (notice) notice.hidden = true; }
-function selectGroup(id: string): void { if (!data) return; dismissTaskLinkNotice(); if (selectedGroup === id && viewState.detail) { closeDetails(); return; } const group = data.groups.find((item) => item.id === id); if (!group) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; lastScrollTop = window.scrollY; selectedGroup = id; selectedTask = null; viewState = { ...viewState, selected: { kind: "group", id }, detail: true }; syncUrl(); showGroup(group); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "group", id }); showCurrentSelectionPreview(); }
-function selectTask(id: string): void { if (!data) return; dismissTaskLinkNotice(); if (selectedTask === id && viewState.detail) { closeDetails(); return; } const task = data.tasks.find((item) => item.id === id); if (!task) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; lastScrollTop = window.scrollY; selectedTask = id; selectedGroup = null; viewState = { ...viewState, selected: { kind: "task", id }, detail: true }; syncUrl(); showTask(task); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "task", id }); showCurrentSelectionPreview(); }
+function selectGroup(id: string): void { if (!data) return; dismissTaskLinkNotice(); if (selectedGroup === id && viewState.detail) { closeDetails(); return; } const group = data.groups.find((item) => item.id === id); if (!group) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; lastScrollTop = window.scrollY; selectedGroup = id; selectedTask = null; selectedMilestone = null; viewState = { ...viewState, selected: { kind: "group", id }, atom: null, detail: true }; syncUrl(); showGroup(group); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "group", id }); showCurrentSelectionPreview(); }
+function selectTask(id: string): void { if (!data) return; dismissTaskLinkNotice(); if (selectedTask === id && viewState.detail) { closeDetails(); return; } const task = data.tasks.find((item) => item.id === id); if (!task) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; lastScrollTop = window.scrollY; selectedTask = id; selectedGroup = null; selectedMilestone = null; viewState = { ...viewState, selected: { kind: "task", id }, atom: null, detail: true }; syncUrl(); showTask(task); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "task", id }); showCurrentSelectionPreview(); }
+function selectMilestone(id: string): void { if (!data) return; const node = data.nodes.find((item) => item.kind === "milestone" && item.id === id); const group = node?.group_id ? data.groups.find((item) => item.id === node.group_id) : null; if (!node || !group) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; selectedMilestone = id; selectedTask = null; selectedGroup = null; viewState = { ...viewState, selected: { kind: "milestone", id }, detail: true }; syncUrl(); showMilestone(id, group); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "milestone", id }); showCurrentSelectionPreview(); }
 function applyStateToControls(): void { $<HTMLInputElement>("search").value = viewState.query; setMenuValue("group-filter", viewState.group); setMenuValue("state-filter", viewState.state); setMenuValue("kind-filter", viewState.kind); }
 type ListFocus = { kind: "task" | "group"; id: string; href: string | null } | null;
 function captureListFocus(): ListFocus {
@@ -556,7 +560,7 @@ function render(): void {
     ...(warningReasons.length ? warningReasons : ["计划完整性检查通过。"]),
   ].join(" · ");
   updateMenu("group-filter", data.groups.map((group) => ({ value: group.id, label: group.title })), "全部交付单元"); updateMenu("state-filter", [...defaultStates].filter((key) => !["active", "merged", "unknown", "idle"].includes(key)).map((value) => ({ value, label: value === "ready" ? "就绪" : labels[value] ?? value })), "全部状态"); updateMenu("kind-filter", ["contribution", "release", "deployment", "verification", "coordination"].map((value) => ({ value, label: taskKindLabel(value) })), "全部任务类型"); updateVersionMenu();
-  setMenuValue("group-filter", viewState.group); setMenuValue("state-filter", viewState.state); setMenuValue("kind-filter", viewState.kind); $("graph-tools").hidden = viewState.tab !== "graph"; $("timeline-tools").hidden = viewState.tab === "graph"; applyStateToControls(); renderSummary(); const tasks = filteredTasks(); $("task-count").textContent = `${tasks.length} / ${data.tasks.length} 个任务`; $("view-context").textContent = viewState.tab === "graph" ? "依赖关系" : viewState.tab === "planned" ? "理论安排" : "实际运行"; $("view-count").textContent = `${tasks.length} 项任务 · ${data.groups.length} 个交付单元`; renderGroups(); renderList(tasks); syncStableGridCardWidth(); setTabAria(viewState.tab); if (viewState.tab === "graph") graphController.render(tasks, viewState.group ? new Set([viewState.group]) : undefined); else timelineController.renderTimeline(tasks, viewState.tab); const focusDetails = focusDetailsOnNextRender; focusDetailsOnNextRender = false; updateDetailsSurface(viewState.detail, focusDetails); const selectedTaskData = selectedTask ? data.tasks.find((item) => item.id === selectedTask) : null; const selectedGroupData = selectedGroup ? data.groups.find((item) => item.id === selectedGroup) : null; if (selectedTaskData) showTask(selectedTaskData); else if (selectedGroupData) showGroup(selectedGroupData); else clearDetails(); createIcons({ icons: ICONS }); showCurrentSelectionPreview(); restoreListFocus(listFocus);
+  setMenuValue("group-filter", viewState.group); setMenuValue("state-filter", viewState.state); setMenuValue("kind-filter", viewState.kind); $("graph-tools").hidden = viewState.tab !== "graph"; $("timeline-tools").hidden = viewState.tab === "graph"; applyStateToControls(); renderSummary(); const tasks = filteredTasks(); $("task-count").textContent = `${tasks.length} / ${data.tasks.length} 个任务`; $("view-context").textContent = viewState.tab === "graph" ? "依赖关系" : viewState.tab === "planned" ? "理论安排" : "实际运行"; $("view-count").textContent = `${tasks.length} 项任务 · ${data.groups.length} 个交付单元`; renderGroups(); renderList(tasks); syncStableGridCardWidth(); setTabAria(viewState.tab); if (viewState.tab === "graph") graphController.render(tasks, viewState.group ? new Set([viewState.group]) : undefined); else timelineController.renderTimeline(tasks, viewState.tab); const focusDetails = focusDetailsOnNextRender; focusDetailsOnNextRender = false; updateDetailsSurface(viewState.detail, focusDetails); const selectedTaskData = selectedTask ? data.tasks.find((item) => item.id === selectedTask) : null; const selectedGroupData = selectedGroup ? data.groups.find((item) => item.id === selectedGroup) : null; const selectedMilestoneData = selectedMilestone ? data.nodes.find((item) => item.kind === "milestone" && item.id === selectedMilestone) : null; const selectedMilestoneGroup = selectedMilestoneData?.group_id ? data.groups.find((item) => item.id === selectedMilestoneData.group_id) : null; if (selectedTaskData) showTask(selectedTaskData); else if (selectedGroupData) showGroup(selectedGroupData, viewState.atom); else if (selectedMilestoneData && selectedMilestoneGroup) showMilestone(selectedMilestoneData.id, selectedMilestoneGroup); else clearDetails(); createIcons({ icons: ICONS }); showCurrentSelectionPreview(); restoreListFocus(listFocus);
   restoreMenuFocus(menuFocus);
   restoreDetailFocus(detailFocus);
   if (restoreClosedDetailsOnNextRender) { restoreClosedDetailsOnNextRender = false; restoreClosedDetails(); }
@@ -592,7 +596,7 @@ async function refresh(): Promise<void> {
     taskNotice.hidden = !missingTask;
     taskNotice.textContent = missingTask ? `任务 ${requestedTask} 不存在或已不可用。` : "";
     if (!hydrated && requestedTask && !missingTask && viewState.detail) viewState = { ...viewState, query: "", group: "", kind: "", state: "" };
-    viewState = sanitizeViewState(viewState, stateValidation()); selectedTask = viewState.selected?.kind === "task" ? viewState.selected.id : null; selectedGroup = viewState.selected?.kind === "group" ? viewState.selected.id : null; activePlan = viewState.plan ?? data.selected_plan_id;
+    viewState = sanitizeViewState(viewState, stateValidation()); selectedTask = viewState.selected?.kind === "task" ? viewState.selected.id : null; selectedGroup = viewState.selected?.kind === "group" ? viewState.selected.id : null; selectedMilestone = viewState.selected?.kind === "milestone" ? viewState.selected.id : null; activePlan = viewState.plan ?? data.selected_plan_id;
     if (previousPhase === "planning" && currentPhase === "execution") phaseTransition = true; phase = currentPhase; const shouldFocusRestoredDetails = !hydrated && viewState.detail; hydrated = true; if (shouldFocusRestoredDetails) focusDetailsOnNextRender = true; syncUrl(); connection(deriveConnectionStatus(connected, result.watching)); $("load-error").hidden = true; render();
     if (shouldFocusRestoredDetails && selectedTask) {
       const card = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(selectedTask)}"]`);
@@ -620,7 +624,7 @@ document.addEventListener("keydown", (event) => { const target = event.target as
 $("close-details").addEventListener("click", closeDetails); $("details-backdrop").addEventListener("click", closeDetails); $("phase-jump").addEventListener("click", () => { phaseTransition = false; setTab("actual"); });
 $("zoom-in").addEventListener("click", () => graphController.zoomIn()); $("zoom-out").addEventListener("click", () => graphController.zoomOut()); $("fit").addEventListener("click", () => graphController.fit());
 $("timeline-zoom-in").addEventListener("click", () => timelineController.adjustWindow("in")); $("timeline-zoom-out").addEventListener("click", () => timelineController.adjustWindow("out")); $("timeline-fit").addEventListener("click", () => timelineController.fit());
-installViewStateNavigation(window, { getSearch: () => window.location.search, getValidation: (search) => { const targetPlan = search ? new URLSearchParams(search).get("plan") : null; if ((targetPlan ?? activePlanId) !== (viewState.plan ?? activePlanId)) return { plans: new Set(data?.plans.map((plan) => plan.id) ?? []) }; return data ? stateValidation() : {}; }, getPhase: () => data ? phase ?? derivePhase(data.tasks) : null, restore: (next, hasExplicitTab) => { const planChanged = next.plan !== viewState.plan; const closingDetails = viewState.detail && !next.detail; userChangedTab = hasExplicitTab; if (closingDetails) { keyboardSelection = false; hideHoverPreview(); restoreClosedDetailsOnNextRender = true; } viewState = next; selectedTask = next.selected?.kind === "task" ? next.selected.id : null; selectedGroup = next.selected?.kind === "group" ? next.selected.id : null; activePlan = next.plan ?? ""; if (next.detail) focusDetailsOnNextRender = true; if (planChanged) void refresh(); else if (data) render(); } });
+installViewStateNavigation(window, { getSearch: () => window.location.search, getValidation: (search) => { const targetPlan = search ? new URLSearchParams(search).get("plan") : null; if ((targetPlan ?? activePlanId) !== (viewState.plan ?? activePlanId)) return { plans: new Set(data?.plans.map((plan) => plan.id) ?? []) }; return data ? stateValidation() : {}; }, getPhase: () => data ? phase ?? derivePhase(data.tasks) : null, restore: (next, hasExplicitTab) => { const planChanged = next.plan !== viewState.plan; const closingDetails = viewState.detail && !next.detail; userChangedTab = hasExplicitTab; if (closingDetails) { keyboardSelection = false; hideHoverPreview(); restoreClosedDetailsOnNextRender = true; } viewState = next; selectedTask = next.selected?.kind === "task" ? next.selected.id : null; selectedGroup = next.selected?.kind === "group" ? next.selected.id : null; selectedMilestone = next.selected?.kind === "milestone" ? next.selected.id : null; activePlan = next.plan ?? ""; if (next.detail) focusDetailsOnNextRender = true; if (planChanged) void refresh(); else if (data) render(); } });
 window.addEventListener("keydown", (event) => { trapDetailsFocus(event); trapPlanInfoFocus(event); if (event.key === "Escape" && planInfoIsOpen()) { event.preventDefault(); closePlanInfo(); } else if (event.key === "Escape" && viewState.detail) closeDetails(); });
 window.addEventListener("resize", () => { refreshResponsiveDetails(); syncPlanInfoSurface(); if (data && viewState.tab === "graph" && graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")) graphController.render(filteredTasks(), viewState.group ? new Set([viewState.group]) : undefined); window.requestAnimationFrame(() => timelineController.redraw()); });
 anyHoverCapability.addEventListener("change", refreshResponsiveDetails); anyFinePointerCapability.addEventListener("change", refreshResponsiveDetails);
