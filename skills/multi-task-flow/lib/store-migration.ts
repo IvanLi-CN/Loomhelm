@@ -39,6 +39,32 @@ type MigrationRequestIdentity = {
   canonical_input: string;
 };
 
+function readMigrationRequestIdentity(
+  context: LockedLedgerMigrationContext,
+  identityPath: string,
+): Partial<MigrationRequestIdentity> {
+  try {
+    const parsed: unknown = JSON.parse(
+      readRegularNoFollow(
+        identityPath,
+        context.rootPath,
+        undefined,
+        Number.MAX_SAFE_INTEGER,
+        context.runIdentity,
+      ).toString("utf8"),
+    );
+    return parsed && typeof parsed === "object"
+      ? (parsed as Partial<MigrationRequestIdentity>)
+      : {};
+  } catch {
+    throw new ContractError(
+      "MIGRATION_CONFLICT",
+      "Migration backup request identity is unreadable",
+      3,
+    );
+  }
+}
+
 const migrationIdPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const unknownLifecycle = {
   workspace_ready: "unknown" as const,
@@ -289,6 +315,23 @@ export function commitMigration(
   const backupPath = join(context.runPath, backup);
   const identityPath = `${backupPath}.request.json`;
   const identityContent = JSON.stringify(requestIdentity) + "\n";
+  const requireMatchingIdentity = (): void => {
+    requireCondition(
+      existsSync(identityPath),
+      "MIGRATION_CONFLICT",
+      "Migration backup request identity is missing",
+      3,
+    );
+    const existingIdentity = readMigrationRequestIdentity(context, identityPath);
+    requireCondition(
+      existingIdentity.request_id === requestIdentity.request_id &&
+        existingIdentity.command === requestIdentity.command &&
+        existingIdentity.canonical_input === requestIdentity.canonical_input,
+      "MIGRATION_CONFLICT",
+      "Migration backup belongs to a different request",
+      3,
+    );
+  };
   if (existsSync(backupPath)) {
     const existingBackup = readRegularNoFollow(
       backupPath,
@@ -303,54 +346,22 @@ export function commitMigration(
       "Migration backup already contains different content",
       3,
     );
-    requireCondition(
-      existsSync(identityPath),
-      "MIGRATION_CONFLICT",
-      "Migration backup request identity is missing",
-      3,
-    );
-    let existingIdentity: Partial<MigrationRequestIdentity>;
-    try {
-      existingIdentity = JSON.parse(
-        readRegularNoFollow(
-          identityPath,
-          context.rootPath,
-          undefined,
-          Number.MAX_SAFE_INTEGER,
-          context.runIdentity,
-        ).toString("utf8"),
-      );
-    } catch {
-      throw new ContractError(
-        "MIGRATION_CONFLICT",
-        "Migration backup request identity is unreadable",
-        3,
-      );
-    }
-    requireCondition(
-      existingIdentity.request_id === requestIdentity.request_id &&
-        existingIdentity.command === requestIdentity.command &&
-        existingIdentity.canonical_input === requestIdentity.canonical_input,
-      "MIGRATION_CONFLICT",
-      "Migration backup belongs to a different request",
-      3,
-    );
+    requireMatchingIdentity();
   } else {
-    requireCondition(
-      !existsSync(identityPath),
-      "MIGRATION_CONFLICT",
-      "Migration backup request identity exists without its backup",
-      3,
-    );
+    if (existsSync(identityPath)) requireMatchingIdentity();
+    else {
+      writeExclusiveNoFollow(
+        identityPath,
+        identityContent,
+        context.rootPath,
+        context.runIdentity,
+      );
+      syncDirectoryNoFollow(context.runPath, context.rootPath, context.runIdentity);
+    }
+    context.onStage?.("migration_backup_identity_committed");
     writeExclusiveNoFollow(
       backupPath,
       oldContent,
-      context.rootPath,
-      context.runIdentity,
-    );
-    writeExclusiveNoFollow(
-      identityPath,
-      identityContent,
       context.rootPath,
       context.runIdentity,
     );

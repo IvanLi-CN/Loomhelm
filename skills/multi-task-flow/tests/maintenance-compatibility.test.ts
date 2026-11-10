@@ -1,6 +1,6 @@
 import {switchRelease} from "../lib/service-maintenance";
 import {afterEach, expect, test} from "bun:test";
-import {cpSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync, unlinkSync, readdirSync} from "node:fs";
+import {cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync, unlinkSync, readdirSync} from "node:fs";
 import {join} from "node:path";
 import {serviceFixture, fixtureRelease, fixtureRun} from "./service-fixture";
 import {buildId} from "../lib/service-release";
@@ -186,16 +186,20 @@ test("maintenance rejects stale targets, owner, revision, digest and incompatibl
   expect(readFileSync(f.store.ledgerPath,"utf8")).toBe(JSON.stringify(f.raw));
 });
 test("backup interruption recovers and commit-response loss replays; conflicting backup is retained",async()=>{
-  for(const stage of ["migration_backup_committed","migration_candidate_synced","migration_committed"]) {
+  for(const stage of ["migration_backup_identity_committed","migration_backup_committed","migration_candidate_synced","migration_committed"]) {
     const f=setup();const req=request(f.state);const store=new LedgerStore(f.state.paths.data,"demo-run",at=>{if(at===stage)throw Error("interrupted");});
     await expect(maintenanceApply(f.state,req,caps,store)).rejects.toThrow("interrupted");
+    if(stage==="migration_backup_identity_committed") {
+      expect(existsSync(join(f.store.runPath,"ledger.maintenance-maint-1.json"))).toBe(false);
+      expect(existsSync(join(f.store.runPath,"ledger.maintenance-maint-1.json.request.json"))).toBe(true);
+    }
     const retried:any=await maintenanceApply(f.state,req);expect(retried.code).toBe(stage==="migration_committed"?"REPLAYED":"APPLIED");
     expect(JSON.parse(readFileSync(f.store.ledgerPath,"utf8")).revision).toBe(f.raw.revision+1);
   }
   const f=setup();const req=request(f.state);const path=join(f.store.runPath,"ledger.maintenance-maint-1.json");writeFileSync(path,"conflict");await expect(maintenanceApply(f.state,req)).rejects.toThrow("different content");expect(readFileSync(path,"utf8")).toBe("conflict");
 });
-test("backup-only interruption rejects a changed request identity",async()=>{
-  const f=setup();const req=request(f.state);const store=new LedgerStore(f.state.paths.data,"demo-run",at=>{if(at==="migration_backup_committed")throw Error("interrupted");});
+test("identity-only interruption rejects a changed request identity",async()=>{
+  const f=setup();const req=request(f.state);const store=new LedgerStore(f.state.paths.data,"demo-run",at=>{if(at==="migration_backup_identity_committed")throw Error("interrupted");});
   await expect(maintenanceApply(f.state,req,caps,store)).rejects.toThrow("interrupted");
   await expect(maintenanceApply(f.state,{...req,reason:"different"})).rejects.toThrow("different request");
   expect(JSON.parse(readFileSync(f.store.ledgerPath,"utf8"))).toEqual(f.raw);
