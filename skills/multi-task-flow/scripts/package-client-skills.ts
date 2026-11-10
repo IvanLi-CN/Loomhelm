@@ -10,12 +10,25 @@ const packageMetadata = JSON.parse(readFileSync(resolve(root, 'clients/typescrip
 const packageConfig = packageMetadata.loomhelm;
 const requireDependencies = process.argv.includes('--require-dependencies');
 const productPartitionBuild = Boolean(process.env.LOOMHELM_PRODUCT_BUILD_VERSION?.trim());
+const productBuildVersion = process.env.LOOMHELM_PRODUCT_BUILD_VERSION?.trim() || null;
 const exactSemver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+const compatibilityLine = /^compat-v([1-9]\d*)$/;
 const sha1 = /^[a-f0-9]{40}$/;
 const sha256 = /^[a-f0-9]{64}$/;
-const packageOmissions = [{ path: 'skills/multi-task-flow/.gitignore', reason: 'package-root .gitignore is omitted by npm-compatible package archives' }];
+const packageOmissions = [
+  { path: 'skills/multi-task-flow/.gitignore', reason: 'package-root .gitignore is omitted by npm-compatible package archives' },
+  { path: 'AGENTS.md', reason: 'repository instructions are package metadata, not a runtime Skill resource' },
+  { path: 'package.json', reason: 'generated toolkit metadata is validated as package metadata, not a Skill resource' },
+  { path: 'artifact-manifest.json', reason: 'the artifact manifest validates itself through identity and inventory checks' },
+];
 const packageOmissionPaths = new Set(packageOmissions.map(item => item.path));
-if (packageMetadata.name !== '@loomhelm/multi-task-flow' || typeof packageMetadata.version !== 'string' || !exactSemver.test(packageMetadata.version) || packageMetadata.version.split('-')[1]?.split('.').some(part => /^0\d+$/.test(part)) || !packageConfig || packageConfig.compatibilityLine !== 'compat-v1' || typeof packageConfig.skillVersion !== 'string' || !exactSemver.test(packageConfig.skillVersion)) throw new Error('Package name/version/metadata must be explicit and valid');
+const safeSemver = (value: unknown): value is string => {
+  if (typeof value !== 'string' || !exactSemver.test(value)) return false;
+  const [major, minor, patch] = value.split('-', 1)[0]!.split('.').map(Number);
+  return [major, minor, patch].every(Number.isSafeInteger) && !value.split('-')[1]?.split('.').some(part => /^0\d+$/.test(part));
+};
+const buildVersion = productBuildVersion ?? packageMetadata.version;
+if (packageMetadata.name !== '@loomhelm/multi-task-flow' || !safeSemver(packageMetadata.version) || !safeSemver(buildVersion) || !packageConfig || typeof packageConfig.compatibilityLine !== 'string' || !compatibilityLine.test(packageConfig.compatibilityLine) || typeof packageConfig.skillVersion !== 'string' || !safeSemver(packageConfig.skillVersion)) throw new Error('Package name/version/metadata must be explicit and valid');
 const packageContracts = packageConfig.contracts;
 if (!packageContracts || typeof packageContracts.ledger !== 'number' || !Number.isSafeInteger(packageContracts.ledger) || packageContracts.ledger < 1 || typeof packageContracts.api !== 'number' || !Number.isSafeInteger(packageContracts.api) || packageContracts.api < 1 || typeof packageContracts.frontend !== 'number' || !Number.isSafeInteger(packageContracts.frontend) || packageContracts.frontend < 1 || typeof packageContracts.viewer !== 'number' || !Number.isSafeInteger(packageContracts.viewer) || packageContracts.viewer < 1 || typeof packageContracts.service !== 'string' || !packageContracts.service) throw new Error('Package contract metadata is incomplete');
 const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
@@ -26,7 +39,7 @@ const mergeShaValue = process.env.LOOMHELM_MERGE_SHA?.trim() || null;
 if (mergeShaValue !== null && !sha1.test(mergeShaValue)) throw new Error('LOOMHELM_MERGE_SHA must be a full commit SHA');
 if (process.env.LOOMHELM_REQUIRE_MERGE_SHA === '1' && (dirty || mergeShaValue === null || mergeShaValue !== sourceSha)) throw new Error('Release package builds require a clean checkout at the exact merge SHA');
 const gitTag = process.env.LOOMHELM_GIT_TAG?.trim() || null;
-if (gitTag !== null && gitTag !== `multi-task-flow-v${packageMetadata.version}`) throw new Error('LOOMHELM_GIT_TAG does not match package version');
+if (gitTag !== null && gitTag !== `multi-task-flow-v${buildVersion}`) throw new Error('LOOMHELM_GIT_TAG does not match package version');
 const tarballDigest = process.env.LOOMHELM_TARBALL_DIGEST?.trim() || null;
 if (tarballDigest !== null && !sha256.test(tarballDigest)) throw new Error('LOOMHELM_TARBALL_DIGEST must be a SHA-256 digest');
 // Only this exact disposable resource output is replaced. TS is never emitted.
@@ -84,6 +97,7 @@ const copyDependencies = (path: string): boolean => {
   }
   const rootStat = lstatSync(sourceRoot);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || realpathSync(sourceRoot) !== sourceRoot) throw new Error('Unsafe dependency directory: ' + path);
+  let preparedFiles = 0;
   const copyBinLauncher = (child: string, source: string): void => {
     const resolvedSource = realpathSync(source);
     const relSource = relative(sourceRoot, resolvedSource);
@@ -100,6 +114,7 @@ const copyDependencies = (path: string): boolean => {
     const stat = lstatSync(source);
     if (!stat.isFile() || stat.isSymbolicLink() || realpathSync(source) !== source) throw new Error('Unsafe prepared dependency: ' + destination);
     record(destination, readFileSync(source));
+    preparedFiles += 1;
   };
   const walk = (relativePath: string): void => {
     for (const entry of readdirSync(resolve(sourceRoot, relativePath), { withFileTypes: true })) {
@@ -116,26 +131,55 @@ const copyDependencies = (path: string): boolean => {
     }
   };
   walk('');
+  return preparedFiles > 0;
+};
+const prepareDependencyShims = (): boolean => {
+  const skillsPackage = JSON.parse(readFileSync(resolve(root, 'skills/package.json'), 'utf8')) as { dependencies?: Record<string, string> };
+  const dependencies = Object.entries(skillsPackage.dependencies ?? {});
+  if (dependencies.length === 0) return false;
+  for (const [name, expectedVersion] of dependencies) {
+    const packageRoot = resolve(root, 'clients/typescript/node_modules', name);
+    const packageJsonPath = resolve(packageRoot, 'package.json');
+    if (!existsSync(packageJsonPath)) {
+      if (requireDependencies) throw new Error(`Prepared dependency missing: ${name}`);
+      continue;
+    }
+    const metadata = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { name?: string; version?: string; module?: string; main?: string };
+    if (metadata.name !== name || metadata.version !== expectedVersion) throw new Error(`Prepared dependency version mismatch: ${name}`);
+    const entry = metadata.module ?? metadata.main ?? 'index.js';
+    const sourceEntry = resolve(packageRoot, entry);
+    if (!sourceEntry.startsWith(`${packageRoot}${sep}`) || !existsSync(sourceEntry) || !lstatSync(sourceEntry).isFile() || realpathSync(sourceEntry) !== sourceEntry) throw new Error(`Unsafe prepared dependency entry: ${name}`);
+    const shimRoot = `skills/node_modules/${name}`;
+    writeGenerated(`${shimRoot}/package.json`, Buffer.from(JSON.stringify({ name, version: expectedVersion, type: 'module', private: true }, null, 2) + '\n'));
+    const output = resolve(target, shimRoot, 'index.js');
+    const packageEntry = resolve(target, '..', 'node_modules', name, entry);
+    const targetRel = relative(dirname(output), packageEntry).split(sep).join('/');
+    const wrapper = `import * as packageExports from ${JSON.stringify(targetRel)};\nexport default packageExports.default;\nexport * from ${JSON.stringify(targetRel)};\n`;
+    writeGenerated(`${shimRoot}/index.js`, Buffer.from(wrapper));
+  }
   return true;
 };
-const bundledDependencies = [copyDependencies('skills/node_modules'), copyDependencies('skills/multi-task-flow/node_modules')].filter(Boolean).length;
+const bundledDependencies = productPartitionBuild
+  ? [copyDependencies('skills/node_modules'), copyDependencies('skills/multi-task-flow/node_modules')].filter(Boolean).length
+  : [prepareDependencyShims()].filter(Boolean).length;
+const dependenciesBundled = productPartitionBuild ? bundledDependencies === 2 : bundledDependencies === 1;
 copyRootFile('AGENTS.md');
 const packageIdentityBase = {
   packageName: packageMetadata.name,
-  packageVersion: packageMetadata.version,
+  packageVersion: buildVersion,
   compatibilityLine: packageConfig.compatibilityLine,
   skillVersion: packageConfig.skillVersion,
   sourceSha,
-  mergeSha: mergeShaValue,
+  mergeSha: productPartitionBuild ? mergeShaValue ?? sourceSha : mergeShaValue,
   contracts: { ledgerContract: packageContracts.ledger, apiVersion: packageContracts.api, frontendContract: packageContracts.frontend, viewerContract: packageContracts.viewer, serviceVersion: packageContracts.service },
   tarballDigest,
   gitTag,
 };
-const generatedPackage = JSON.stringify({ private: true, type: 'module', packageName: packageMetadata.name, packageVersion: packageMetadata.version, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion }, null, 2) + '\n';
+const generatedPackage = JSON.stringify({ private: true, type: 'module', packageName: packageMetadata.name, packageVersion: buildVersion, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion }, null, 2) + '\n';
 writeFileSync(resolve(target, 'package.json'), generatedPackage);
 const finalInventory = [...outputs.values()].sort((left, right) => left.path.localeCompare(right.path));
 const buildId = createHash('sha256').update(JSON.stringify({ ...packageIdentityBase, files: finalInventory })).digest('hex');
 const identity = { ...packageIdentityBase, buildId };
-const artifact = { schemaVersion: 2, packageName: packageMetadata.name, packageVersion: packageMetadata.version, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion, sourceCommit: manifest.commit, sourceSha, mergeSha: mergeShaValue, candidateSha: sourceSha, dirty, runtime: 'bun@1.4.4', identity, buildId, tarballDigest, gitTag, dependenciesBundled: bundledDependencies === 2, omittedResources: packageOmissions, files: finalInventory };
+const artifact = { schemaVersion: 2, packageName: packageMetadata.name, packageVersion: buildVersion, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion, sourceCommit: manifest.commit, sourceSha, mergeSha: packageIdentityBase.mergeSha, candidateSha: sourceSha, dirty, runtime: 'bun@1.4.4', identity, buildId, tarballDigest, gitTag, dependenciesBundled, omittedResources: packageOmissions, files: finalInventory };
 writeFileSync(resolve(target, 'artifact-manifest.json'), JSON.stringify(artifact, null, 2) + '\n');
-console.log(JSON.stringify({ artifact: target, package: packageMetadata.name, version: packageMetadata.version, compatibilityLine: packageConfig.compatibilityLine, runtime: 'bun@1.4.4', resources: finalInventory.length, dependenciesBundled: bundledDependencies === 2, source: sourceSha, merge: mergeShaValue, buildId, dirty }));
+console.log(JSON.stringify({ artifact: target, package: packageMetadata.name, version: buildVersion, compatibilityLine: packageConfig.compatibilityLine, runtime: 'bun@1.4.4', resources: finalInventory.length, dependenciesBundled, source: sourceSha, merge: packageIdentityBase.mergeSha, buildId, dirty }));

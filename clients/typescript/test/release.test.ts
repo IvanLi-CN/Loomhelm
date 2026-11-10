@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { compatibilityDistTag, identityDigest, isCompatibilityDistTag, isExactSemVer, parseCompatibilityDistTag, parseExactSemVer, validatePackageIdentity, validatePublication } from '../src/release.ts';
 
 test('accepts exact SemVer and rejects ranges, build metadata, and leading zeroes', () => {
@@ -39,4 +41,15 @@ test('validates independent package identity dimensions', () => {
   assert.equal(identityDigest({ ...identityWithoutBuildId, files: [{ path: 'a', sha256: 'c'.repeat(64) }] }).length, 64);
   assert.throws(() => validatePackageIdentity({ ...identity, compatibilityLine: 'compat-v0' }), /compatibility/);
   assert.throws(() => validatePackageIdentity({ ...identity, mergeSha: 'not-a-sha' }), /mergeSha/);
+});
+
+test('release validation binds the requested version to the packaged artifact', () => {
+  const cli = resolve(import.meta.dir, '../src/cli.ts');
+  const mismatched = spawnSync(process.execPath, ['--no-install', cli, 'release', 'validate', '--version', '9.9.9'], { encoding: 'utf8' });
+  assert.notEqual(mismatched.status, 0);
+  assert.match(mismatched.stderr + mismatched.stdout, /Publication version does not match artifact version/);
+
+  const missingProvenance = spawnSync(process.execPath, ['--no-install', cli, 'release', 'validate', '--version', '0.1.0', '--require-provenance'], { encoding: 'utf8' });
+  assert.notEqual(missingProvenance.status, 0);
+  assert.match(missingProvenance.stderr + missingProvenance.stdout, /Publication requires (a clean toolkit artifact|artifact merge provenance)/);
 });

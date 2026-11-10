@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
-import { access, readFile, realpath, stat } from 'node:fs/promises';
+import { access, lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { delimiter, isAbsolute, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { runProcess, type ProcessOptions, type ProcessResult } from './runtime/process.ts';
-import { validatePackageIdentity, type PackageIdentity } from './release.ts';
+import { identityDigest, validatePackageIdentity, type PackageIdentity } from './release.ts';
 
 export interface SkillCapabilityReport { name: string; ready: boolean; readinessScope: 'all-declared-scenarios'; resourcesValid: boolean; dependencies: { skill: string; kind: 'skill' | 'command' | 'host'; strength: string; condition: string; available: boolean; code: string }[]; platform: string; arch: string; nativeSupported: boolean; source: string }
 export interface ToolkitResource { path: string; source?: string; sourceSha256?: string; installedSha256?: string }
@@ -51,9 +51,11 @@ export class SkillsRuntime {
   }
   async artifact(): Promise<ToolkitArtifactManifest> {
     const value = JSON.parse(await readFile(resolve(this.root, 'artifact-manifest.json'), 'utf8')) as ToolkitArtifactManifest & { identity?: unknown };
-    if (value.schemaVersion !== 2 || value.packageName !== '@loomhelm/multi-task-flow' || value.runtime !== 'bun@1.4.4' || typeof value.sourceCommit !== 'string' || !/^[a-f0-9]{40}$/.test(value.sourceCommit) || typeof value.sourceSha !== 'string' || !/^[a-f0-9]{40}$/.test(value.sourceSha) || typeof value.candidateSha !== 'string' || !/^[a-f0-9]{40}$/.test(value.candidateSha) || value.candidateSha !== value.sourceSha || typeof value.dirty !== 'boolean' || value.dependenciesBundled !== true || !Array.isArray(value.omittedResources) || value.omittedResources.some(item => !item || typeof item.path !== 'string' || !isSafeResourcePath(item.path) || typeof item.reason !== 'string' || item.reason.length === 0) || new Set(value.omittedResources.map(item => item.path)).size !== value.omittedResources.length || !Array.isArray(value.files) || !value.identity) throw new Error('Invalid toolkit artifact manifest');
+    if (value.schemaVersion !== 2 || value.packageName !== '@loomhelm/multi-task-flow' || value.runtime !== 'bun@1.4.4' || typeof value.sourceCommit !== 'string' || !/^[a-f0-9]{40}$/.test(value.sourceCommit) || typeof value.sourceSha !== 'string' || !/^[a-f0-9]{40}$/.test(value.sourceSha) || typeof value.candidateSha !== 'string' || !/^[a-f0-9]{40}$/.test(value.candidateSha) || value.candidateSha !== value.sourceSha || typeof value.dirty !== 'boolean' || value.dependenciesBundled !== true || !Array.isArray(value.omittedResources) || value.omittedResources.some(item => !item || typeof item.path !== 'string' || !isSafeResourcePath(item.path) || typeof item.reason !== 'string' || item.reason.length === 0) || new Set(value.omittedResources.map(item => item.path)).size !== value.omittedResources.length || !Array.isArray(value.files) || value.files.some(file => !file || typeof file.path !== 'string' || !isSafeResourcePath(file.path) || !/^[a-f0-9]{64}$/.test(file.sha256)) || new Set(value.files.map(file => file.path)).size !== value.files.length || !value.identity) throw new Error('Invalid toolkit artifact manifest');
     const identity = validatePackageIdentity(value.identity);
     if (identity.packageName !== value.packageName || identity.packageVersion !== value.packageVersion || identity.compatibilityLine !== value.compatibilityLine || identity.skillVersion !== value.skillVersion || identity.sourceSha !== value.sourceSha || identity.mergeSha !== value.mergeSha || identity.buildId !== value.buildId || identity.tarballDigest !== value.tarballDigest || identity.gitTag !== value.gitTag) throw new Error('Toolkit artifact identity mismatch');
+    const { buildId, ...withoutBuildId } = identity;
+    if (identityDigest({ ...withoutBuildId, files: value.files }) !== buildId) throw new Error('Toolkit artifact build ID mismatch');
     return value;
   }
   private async validateArtifact(): Promise<ToolkitArtifactManifest> {
@@ -68,10 +70,27 @@ export class SkillsRuntime {
       if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`) || await realpath(target) !== target || !(await stat(target)).isFile()) throw new Error('Unsafe toolkit resource: ' + file.path);
       if (createHash('sha256').update(await readFile(target)).digest('hex') !== file.sha256) throw new Error('Toolkit resource checksum mismatch: ' + file.path);
     }
+    const omitted = new Set(artifact.omittedResources.map(item => item.path));
+    const actual = new Set<string>();
+    const walk = async (relativePath: string): Promise<void> => {
+      const directory = resolve(root, relativePath);
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const child = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+        const target = resolve(root, child);
+        if (entry.isSymbolicLink()) throw new Error('Unsafe toolkit resource: ' + child);
+        if (entry.isDirectory()) { await walk(child); continue; }
+        if (!entry.isFile() || await realpath(target) !== target) throw new Error('Unsafe toolkit resource: ' + child);
+        actual.add(child);
+      }
+    };
+    await walk('');
+    for (const path of actual) if (!seen.has(path) && !omitted.has(path)) throw new Error('Unlisted toolkit resource: ' + path);
     return artifact;
   }
+  async validate(): Promise<ToolkitArtifactManifest> { return this.validateArtifact(); }
   async list(): Promise<{ name: string; path: string; scripts: string[] }[]> {
     const manifest = await this.manifest();
+    await this.validateArtifact();
     const resources = resourceFiles(manifest);
     return manifest.skills.map(name => ({ name, path: resolve(this.root, 'skills', name, 'SKILL.md'), scripts: resources.filter(file => file.path.startsWith(`skills/${name}/scripts/`)).map(file => file.path) }));
   }
@@ -110,6 +129,7 @@ export class SkillsRuntime {
   }
   async run(script: string, args: readonly string[], options: ProcessOptions = {}): Promise<ProcessResult> {
     const manifest = await this.manifest();
+    await this.validateArtifact();
     if (!resourceFiles(manifest).some(file => file.path === script) || !/^(skills\/[^/]+\/scripts|skills\/bin)\/.+/.test(script)) throw new Error('Unknown toolkit script');
     const root = await realpath(this.root);
     const target = await realpath(resolve(root, script));

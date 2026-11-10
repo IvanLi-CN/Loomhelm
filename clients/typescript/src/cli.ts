@@ -1,5 +1,4 @@
 #!/usr/bin/env -S bun --no-install
-import { buildInfo } from './build-info.ts';
 import { LocalClient } from './client.ts';
 import { StateLock } from './runtime/lock.ts';
 import { loadConfig } from './config.ts';
@@ -10,10 +9,12 @@ import { runCodexCommand } from './cli/codex.ts';
 import { runSkillsCommand } from './cli/skills.ts';
 import { runFlowCommand } from './cli/flow.ts';
 import { runReleaseCommand } from './cli/release.ts';
+import { buildInfoFromArtifact } from './runtime-identity.ts';
+import { SkillsRuntime } from './toolkit.ts';
 import { fileURLToPath } from 'node:url';
 
 async function main(args: string[]): Promise<void> {
-  if (args.length === 1 && (args[0] === "--version" || args[0] === "version")) { console.log(JSON.stringify(buildInfo)); return; }
+  if (args.length === 1 && (args[0] === "--version" || args[0] === "version")) { console.log(JSON.stringify(buildInfoFromArtifact(await new SkillsRuntime().validate()))); return; }
   let configPath: string | undefined;
   if (args[0] === '--config') { args.shift(); configPath = args.shift(); if (!configPath) throw new Error('Missing config path'); }
   const [command, ...rest] = args;

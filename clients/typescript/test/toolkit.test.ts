@@ -1,9 +1,10 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, realpath, mkdir, writeFile, readdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { cp, mkdtemp, readFile, rm, realpath, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SkillsRuntime } from '../src/index.ts';
+import { identityDigest, SkillsRuntime } from '../src/index.ts';
 import { spawnSync } from 'node:child_process';
 
 const runtime = new SkillsRuntime();
@@ -35,6 +36,16 @@ test('packaged catalog contains all approved Skills and rejects path escape', as
   assert.ok(skills.some(skill => skill.name === 'dev-plan'));
   assert.ok(skills.some(skill => skill.name === 'multi-task-flow'));
   await assert.rejects(runtime.run('../bin/plan_contract_check.ts', []), /Unknown toolkit script/);
+});
+
+test('rejects toolkit files that are absent from the signed inventory', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'loomhelm-artifact-')));
+  try {
+    const toolkit = join(root, 'toolkit');
+    await cp(runtime.root, toolkit, { recursive: true });
+    await writeFile(join(toolkit, 'unlisted.txt'), 'tampered');
+    await assert.rejects(new SkillsRuntime(toolkit).list(), /Unlisted toolkit resource: unlisted\.txt/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('packaged plan checker preserves stdin pass and rejection with the pinned Bun runtime', async () => {
@@ -74,10 +85,22 @@ test('missing runtime dependencies fail without registry access or cache writes'
     await mkdir(join(root,'skills/bin'),{recursive:true});
     await mkdir(join(root,'cache'));
     await mkdir(join(root,'home'));
-    await writeFile(join(root,'package.json'),JSON.stringify({name:'loomhelm-no-install-test',type:'module',dependencies:{[dependency]:'1.0.0'}}));
-    await writeFile(join(root,'.npmrc'),'registry=http://127.0.0.1:'+registry.port+'/\n');
-    await writeFile(join(root,script),`import ${JSON.stringify(dependency)}; console.log('unexpected execution');`);
-    await writeFile(join(root,'skills/source-manifest.json'),JSON.stringify({...await runtime.manifest(),files:[{path:script,source:script,sourceSha256:''}]}));
+    await writeFile(join(root,'package.json'),JSON.stringify({name:'loomhelm-no-install-test',type:'module'}));
+    const npmrc='registry=http://127.0.0.1:'+registry.port+'/\n';
+    await writeFile(join(root,'.npmrc'),npmrc);
+    const scriptContents=`import ${JSON.stringify(dependency)}; console.log('unexpected execution');`;
+    await writeFile(join(root,script),scriptContents);
+    const scriptSha256=createHash('sha256').update(scriptContents).digest('hex');
+    await writeFile(join(root,'skills/source-manifest.json'),JSON.stringify({...await runtime.manifest(),files:[{path:script,source:script,sourceSha256:'',installedSha256:scriptSha256}]}));
+    const template=await runtime.artifact();
+    const files=[
+      {path:'skills/bin/no-install-probe.ts',sha256:scriptSha256},
+      {path:'skills/source-manifest.json',sha256:createHash('sha256').update(await readFile(join(root,'skills/source-manifest.json'))).digest('hex')},
+      {path:'.npmrc',sha256:createHash('sha256').update(npmrc).digest('hex')},
+    ];
+    const {buildId: _templateBuildId, ...identityWithoutBuildId}=template.identity;
+    const buildId=identityDigest({...identityWithoutBuildId,files});
+    await writeFile(join(root,'artifact-manifest.json'),JSON.stringify({...template,files,identity:{...template.identity,buildId},buildId},null,2));
     // Force fallback mode to exercise absence even when the test checkout has ancestor node_modules.
     const result=await new SkillsRuntime(root).run(script,[],{cwd:root,timeoutMs:10000,env:{...process.env,HOME:join(root,'home'),BUN_INSTALL_CACHE_DIR:join(root,'cache'),BUN_OPTIONS:'--install=fallback',BUN_RUNTIME_TRANSPILER_CACHE_PATH:'0'}});
     assert.notEqual(result.code,0); assert.doesNotMatch(result.stdout,/unexpected execution/);
