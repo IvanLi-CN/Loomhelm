@@ -28,8 +28,10 @@ export async function layoutProjection(projection: GraphProjection, direction: D
     ports.get(e.target)?.push({ id: target, width: 0, height: 0, layoutOptions: { 'elk.port.side': direction === 'DOWN' ? 'NORTH' : 'WEST' } });
     return { id: e.id, sources: [source], targets: [target] };
   });
+  const nonEmptyGroups = new Set(projection.nodes.map(n => n.parentId).filter((id): id is string => !!id));
+  // ELK gives empty compound nodes zero size; keep their graph endpoint visible.
   const entries = new Map(projection.nodes.map(n => [n.id, {
-    id: n.id, ...(n.nodeKind === 'group' ? {} : cardSize(n.title)),
+    id: n.id, ...(n.nodeKind === 'group' ? (nonEmptyGroups.has(n.id) ? {} : { width: CARD_WIDTH, height: CARD_HEIGHT }) : cardSize(n.title)),
     ports: ports.get(n.id),
     layoutOptions: n.nodeKind === 'group' ? { 'elk.padding': '[top=38,left=16,bottom=16,right=16]' } : { 'elk.portConstraints': 'FIXED_SIDE' },
     ...(n.nodeKind === 'group' ? {children: []} : {}),

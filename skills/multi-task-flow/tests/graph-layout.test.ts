@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
+import { emptyBootstrapView } from './service-fixture';
 import { layoutProjection, type PlacedNode } from '../web/graph-layout';
-import type { GraphProjection, GraphProjectionNode } from '../web/graph-projection';
+import { buildGraphProjection, type GraphProjection, type GraphProjectionNode } from '../web/graph-projection';
 
 function fixture(): GraphProjection {
   const node = (id:string, parentId:string|null=null,group=false):GraphProjectionNode => ({id,parentId,nodeKind:group?'group':'task',sourceNodeId:id,refId:id,groupId:parentId,plannedGroupId:parentId,taskKind:'contribution',state:'running',stateLabel:'执行中',stateIcon:'loader-circle',title:`任务 ${id} 的长中文名称`,graphLabel:id,fullLabel:id});
@@ -28,5 +29,16 @@ for (const direction of ['DOWN','RIGHT'] as const) test(`${direction}: routes ev
   for(let i=0;i<cards.length;i++)for(let j=i+1;j<cards.length;j++){
     const a=cards[i]!,b=cards[j]!;
     expect(a.x+a.width<=b.x||b.x+b.width<=a.x||a.y+a.height<=b.y||b.y+b.height<=a.y).toBe(true);
+  }
+});
+
+test('gives an empty delivery unit a visible layout box and routes its outgoing dependency', async () => {
+  const projection = buildGraphProjection(emptyBootstrapView());
+  for (const direction of ['DOWN', 'RIGHT'] as const) {
+    const result = await layoutProjection(projection, direction);
+    const bootstrap = result.nodes.find(({ node }) => node.id === 'group:bootstrap');
+    expect(bootstrap?.width).toBeGreaterThan(0);
+    expect(bootstrap?.height).toBeGreaterThan(0);
+    expect(result.edges).toEqual(expect.arrayContaining([expect.objectContaining({ source: 'group:bootstrap', target: 'later-task-node' })]));
   }
 });

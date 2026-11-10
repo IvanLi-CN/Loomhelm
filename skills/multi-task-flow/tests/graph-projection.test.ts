@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
 import { buildView } from "../lib/view";
+import { emptyBootstrapView } from "./service-fixture";
 import type { View } from "../web/model";
 import { GRAPH_LABEL_LIMITS, GRAPH_SHAPES, MAX_GRAPH_PATHS, buildGraphProjection, fitGraphLabel } from "../web/graph-projection";
 
@@ -125,6 +126,26 @@ describe("dashboard graph projection", () => {
     expect(new Set(projected.nodes.map((item) => item.id)).size).toBe(projected.nodes.length);
     expect(groupNode?.id).not.toBe(sourceNode?.id);
     expect(sourceNode?.parentId).toBe(groupNode?.id);
+  });
+
+  test("keeps an empty delivery unit visible and connects it to the next unit", () => {
+    const view = emptyBootstrapView();
+    const projected = buildGraphProjection(view);
+    const bootstrapEdge = projected.edges.find((item) => item.source === "group:bootstrap" && item.target === "later-task-node");
+
+    expect(projected.nodes.filter((item) => item.nodeKind === "group").map((item) => item.refId)).toEqual(["bootstrap", "regular"]);
+    expect(bootstrapEdge).toEqual(expect.objectContaining({
+      crossGroup: "yes",
+      paths: [{
+        requires: ["merged", "completed"],
+        sourceEdgeIds: ["bootstrap-to-regular", "regular-to-task"],
+        boundaryNodeIds: ["bootstrap-end", "regular-start"],
+      }],
+    }));
+
+    const filtered = buildGraphProjection(view, new Set(), new Set(["bootstrap"]));
+    expect(filtered.nodes).toEqual(expect.arrayContaining([expect.objectContaining({ nodeKind: "group", refId: "bootstrap" })]));
+    expect(filtered.nodes.some((item) => item.refId === "regular")).toBe(false);
   });
 
   test("retains current and planned group identity for moved tasks", () => {

@@ -25,7 +25,7 @@ export function createGraphController(context: GraphContext, calculateLayout = l
   const root = createRoot(container);
   let projection: GraphProjection | null = null, instance: ReactFlowInstance | null = null;
   let direction: Direction = 'RIGHT', generation = 0;
-  let latest: Task[] = [], update: (() => void) | null = null;
+  let latest: Task[] = [], latestGroupIds: ReadonlySet<string> | undefined, update: (() => void) | null = null;
   let layout: GraphLayout | null = null, error = '', pending = false;
   let signature = '', viewportInitialized = false;
   const highlightSelection = () => { highlightAccessibleSelection(projection, context); update?.(); };
@@ -45,7 +45,7 @@ export function createGraphController(context: GraphContext, calculateLayout = l
         ports:(projection?.edges??[]).filter(e=>e.source===n.id||e.target===n.id).map(e=>({id:`port:${e.id}:${e.source===n.id?'source':'target'}`,source:e.source===n.id})),},
     }));
     const edges: Edge[] = (layout?.edges??[]).map(e=>({id:e.id,source:e.source,target:e.target,type:'routed',sourceHandle:`port:${e.id}:source`,targetHandle:`port:${e.id}:target`,data:{path:e.path},markerEnd:{type:MarkerType.ArrowClosed,width:16,height:16,color:context.css('--muted','#789096')},style:{stroke:context.css('--muted','#789096'),strokeWidth:1.5}}));
-    return <><div className="dependency-layout-tools"><span>前置任务 → 后续任务 · 正交连线</span><label>排列方向 <select value={direction} onChange={e=>{direction=e.target.value as Direction;signature='';viewportInitialized=false;render(latest);}}><option value="DOWN">从上到下</option><option value="RIGHT">从左到右</option></select></label><button onClick={()=>{instance?.setViewport({x:24,y:24,zoom:1});context.setZoom(1);}}>100% 阅读</button></div>{error?<div role="alert" className="notice notice-warning">{error}</div>:null}<ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+    return <><div className="dependency-layout-tools"><span>前置任务 → 后续任务 · 正交连线</span><label>排列方向 <select value={direction} onChange={e=>{direction=e.target.value as Direction;signature='';viewportInitialized=false;render(latest,latestGroupIds);}}><option value="DOWN">从上到下</option><option value="RIGHT">从左到右</option></select></label><button onClick={()=>{instance?.setViewport({x:24,y:24,zoom:1});context.setZoom(1);}}>100% 阅读</button></div>{error?<div role="alert" className="notice notice-warning">{error}</div>:null}<ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       onInit={i=>{instance=i;}} deleteKeyCode={null} nodesConnectable={false} nodesDraggable={false} elementsSelectable={true} minZoom={0.15} maxZoom={2.5}
       zoomOnScroll={false} zoomOnPinch={true} panOnScroll={true} panOnDrag={true} preventScrolling={false}
       onMoveEnd={(_,v)=>context.setZoom(Math.round(v.zoom*100)/100)}
@@ -54,10 +54,10 @@ export function createGraphController(context: GraphContext, calculateLayout = l
       onNodeMouseLeave={context.hideHoverPreview} proOptions={{hideAttribution:false}} />{pending?<span className="dependency-layout-pending" role="status">正在计算布局…</span>:null}</>;
   }
   root.render(<Surface/>);
-  function render(tasks: Task[]) {
-    latest=tasks;const data=context.getData();if(!data)return;
-    const next=buildGraphProjection(data,new Set(tasks.map(t=>t.id)));
-    context.element('graph-empty').hidden=next.nodes.some(n=>n.nodeKind!=='group');
+  function render(tasks: Task[], visibleGroupIds?: ReadonlySet<string>) {
+    latest=tasks;latestGroupIds=visibleGroupIds;const data=context.getData();if(!data)return;
+    const next=buildGraphProjection(data,new Set(tasks.map(t=>t.id)),visibleGroupIds);
+    context.element('graph-empty').hidden=next.nodes.length>0;
     const warning=context.element('graph-projection-warning');warning.hidden=!next.warnings.length;warning.textContent=next.warnings.join(' ');
     projection=next;renderAccessibleNodes(next,context);
     const key=JSON.stringify([direction,next.nodes.map(n=>[n.id,n.parentId,n.title]),next.edges.map(e=>[e.id,e.source,e.target])]);
