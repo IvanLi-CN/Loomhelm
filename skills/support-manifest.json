@@ -47,13 +47,9 @@
   "skills/multi-task-flow/scripts/test-skills-artifact.ts",
   "skills/multi-task-flow/scripts/test-skills-native.ts",
   "skills/multi-task-flow/scripts/test-viewer-source.ts",
-  "skills/multi-task-flow/scripts/viewer-gateway.ts",
-  "skills/multi-task-flow/scripts/viewer-runtime.ts",
-  "skills/multi-task-flow/scripts/viewer-worker.ts",
   "skills/multi-task-flow/scripts/verify-skills-modules.ts",
   "skills/support-manifest.json",
   "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/output-tooltip-boundary.png",
   "skills/multi-task-flow/web/task-context-menu.ts",
-  "skills/multi-task-flow/tests/ui/task-context-menu.test.ts",
-  "skills/multi-task-flow/tests/viewer-runtime.test.ts"
+  "skills/multi-task-flow/tests/ui/task-context-menu.test.ts"
 ]

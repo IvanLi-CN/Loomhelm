@@ -13895,7 +13895,7 @@
       "path": "skills/multi-task-flow/SKILL.md",
       "sourceBlob": "708e77c1572d4c7271e294984151eae1e11c0894",
       "sourceSha256": "e3ec7fceef4c5cbd8650e17603ed261e59fc06dafa9d18c85a0e2966b0d9a298",
-      "installedSha256": "e1e960c1fe43959bb92d981813938a88ffc632d9bba1afc1a8d5413477f3aeee",
+      "installedSha256": "0eb66a22bf277b85a8a6450f3deaa2cdddbae2a9d061965b475453104859be33",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15834,7 +15834,7 @@
     },
     {
       "path": "skills/multi-task-flow/scripts/package-client-skills.ts",
-      "installedSha256": "964a1b33b6abbabf027b899b972f2cf1e6237cb377a789d4bc8703ff864484b1"
+      "installedSha256": "e4c0350952e2c339cd8110b4d1d487a0449713a0d8dc3fc499d3a4e628034d86"
     },
     {
       "path": "skills/multi-task-flow/lib/package-source.ts",
@@ -15853,24 +15853,12 @@
       "installedSha256": "d42de44ea2fb32e5407bbb904eb795c77af35271b8b58a7ec98c7cb779c0dfc9"
     },
     {
-      "path": "skills/multi-task-flow/scripts/viewer-gateway.ts",
-      "installedSha256": "1109009e8ef70547cf931305ad43f2904c2419ffe85e3d2ae7b9ffb4a0233f2e"
-    },
-    {
-      "path": "skills/multi-task-flow/scripts/viewer-runtime.ts",
-      "installedSha256": "2f98e3e115350b07be2d287293f82f3f7bdd97d9df42ac2e9a9c4a5899a55ede"
-    },
-    {
-      "path": "skills/multi-task-flow/scripts/viewer-worker.ts",
-      "installedSha256": "e7883cda8988ac69cdbbadf327b29f7ab1bf67414177eb34e96593e94b988c9d"
-    },
-    {
       "path": "skills/multi-task-flow/scripts/verify-skills-modules.ts",
       "installedSha256": "41e4134eef5f7d8c6cacdad5de2693e526eba172e7ca3c58fcef74114c2cb1a7"
     },
     {
       "path": "skills/support-manifest.json",
-      "installedSha256": "5034e002ab7e50f09cf004ccea5d90da25a1fa2e8ca3efc4867140fb845cfd3e"
+      "installedSha256": "1510674f7f966476eaafdb539253e8ed23dd4ecf08c0ec0bfa302ac8123b2ba1"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/output-tooltip-boundary.png",
@@ -15883,10 +15871,6 @@
     {
       "path": "skills/multi-task-flow/tests/ui/task-context-menu.test.ts",
       "installedSha256": "55a7acbb9ca25a891286b3eab3bac75c3f4efcabe5d85e802623d86cbd892e61"
-    },
-    {
-      "path": "skills/multi-task-flow/tests/viewer-runtime.test.ts",
-      "installedSha256": "41856e064d92586bf531a0fdf07f863832529b2d8e4b5566ba33ec0ec6ef2a3b"
     },
     {
       "path": "skills/bin/modules/core/runtime.ts",
