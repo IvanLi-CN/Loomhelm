@@ -76,7 +76,7 @@ An active delivery unit cannot be recorded as idle while it still has a ready, u
 
 native request ID 一旦绑定，完整创建参数（含 transport、cwd、prompt、title 和 execution_profile）即冻结；相同内容可再次绑定，不同内容复用 ID 必须拒绝。已知线程、工作区、初始 HEAD 和执行事实通过 `creation_observations` 单调保留，后续空 unknown 回执不能遗忘它们；failed 门禁不能依赖可变 transport。明确失败且已对账的请求才允许修正配置并重新 claim。未绑定 native request 的 claim 遇到配置变化会终止旧 claim，审计记录保留旧 profile、原因和新 claim 要求。
 
-旧账本缺少默认 profile 时保持只读。先完成原有 schema 迁移，再由绑定主会话显式调用 `execution-profile-migrate`，带 request ID、expected revision 和完整默认 pair。此操作保留账本上一快照，不推断旧对象的模型。历史 `create_thread` 证据可读；新增创建通过 CLI 证据解析。
+旧账本缺少默认 profile 时保持只读。历史 `schema-2/contract-2` 账本若任务缺少 `execution_owner`、`conversation_policy` 或 `delivery_policy` 也保持只读，并在普通写入口返回 `HISTORICAL_LEDGER_READ_ONLY`；先用 `ledger-maintenance-check` / `ledger-maintenance-apply` 的 `action: "contract"` 仅补出缺失策略键的显式 `null`，再按需由绑定主会话显式调用 `execution-profile-migrate`，两项迁移分别携带 request ID、expected revision、源 SHA256、operation digest、维护身份、批准引用和完整备份。部分策略声明不自动补齐，PR、owner 和 lifecycle 事实也不由迁移推断。历史 `create_thread` 证据可读；新增创建通过 CLI 证据解析。
 
 ## 主动通知闭环
 

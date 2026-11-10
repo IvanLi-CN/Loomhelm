@@ -105,7 +105,18 @@ export class ServiceAuth {
     });
     return value;
   }
-  exchange(value: string): { cookie: string; target: string } {
+  consumeTicket(value: string, expectedTarget?: string): boolean {
+    return this.transaction((auth) => {
+      const index = auth.tickets.findIndex((item) =>
+        safeCompare(item.digest, hash(value)),
+      );
+      if (index < 0 || (expectedTarget && auth.tickets[index]!.target !== expectedTarget))
+        return false;
+      auth.tickets.splice(index, 1);
+      return true;
+    });
+  }
+  exchange(value: string, expectedTarget?: string): { cookie: string; target: string } {
     return this.transaction((auth) => {
       const index = auth.tickets.findIndex((item) =>
         safeCompare(item.digest, hash(value)),
@@ -114,6 +125,11 @@ export class ServiceAuth {
         index >= 0,
         "INVALID_TICKET",
         "Login ticket expired or already used",
+      );
+      requireCondition(
+        !expectedTarget || auth.tickets[index]!.target === expectedTarget,
+        "INVALID_TICKET",
+        "Login ticket is bound to another target",
       );
       const [ticket] = auth.tickets.splice(index, 1);
       const session = token();

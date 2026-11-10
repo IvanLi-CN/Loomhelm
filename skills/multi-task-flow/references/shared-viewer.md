@@ -6,7 +6,7 @@ All commands use `service.ts <command> --input -`, consuming one JSON object. No
 
 - `ensure`, `renew`, `release`: `{"run_id":"example","thread_id":"main-thread","api_version":1}`.
 - `status`, `doctor`: `{}`. Inspect configured identity and runtime before remediation.
-- `login`: `{}` or `{"run_id":"example"}`. Its returned fragment ticket is sensitive.
+- `login`: `{}` or `{"run_id":"example"}`. Its returned target URL contains a sensitive one-time query ticket.
 
 ## Explicit maintenance
 
@@ -37,11 +37,17 @@ Re-running the exact command is idempotent. A prepared journal after source seal
 
 合同迁移使用 `ledger-maintenance-check` 和 `ledger-maintenance-apply`，不是目录导入的历史 `import/migrate` 别名。普通 orchestration `migrate` 与 `execution-profile-migrate` 仍只允许绑定 main；维护入口使用真实维护身份，不恢复原会话、不改 owner、不取得业务控制权。
 
+历史 `schema-2/contract-2` 账本若任一任务缺少 `execution_owner`、`conversation_policy` 或 `delivery_policy`，普通写入会在 `requireLedgerCompatibility(..., "write")` 处先返回 `HISTORICAL_LEDGER_READ_ONLY`，因此不会进入 engine，也不会自动推断策略；完整声明但语义冲突或值非法的历史策略同样保持只读并要求显式恢复；这条只读链与缺失默认 execution profile 是两个独立门禁。
+
+对该历史形态，唯一正式修复是对准确 run 执行 `ledger-maintenance-check` / `ledger-maintenance-apply` 的 `action: "contract"`。candidate 只为完全缺失的策略键补出显式 `null` 声明，并在报告和 request result 的 `task_execution_policy_migration` 中记录任务与字段；部分声明会以 `TASK_EXECUTION_POLICY_INCOMPLETE` 拒绝，不推断 owner、对话归属、交付方式、PR 或生命周期事实。普通 orchestration `migrate` 仍只处理 legacy/contract-1，不能用它绕过该门禁。
+
 先用 `ledger-maintenance-check` 输入 `{ "run_id": "exact-run", "action": "contract" }`。执行配置是另一个独立动作：`{ "run_id": "exact-run", "action": "execution-profile", "execution_profile": { "model": "<owner-selected-model>", "thinking": "<owner-selected-thinking>" } }`。check 返回原 owner、revision、源 SHA256、目标、当前/迁移后读取能力、未决操作和 `operation_digest`，不写入状态。
 
 获得主人对准确动作的批准、暂停旧写入器后，apply 传入同样动作参数，并添加 `expected_owner_thread_id`、`expected_revision`、`expected_ledger_sha256`、`operation_digest`、唯一 `request_id`、实际 `maintenance_thread_id`、`approval_ref`、`reason` 和 `writers_paused: true`。`approval_ref` 和暂停声明是同 OS 用户维护信任边界内的审计记录，不是独立认证或进程隔离证明。不要冒用原 owner。claimed/unknown 创建、合并和切割操作须由原业务流程对账，维护命令不会替它们收口；服务租约本身不阻塞。
 
-安全顺序是先显式升级至同时可读源/目标合同的 viewer，再批准单 run 合同迁移，再按需单独批准完整 profile 迁移。只有机械、无语义推断、幂等、可恢复且经过备份和 digest 验证的迁移可以自动执行；历史内容不自动清理。若最新 viewer 无法读取某个 run，已配置 `previous_build` 的 viewer 可通过 `GET /api/v1/runs/<run-id>/legacy-view` 请求明确的旧 viewer 只读投影；该端点不创建 lease、不接受 mutation、不推进 owner 或 revision。服务未安装或不支持目标时 apply 拒绝；不为历史展示补造模型或完成事实。维护锁、run 锁覆盖复核和原子提交，完整旧文件写入 `ledger.maintenance-<request_id>.json`，真实维护身份和批准引用保留于账本 request result。每次变更 revision 增加 1；同请求同内容重放，异内容拒绝。
+安全顺序是先显式升级至同时可读源/目标合同的 viewer，再批准单 run 合同迁移，再按需单独批准完整 profile 迁移。只有机械、无语义推断、幂等、可恢复且经过备份和 digest 验证的迁移可以自动执行；历史内容不自动清理。已提交但缺少源摘要或请求 sidecar 的旧迁移记录无法安全证明备份绑定原始源数据，重放必须进入显式恢复流程，系统不会自动补写 sidecar 或接受该重放。若最新 viewer 无法读取某个 run，已配置 `previous_build` 的 viewer 可通过 `GET /api/v1/runs/<run-id>/legacy-view` 请求明确的旧 viewer 只读投影；该端点不创建 lease、不接受 mutation、不推进 owner 或 revision。服务未安装或不支持目标时 apply 拒绝；不为历史展示补造模型或完成事实。维护锁、run 锁覆盖复核和原子提交，完整旧文件写入 `ledger.maintenance-<request_id>.json`，并以 request identity sidecar 绑定 `request_id`、command 和 `canonical_input`；sidecar 先于新备份持久化，只有精确匹配的旧备份或仅 sidecar 中间状态可以补绑/恢复，损坏、不匹配或 replay 工件校验失败时 fail closed。真实维护身份和批准引用保留于账本 request result。每次变更 revision 增加 1；同请求同内容重放，异内容拒绝。
+
+维护迁移完成后，bootstrap 仍由绑定的 main conversation 持有：已完成文档/工作区 atom 只能对应已有的 workspace 和提交事实，`parent_pr` 仍为 `null`、`pr_created` 仍为 `unknown`，直到真实 `publish-pr` receipt 被记录；不得把其他 delivery unit 的实现 PR（例如 PR `#360`）挂到 bootstrap，也不得用迁移补造父 PR 或合并事实。
 
 备份后中断可用相同请求恢复，提交后响应丢失可安全重放。冲突保留双方证据，不覆盖备份或账本。代码健康失败恢复原构建和租约期限；新数据不被旧备份覆盖。迁移后旧构建不可读时 rollback 拒绝，采用兼容过渡构建或向前修复。合作锁不能防止同用户手工改文件或不遵守协议的旧写入器，主人必须确认这些写入已暂停。
 

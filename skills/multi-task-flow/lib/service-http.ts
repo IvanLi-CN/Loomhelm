@@ -16,11 +16,10 @@ import {
 import { ContractError } from "../lib/errors";
 import { ServiceState } from "../lib/service-state";
 import {
+  authFailedPage,
   homePage,
   homeScript,
-  loginPage,
-  loginScript,
-  resumeTaskScript,
+  parseViewerTarget,
   viewerPage,
   runClientScript,
 } from "../lib/service-pages";
@@ -48,6 +47,14 @@ const script = (body: string) =>
       "Content-Type": "text/javascript; charset=utf-8",
     },
   });
+const redirect = (location: string, extra: Record<string, string> = {}) =>
+  new Response(null, {
+    status: 302,
+    headers: { ...dashboardHeaders, Location: location, ...extra },
+  });
+const runEntryPath = /^\/runs\/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\/$/;
+const authFailureLocation = (target: string) =>
+  "/auth/failed?" + new URLSearchParams({ redirect: target });
 const agentInput = z
   .object({
     thread_id: z.string().min(1),
@@ -208,31 +215,53 @@ export async function startSharedViewer(
         return json({ code: "FORBIDDEN" }, 403);
       const url = new URL(request.url);
       try {
-        if (request.method === "GET" && url.pathname === "/login")
-          return html(loginPage);
-        if (request.method === "GET" && url.pathname === "/login.js")
-          return script(loginScript);
-        if (request.method === "POST" && url.pathname === "/api/v1/login") {
-          if (origin !== `http://${host}`)
-            return json({ code: "FORBIDDEN" }, 403);
-          const input = z
-            .object({ ticket: z.string().max(100) })
-            .strict()
-            .parse(await body(request));
-          const session = auth.exchange(input.ticket);
-          return json({ target: session.target }, 200, {
-            "Set-Cookie": session.cookie,
-          });
+        if (url.pathname === "/login" || url.pathname === "/login.js" || url.pathname === "/resume-task.js" || url.pathname === "/api/v1/login")
+          return json({ code: "NOT_FOUND" }, 404);
+        const viewerEntry = request.method === "GET" &&
+          (url.pathname === "/" || runEntryPath.test(url.pathname));
+        if (request.method === "GET" && url.pathname === "/auth/failed") {
+          const redirectValues = url.searchParams.getAll("redirect");
+          const hasOnlyRedirect = [...url.searchParams.keys()].every((key) => key === "redirect");
+          const target = hasOnlyRedirect && redirectValues.length === 1
+            ? parseViewerTarget(redirectValues[0]!, `http://${host}`, { allowHome: false })?.target
+            : null;
+          if (!target) return html(authFailedPage, 400);
+          const actor = auth.authorize(request);
+          return actor ? redirect(target) : html(authFailedPage, 401);
         }
-        if (request.method === "GET" && url.pathname === "/resume-task.js") return script(resumeTaskScript);
+        const viewerTarget = viewerEntry
+          ? parseViewerTarget(request.url, `http://${host}`, { allowTicket: true })
+          : null;
         const actor = auth.authorize(request);
+        if (viewerEntry && !viewerTarget) {
+          if (!actor) return html(authFailedPage, 400);
+          return json({ code: "INVALID_REDIRECT" }, 400);
+        }
+        if (viewerEntry && viewerTarget) {
+          if (actor) {
+            if (viewerTarget.ticket !== null) {
+              auth.consumeTicket(viewerTarget.ticket, url.pathname);
+              return redirect(viewerTarget.target);
+            }
+          } else if (viewerTarget.ticket !== null) {
+            try {
+              const session = auth.exchange(viewerTarget.ticket, url.pathname);
+              return redirect(viewerTarget.target, { "Set-Cookie": session.cookie });
+            } catch (error) {
+              if (!(error instanceof ContractError) || error.code !== "INVALID_TICKET") throw error;
+              if (url.pathname === "/") return html(authFailedPage, 401);
+              return redirect(authFailureLocation(viewerTarget.target));
+            }
+          } else if (url.pathname !== "/") {
+            return redirect(authFailureLocation(viewerTarget.target));
+          }
+        }
         if (!actor)
           return request.method === "GET" && !url.pathname.startsWith("/api/")
             ? html(
                 viewerPage(
                   "需要连接本地展示服务",
                   "<p>请通过 service login 获取一次性登录入口；登录后将恢复任务定位。若在其他标签页登录，请返回此页刷新。</p>",
-                  "/resume-task.js",
                 ),
                 401,
               )

@@ -32,6 +32,15 @@ test("run default inheritance is selected and cleared as one pair", async () => 
   expect(received).toEqual(["task", "a", null, false]);
 });
 
+test("run profile uses a neutral settings icon trigger", () => {
+  const editor = createProfileEditor({ capabilities, update: async () => {} }, "run", "run", profile, profile, null);
+  const trigger = editor.querySelector<HTMLElement>(".profile-trigger")!;
+  expect(trigger.textContent?.trim()).toBe("");
+  expect(trigger.dataset.profileStatus).toBeUndefined();
+  expect(trigger.dataset.tooltip).toBe("默认执行配置");
+  expect(trigger.querySelector('[data-lucide="settings-2"]')).not.toBeNull();
+});
+
 test("profile dropdown uses a model list and discrete thinking slider", async () => {
   let received: unknown;
   const editor = createProfileEditor({ capabilities, update: async (...args) => { received = args; } }, "task", "a", profile, profile, null);

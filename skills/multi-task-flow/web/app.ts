@@ -7,7 +7,7 @@ import { OutputSnapshots, initialOutput, refreshOutputNodes, type OutputSnapshot
 import { createProfileEditor } from "./profile-editor";
 import type { ProfileCapabilities, ProfileTarget } from "./profile-editor";
 import moment from "moment";
-import { createIcons, Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, TreePalm, ArchiveX, ArchiveRestore, Archive, RefreshCw } from "lucide";
+import { createIcons, Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleHelp, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, TreePalm, ArchiveX, ArchiveRestore, Archive, RefreshCw, Info, Settings2, SunMoon, Sun, Moon } from "lucide";
 import { createCardRenderer } from "./cards";
 import { createTimelineController } from "./timeline";
 import { createGraphController } from "./graph";
@@ -22,9 +22,10 @@ import { installViewStateNavigation } from "./navigation";
 import { createHoverPreviewBridge, type HoverPreviewBridge } from "./hover-preview";
 import { formatDuration, formatLocalTime } from "./time";
 import { renderTimestamp, refreshTimestamps } from "./timestamp";
+import { planStateSeverity, renderPlanInfoContent, renderPlanState } from "./status-row";
 import { taskKindLabel, STATE_LABELS } from "./labels";
 import { DEFAULT_VIEW_STATE, defaultTaskLayout, hasValidLayoutParam, canonicalViewUrl, hasValidTabParam, parseViewState, replaceViewState, sanitizeViewState, type DashboardTab, type TaskLayout, type ViewState } from "./view-state";
-const ICONS = { Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, TreePalm, ArchiveX, ArchiveRestore, Archive, RefreshCw };
+const ICONS = { Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleHelp, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, TreePalm, ArchiveX, ArchiveRestore, Archive, RefreshCw, Info, Settings2, SunMoon, Sun, Moon };
 installTextTooltips();
 createIcons({ icons: ICONS });
 moment.defineLocale("zh-task", { parentLocale: "en", months: "一月_二月_三月_四月_五月_六月_七月_八月_九月_十月_十一月_十二月".split("_"), monthsShort: "1月_2月_3月_4月_5月_6月_7月_8月_9月_10月_11月_12月".split("_"), weekdays: "星期日_星期一_星期二_星期三_星期四_星期五_星期六".split("_"), weekdaysShort: "周日_周一_周二_周三_周四_周五_周六".split("_"), weekdaysMin: "日_一_二_三_四_五_六".split("_") });
@@ -83,6 +84,7 @@ let focusDetailsOnNextRender = false;
 let keyboardSelection = false;
 let hoverBridge: HoverPreviewBridge | null = null;
 let restoreClosedDetailsOnNextRender = false;
+let planInfoLastFocus: HTMLElement | null = null;
 const anyHoverCapability = window.matchMedia("(any-hover: hover)");
 const anyFinePointerCapability = window.matchMedia("(any-pointer: fine)");
 function text(tag: string, value: string, ...classNames: string[]): HTMLElement { const element = document.createElement(tag); if (classNames.length) element.className = classNames.join(" "); element.textContent = value; return element; }
@@ -365,6 +367,80 @@ function restoreClosedDetails(): void {
   focusAfterRerender(lastFocus, (fallback ? firstVisibleElement(document, fallback) : null) ?? $("search"));
 }
 function closeDetails(): void { hideHoverPreview(); keyboardSelection = false; viewState = { ...viewState, detail: false }; syncUrl(); updateDetailsSurface(false); syncStableGridCardWidth(); restoreClosedDetails(); }
+function planInfoIsOpen(): boolean { return $("plan-info-panel").classList.contains("open"); }
+function planInfoIsDrawer(): boolean { return window.innerWidth < DETAILS_PANEL_BREAKPOINT; }
+function positionPlanInfo(): void {
+  const trigger = $("plan-info-trigger");
+  const panel = $("plan-info-panel");
+  if (!planInfoIsOpen() || planInfoIsDrawer()) return;
+  const rect = trigger.getBoundingClientRect();
+  const left = Math.max(12, Math.min(window.innerWidth - panel.offsetWidth - 12, rect.right - panel.offsetWidth));
+  panel.style.left = `${left}px`;
+  panel.style.top = `${Math.max(12, Math.min(window.innerHeight - panel.offsetHeight - 12, rect.bottom + 8))}px`;
+}
+function syncPlanInfoSurface(): void {
+  const panel = $("plan-info-panel");
+  const drawer = planInfoIsDrawer();
+  panel.dataset.surface = drawer ? "drawer" : "popover";
+  if (drawer) {
+    panel.style.removeProperty("left");
+    panel.style.removeProperty("top");
+  } else positionPlanInfo();
+  $("plan-info-backdrop").hidden = !(planInfoIsOpen() && drawer);
+}
+function openPlanInfo(): void {
+  if (!data) return;
+  const panel = $("plan-info-panel");
+  if (planInfoIsOpen()) return;
+  planInfoLastFocus = document.activeElement as HTMLElement | null;
+  closeMenus();
+  hideHoverPreview();
+  panel.hidden = false;
+  panel.classList.add("open");
+  panel.setAttribute("aria-hidden", "false");
+  $("plan-info-trigger").setAttribute("aria-expanded", "true");
+  syncPlanInfoSurface();
+  window.requestAnimationFrame(() => $("close-plan-info").focus({ preventScroll: true }));
+}
+function closePlanInfo(restoreFocus = true): void {
+  const panel = $("plan-info-panel");
+  if (!planInfoIsOpen()) return;
+  panel.classList.remove("open");
+  panel.hidden = true;
+  panel.setAttribute("aria-hidden", "true");
+  $("plan-info-trigger").setAttribute("aria-expanded", "false");
+  $("plan-info-backdrop").hidden = true;
+  if (restoreFocus && planInfoLastFocus && document.contains(planInfoLastFocus)) planInfoLastFocus.focus({ preventScroll: true });
+  planInfoLastFocus = null;
+}
+function trapPlanInfoFocus(event: KeyboardEvent): void {
+  if (event.key !== "Tab" || !planInfoIsOpen()) return;
+  const panel = $("plan-info-panel");
+  const focusable = [...panel.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')].filter((element) => !element.hidden);
+  if (!focusable.length) { event.preventDefault(); panel.focus(); return; }
+  const first = focusable[0]!; const last = focusable[focusable.length - 1]!;
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+}
+function renderPlanInfo(): void {
+  const trigger = $("plan-info-trigger");
+  const severity = planStateSeverity(data?.plan_state);
+  const iconName = severity === "blocked" ? "circle-alert" : severity === "unknown" ? "circle-help" : "info";
+  const label = severity === "blocked" ? "查看编排问题" : severity === "unknown" ? "查看编排状态" : "查看编排信息";
+  trigger.dataset.status = severity;
+  trigger.dataset.tooltip = label;
+  trigger.setAttribute("aria-label", label);
+  trigger.setAttribute("aria-expanded", String(planInfoIsOpen()));
+  const icon = document.createElement("i");
+  icon.id = "plan-info-icon";
+  icon.dataset.lucide = iconName;
+  icon.setAttribute("aria-hidden", "true");
+  trigger.replaceChildren(icon);
+  if (data) {
+    $("plan-info-title").textContent = `${data.orchestration.repository.owner} / ${data.orchestration.repository.name}`;
+    renderPlanInfoContent($("plan-info-content"), data);
+  } else $("plan-info-content").replaceChildren();
+}
 function trapDetailsFocus(event: KeyboardEvent): void {
   if (event.key !== "Tab") return;
   const details = $("details");
@@ -461,16 +537,26 @@ function render(): void {
   const planWarnings = data.plan_warnings ?? [];
   const planWarning = $("plan-warning");
   const planState = data.plan_state;
+  renderPlanInfo();
+  renderPlanState($("plan-state"), planState);
   const authorizationLabel = planState?.authorization_label ??
     (planState?.approval_pending ? "Not approved" : "Schedulable");
+  const runtimeBlockers = planState?.runtime_readiness?.status === "blocked"
+    ? planState.runtime_readiness.blockers.map((blocker) => blocker.message)
+    : [];
+  const warningReasons = planWarnings.length
+    ? planWarnings.map((warning) => warning.reason)
+    : planState?.approval_pending
+      ? ["Owner approval 尚未完成。"]
+      : runtimeBlockers;
   planWarning.hidden = viewState.tab !== "planned" ||
-    (!planWarnings.length && !planState?.approval_pending);
+    (!warningReasons.length && authorizationLabel === "Schedulable");
   planWarning.textContent = [
     authorizationLabel,
-    ...(planWarnings.length ? planWarnings.map((warning) => warning.reason) : ["计划完整性检查通过。"]),
+    ...(warningReasons.length ? warningReasons : ["计划完整性检查通过。"]),
   ].join(" · ");
   updateMenu("group-filter", data.groups.map((group) => ({ value: group.id, label: group.title })), "全部交付单元"); updateMenu("state-filter", [...defaultStates].filter((key) => !["active", "merged", "unknown", "idle"].includes(key)).map((value) => ({ value, label: value === "ready" ? "就绪" : labels[value] ?? value })), "全部状态"); updateMenu("kind-filter", ["contribution", "release", "deployment", "verification", "coordination"].map((value) => ({ value, label: taskKindLabel(value) })), "全部任务类型"); updateVersionMenu();
-  setMenuValue("group-filter", viewState.group); setMenuValue("state-filter", viewState.state); setMenuValue("kind-filter", viewState.kind); $("graph-tools").hidden = viewState.tab !== "graph"; $("timeline-tools").hidden = viewState.tab === "graph"; applyStateToControls(); renderSummary(); const tasks = filteredTasks(); $("task-count").textContent = `${tasks.length} / ${data.tasks.length} 个任务`; $("view-context").textContent = viewState.tab === "graph" ? "依赖关系" : viewState.tab === "planned" ? "理论安排" : "实际运行"; $("view-count").textContent = `${tasks.length} 项任务 · ${data.groups.length} 个交付单元`; renderGroups(); renderList(tasks); syncStableGridCardWidth(); setTabAria(viewState.tab); if (viewState.tab === "graph") graphController.render(tasks); else timelineController.renderTimeline(tasks, viewState.tab); const focusDetails = focusDetailsOnNextRender; focusDetailsOnNextRender = false; updateDetailsSurface(viewState.detail, focusDetails); const selectedTaskData = selectedTask ? data.tasks.find((item) => item.id === selectedTask) : null; const selectedGroupData = selectedGroup ? data.groups.find((item) => item.id === selectedGroup) : null; if (selectedTaskData) showTask(selectedTaskData); else if (selectedGroupData) showGroup(selectedGroupData); else clearDetails(); createIcons({ icons: ICONS }); showCurrentSelectionPreview(); restoreListFocus(listFocus);
+  setMenuValue("group-filter", viewState.group); setMenuValue("state-filter", viewState.state); setMenuValue("kind-filter", viewState.kind); $("graph-tools").hidden = viewState.tab !== "graph"; $("timeline-tools").hidden = viewState.tab === "graph"; applyStateToControls(); renderSummary(); const tasks = filteredTasks(); $("task-count").textContent = `${tasks.length} / ${data.tasks.length} 个任务`; $("view-context").textContent = viewState.tab === "graph" ? "依赖关系" : viewState.tab === "planned" ? "理论安排" : "实际运行"; $("view-count").textContent = `${tasks.length} 项任务 · ${data.groups.length} 个交付单元`; renderGroups(); renderList(tasks); syncStableGridCardWidth(); setTabAria(viewState.tab); if (viewState.tab === "graph") graphController.render(tasks, viewState.group ? new Set([viewState.group]) : undefined); else timelineController.renderTimeline(tasks, viewState.tab); const focusDetails = focusDetailsOnNextRender; focusDetailsOnNextRender = false; updateDetailsSurface(viewState.detail, focusDetails); const selectedTaskData = selectedTask ? data.tasks.find((item) => item.id === selectedTask) : null; const selectedGroupData = selectedGroup ? data.groups.find((item) => item.id === selectedGroup) : null; if (selectedTaskData) showTask(selectedTaskData); else if (selectedGroupData) showGroup(selectedGroupData); else clearDetails(); createIcons({ icons: ICONS }); showCurrentSelectionPreview(); restoreListFocus(listFocus);
   restoreMenuFocus(menuFocus);
   restoreDetailFocus(detailFocus);
   if (restoreClosedDetailsOnNextRender) { restoreClosedDetailsOnNextRender = false; restoreClosedDetails(); }
@@ -525,7 +611,9 @@ for (const id of ["theme", "version", "group-filter", "state-filter", "kind-filt
 for (const option of document.querySelectorAll<HTMLButtonElement>("#theme-menu [role=option]")) option.addEventListener("click", () => chooseMenu("theme", option.dataset.menuValue ?? "system"));
 $("version-menu").addEventListener("keydown", (event) => { if (event.key !== "Enter" && event.key !== " ") return; const option = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[role=option]"); if (!option) return; event.preventDefault(); event.stopPropagation(); option.click(); }, true);
 $("task-layout-board").addEventListener("click", () => setTaskLayout("board")); $("task-layout-grid").addEventListener("click", () => setTaskLayout("grid"));
-document.addEventListener("click", (event) => { const target = event.target as HTMLElement; if (!target.closest("[data-menu]")) closeMenus(); if (viewState.detail && $("details").classList.contains("open") && !isDetailInteraction(target)) closeDetails(); });
+$("plan-info-trigger").addEventListener("click", (event) => { event.stopPropagation(); if (planInfoIsOpen()) closePlanInfo(false); else openPlanInfo(); });
+$("close-plan-info").addEventListener("click", () => closePlanInfo()); $("plan-info-backdrop").addEventListener("click", () => closePlanInfo()); $("plan-info-panel").addEventListener("click", (event) => event.stopPropagation());
+document.addEventListener("click", (event) => { const target = event.target as HTMLElement; if (!target.closest("[data-menu]")) closeMenus(); if (planInfoIsOpen() && !target.closest("#plan-info-panel, #plan-info-trigger")) closePlanInfo(); if (viewState.detail && $("details").classList.contains("open") && !isDetailInteraction(target)) closeDetails(); });
 document.addEventListener("pointerdown", (event) => { keyboardSelection = false; recordPointerType(event.pointerType); }, true); document.addEventListener("pointermove", (event) => recordPointerType(event.pointerType), true);
 document.addEventListener("keydown", (event) => { if ((event.key === "Enter" || event.key === " ") && (event.target as HTMLElement).closest(".task-card-select, .task-column-select, .task-row")) keyboardSelection = true; }, true);
 document.addEventListener("keydown", (event) => { const target = event.target as HTMLElement; const trigger = target.closest<HTMLButtonElement>(".menu-trigger, .theme-trigger"); const option = target.closest<HTMLButtonElement>("[role=option]"); if (event.key === "Escape" && trigger) { event.preventDefault(); event.stopPropagation(); closeMenus(); trigger.focus(); } else if (trigger && (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter" || event.key === " ")) { event.preventDefault(); const id = trigger.id.replace(/-trigger$/, "") as MenuId; openMenu(id); } else if (option && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); const options = [...option.closest<HTMLElement>("[role=listbox]")!.querySelectorAll<HTMLButtonElement>("[role=option]")]; const index = options.indexOf(option); options[(index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length]?.focus(); } else if (option && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); const menu = option.closest<HTMLElement>("[role=listbox]"); const id = menu?.id.replace(/-menu$/, "") as MenuId; chooseMenu(id, option.dataset.menuValue ?? ""); } else if (option && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeMenus(); menuTrigger(option.closest<HTMLElement>("[role=listbox]")?.id.replace(/-menu$/, "") as MenuId).focus(); } });
@@ -533,8 +621,8 @@ $("close-details").addEventListener("click", closeDetails); $("details-backdrop"
 $("zoom-in").addEventListener("click", () => graphController.zoomIn()); $("zoom-out").addEventListener("click", () => graphController.zoomOut()); $("fit").addEventListener("click", () => graphController.fit());
 $("timeline-zoom-in").addEventListener("click", () => timelineController.adjustWindow("in")); $("timeline-zoom-out").addEventListener("click", () => timelineController.adjustWindow("out")); $("timeline-fit").addEventListener("click", () => timelineController.fit());
 installViewStateNavigation(window, { getSearch: () => window.location.search, getValidation: (search) => { const targetPlan = search ? new URLSearchParams(search).get("plan") : null; if ((targetPlan ?? activePlanId) !== (viewState.plan ?? activePlanId)) return { plans: new Set(data?.plans.map((plan) => plan.id) ?? []) }; return data ? stateValidation() : {}; }, getPhase: () => data ? phase ?? derivePhase(data.tasks) : null, restore: (next, hasExplicitTab) => { const planChanged = next.plan !== viewState.plan; const closingDetails = viewState.detail && !next.detail; userChangedTab = hasExplicitTab; if (closingDetails) { keyboardSelection = false; hideHoverPreview(); restoreClosedDetailsOnNextRender = true; } viewState = next; selectedTask = next.selected?.kind === "task" ? next.selected.id : null; selectedGroup = next.selected?.kind === "group" ? next.selected.id : null; activePlan = next.plan ?? ""; if (next.detail) focusDetailsOnNextRender = true; if (planChanged) void refresh(); else if (data) render(); } });
-window.addEventListener("keydown", (event) => { trapDetailsFocus(event); if (event.key === "Escape" && viewState.detail) closeDetails(); });
-window.addEventListener("resize", () => { refreshResponsiveDetails(); if (data && viewState.tab === "graph" && graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")) graphController.render(filteredTasks()); window.requestAnimationFrame(() => timelineController.redraw()); });
+window.addEventListener("keydown", (event) => { trapDetailsFocus(event); trapPlanInfoFocus(event); if (event.key === "Escape" && planInfoIsOpen()) { event.preventDefault(); closePlanInfo(); } else if (event.key === "Escape" && viewState.detail) closeDetails(); });
+window.addEventListener("resize", () => { refreshResponsiveDetails(); syncPlanInfoSurface(); if (data && viewState.tab === "graph" && graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")) graphController.render(filteredTasks(), viewState.group ? new Set([viewState.group]) : undefined); window.requestAnimationFrame(() => timelineController.redraw()); });
 anyHoverCapability.addEventListener("change", refreshResponsiveDetails); anyFinePointerCapability.addEventListener("change", refreshResponsiveDetails);
 const stream = new EventSource("api/events"); stream.addEventListener("open", () => { connected = true; connection("live"); void refresh(); }); stream.addEventListener("revision", () => void refresh()); stream.addEventListener("stale", () => { connected = false; connection("stale"); }); stream.addEventListener("heartbeat", (event) => { try { if (JSON.parse((event as MessageEvent).data).watching && !connected) { connected = true; void refresh(); } } catch { connection("stale"); } }); stream.addEventListener("error", () => { connected = false; connection("stale"); });
 hoverBridge = createHoverPreviewBridge($("hover-preview"), dismissHoverPreview);

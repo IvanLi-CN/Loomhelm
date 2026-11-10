@@ -25,6 +25,28 @@ test("v2 checks complete resources, content, links and contained import closure"
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("viewer contract upgrades keep old release identity verification compatible", () => {
+  const { root } = serviceFixture();
+  try {
+    const { source, manifest } = fixtureRelease(root);
+    const candidate = { ...manifest, viewer_contract: 3 as const };
+    const { build_id: _candidateBuildId, ...candidateBody } = candidate;
+    writeFileSync(join(source, "manifest.json"), JSON.stringify({ ...candidateBody, build_id: buildId(candidateBody) }));
+    expect(verifyRelease(source).viewer_contract).toBe(3);
+
+    const legacy = { ...candidate, viewer_contract: 2 as const };
+    const { build_id: _buildId, ...legacyBody } = legacy;
+    const oldIdentity = digest(JSON.stringify({
+      ...Object.fromEntries(Object.entries(legacyBody).filter(([key, value]) =>
+        key !== "viewer_contract" && !(key === "skill_id" && value === "multi-task-flow") && !(key === "skill_version" && value === "2.4.0") && !(key === "ledger_contract" && value === 2),
+      )),
+      files: Object.fromEntries(Object.entries(legacy.files).filter(([key]) => key !== "viewer").sort(([a], [b]) => a.localeCompare(b))),
+    }));
+    writeFileSync(join(source, "manifest.json"), JSON.stringify({ ...legacy, build_id: oldIdentity }));
+    expect(verifyRelease(source).viewer_contract).toBe(2);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("candidate discovery selects the newest verified build and ignores the current build", async () => {
   const { root, state } = serviceFixture();
   try {

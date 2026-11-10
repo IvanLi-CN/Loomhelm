@@ -286,7 +286,7 @@ flowchart TD
 
 每个新运行持有一个完整的 `config.execution_profile`。对象的 `execution_profile=null` 独立解析到该默认值；交付单元配置不参与任务解析。`execution_profile_source` 与版本化 `execution_profile_rule` 记录手动选择或类型推荐的来源，推荐只有新对象或显式重新应用时物化。
 
-`execution-profile-update`、`execution-profile-default-update`、`execution-profile-recommend` 与 `execution-profile-migrate` 使用标准 request/revision/owner envelope。CLI 与认证 dashboard 的 `/api/execution-profile` 共用 mutation contract，能力组合来自 app-server `model/list`。缺失默认 pair 的旧运行可以读取，写入须先显式迁移。
+`execution-profile-update`、`execution-profile-default-update`、`execution-profile-recommend` 与 `execution-profile-migrate` 使用标准 request/revision/owner envelope。CLI 与认证 dashboard 的 `/api/execution-profile` 共用 mutation contract，能力组合来自 app-server `model/list`。缺失默认 pair 的旧运行可以读取，写入须先显式迁移；schema2/contract2 任务缺少 execution policy 键时，普通写入先由 `HISTORICAL_LEDGER_READ_ONLY` 拒绝，独立的 contract maintenance 只能补显式 null，不能推断执行归属、对话或交付事实。
 
 `dispatch-claim` / `dispatch-group-claim` 捕获完整有效 profile，`conversation-create` 绑定唯一 native request ID，再通过独立的 `codex exec --worktree --json` 进程创建、命名和初始化线程。创建 adapter 必须核对返回的实际模型与思考强度；返回值不是请求配置的自我回显。只有真实 thread ID 与匹配 request/operation/profile 的 CLI 证据才能成功绑定。unknown 保留 claim 和已观察到的 thread ID，对账通过 `dispatch-resolve` 记录匹配证据；禁止自动重复创建。初始化首条消息只确认握手并在进程退出后由主对话通过内置 `send_message_to_thread` 发送正式任务。
 
@@ -294,4 +294,4 @@ flowchart TD
 
 ## 主人授权的维护迁移
 
-service 的 `ledger-maintenance-check` / `ledger-maintenance-apply` 提供独立维护边界；它们与 orchestration 的 bound-main migrate、service 的目录导入 migrate 各自独立。合同与完整 execution profile 分别授权，维护请求保留准确 owner、revision、源文件摘要、动作摘要、实际维护线程、批准引用和暂停写入声明，不改变控制权。提交使用维护锁、run 锁、完整 `ledger.maintenance-<request_id>.json` 备份、原子替换及 request 幂等；同 ID 异内容拒绝，已提交重放先于旧 revision 校验。源/目标均须被已安装 viewer 读取，未决 claimed/unknown 操作拒绝。详细 JSON 输入及恢复步骤以 Skill 的 shared-viewer 引用为准。
+service 的 `ledger-maintenance-check` / `ledger-maintenance-apply` 提供独立维护边界；它们与 orchestration 的 bound-main migrate、service 的目录导入 migrate 各自独立。合同与完整 execution profile 分别授权；对 schema2/contract2 的历史策略键缺口，`action: "contract"` 把完全缺失的字段声明为 null，部分声明则拒绝，普通 migrate 不扩大范围。维护请求保留准确 owner、revision、源文件摘要、动作摘要、实际维护线程、批准引用和暂停写入声明，不改变控制权。提交使用维护锁、run 锁、完整 `ledger.maintenance-<request_id>.json` 备份、原子替换及 request 幂等；同 ID 异内容拒绝，已提交重放先于旧 revision 校验。源/目标均须被已安装 viewer 读取，未决 claimed/unknown 操作拒绝。详细 JSON 输入及恢复步骤以 Skill 的 shared-viewer 引用为准。

@@ -46,6 +46,62 @@ describe("ledger store", () => {
     expect(JSON.parse(readFileSync(join(store.runPath, "ledger.json"), "utf8"))).toEqual({ revision: 0 });
   });
 
+  test("rejects incomplete declared task policies before writing", () => {
+    const store = new LedgerStore(temporaryRoot(), "partial-policy-run");
+    store.create({
+      schema_version: 2,
+      contract_version: 2,
+      revision: 0,
+      tasks: [{ execution_owner: "main", conversation_policy: null, delivery_policy: null }],
+    });
+    const before = readFileSync(store.ledgerPath, "utf8");
+    expect(() => store.update((ledger) => { ledger.revision = 1; })).toThrow();
+    expect(readFileSync(store.ledgerPath, "utf8")).toBe(before);
+    expect(existsSync(join(store.runPath, "ledger.previous.json"))).toBe(false);
+  });
+
+  test("rejects updates that create incomplete task policies", () => {
+    const store = new LedgerStore(temporaryRoot(), "mutated-policy-run");
+    store.create({
+      schema_version: 2,
+      contract_version: 2,
+      revision: 0,
+      tasks: [{ execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "evidence" }],
+    });
+    const before = readFileSync(store.ledgerPath, "utf8");
+    expect(() => store.update((ledger) => { delete ledger.tasks[0].delivery_policy; })).toThrow();
+    expect(readFileSync(store.ledgerPath, "utf8")).toBe(before);
+    expect(existsSync(join(store.runPath, "ledger.previous.json"))).toBe(false);
+  });
+
+  test("rejects updates that create invalid task policy values", () => {
+    const store = new LedgerStore(temporaryRoot(), "invalid-policy-run");
+    store.create({
+      schema_version: 2,
+      contract_version: 2,
+      revision: 0,
+      tasks: [{ execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "evidence" }],
+    });
+    const before = readFileSync(store.ledgerPath, "utf8");
+    expect(() => store.update((ledger) => { ledger.tasks[0].execution_owner = "not-an-owner"; })).toThrow();
+    expect(readFileSync(store.ledgerPath, "utf8")).toBe(before);
+    expect(existsSync(join(store.runPath, "ledger.previous.json"))).toBe(false);
+  });
+
+  test("rejects updates that remove a task policy value", () => {
+    const store = new LedgerStore(temporaryRoot(), "undefined-policy-run");
+    store.create({
+      schema_version: 2,
+      contract_version: 2,
+      revision: 0,
+      tasks: [{ execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "evidence" }],
+    });
+    const before = readFileSync(store.ledgerPath, "utf8");
+    expect(() => store.update((ledger) => { ledger.tasks[0].delivery_policy = undefined; })).toThrow();
+    expect(readFileSync(store.ledgerPath, "utf8")).toBe(before);
+    expect(existsSync(join(store.runPath, "ledger.previous.json"))).toBe(false);
+  });
+
   test("refuses to overwrite an existing run", () => {
     const store = new LedgerStore(temporaryRoot(), "test-run");
     store.create({ schema_version: 2, contract_version: 2, revision: 0 });

@@ -22,6 +22,7 @@ const object = (v: unknown): JsonRecord | null =>
     ? (v as JsonRecord)
     : null;
 const key = (turn: unknown, item: unknown) => JSON.stringify([turn, item]);
+const terminalTurnStatuses = new Set(["completed", "interrupted", "failed"]);
 
 type ThreadState = {
   output: AgentOutput;
@@ -227,10 +228,13 @@ export class ConversationOutputs {
           const metadata = await metadataRead;
           const status = object(object(metadata.thread)?.status)?.type;
           if (status === "active") runtime = "active";
-          if (status === "idle") {
+          // Codex reports completed threads that are not loaded in the current
+          // app session as `notLoaded`. Confirm the latest turn before treating
+          // that runtime as idle; an active or missing turn remains unknown.
+          if (status === "idle" || status === "notLoaded") {
             const page = await connection.request("thread/turns/list", { threadId: thread, sortDirection: "desc", limit: 1, itemsView: "full" });
             const latest = Array.isArray(page.data) ? object(page.data[0]) : null;
-            if (typeof latest?.id === "string" && latest.id.trim() && ["completed", "interrupted", "failed"].includes(String(latest.status))) {
+            if (typeof latest?.id === "string" && latest.id.trim() && terminalTurnStatuses.has(String(latest.status))) {
               runtime = "idle";
               runtimeTurnId = latest.id;
             }
@@ -301,7 +305,7 @@ export class ConversationOutputs {
       state.version++;
       state.activeTurnId = null;
       this.set(state, { ...state.output, agent_state: status === "active" ? "active" : "unknown", runtime_turn_id: null, observed_at: new Date().toISOString() });
-      if (status === "idle" && this.connection) void this.load(thread, this.connection, this.generation);
+      if ((status === "idle" || status === "notLoaded") && this.connection) void this.load(thread, this.connection, this.generation);
       return;
     }
     if (method === "turn/started") {
