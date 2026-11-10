@@ -953,7 +953,6 @@ export function execute(
     case "plan-propose": {
       onlyMain(request.actor);
       const proposed = parse(plan, payload.plan);
-    ensureSchedulable(ledger, proposed);
       requireCondition(
         proposed.approval_id === null,
         "INVALID_PLAN",
@@ -967,7 +966,7 @@ export function execute(
       );
       const groups = parse(z.array(group), payload.groups);
       const tasks = parse(z.array(task), payload.tasks);
-      validateTaskExecutionPolicies(tasks, Boolean(proposed.plan_handoff));
+      ensureSchedulable(ledger, proposed);
       for (const item of groups)
         if (
           !ledger.groups.some((old) => old.id === item.id) &&
@@ -1135,6 +1134,15 @@ export function execute(
         "Bootstrap can only be created during run initialization",
         3,
       );
+      const policyCompleteTasks = tasks.filter((incoming) => {
+        const existing = ledger.tasks.find((item) => item.id === incoming.id);
+        const legacyAbsent = (item: Task) =>
+          item.execution_owner === null &&
+          item.conversation_policy === null &&
+          item.delivery_policy === null;
+        return !(existing && legacyAbsent(existing) && legacyAbsent(incoming));
+      });
+      validateTaskExecutionPolicies(policyCompleteTasks, true);
       validateInitialRuntimeState(newGroups, []);
       if (revision.change_class === "implementation_low_impact") {
         requireCondition(

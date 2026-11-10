@@ -10,6 +10,7 @@ import {
 } from "../../bin/modules/visual/secure_io";
 import { validateLedger, type Ledger } from "../lib/schema";
 import { requireLedgerCompatibility } from "../lib/service-contract";
+import { versionEnvelope } from "../lib/contract";
 
 export type LedgerMigrationRequest = {
   run_id: string;
@@ -204,6 +205,7 @@ export function contractMigrationCandidate(raw: any): Ledger {
   candidate.source_schema_version =
     raw.schema_version === 1 ? 1 : current.source_schema_version;
   candidate.contract_version = 2;
+  candidate.version = versionEnvelope;
   // Lifecycle stages absent from v1 remain unknown. Migration does not turn
   // runtime state, PRs, or facts into new lifecycle evidence.
   const rawGroups = Array.isArray(raw.groups) ? raw.groups : [];

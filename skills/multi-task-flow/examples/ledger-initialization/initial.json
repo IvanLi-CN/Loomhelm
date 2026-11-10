@@ -38,8 +38,8 @@
     },
     "groups": [{ "id": "group-1", "title": "Core", "agent_thread_id": null, "state": "planned", "parent_branch": null, "parent_pr": null, "cut_sha": null, "current_sha": null, "merge_sha": null, "requirements_path": null }],
     "tasks": [
-      { "id": "task-1", "title": "Implement core", "kind": "contribution", "group_id": "group-1", "thread_id": null, "state": "planned", "atoms": [{ "id": "atom-1", "title": "Implement core", "status": "planned" }], "owned_surfaces": ["src/core"], "base_sha": null, "pr": null, "requirements_path": null, "started_at": null, "finished_at": null, "blocker": null, "assignment_history": [] },
-      { "id": "task-2", "title": "Verify CLI", "kind": "verification", "group_id": "group-1", "thread_id": null, "state": "planned", "atoms": [{ "id": "atom-2", "title": "Verify CLI", "status": "planned" }], "owned_surfaces": ["src/cli"], "base_sha": null, "pr": null, "requirements_path": null, "started_at": null, "finished_at": null, "blocker": null, "assignment_history": [] }
+      { "id": "task-1", "title": "Implement core", "kind": "contribution", "group_id": "group-1", "thread_id": null, "state": "planned", "atoms": [{ "id": "atom-1", "title": "Implement core", "status": "planned" }], "owned_surfaces": ["src/core"], "base_sha": null, "pr": null, "requirements_path": null, "started_at": null, "finished_at": null, "blocker": null, "assignment_history": [], "execution_owner": "task_agent", "conversation_policy": "task_agent", "delivery_policy": "child_pr" },
+      { "id": "task-2", "title": "Verify CLI", "kind": "verification", "group_id": "group-1", "thread_id": null, "state": "planned", "atoms": [{ "id": "atom-2", "title": "Verify CLI", "status": "planned" }], "owned_surfaces": ["src/cli"], "base_sha": null, "pr": null, "requirements_path": null, "started_at": null, "finished_at": null, "blocker": null, "assignment_history": [], "execution_owner": "task_agent", "conversation_policy": "task_agent", "delivery_policy": "evidence" }
     ]
   }
 }

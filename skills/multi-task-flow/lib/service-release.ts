@@ -9,6 +9,7 @@ import {
   releaseManifestSchema,
   type ReleaseManifest,
 } from "../lib/service-contract";
+import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
 
 export const releaseFiles = [
   "viewer",
@@ -25,12 +26,20 @@ export function requireSourceRelease(manifest: ReleaseManifest): void {
 export const digest = (value: Uint8Array | string) =>
   createHash("sha256").update(value).digest("hex");
 export function buildId(manifest: Omit<ReleaseManifest, "build_id">): string {
+  const body = { ...manifest } as Record<string, unknown>;
+  if (body.skill_id === SKILL_ID) delete body.skill_id;
+  if (body.skill_version === SKILL_VERSION) delete body.skill_version;
+  if (body.ledger_contract === 2) delete body.ledger_contract;
+  if (body.viewer_contract === VIEWER_CONTRACT) delete body.viewer_contract;
+  // The launcher embeds this identity and therefore cannot be part of its own
+  // identity. The bootstrap verifier applies the same rule before checking
+  // the immutable resource inventory.
+  const files = { ...(body.files as Record<string, string>) };
+  delete files.viewer;
   return digest(
     JSON.stringify({
-      ...manifest,
-      files: Object.fromEntries(
-        Object.entries(manifest.files).sort(([a], [b]) => a.localeCompare(b)),
-      ),
+      ...body,
+      files: Object.fromEntries(Object.entries(files).sort(([a], [b]) => a.localeCompare(b))),
     }),
   );
 }

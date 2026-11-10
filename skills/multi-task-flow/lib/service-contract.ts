@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { requireCondition } from "../lib/errors";
+import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
 
 export const API_VERSION = 1;
 export const FRONTEND_CONTRACT = 1;
@@ -22,6 +23,10 @@ export const releaseManifestSchema = z
     schema_version: z.union([z.literal(1), z.literal(2)]),
     build_id: z.string().regex(/^[a-f0-9]{64}$/),
     source_sha: z.string().regex(/^[a-f0-9]{40}$/),
+    skill_id: z.string().default(SKILL_ID),
+    skill_version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).default(SKILL_VERSION),
+    ledger_contract: z.number().int().positive().default(2),
+    viewer_contract: z.number().int().positive().default(VIEWER_CONTRACT),
     service_version: z.string().min(1),
     platform: z.enum([
       "darwin-arm64",
