@@ -13895,7 +13895,7 @@
       "path": "skills/multi-task-flow/SKILL.md",
       "sourceBlob": "708e77c1572d4c7271e294984151eae1e11c0894",
       "sourceSha256": "e3ec7fceef4c5cbd8650e17603ed261e59fc06dafa9d18c85a0e2966b0d9a298",
-      "installedSha256": "a6b324e944fc69286cda5e52573fab8c1d0c7ee37708b8777ea0f68a540998c2",
+      "installedSha256": "3aad1b26755227663d5e52fb9e2ce2b8c7f191471ed14612fd0195b3bcadd454",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14119,7 +14119,7 @@
       "path": "skills/multi-task-flow/lib/contract.ts",
       "sourceBlob": "2b8f25c6bbb59d20f7a85a08b57ed86b35c50687",
       "sourceSha256": "830424a1dd3420f8279db5db7cd3bb71600acc05bccfd36d8d41c2b18bc834b8",
-      "installedSha256": "96afe0a067b035be3379c99e4733da1c7e3496b1e05952aef37ec7ae3e549bb7",
+      "installedSha256": "17231713c6c1bc827aab925addfea32dfa40a90cf5bed1b8beef53bb8b599996",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15826,7 +15826,7 @@
     },
     {
       "path": "skills/multi-task-flow/scripts/package-client-skills.ts",
-      "installedSha256": "e4c0350952e2c339cd8110b4d1d487a0449713a0d8dc3fc499d3a4e628034d86"
+      "installedSha256": "964a1b33b6abbabf027b899b972f2cf1e6237cb377a789d4bc8703ff864484b1"
     },
     {
       "path": "skills/multi-task-flow/lib/package-source.ts",
@@ -15845,12 +15845,24 @@
       "installedSha256": "d42de44ea2fb32e5407bbb904eb795c77af35271b8b58a7ec98c7cb779c0dfc9"
     },
     {
+      "path": "skills/multi-task-flow/scripts/viewer-gateway.ts",
+      "installedSha256": "1109009e8ef70547cf931305ad43f2904c2419ffe85e3d2ae7b9ffb4a0233f2e"
+    },
+    {
+      "path": "skills/multi-task-flow/scripts/viewer-runtime.ts",
+      "installedSha256": "2f98e3e115350b07be2d287293f82f3f7bdd97d9df42ac2e9a9c4a5899a55ede"
+    },
+    {
+      "path": "skills/multi-task-flow/scripts/viewer-worker.ts",
+      "installedSha256": "e7883cda8988ac69cdbbadf327b29f7ab1bf67414177eb34e96593e94b988c9d"
+    },
+    {
       "path": "skills/multi-task-flow/scripts/verify-skills-modules.ts",
       "installedSha256": "41e4134eef5f7d8c6cacdad5de2693e526eba172e7ca3c58fcef74114c2cb1a7"
     },
     {
       "path": "skills/support-manifest.json",
-      "installedSha256": "1510674f7f966476eaafdb539253e8ed23dd4ecf08c0ec0bfa302ac8123b2ba1"
+      "installedSha256": "5034e002ab7e50f09cf004ccea5d90da25a1fa2e8ca3efc4867140fb845cfd3e"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/output-tooltip-boundary.png",
@@ -15863,6 +15875,10 @@
     {
       "path": "skills/multi-task-flow/tests/ui/task-context-menu.test.ts",
       "installedSha256": "d4bbf099627bebeb84b8fb104d1d8e0c6bb044101df07c074150319763fdad57"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/viewer-runtime.test.ts",
+      "installedSha256": "41856e064d92586bf531a0fdf07f863832529b2d8e4b5566ba33ec0ec6ef2a3b"
     },
     {
       "path": "skills/bin/modules/core/runtime.ts",
