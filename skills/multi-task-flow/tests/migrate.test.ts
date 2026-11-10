@@ -217,6 +217,45 @@ describe("orchestrate migrate", () => {
     );
   });
 
+  test("recovers a legacy backup without a request identity sidecar", async () => {
+    const dataRoot = root();
+    const { legacy } = await createLegacyRun(dataRoot);
+    const runPath = join(dataRoot, "runs", "legacy-run");
+    const backupPath = join(runPath, "ledger.migration-v1-migration-1.json");
+    writeFileSync(backupPath, JSON.stringify(legacy, null, 2) + "\n");
+    const result = await runOrchestrate(
+      dataRoot,
+      "migrate",
+      migrateInput("legacy-run", 7),
+    );
+
+    expect(result).toMatchObject({ exitCode: 0, output: { code: "APPLIED" } });
+    expect(existsSync(`${backupPath}.request.json`)).toBe(true);
+  });
+
+  test("migration replay verifies committed backup artifacts", async () => {
+    for (const artifact of ["backup", "identity"]) {
+      const dataRoot = root();
+      const { legacy } = await createLegacyRun(dataRoot, `legacy-${artifact}`);
+      const request = migrateInput(`legacy-${artifact}`, 7, `migration-${artifact}`);
+      const applied = await runOrchestrate(dataRoot, "migrate", request);
+      const backupPath = join(
+        dataRoot,
+        "runs",
+        `legacy-${artifact}`,
+        applied.output.result.backup,
+      );
+      if (artifact === "backup") writeFileSync(backupPath, "corrupted");
+      else writeFileSync(`${backupPath}.request.json`, "{}");
+      const replay = await runOrchestrate(dataRoot, "migrate", request);
+      expect(replay).toMatchObject({
+        exitCode: 3,
+        output: { ok: false, code: "MIGRATION_CONFLICT" },
+      });
+      expect(legacy.schema_version).toBe(1);
+    }
+  });
+
   test("replays the same request and lets the next normal command use the new revision", async () => {
     const dataRoot = root();
     await createLegacyRun(dataRoot);

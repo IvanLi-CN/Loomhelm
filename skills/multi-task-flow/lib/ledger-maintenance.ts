@@ -9,6 +9,8 @@ import {
   stable,
   contractMigrationCandidate,
   commitMigration,
+  migrationBackupName,
+  verifyMigrationBackup,
   type LockedLedgerMigrationContext,
 } from "../lib/store-migration";
 import {
@@ -161,7 +163,7 @@ export function maintenanceCheck(state: ServiceState, input: unknown) {
   const { raw, content } = readRaw(state, op.run_id);
   return prepare(state, op, raw, content).report;
 }
-function replay(raw: any, request: Apply, canonical: string) {
+function findPrior(raw: any, request: Apply, canonical: string) {
   const prior = validateLedger(raw).requests.find(
     (item) => item.request_id === request.request_id,
   );
@@ -173,10 +175,33 @@ function replay(raw: any, request: Apply, canonical: string) {
     "Request ID has different content",
     3,
   );
+  return prior;
+}
+function replay(
+  context: LockedLedgerMigrationContext,
+  raw: any,
+  request: Apply,
+  canonical: string,
+) {
+  const prior = findPrior(raw, request, canonical);
+  if (!prior) return null;
+  const priorResult = prior.result as Record<string, unknown>;
+  verifyMigrationBackup(
+    context,
+    priorResult.backup,
+    {
+      request_id: request.request_id,
+      command: "ledger-maintenance-apply",
+      canonical_input: canonical,
+    },
+    typeof priorResult.ledger_sha256 === "string"
+      ? priorResult.ledger_sha256
+      : undefined,
+  );
   return {
     ok: true,
     code: "REPLAYED",
-    revision: raw.revision,
+    revision: prior.committed_revision,
     result: prior.result,
   };
 }
@@ -190,10 +215,9 @@ export async function maintenanceApply(
   const canonical = stable(request);
   // Network capability lookup stays outside synchronous storage locks. Replays do not need app-server.
   const first = readRaw(state, request.run_id);
-  const prior = replay(first.raw, request, canonical);
-  if (prior) return prior;
+  const prior = findPrior(first.raw, request, canonical);
   const capabilities =
-    request.action === "execution-profile" ? await getCapabilities() : null;
+    prior || request.action !== "execution-profile" ? null : await getCapabilities();
   const store =
     storeOverride ?? new LedgerStore(state.paths.data, request.run_id);
   requireCondition(
@@ -204,8 +228,14 @@ export async function maintenanceApply(
   );
   return store.maintain((context: LockedLedgerMigrationContext) => {
     const { raw, content } = readRaw(state, request.run_id);
-    const repeated = replay(raw, request, canonical);
+    const repeated = replay(context, raw, request, canonical);
     if (repeated) return repeated;
+    if (prior)
+      throw new ContractError(
+        "LEDGER_CONFLICT",
+        "Persisted replay request changed before it could be verified",
+        3,
+      );
     requireCondition(
       raw.control?.owner_thread_id === request.expected_owner_thread_id &&
         raw.control?.ownership === "bound",
@@ -250,7 +280,10 @@ export async function maintenanceApply(
       validateProfileCapability(request.execution_profile!, capabilities);
     candidate.revision += 1;
     candidate.updated_at = new Date().toISOString();
-    const backup = `ledger.maintenance-${request.request_id}.json`;
+    const backup = migrationBackupName(
+      "ledger-maintenance-apply",
+      request.request_id,
+    );
     const result = {
       ...report,
       revision: candidate.revision,
