@@ -304,6 +304,7 @@ describe("orchestrate migrate", () => {
       exitCode: 3,
       output: { ok: false, code: "MIGRATION_CONFLICT" },
     });
+    expect(replay.output.message).toContain("explicit recovery is required");
   });
 
   test("replays the same request and lets the next normal command use the new revision", async () => {

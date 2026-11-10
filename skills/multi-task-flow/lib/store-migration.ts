@@ -113,7 +113,7 @@ function requireMatchingMigrationRequestIdentity(
     requireCondition(
       typeof existingIdentity.source_ledger_sha256 === "string",
       "MIGRATION_CONFLICT",
-      "Migration backup source identity is missing",
+      "Historical migration replay lacks a source digest; explicit recovery is required",
       3,
     );
   if (sourceDigest !== undefined && existingIdentity.source_ledger_sha256 !== undefined)
@@ -190,7 +190,7 @@ export function verifyMigrationBackup(
     requireCondition(
       !requireSourceDigest,
       "MIGRATION_CONFLICT",
-      "Migration backup request identity is missing",
+      "Historical migration replay lacks a request identity; explicit recovery is required",
       3,
     );
     writeExclusiveNoFollow(
