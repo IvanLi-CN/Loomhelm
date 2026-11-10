@@ -24,6 +24,7 @@ import {
 } from "../lib/revisions";
 import { initialOutput, type AgentOutput } from "../web/agent-output";
 import { localSemanticProjection } from "../lib/contract";
+import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
 
 export type PlannedInterval = {
   node_id: string;
@@ -344,6 +345,9 @@ export function buildView(
           : null,
       };
     });
+  const allTasksDispatchReady = tasks.every(
+    (task) => task.dispatch_readiness === "ready",
+  );
   const planSummary = ledger.plans.map((item) => ({
     id: item.id,
     created_at: item.created_at,
@@ -368,6 +372,12 @@ export function buildView(
       max_running_tasks: ledger.config.max_running_tasks,
       conversation_links_verified: ledger.config.conversation_links_verified,
       contract_version: ledger.contract_version,
+      version: ledger.version,
+      version_status: ledger.version === null
+        ? { state: "historical_read_only", reason: "账本未声明 Skill 版本身份" }
+        : ledger.version.skill_id !== SKILL_ID || ledger.version.skill_version !== SKILL_VERSION || ledger.version.viewer_contract !== VIEWER_CONTRACT
+          ? { state: "mismatch", reason: "Skill、账本和 Viewer 版本不一致" }
+          : { state: "current", reason: null },
       execution_profile: ledger.config.execution_profile,
     },
     execution_phase: phase,
@@ -382,7 +392,7 @@ export function buildView(
         activePlan.id !== executionPlan.id ||
         activePlan.lifecycle !== "approved",
       scheduling_eligible: isApprovedExecution && completenessIssues.length === 0,
-      dispatch_readiness: ledger.groups.every((item) => item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id) && tasks.every((item) => (item.dispatch_diagnostics?.length ?? 0) === 0) ? "ready" : "blocked",
+      dispatch_readiness: ledger.groups.every((item) => item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id) && allTasksDispatchReady ? "ready" : "blocked",
       delivery_agent_readiness: ledger.groups.some((item) => item.delivery_unit_kind === "regular" && !item.agent_thread_id) ? "unbound" : "bound",
       completeness: {
         status: completenessIssues.length === 0 ? "complete" : "blocked",

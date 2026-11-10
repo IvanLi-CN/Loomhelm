@@ -602,6 +602,11 @@ export const ledgerSchema = z
     schema_version: z.literal(2),
     source_schema_version: z.literal(1).nullable().default(null),
     contract_version: z.union([z.literal(1), z.literal(2)]),
+    version: z.object({
+      skill_id: text,
+      skill_version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
+      viewer_contract: z.number().int().positive(),
+    }).strict().nullable().default(null),
     orchestration_id: id,
     revision: z.number().int().nonnegative(),
     repository: z

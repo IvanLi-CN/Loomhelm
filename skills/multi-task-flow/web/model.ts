@@ -121,6 +121,8 @@ export type View = {
     max_running_tasks: number;
     conversation_links_verified: boolean;
     contract_version?: number;
+    version?: { skill_id: string; skill_version: string; viewer_contract: number } | null;
+    version_status?: { state: "current" | "mismatch" | "historical_read_only"; reason: string | null };
     execution_profile?: { model: string; thinking: string } | null;
   };
   groups: Group[];

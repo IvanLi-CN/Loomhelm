@@ -78,6 +78,14 @@ _Avoid_: 原任务代修
 
 绑定 Codex 对话没有活跃 turn 且最新 turn 已确认终止的运行时观察状态。它只说明对话当前不在工作，不说明停下原因、交接意图、阻塞原因或任务完成意图。
 
+### 版本信封
+
+记录 Skill、账本合同和 Viewer 合同身份的结构化元数据，包括 `skill_id`、`skill_version`、`ledger_schema`、`ledger_contract` 和 `viewer_contract`。版本信封用于判断兼容关系，不替代 source SHA、build ID 或运行时事实。
+
+### 安全迁移
+
+由 Main Agent 执行、具有登记迁移路径、完整备份、expected revision、幂等 request ID 和结果事件的账本迁移。安全迁移只能补充结构或可计算派生状态，不能改变既有责任身份或补造外部事实。
+
 ### 对话资源异常
 
 绑定任务对话在归档或观测过程中产生的资源事实，例如归档失败、归档结果未知、连接断开或状态不可用。它与任务业务状态分离。

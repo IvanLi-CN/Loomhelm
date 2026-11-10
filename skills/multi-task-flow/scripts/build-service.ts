@@ -4,6 +4,7 @@ import { compatibility } from "../lib/service-contract";
 import { buildId, digest, verifyRelease } from "../lib/service-release";
 import { requireCondition } from "../lib/errors";
 import { copySkillSources } from "../lib/package-source.ts";
+import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
 
 const args = process.argv.slice(2);
 const option = (name: string) => args[args.indexOf(name) + 1];
@@ -24,7 +25,7 @@ mkdirSync(output, { recursive: true, mode: 0o700 });
 const files: Record<string,string> = copySkillSources(root, output, { dependencies: true });
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const runtimeSha = digest(readFileSync(executable));
-const manifest = { schema_version: 2 as const, source_sha: source.stdout.toString().trim(), service_version: version, platform: `${process.platform}-${process.arch}` as "darwin-arm64", api_versions: compatibility.api_versions, frontend_contracts: compatibility.frontend_contracts, readable: compatibility.readable, writable: compatibility.writable, readable_releases: [version], migration_guides: [], files };
+const manifest = { schema_version: 2 as const, source_sha: source.stdout.toString().trim(), skill_id: SKILL_ID, skill_version: SKILL_VERSION, ledger_contract: 2, viewer_contract: VIEWER_CONTRACT, service_version: version, platform: `${process.platform}-${process.arch}` as "darwin-arm64", api_versions: compatibility.api_versions, frontend_contracts: compatibility.frontend_contracts, readable: compatibility.readable, writable: compatibility.writable, readable_releases: [version], migration_guides: [], files };
 // Bind resource metadata before adding the launcher itself, avoiding a self-hash cycle.
 const resourceIdentity = buildId(manifest);
 const bootstrap = `import * as fs from "node:fs";import * as path from "node:path";import{createHash}from"node:crypto";
@@ -37,6 +38,10 @@ for(let p=root;;p=path.dirname(p)){if(!trusted(p,p!==root).isDirectory())throw E
 const read=p=>{const s=trusted(p);if(!s.isFile()||s.nlink!==1)throw Error("VIEWER_RESOURCE_UNTRUSTED");const fd=fs.openSync(p,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);try{const a=fs.fstatSync(fd);if(a.dev!==s.dev||a.ino!==s.ino)throw Error("VIEWER_RESOURCE_CHANGED");return fs.readFileSync(fd);}finally{fs.closeSync(fd);}};
 const m=JSON.parse(read(path.join(root,"manifest.json"))),{build_id,...body}=m;
 const launcherHash=body.files.viewer;delete body.files.viewer;
+if(body.skill_id===${JSON.stringify(SKILL_ID)})delete body.skill_id;
+if(body.skill_version===${JSON.stringify(SKILL_VERSION)})delete body.skill_version;
+if(body.ledger_contract===2)delete body.ledger_contract;
+if(body.viewer_contract===${VIEWER_CONTRACT})delete body.viewer_contract;
 body.files=Object.fromEntries(Object.entries(body.files).sort(([a],[b])=>a.localeCompare(b)));
 if(hash(JSON.stringify(body))!==${JSON.stringify(resourceIdentity)})throw Error("VIEWER_RESOURCE_IDENTITY_MISMATCH");
 body.files.viewer=launcherHash;

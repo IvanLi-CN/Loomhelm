@@ -274,7 +274,7 @@ describe("phase-aware plan revisions", () => {
     proposed.nodes = proposed.nodes.filter((node) => node.ref_id !== "a");
     proposed.nodes.push({ ...structuredClone(proposed.nodes[0]!), id: "node-a-replacement", ref_id: "a-replacement", label: "a replacement" });
     proposed.edges = [];
-    const replacement = { ...structuredClone(ledger.tasks[0]!), id: "a-replacement", title: "a replacement", thread_id: null, state: "planned", owned_surfaces: ["src/a-replacement"], started_at: null, finished_at: null, blocker: null, assignment_history: [] };
+    const replacement = { ...structuredClone(ledger.tasks[0]!), id: "a-replacement", title: "a replacement", thread_id: null, state: "planned", owned_surfaces: ["src/a-replacement"], started_at: null, finished_at: null, blocker: null, assignment_history: [], execution_owner: "task_agent", conversation_policy: "task_agent", delivery_policy: "child_pr" };
     const tasks = [...structuredClone(ledger.tasks), replacement];
     apply(ledger, "plan-propose", request(ledger, "propose-migration", {
       plan: proposed,
