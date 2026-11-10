@@ -285,6 +285,7 @@ export async function runDaemon(
           source?.revision,
           source?.name,
           source ? { ...source.demoHooks, connectObserver: source.demoHooks?.connectObserver ?? source.connectObserver } : undefined,
+          Boolean(source),
         );
         return viewer;
       },

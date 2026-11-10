@@ -157,6 +157,7 @@ export async function startSharedViewer(
   sourceRevision?: () => string,
   sourceName?: string,
   demoHooks?: ConnectObserver | Pick<import("../lib/server-contract").DashboardOptions, "connectObserver" | "archiveProvider" | "getProfileCapabilities">,
+  previewPublic = false,
 ) {
   if ((sourceRevision || demoHooks) && !state.paths.isolated)
     throw new ContractError(
@@ -226,13 +227,13 @@ export async function startSharedViewer(
             ? parseViewerTarget(redirectValues[0]!, `http://${host}`, { allowHome: false })?.target
             : null;
           if (!target) return html(authFailedPage, 400);
-          const actor = auth.authorize(request);
+          const actor = auth.authorize(request) ?? (previewPublic ? { kind: "browser" as const, id: "source-preview" } : null);
           return actor ? redirect(target) : html(authFailedPage, 401);
         }
         const viewerTarget = viewerEntry
           ? parseViewerTarget(request.url, `http://${host}`, { allowTicket: true })
           : null;
-        const actor = auth.authorize(request);
+        const actor = auth.authorize(request) ?? (previewPublic ? { kind: "browser" as const, id: "source-preview" } : null);
         if (viewerEntry && !viewerTarget) {
           if (!actor) return html(authFailedPage, 400);
           return json({ code: "INVALID_REDIRECT" }, 400);

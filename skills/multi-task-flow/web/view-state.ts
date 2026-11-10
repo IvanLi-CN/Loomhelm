@@ -1,6 +1,6 @@
 export type DashboardTab = "graph" | "planned" | "actual";
 export type TaskLayout = "board" | "grid";
-export type Selection = { kind: "task" | "group"; id: string };
+export type Selection = { kind: "task" | "group" | "milestone"; id: string };
 
 export type ViewState = {
   tab: DashboardTab;
@@ -11,6 +11,7 @@ export type ViewState = {
   kind: string;
   plan: string | null;
   selected: Selection | null;
+  atom: string | null;
   detail: boolean;
   zoom: number;
   plannedStart: string | null;
@@ -21,7 +22,7 @@ export type ViewState = {
 
 export const DEFAULT_VIEW_STATE: ViewState = {
   tab: "graph", layout: "board", query: "", group: "", state: "", kind: "", plan: null,
-  selected: null, detail: false, zoom: 1, plannedStart: null, plannedEnd: null,
+  selected: null, atom: null, detail: false, zoom: 1, plannedStart: null, plannedEnd: null,
   actualStart: null, actualEnd: null,
 };
 
@@ -45,6 +46,7 @@ export type ViewStateValidation = {
   kinds?: ReadonlySet<string>;
   plans?: ReadonlySet<string>;
   tasks?: ReadonlySet<string>;
+  milestones?: ReadonlySet<string>;
 };
 
 export type ViewStateHistory = {
@@ -74,12 +76,13 @@ function validDateRange(start: string | null, end: string | null): [string | nul
 
 function parseSelection(value: string | null, validation: ViewStateValidation): Selection | null {
   if (!value) return null;
-  const match = /^(task|group):([A-Za-z0-9][A-Za-z0-9_.-]{0,127})$/.exec(value);
+  const match = /^(task|group|milestone):([A-Za-z0-9][A-Za-z0-9_.-]{0,127})$/.exec(value);
   if (!match) return null;
   const id = validId(match[2] ?? null);
   if (!id) return null;
   if (match[1] === "task" && validation.tasks && !validation.tasks.has(id)) return null;
   if (match[1] === "group" && validation.groups && !validation.groups.has(id)) return null;
+  if (match[1] === "milestone" && validation.milestones && !validation.milestones.has(id)) return null;
   return { kind: match[1] as Selection["kind"], id };
 }
 
@@ -101,6 +104,7 @@ export function parseViewState(search: string, validation: ViewStateValidation =
     kind: validValue(params.get("kind"), validation.kinds),
     plan: validValue(params.get("plan"), validation.plans) || null,
     selected,
+    atom: validId(params.get("atom")),
     detail: ["1", "true"].includes(params.get("detail") ?? "") && selected !== null,
     zoom,
     plannedStart,
@@ -134,6 +138,7 @@ export function sanitizeViewState(state: ViewState, validation: ViewStateValidat
     kind: validValue(state.kind, validation.kinds),
     plan: validValue(state.plan, validation.plans) || null,
     selected,
+    atom: validId(state.atom),
     detail: state.detail && selected !== null,
   };
 }
@@ -148,6 +153,7 @@ export function serializeViewState(state: ViewState, defaultPlan: string | null 
   if (state.kind) params.set("kind", state.kind);
   if (state.plan && state.plan !== defaultPlan) params.set("plan", state.plan);
   if (state.selected) params.set("selected", `${state.selected.kind}:${state.selected.id}`);
+  if (state.atom) params.set("atom", state.atom);
   if (state.detail && state.selected) params.set("detail", "1");
   if (state.plannedStart) params.set("plannedStart", state.plannedStart);
   if (state.plannedEnd) params.set("plannedEnd", state.plannedEnd);

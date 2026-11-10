@@ -74,3 +74,17 @@ test("grid and board groups expose time details from their own execution facts",
   expect(document.querySelector('.resource-popover[data-resource="time"]')?.textContent).toContain("开始时间不可用");
   expect(document.querySelector('.resource-popover[data-resource="time"] .resource-badge')?.textContent).toBe("时间未知");
 });
+
+test("task and delivery unit cards expose stable context targets and mobile triggers", async () => {
+  const { createCardRenderer } = await import("../../web/cards");
+  const { createSingleDeliveryUnitLedger } = await import("../../examples/single-delivery-unit/ledger");
+  const { buildView } = await import("../../lib/view");
+  const view = buildView(createSingleDeliveryUnitLedger()) as import("../../web/model").View;
+  document.body.innerHTML = '<div id="task-list"></div><div id="group-list"></div>';
+  const cards = createCardRenderer({ getData: () => view, labels: {}, safeExternal: () => null, getLayout: () => "grid", getSelectedTask: () => null, getSelectedGroup: () => null, selectTask: () => {}, selectGroup: () => {}, setKeyboardSelection: () => {}, updateTaskLayoutControls: () => {}, bindTaskHover: () => {}, bindGroupHover: () => {} });
+  cards.renderList(view.tasks); cards.renderGroups();
+  const task = view.tasks[0]!, group = view.groups[0]!;
+  expect(document.querySelector(`[data-context-kind="task"][data-context-id="${task.id}"]`)).toBeTruthy();
+  expect(document.querySelector(`[data-context-kind="group"][data-context-id="${group.id}"]`)).toBeTruthy();
+  expect(document.querySelector(`[data-context-trigger][data-context-kind="group"][data-context-id="${group.id}"]`)).toBeTruthy();
+});

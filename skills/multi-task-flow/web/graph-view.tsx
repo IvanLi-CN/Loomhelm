@@ -8,10 +8,10 @@ import { accessibleNodeLabel, renderAccessibleNodes, highlightAccessibleSelectio
 import { taskKindLabel } from './labels';
 import type { Task } from './model';
 
-type CardData = { title: string; kind: string; state: string; idle: boolean; color: string; label: string; ports: {id:string; source:boolean}[]; direction: Direction; group: boolean; taskId: string | null };
+type CardData = { title: string; kind: string; state: string; idle: boolean; color: string; label: string; ports: {id:string; source:boolean}[]; direction: Direction; group: boolean; taskId: string | null; contextKind: "task" | "group" | null; contextId: string | null };
 const Card = memo(function Card({data}: NodeProps) {
   const d = data as unknown as CardData;
-  return <div data-context-task={d.taskId ?? undefined} className={d.group ? 'dependency-group' : 'dependency-card'} style={{'--node-color':d.color} as React.CSSProperties}>
+  return <div data-context-kind={d.contextKind ?? undefined} data-context-id={d.contextId ?? undefined} data-context-task={d.taskId ?? undefined} className={d.group ? 'dependency-group' : 'dependency-card'} style={{'--node-color':d.color} as React.CSSProperties}>
     <div className="dependency-card-meta"><span>{d.kind}</span><span className={d.idle ? "dependency-state-idle" : undefined}>{d.idle ? <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{TreePalm.map(([tag, props], i) => React.createElement(tag, {...props, key:i}))}</svg> : null}{d.state}</span></div>
     <div className="dependency-card-title">{d.title}</div>
     {d.ports.map(p => <Handle key={p.id} id={p.id} type={p.source?'source':'target'} position={d.direction==='DOWN'?(p.source?Position.Bottom:Position.Top):(p.source?Position.Right:Position.Left)} />)}
@@ -40,7 +40,7 @@ export function createGraphController(context: GraphContext, calculateLayout = l
       ariaLabel: projection ? accessibleNodeLabel(n, projection) : n.title,
       selected:n.nodeKind==='task'?selected.task===n.refId:selected.group===n.refId,
       style:{width,height},
-      data:{taskId:n.nodeKind==='task'?n.refId:null,title:n.title,group:n.nodeKind==='group',kind:n.nodeKind==='group'?'交付单元':n.nodeKind==='milestone'?'里程碑':taskKindLabel(n.taskKind??'coordination').split(' ')[0],state:n.stateLabel??'',idle:n.state==='agent_idle',direction,
+      data:{taskId:n.nodeKind==='task'?n.refId:null,contextKind:n.nodeKind==='task'?'task':n.nodeKind==='group'?'group':n.nodeKind==='milestone'?'milestone':null,contextId:n.nodeKind==='task'||n.nodeKind==='group'?n.refId:n.nodeKind==='milestone'?n.id:null,title:n.title,group:n.nodeKind==='group',kind:n.nodeKind==='group'?'交付单元':n.nodeKind==='milestone'?'里程碑':taskKindLabel(n.taskKind??'coordination').split(' ')[0],state:n.stateLabel??'',idle:n.state==='agent_idle',direction,
         color:n.nodeKind==='group'?context.groupColor(n.groupId):n.state?context.stateColor(n.state):context.css('--accent','#5889c4'),
         ports:(projection?.edges??[]).filter(e=>e.source===n.id||e.target===n.id).map(e=>({id:`port:${e.id}:${e.source===n.id?'source':'target'}`,source:e.source===n.id})),},
     }));
@@ -49,7 +49,7 @@ export function createGraphController(context: GraphContext, calculateLayout = l
       onInit={i=>{instance=i;}} deleteKeyCode={null} nodesConnectable={false} nodesDraggable={false} elementsSelectable={true} minZoom={0.15} maxZoom={2.5}
       zoomOnScroll={false} zoomOnPinch={true} panOnScroll={true} panOnDrag={true} preventScrolling={false}
       onMoveEnd={(_,v)=>context.setZoom(Math.round(v.zoom*100)/100)}
-      onNodeClick={(_,n)=>{const item=projection?.nodes.find(p=>p.id===n.id);if(item?.refId){if(item.nodeKind==='task')context.selectTask(item.refId);else context.selectGroup(item.refId);}}}
+      onNodeClick={(_,n)=>{const item=projection?.nodes.find(p=>p.id===n.id);if(item?.refId){if(item.nodeKind==='task')context.selectTask(item.refId);else if(item.nodeKind==='group')context.selectGroup(item.refId);else if(item.nodeKind==='milestone')context.selectMilestone(item.id);}}}
       onNodeMouseEnter={(event,n)=>{const data=context.getData(), item=projection?.nodes.find(p=>p.id===n.id);if(!item?.refId||!data)return;const target=event.currentTarget as HTMLElement;const task=data.tasks.find(t=>t.id===item.refId),group=data.groups.find(g=>g.id===item.refId);if(task)context.showHoverPreview(context.taskPreview(task),target.getBoundingClientRect());else if(group)context.showHoverPreview(context.groupPreview(group),target.getBoundingClientRect());}}
       onNodeMouseLeave={context.hideHoverPreview} proOptions={{hideAttribution:false}} />{pending?<span className="dependency-layout-pending" role="status">正在计算布局…</span>:null}</>;
   }
