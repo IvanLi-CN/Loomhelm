@@ -5,7 +5,7 @@ import { ledgerSchema, type Ledger, type PlanRevision } from "../lib/schema";
 export const CONTRACT_VERSION = 2 as const;
 export const SKILL_ID = "multi-task-flow" as const;
 export const SKILL_VERSION = "2.7.2" as const;
-export const VIEWER_CONTRACT = 4 as const;
+export const VIEWER_CONTRACT = 5 as const;
 export const versionEnvelope = { skill_id: SKILL_ID, skill_version: SKILL_VERSION, viewer_contract: VIEWER_CONTRACT } as const;
 
 export const contractMetadata = {
