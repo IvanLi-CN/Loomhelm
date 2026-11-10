@@ -97,27 +97,63 @@ def contract_markers(ref):
     return markers
 
 
+def changed_skill_dirs(files):
+    result = set()
+    for path in files:
+        parts = path.split("/")
+        if len(parts) < 3 or parts[0] != "skills" or parts[1] in ("bin", "docs"):
+            continue
+        result.add(parts[1])
+    return sorted(result)
+
+
 def source_skill_dirs(files):
     result = set()
     for path in files:
         parts = path.split("/")
         if len(parts) < 3 or parts[0] != "skills" or parts[1] in ("bin", "docs"):
             continue
-        if Path(path).suffix in SOURCE_SUFFIXES and parts[2] != "SKILL.md":
+        if Path(path).suffix in SOURCE_SUFFIXES or parts[2] == "SKILL.md":
             result.add(parts[1])
     return sorted(result)
 
 
-def required_labels(files):
+def contract_semantics_changed(base, head, files):
+    changed_contract_paths = {
+        path for path in files if any(path.startswith(prefix) for prefix in CONTRACT_PATHS)
+    }
+    if not changed_contract_paths:
+        return False
+    if changed_contract_paths != {"skills/multi-task-flow/lib/contract.ts"}:
+        return True
+    before = read_at(base, "skills/multi-task-flow/lib/contract.ts")
+    after = read_at(head, "skills/multi-task-flow/lib/contract.ts")
+    if before is None or after is None:
+        return True
+    marker = re.compile(r"export const SKILL_VERSION = (?:\"[^\"]+\"|\d+)")
+    return marker.sub("", before) != marker.sub("", after)
+
+
+def required_labels(files, base=None, head=None, before_markers=None, after_markers=None):
     result = set()
-    if source_skill_dirs(files):
+    if changed_skill_dirs(files) or (
+        before_markers is not None
+        and after_markers is not None
+        and before_markers["SKILL_VERSION"] != after_markers["SKILL_VERSION"]
+    ):
         result.add(SKILL_LABEL)
     if any(path.startswith("clients/typescript/") for path in files):
         result.add(CLI_LABEL)
     if any(any(path.startswith(prefix) for prefix in VIEWER_PATHS) for path in files):
         result.add(VIEWER_LABEL)
-    if any(any(path.startswith(prefix) for prefix in CONTRACT_PATHS) for path in files):
+    if (base is not None and head is not None and contract_semantics_changed(base, head, files)) or (
+        before_markers is not None
+        and after_markers is not None
+        and before_markers["CONTRACT_VERSION"] != after_markers["CONTRACT_VERSION"]
+    ):
         result.add(CONTRACT_LABEL)
+    if before_markers is not None and after_markers is not None and before_markers["VIEWER_CONTRACT"] != after_markers["VIEWER_CONTRACT"]:
+        result.add(VIEWER_LABEL)
     return result
 
 
@@ -128,8 +164,8 @@ def _require_advance(kind, before, after):
 
 def check(base, head, labels=(), require_labels=True):
     files = git_files(base, head)
-    expected = required_labels(files)
     provided = {item.strip() for item in labels if item.strip()}
+    expected = required_labels(files)
     if require_labels and not expected <= provided:
         missing = ", ".join(sorted(expected - provided))
         raise ReleaseError(f"missing release label(s): {missing}")
@@ -151,6 +187,13 @@ def check(base, head, labels=(), require_labels=True):
 
     before_markers = contract_markers(base)
     after_markers = contract_markers(head)
+    expected = required_labels(files, base, head, before_markers, after_markers)
+    if require_labels and not expected <= provided:
+        missing = ", ".join(sorted(expected - provided))
+        raise ReleaseError(f"missing release label(s): {missing}")
+    if provided & RELEASE_LABELS and not (provided & expected):
+        raise ReleaseError("release labels do not describe the changed surfaces")
+
     if CONTRACT_LABEL in expected and after_markers["CONTRACT_VERSION"] <= before_markers["CONTRACT_VERSION"]:
         raise ReleaseError("internal contract version must advance for contract changes")
     if VIEWER_LABEL in expected and after_markers["VIEWER_CONTRACT"] <= before_markers["VIEWER_CONTRACT"]:

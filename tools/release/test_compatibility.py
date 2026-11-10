@@ -52,6 +52,23 @@ class CompatibilityTests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseError, "must advance"):
                 compatibility.check("base", "head", {"release:cli"})
 
+    def test_skill_version_only_change_does_not_require_contract_label(self):
+        files = ["skills/multi-task-flow/SKILL.md", "skills/multi-task-flow/lib/contract.ts"]
+        values = {
+            ("base", "skills/multi-task-flow/SKILL.md"): "version: 2.4.0\n",
+            ("head", "skills/multi-task-flow/SKILL.md"): "version: 2.5.0\n",
+            ("base", "skills/multi-task-flow/lib/contract.ts"): 'export const CONTRACT_VERSION = 2; export const VIEWER_CONTRACT = 2; export const SKILL_VERSION = "2.4.0";\n',
+            ("head", "skills/multi-task-flow/lib/contract.ts"): 'export const CONTRACT_VERSION = 2; export const VIEWER_CONTRACT = 2; export const SKILL_VERSION = "2.5.0";\n',
+        }
+        with patch.object(compatibility, "git_files", return_value=files), patch.object(compatibility, "read_at", side_effect=lambda ref, path: values.get((ref, path))), patch.object(
+            compatibility,
+            "git",
+            side_effect=lambda *args, **kwargs: {("rev-parse", "base"): "a" * 40 + "\n", ("rev-parse", "head"): "b" * 40 + "\n"}.get(args, ""),
+        ):
+            result = compatibility.check("base", "head", {"release:skill"})
+        self.assertEqual(result["required_labels"], ["release:skill"])
+        self.assertEqual(result["skill_version"], "2.5.0")
+
     def test_private_package_cannot_publish(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
