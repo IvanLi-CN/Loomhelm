@@ -1,10 +1,14 @@
 ---
 name: multi-task-flow
 description: Coordinate a dependency-driven Codex task through an isolated JSON ledger, on-demand delivery-unit and task conversations, PR coordination, and an authenticated local dashboard.
-version: 2.4.0
+version: 2.6.0
 ---
 
 # Multi-task flow
+
+## npm runtime package
+
+本 Skill 的 npm 运行包是 `@loomhelm/multi-task-flow`，由 `clients/typescript/` 提供 Bun 1.4.4 CLI 与完整资源。发布构建必须包含 `skills/` 下的全部 Skill 脚本、`skills/docs/vendor/dot-codex/` 合同、viewer `index.html`/`app.js`/`app.css` 和冻结安装的依赖目录；`zod` 与视觉脚本使用的 `sharp` 必须可从已安装包解析。版本字段使用精确 SemVer，兼容发布使用 `compat-vN` dist-tag，N 为正整数。
 
 ## 术语约定
 

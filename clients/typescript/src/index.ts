@@ -9,3 +9,4 @@ export * from './dispatch/index.ts';
 export * from './toolkit.ts';
 
 export * from './version.ts';
+export * from './release.ts';
