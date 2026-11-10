@@ -1,7 +1,7 @@
 {
-  "name": "@loomhelm/multi-task-flow",
-  "version": "0.2.0",
-  "description": "Versioned Bun CLI and complete Multi-task Flow Skill runtime for Loomhelm",
+  "name": "@loomhelm/client",
+  "version": "0.1.0",
+  "private": true,
   "type": "module",
   "engines": {
     "bun": "1.4.4"
@@ -9,43 +9,22 @@
   "bin": {
     "loomhelm": "src/cli.ts"
   },
-  "files": [
-    "src",
-    "toolkit",
-    "README.md",
-    "bun.lock",
-    "package.json"
-  ],
   "exports": {
     ".": "./src/index.ts"
   },
   "types": "src/index.ts",
   "scripts": {
-    "build": "bun ../../skills/multi-task-flow/scripts/package-client-skills.ts --require-dependencies",
+    "build": "bun ../../skills/multi-task-flow/scripts/package-client-skills.ts",
     "check": "bun x --no-install tsc -p tsconfig.json --noEmit",
-    "test": "bun run build && bun test test/*.test.ts",
-    "pack:check": "bun run build && bun pm pack --dry-run",
-    "publish:exact": "bun --no-install src/cli.ts release validate --version \"$npm_package_version\" && bun pm publish",
-    "publish:compat": "bun --no-install src/cli.ts release validate --version \"$npm_package_version\" --dist-tag \"compat-v${npm_config_compat_version:-1}\" && bun pm publish --tag \"compat-v${npm_config_compat_version:-1}\""
+    "test": "bun run build && bun test test/*.test.ts"
   },
   "devDependencies": {
     "typescript": "5.9.3",
     "@types/bun": "1.4.4"
   },
   "dependencies": {
-    "@xyflow/react": "12.12.1",
-    "elkjs": "0.12.1",
-    "lucide": "1.65.0",
-    "moment": "2.31.0",
-    "react": "19.3.1",
-    "react-dom": "19.3.1",
     "sharp": "0.35.5",
-    "vis-data": "8.0.6",
-    "vis-timeline": "8.5.6",
     "zod": "4.6.7"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "packageManager": "bun@1.4.4"
 }
