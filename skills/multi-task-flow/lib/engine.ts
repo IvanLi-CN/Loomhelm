@@ -2465,10 +2465,15 @@ export function execute(
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
+      const mainOwned = target.execution_owner === "main" &&
+        target.conversation_policy === "main_owned" &&
+        request.actor.role === "main" &&
+        request.actor.thread_id === ledger.control.owner_thread_id;
       const state = z
         .enum(["running", "waiting", "blocked", "completed", "closed"])
         .parse(payload.state);
       const allowed: Record<string, string[]> = {
+        planned: mainOwned ? ["running", "waiting", "blocked"] : [],
         starting: ["running", "waiting", "blocked"],
         running: ["waiting", "blocked"],
         agent_idle: ["running", "waiting", "blocked"],
@@ -2518,6 +2523,13 @@ export function execute(
           4,
         );
       }
+      if (state === "running" && previousState === "planned")
+        requireCondition(
+          mainOwned && ready(ledger, target.id),
+          "MAIN_TASK_REQUIRED",
+          "Only the bound main conversation can start a main-owned task directly",
+          3,
+        );
       if (state === "completed")
         requireCondition(
           typeof payload.evidence === "string" && payload.evidence.length > 0,
@@ -2557,7 +2569,7 @@ export function execute(
           : null;
       if (state === "closed" && target.lifecycle && !legacyLedger(ledger))
         target.lifecycle.closed = "passed";
-      if (state === "running" && previousState === "starting")
+      if (state === "running" && (previousState === "starting" || previousState === "planned"))
         target.started_at = z.iso
           .datetime({ offset: false })
           .parse(payload.occurred_at);
@@ -2629,8 +2641,12 @@ export function execute(
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
+      const mainOwned = target.execution_owner === "main" &&
+        target.conversation_policy === "main_owned" &&
+        request.actor.role === "main" &&
+        request.actor.thread_id === ledger.control.owner_thread_id;
       requireCondition(
-        request.actor.role === "task" && taskExecutionState(target) === "running",
+        (request.actor.role === "task" || mainOwned) && taskExecutionState(target) === "running",
         "FORBIDDEN",
         "The running task owner updates its atoms",
         3,
@@ -3496,7 +3512,12 @@ export function execute(
               (item) =>
                 item.group_id === groupId && isContributionKind(item.kind),
             )
-            .every((item) => ["integrated", "closed"].includes(item.state)),
+            .every((item) =>
+              ["integrated", "closed"].includes(item.state) ||
+              (item.execution_owner === "main" &&
+                item.conversation_policy === "main_owned" &&
+                item.state === "running" &&
+                item.atoms.every((atom) => atom.status === "completed"))),
           "TASKS_PENDING",
           "Contribution tasks are not integrated",
           4,
@@ -3694,6 +3715,18 @@ export function execute(
           owner.merge_sha = evidence.sha;
           if (owner.lifecycle && !legacyLedger(ledger))
             owner.lifecycle.pr_merged = "passed";
+          for (const task of ledger.tasks.filter(
+            (item) =>
+              item.group_id === owner.id &&
+              item.execution_owner === "main" &&
+              item.conversation_policy === "main_owned" &&
+              item.state === "running",
+          )) {
+            task.state = "integrated";
+            task.finished_at = evidence.observed_at;
+            if (task.lifecycle && !legacyLedger(ledger))
+              task.lifecycle.pr_merged = "passed";
+          }
         } else if (op.request.mode === "follow") {
           const follow = find(
             ledger.follow_prs,
