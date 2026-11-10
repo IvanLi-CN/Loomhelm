@@ -101,7 +101,7 @@ function requiresRuntimeEvidence(ledger: Ledger): boolean {
 }
 
 function planSchedulingIssues(ledger: Ledger, plan: Plan): PlanCompletenessIssue[] {
-  if (ledger.source_schema_version === 1 || ledger.contract_version !== 2) return [];
+  if (ledger.source_schema_version === 1) return [];
   const contributionTasks = ledger.tasks.filter(
     (task) => task.disposition === "active" && isContributionKind(task.kind),
   );
@@ -400,7 +400,17 @@ function runtimeReadinessProjection(ledger: Ledger, plan: Plan): {
   const blockers = summaries
     .filter((item) => {
       const group = ledger.groups.find((candidate) => candidate.id === item.blockers[0]?.group_id);
-      return group?.state !== "closed" && group?.state !== "blocked";
+      if (!group) return true;
+      if (group.state === "planned" && item.blockers.every((blocker) => blocker.code === "COORDINATOR_NOT_BOUND")) return false;
+      if (group.state === "closed" || group.state === "blocked") {
+        return ledger.tasks.some((task) =>
+          task.group_id === group.id &&
+          task.disposition === "active" &&
+          ["planned", "ready"].includes(task.state) &&
+          !task.thread_id,
+        );
+      }
+      return true;
     })
     .flatMap((item) => item.blockers);
   return {

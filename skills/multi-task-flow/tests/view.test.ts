@@ -141,6 +141,19 @@ describe("timeline projections", () => {
     expect(JSON.stringify(ledger)).toBe(before);
   });
 
+  test("keeps contract1 scheduling aligned with the engine publication gate", () => {
+    const ledger = withRuntimeEvidence(structuredClone(createPlanningDemoLedger(1_767_200_000_000)));
+    ledger.contract_version = 1;
+    ledger.source_schema_version = null;
+    ledger.plans[0]!.actions = [];
+    const view = buildView(ledger) as any;
+
+    expect(view.plan_state.scheduling.status).toBe("blocked");
+    expect(view.plan_state.scheduling.blockers).toContainEqual(expect.objectContaining({
+      code: "PLAN_NOT_DISPATCHABLE",
+    }));
+  });
+
   test("projects contract2 readiness only after workspace and branch receipts pass", () => {
     const ledger = withRuntimeEvidence(structuredClone(createPlanningDemoLedger(1_767_200_000_000)));
     ledger.contract_version = 2;
@@ -164,8 +177,8 @@ describe("timeline projections", () => {
     ledger.groups.find((group) => group.id === "core")!.state = "blocked";
     const view = buildView(ledger) as any;
 
-    expect(view.plan_state.scheduling.status).toBe("eligible");
-    expect(view.plan_state.runtime_readiness.status).toBe("ready");
+    expect(view.plan_state.scheduling.status).toBe("blocked");
+    expect(view.plan_state.runtime_readiness.status).toBe("blocked");
     expect(view.groups.find((group: any) => group.id === "dashboard").runtime_readiness.blockers).toContainEqual(expect.objectContaining({
       code: "GROUP_CLOSED",
       group_id: "dashboard",

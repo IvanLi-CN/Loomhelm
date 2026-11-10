@@ -1525,6 +1525,14 @@ describe("orchestration state", () => {
     expect(() => apply(ledger, "group-execution-update", request(ledger, "group-bad-wait", { group_id: "g", state: "waiting", reason: "missing", waiting_for_task_ids: ["missing"] }, groupActor))).toThrow("contribution tasks");
   });
 
+  test("runtime execution requires bound orchestration ownership", () => {
+    const ledger = fixture();
+    ledger.control.ownership = "uncertain";
+    expect(() => apply(ledger, "group-execution-update", request(ledger, "uncertain-runtime", {
+      group_id: "g", state: "running", reason: null, waiting_for_task_ids: [],
+    }, groupActor))).toThrow("ownership is not resolved");
+  });
+
   test("active delivery units cannot become idle while a contribution task is ready", () => {
     const ledger = fixture();
     approve(ledger);
@@ -1597,10 +1605,13 @@ describe("orchestration state", () => {
       { id: "group-atom-two", title: "Close", purpose: "Close", output: "Closed", lifecycle_stage: "closed", status: "running" },
     ];
     ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
-    ledger.groups[0].coordination_execution = { state: "idle", reason: null, waiting_for_task_ids: [] };
+    ledger.groups[0].coordination_execution = { state: "waiting", reason: "merged closeout", waiting_for_task_ids: [] };
     ledger.tasks.forEach((task: Task) => { task.state = "integrated"; });
     ledger.facts.push({ id: "group-merged", kind: "pr_merged", subject_id: "g", status: "passed", source: "github", observed_at: at, sha: merge, evidence_ref: "merge" });
     ledger.facts.push({ id: "group-ci", kind: "ci_passed", subject_id: "g", status: "passed", source: "github", observed_at: at, sha: merge, evidence_ref: "ci" });
+    apply(ledger, "group-execution-update", request(ledger, "merged-closeout-idle", {
+      group_id: "g", state: "idle", reason: null, waiting_for_task_ids: [],
+    }, coordinator));
     apply(ledger, "group-close", request(ledger, "group-closeout", { group_id: "g" }, coordinator));
     expect(ledger.groups[0].state).toBe("closed");
     expect(ledger.groups[0].atoms.at(-1)?.status).toBe("completed");

@@ -2803,9 +2803,16 @@ export function execute(
         .enum(["unknown", "idle", "running", "waiting", "blocked"])
         .parse(payload.state);
       requireCondition(
-        state === "unknown" || owner.state === "active",
+        state === "unknown" || ledger.control.ownership === "bound",
+        "CONTROL_OWNERSHIP_UNKNOWN",
+        "Runtime execution requires bound orchestration control ownership",
+        4,
+      );
+      requireCondition(
+        state === "unknown" || owner.state === "active" ||
+          (owner.state === "merged" && state === "idle"),
         "GROUP_NOT_ACTIVE",
-        "Only active delivery units can record runtime execution",
+        "Only active delivery units can record runtime execution, except merged closeout idle",
         4,
       );
       requireCondition(
