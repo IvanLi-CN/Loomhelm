@@ -58,7 +58,6 @@ function copyRootFile(path: string): void {
   const output = resolve(target, path);
   mkdirSync(dirname(output), { recursive: true });
   cpSync(source, output);
-  record(path, contents);
 }
 function writeGenerated(path: string, contents: Uint8Array): void {
   const output = resolve(target, path);
@@ -126,7 +125,6 @@ const packageIdentityBase = {
 };
 const generatedPackage = JSON.stringify({ private: true, type: 'module', packageName: packageMetadata.name, packageVersion: packageMetadata.version, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion }, null, 2) + '\n';
 writeFileSync(resolve(target, 'package.json'), generatedPackage);
-record('package.json', Buffer.from(generatedPackage));
 const finalInventory = [...outputs.values()].sort((left, right) => left.path.localeCompare(right.path));
 const buildId = createHash('sha256').update(JSON.stringify({ ...packageIdentityBase, files: finalInventory })).digest('hex');
 const identity = { ...packageIdentityBase, buildId };

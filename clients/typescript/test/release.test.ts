@@ -24,7 +24,7 @@ test('uses explicit compatibility tags without deriving them from package versio
 test('validates independent package identity dimensions', () => {
   const identity = {
     packageName: '@loomhelm/multi-task-flow',
-    packageVersion: '0.2.0',
+    packageVersion: '0.1.0',
     compatibilityLine: 'compat-v1',
     skillVersion: '2.7.2',
     sourceSha: 'a'.repeat(40),
