@@ -24,6 +24,17 @@ test("stream refresh preserves response scroll and switches to the latest messag
   expect(body.textContent).toContain("new streamed message"); expect(body.scrollTop).toBe(120);
   trigger.remove(); refreshResourcePopover(); expect(document.querySelector(".resource-popover")).toBeNull();
 });
+test("scrolling the popover body does not reposition the floating panel", () => {
+  const trigger = document.createElement("button"); document.body.append(trigger);
+  let top = 300;
+  trigger.getBoundingClientRect = () => ({ top, bottom: top + 24, left: 40, right: 120, width: 80, height: 24, x: 40, y: top, toJSON: () => ({}) }) as DOMRect;
+  attachResourcePopover(trigger, "conversation", source()); trigger.focus();
+  const panel = document.querySelector<HTMLElement>(".resource-popover")!;
+  const positionedTop = panel.style.top;
+  top = 500;
+  document.querySelector<HTMLElement>(".resource-body")!.dispatchEvent(new Event("scroll", { bubbles: true }));
+  expect(panel.style.top).toBe(positionedTop);
+});
 test("elapsed budget includes the entire recorded duration and rejects nonpositive schedules", () => {
   expect(timingText(source())).toContain("用时占比：150%\n超出排期：50%");
   const s = source(); s.view = { ...view, planned_intervals: [] }; expect(timingText(s)).toContain("用时占比：不可用");

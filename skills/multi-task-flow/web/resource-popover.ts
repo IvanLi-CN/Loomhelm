@@ -88,6 +88,10 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let observer: ResizeObserver | undefined, titleSignature = "", bodySignature = "", requestId = 0, touchStart: { x: number; y: number } | null = null, longPressed = false;
   let suppressFocus = false;
+  const handleScroll = (event: Event) => {
+    if (event.target instanceof Node && panel.contains(event.target)) return;
+    position();
+  };
   let pr: PRSnapshot | null = null;
   const identity = node("div", "", "resource-identity"), body = node("div", "", "resource-body");
   panel.append(identity, body);
@@ -220,7 +224,7 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
   const close = (restore = false) => {
     cancel(); if (panel.hidden) return;
     panel.hidden = true; requestId++; clearTimeout(refreshTimer); observer?.disconnect(); panel.remove(); trigger.setAttribute("aria-expanded", "false");
-    window.removeEventListener("resize", position); window.removeEventListener("scroll", position, true);
+    window.removeEventListener("resize", position); window.removeEventListener("scroll", handleScroll, true);
     document.removeEventListener("pointerdown", outside, true); document.removeEventListener("keydown", keys, true);
     if (active?.close === close) active = null;
     if (restore) { suppressFocus = true; trigger.focus(); suppressFocus = false; cancel(); }
@@ -230,7 +234,7 @@ export function attachResourcePopover(trigger: HTMLElement, type: "conversation"
     document.dispatchEvent(new Event("resource-popover-open"));
     active?.close(); active = { close, refresh }; panel.hidden = false; document.body.append(panel); trigger.setAttribute("aria-expanded", "true");
     refresh(); if (type === "pr") { renderPRIdentity(); void loadPR(); }
-    window.addEventListener("resize", position); window.addEventListener("scroll", position, true);
+    window.addEventListener("resize", position); window.addEventListener("scroll", handleScroll, true);
     document.addEventListener("pointerdown", outside, true); document.addEventListener("keydown", keys, true);
     if (typeof ResizeObserver !== "undefined") { observer = new ResizeObserver(position); observer.observe(panel); }
   };
