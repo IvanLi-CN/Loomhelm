@@ -14495,7 +14495,7 @@
       "path": "skills/multi-task-flow/lib/store-migration.ts",
       "sourceBlob": "6c190c9e035bc04b48fa171cd68505231052dcd6",
       "sourceSha256": "dd9eb58c4bce8bc790ddec4fa18173822d8972b084fa4b216d9cc815b8fcb19f",
-      "installedSha256": "897d3ea8896ba9f57eba21da14562c8b3f8731d18df061ffe0ca60686bf66a04",
+      "installedSha256": "d11ef50fc84e385d19b7432308ad6550888e00e836ac0a2de822fd96e07b9396",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
