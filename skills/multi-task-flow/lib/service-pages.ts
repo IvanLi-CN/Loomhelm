@@ -16,7 +16,7 @@ const viewParamValidators: Record<string, (value: string) => boolean> = {
   state: (value) => viewIdPattern.test(value),
   kind: (value) => viewIdPattern.test(value),
   plan: (value) => viewIdPattern.test(value),
-  selected: (value) => /^(task|group):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value),
+  selected: (value) => /^(task|group|milestone):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value),
   detail: (value) => value === "1" || value === "true",
   zoom: (value) => {
     const zoom = Number(value);

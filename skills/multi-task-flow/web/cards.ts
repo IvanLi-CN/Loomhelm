@@ -23,6 +23,7 @@ type CardContext = {
   updateTaskLayoutControls: () => void;
   bindTaskHover: (target: HTMLElement, task: Task) => void;
   bindGroupHover: (target: HTMLElement, group: Group) => void;
+  openContextMenu?: (kind: "task" | "group", id: string, target: HTMLElement) => void;
 };
 
 export function selectionAriaLabel(kind: "任务" | "交付单元", title: string, state: string, labels: Record<string, string>): string {
@@ -124,6 +125,8 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   card.className = "task-card";
   card.dataset.taskId = task.id;
   card.dataset.contextTask = task.id;
+  card.dataset.contextKind = "task";
+  card.dataset.contextId = task.id;
   card.setAttribute("role", "listitem");
   card.setAttribute("aria-current", String(context.getSelectedTask() === task.id));
   const head = text("div", "", "task-card-head");
@@ -141,6 +144,12 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   } else actions.append(iconAction(task.thread_id ? task.state === "agent_idle" ? "Agent 已停止工作，打开任务对话" : "打开任务对话" : "任务对话尚未创建", "message-circle", task.thread_id ? conversationUrl(task.thread_id) : null));
   const pr = context.safeExternal(task.pr?.url ?? null);
   actions.append(iconAction(pr ? "打开任务 PR" : "任务 PR 尚未创建", "git-pull-request", pr, true));
+  const more = iconAction("更多任务操作", "ellipsis", null);
+  more.classList.add("context-menu-mobile-trigger");
+  more.removeAttribute("aria-disabled");
+  more.dataset.contextTrigger = "true"; more.dataset.contextKind = "task"; more.dataset.contextId = task.id;
+  more.addEventListener("click", event => { event.stopPropagation(); context.openContextMenu?.("task", task.id, more); });
+  actions.append(more);
   head.append(actions);
   const meta = text("div", "", "task-card-meta");
   meta.append(durationValue(task.started_at, task.finished_at));
@@ -157,6 +166,8 @@ function groupCard(group: Group, context: CardContext): HTMLElement {
   const card = document.createElement("article");
   card.className = "task-card group-card";
   card.dataset.groupId = group.id;
+  card.dataset.contextKind = "group";
+  card.dataset.contextId = group.id;
   card.setAttribute("role", "listitem");
   card.setAttribute("aria-current", String(context.getSelectedGroup() === group.id));
   const head = text("div", "", "task-card-head");
@@ -173,6 +184,12 @@ function groupCard(group: Group, context: CardContext): HTMLElement {
   actions.append(iconAction(group.delivery_unit_kind === "bootstrap" ? "主对话负责首个交付单元" : group.agent_thread_id ? "打开交付单元对话" : "交付单元对话尚未创建", "message-circle", (group.delivery_unit_kind === "bootstrap" ? data.orchestration.owner_thread_id : group.agent_thread_id) ? conversationUrl((group.delivery_unit_kind === "bootstrap" ? data.orchestration.owner_thread_id : group.agent_thread_id)!) : null));
   const pr = context.safeExternal(group.parent_pr?.url ?? null);
   actions.append(iconAction(pr ? "打开交付单元 PR" : "交付单元 PR 尚未创建", "git-pull-request", pr, true));
+  const more = iconAction("更多交付单元操作", "ellipsis", null);
+  more.classList.add("context-menu-mobile-trigger");
+  more.removeAttribute("aria-disabled");
+  more.dataset.contextTrigger = "true"; more.dataset.contextKind = "group"; more.dataset.contextId = group.id;
+  more.addEventListener("click", event => { event.stopPropagation(); context.openContextMenu?.("group", group.id, more); });
+  actions.append(more);
   head.append(actions);
   const groupTasks = data.tasks.filter((task) => task.group_id === group.id);
   const range = { start: group.started_at ?? null, end: group.finished_at ?? null };
@@ -205,6 +222,8 @@ export function createCardRenderer(context: CardContext): { renderList: (tasks: 
       column.setAttribute("role", "listitem");
       column.setAttribute("aria-current", String(context.getSelectedGroup() === group.id));
       const heading = text("div", "", "task-column-heading");
+      heading.dataset.contextKind = "group";
+      heading.dataset.contextId = group.id;
       const select = document.createElement("button");
       select.type = "button";
       select.className = "task-column-select";
@@ -217,6 +236,12 @@ export function createCardRenderer(context: CardContext): { renderList: (tasks: 
       actions.append(iconAction(group.delivery_unit_kind === "bootstrap" ? "主对话负责首个交付单元" : group.agent_thread_id ? "打开交付单元对话" : "交付单元对话尚未创建", "message-circle", (group.delivery_unit_kind === "bootstrap" ? data.orchestration.owner_thread_id : group.agent_thread_id) ? conversationUrl((group.delivery_unit_kind === "bootstrap" ? data.orchestration.owner_thread_id : group.agent_thread_id)!) : null));
       const pr = context.safeExternal(group.parent_pr?.url ?? null);
       actions.append(iconAction(pr ? "打开交付单元 PR" : "交付单元 PR 尚未创建", "git-pull-request", pr, true));
+      const more = iconAction("更多交付单元操作", "ellipsis", null);
+      more.classList.add("context-menu-mobile-trigger");
+      more.removeAttribute("aria-disabled");
+      more.dataset.contextTrigger = "true"; more.dataset.contextKind = "group"; more.dataset.contextId = group.id;
+      more.addEventListener("click", event => { event.stopPropagation(); context.openContextMenu?.("group", group.id, more); });
+      actions.append(more);
       const progress = text("span", groupAtomProgress(group), "task-column-count");
       const meta = text("div", "", "task-card-meta task-column-time");
       meta.append(durationValue(group.started_at ?? null, group.finished_at ?? null));
