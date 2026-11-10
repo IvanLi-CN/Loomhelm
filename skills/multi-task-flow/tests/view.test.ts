@@ -12,6 +12,48 @@ function taskNode(id: string, minutes: number | null) {
 function fixture(nodes: unknown[], edges: unknown[], startAt: string | null = at) {
   return plan.parse({ id: "plan", supersedes_id: null, approval_id: null, created_at: at, start_at: startAt, atoms: [], atomic_edges: [], nodes, edges, cut_rules: [], actions: [] });
 }
+function withRuntimeEvidence<T extends ReturnType<typeof createPlanningDemoLedger>>(ledger: T): T {
+  ledger.groups.forEach((group) => {
+    group.lifecycle.workspace_ready = "passed";
+    ledger.events.push({
+      id: `${group.id}-workspace-ready`,
+      type: "lifecycle_recorded",
+      subject_id: group.id,
+      actor_id: ledger.control.owner_thread_id!,
+      occurred_at: ledger.updated_at,
+      recorded_at: ledger.updated_at,
+      data: { target_type: "group", stage: "workspace_ready", resource_ids: [`${group.id}-worktree`, `${group.id}-branch`] },
+    });
+    ledger.resources.push(
+      { id: `${group.id}-worktree`, kind: "worktree", target: group.id, status: "active", evidence_ref: `${group.id}:worktree` },
+      { id: `${group.id}-branch`, kind: "branch", target: group.parent_branch, status: "active", evidence_ref: `${group.id}:branch` },
+    );
+    ledger.facts.push({
+      id: `${group.id}-branch-published`,
+      kind: "branch_published",
+      subject_id: group.id,
+      status: "passed",
+      source: "sample",
+      observed_at: ledger.updated_at,
+      sha: group.current_sha,
+      evidence_ref: `${group.id}:published`,
+      receipt: {
+        provider: ledger.repository.provider,
+        repository: `${ledger.repository.owner}/${ledger.repository.name}`,
+        resource_type: "branch",
+        resource_id: group.parent_branch!,
+        branch: group.parent_branch!,
+        target_branch: null,
+        base_sha: null,
+        head_sha: group.current_sha,
+        pr: null,
+        state: "exists",
+        evidence_ref: `${group.id}:published`,
+      },
+    });
+  });
+  return ledger;
+}
 
 describe("timeline projections", () => {
   test("rejects incomplete plans before formal scheduling", () => {
@@ -68,7 +110,7 @@ describe("timeline projections", () => {
     expect(JSON.stringify(ledger)).toBe(before);
   });
 
-  test("projects schema2 contract2 readiness without rewriting the historical ledger", () => {
+  test("blocks schema2 contract2 readiness without execution receipts", () => {
     const ledger = structuredClone(createPlanningDemoLedger(1_767_200_000_000));
     ledger.contract_version = 2;
     ledger.source_schema_version = null;
@@ -78,10 +120,92 @@ describe("timeline projections", () => {
     expect(view.plan_state).toMatchObject({
       proposal: { status: "complete" },
       approval: { status: "approved" },
+      scheduling: { status: "blocked" },
+      runtime_readiness: { status: "blocked" },
+      scheduling_eligible: false,
+    });
+    expect(view.plan_state.runtime_readiness.blockers).toContainEqual(expect.objectContaining({
+      code: "WORKSPACE_NOT_READY",
+      group_id: "dashboard",
+    }));
+    expect(JSON.stringify(ledger)).toBe(before);
+  });
+
+  test("projects contract2 readiness only after workspace and branch receipts pass", () => {
+    const ledger = withRuntimeEvidence(structuredClone(createPlanningDemoLedger(1_767_200_000_000)));
+    ledger.contract_version = 2;
+    ledger.source_schema_version = null;
+    const view = buildView(ledger) as any;
+
+    expect(view.plan_state).toMatchObject({
+      proposal: { status: "complete" },
+      approval: { status: "approved" },
       scheduling: { status: "eligible" },
       runtime_readiness: { status: "ready" },
+      scheduling_eligible: true,
     });
-    expect(JSON.stringify(ledger)).toBe(before);
+  });
+
+  test("does not project a closed delivery unit as schedulable", () => {
+    const ledger = withRuntimeEvidence(structuredClone(createPlanningDemoLedger(1_767_200_000_000)));
+    ledger.contract_version = 2;
+    ledger.source_schema_version = null;
+    ledger.groups.find((group) => group.id === "dashboard")!.state = "closed";
+    const view = buildView(ledger) as any;
+
+    expect(view.plan_state.scheduling.status).toBe("blocked");
+    expect(view.plan_state.runtime_readiness.blockers).toContainEqual(expect.objectContaining({
+      code: "GROUP_CLOSED",
+      group_id: "dashboard",
+    }));
+  });
+
+  test("projects an unresolved group conversation creation as unknown", () => {
+    const ledger = structuredClone(createPlanningDemoLedger(1_767_200_000_000));
+    ledger.contract_version = 2;
+    ledger.source_schema_version = null;
+    const group = ledger.groups.find((item) => item.id === "dashboard")!;
+    group.agent_thread_id = null;
+    ledger.operations.push({
+      id: "dispatch-dashboard-unknown",
+      kind: "dispatch",
+      actor_id: ledger.control.owner_thread_id!,
+      target_id: group.id,
+      status: "unknown",
+      request: { target_type: "group" },
+      expected_sha: null,
+      receipt_fact_id: null,
+      created_at: ledger.updated_at,
+      updated_at: ledger.updated_at,
+    });
+    const view = buildView(ledger) as any;
+
+    expect(view.groups.find((item: any) => item.id === group.id)).toMatchObject({
+      coordinator: { status: "unknown", thread_id: null },
+      runtime_readiness: { status: "unknown" },
+    });
+    expect(view.plan_state.runtime_readiness.blockers).toContainEqual(expect.objectContaining({
+      code: "COORDINATOR_UNKNOWN",
+      group_id: group.id,
+      resource: { kind: "conversation", status: "unknown", target_id: group.id },
+    }));
+  });
+
+  test("does not project uncertain orchestration ownership as ready", () => {
+    const ledger = withRuntimeEvidence(structuredClone(createPlanningDemoLedger(1_767_200_000_000)));
+    ledger.contract_version = 2;
+    ledger.source_schema_version = null;
+    ledger.control.ownership = "uncertain";
+    const view = buildView(ledger) as any;
+
+    expect(view.plan_state).toMatchObject({
+      scheduling: { status: "unknown" },
+      runtime_readiness: { status: "unknown" },
+      scheduling_eligible: false,
+    });
+    expect(view.plan_state.runtime_readiness.blockers).toContainEqual(expect.objectContaining({
+      code: "CONTROL_OWNERSHIP_UNKNOWN",
+    }));
   });
 
   test("warns when a running group has no formal contribution dispatch", () => {

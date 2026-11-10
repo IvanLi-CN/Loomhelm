@@ -141,6 +141,32 @@ describe("dashboard details content", () => {
     expect(info.textContent).toContain("资源：尚未创建");
   });
 
+  test("distinguishes unknown owner approval from a rejected approval", () => {
+    const unknown = {
+      active_plan_id: "plan",
+      execution_plan_id: "plan",
+      lifecycle: "approved",
+      approval_pending: false,
+      proposal: { status: "complete" as const, issues: [] },
+      approval: { status: "unknown" as const, approval_id: null },
+      scheduling: { status: "unknown" as const, blockers: [] },
+      runtime_readiness: { status: "ready" as const, blockers: [] },
+    };
+    const info = document.createElement("section");
+    renderPlanInfoContent(info, {
+      orchestration: { id: "run", repository: { owner: "example", name: "repo", host: "github.com" }, revision: 4, updated_at: "2026-01-01T00:00:00Z", display_timezone: "UTC", max_running_tasks: 1, conversation_links_verified: true },
+      groups: [],
+      tasks: [],
+      selected_plan_id: "plan",
+      execution_phase: "planning",
+      plan_state: unknown,
+    });
+
+    expect(planStateSeverity(unknown)).toBe("unknown");
+    expect(info.textContent).toContain("Owner approval 状态未知。");
+    expect(info.textContent).not.toContain("Owner approval 尚未完成。");
+  });
+
   test("removes empty-state layout from a selected task", () => {
     const view = {
       orchestration: { id: "run", repository: { owner: "example", name: "repo", host: "github.com" }, revision: 1, updated_at: "2026-01-01T00:00:00.000Z", display_timezone: "UTC", max_running_tasks: 1, conversation_links_verified: true },

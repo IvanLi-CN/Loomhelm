@@ -96,6 +96,23 @@ function planGroupIds(ledger: Ledger, plan: Plan): Set<string> {
   return groupIds;
 }
 
+function requiresRuntimeEvidence(ledger: Ledger): boolean {
+  return !(ledger.source_schema_version === 1 && ledger.contract_version !== 2);
+}
+
+function activeGroupDispatch(
+  ledger: Ledger,
+  groupId: string,
+): Ledger["operations"][number] | null {
+  return ledger.operations.find(
+    (operation) =>
+      operation.kind === "dispatch" &&
+      operation.target_id === groupId &&
+      operation.request.target_type === "group" &&
+      ["claimed", "unknown", "succeeded"].includes(operation.status),
+  ) ?? null;
+}
+
 function coordinatorProjection(ledger: Ledger, group: Ledger["groups"][number]) {
   if (group.delivery_unit_kind === "bootstrap") {
     return ledger.control.owner_thread_id
@@ -104,7 +121,146 @@ function coordinatorProjection(ledger: Ledger, group: Ledger["groups"][number]) 
   }
   return group.agent_thread_id
     ? { status: "bound" as const, thread_id: group.agent_thread_id }
+    : activeGroupDispatch(ledger, group.id)
+      ? { status: "unknown" as const, thread_id: null }
     : { status: "not_created" as const, thread_id: null };
+}
+
+function blockerResource(
+  ledger: Ledger,
+  kind: "worktree" | "branch",
+  targetId: string,
+): ReadinessBlocker["resource"] {
+  return {
+    kind,
+    status: ledger.resources.some(
+      (resource) => resource.kind === kind && resource.target === targetId,
+    ) ? "unknown" : "not_created",
+    target_id: targetId,
+  };
+}
+
+function groupWorkspaceBlockers(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+): ReadinessBlocker[] {
+  if (!requiresRuntimeEvidence(ledger)) return [];
+  const hasContributionWork = ledger.tasks.some(
+    (task) =>
+      task.group_id === group.id &&
+      task.disposition === "active" &&
+      isContributionKind(task.kind) &&
+      !["integrated", "completed", "closed"].includes(task.state),
+  );
+  const groupDispatch = activeGroupDispatch(ledger, group.id);
+  const hasCodexExecDispatch =
+    groupDispatch?.status === "succeeded" &&
+    (groupDispatch.request.creation_parameters as any)?.transport === "codex-exec";
+  if (!hasContributionWork && !hasCodexExecDispatch) return [];
+
+  const blockers: ReadinessBlocker[] = [];
+  if (group.lifecycle.workspace_ready !== "passed") {
+    blockers.push({
+      code: "WORKSPACE_NOT_READY",
+      group_id: group.id,
+      message: `交付单元「${group.title}」尚未记录通过的工作区就绪事实。`,
+      resource: blockerResource(ledger, "worktree", group.id),
+    });
+    return blockers;
+  }
+
+  const worktreeReady = ledger.resources.some(
+    (resource) =>
+      resource.kind === "worktree" &&
+      resource.target === group.id &&
+      resource.status === "active",
+  );
+  if (!worktreeReady) {
+    blockers.push({
+      code: "WORKSPACE_NOT_READY",
+      group_id: group.id,
+      message: `交付单元「${group.title}」缺少可用的活动工作区。`,
+      resource: blockerResource(ledger, "worktree", group.id),
+    });
+  }
+
+  if (!group.parent_branch || !group.current_sha) {
+    blockers.push({
+      code: "BASE_NOT_READY",
+      group_id: group.id,
+      message: `交付单元「${group.title}」缺少可核对的父分支基线。`,
+      resource: blockerResource(ledger, "branch", group.parent_branch ?? group.id),
+    });
+  } else {
+    const branchReady = ledger.resources.some(
+      (resource) =>
+        resource.kind === "branch" &&
+        resource.target === group.parent_branch &&
+        resource.status === "active",
+    );
+    if (!branchReady) {
+      blockers.push({
+        code: "WORKSPACE_NOT_READY",
+        group_id: group.id,
+        message: `交付单元「${group.title}」缺少活动父分支资源。`,
+        resource: blockerResource(ledger, "branch", group.parent_branch),
+      });
+    }
+  }
+
+  if (hasContributionWork && group.parent_branch && group.current_sha) {
+    const publication = ledger.facts
+      .filter(
+        (fact) =>
+          fact.kind === "branch_published" && fact.subject_id === group.id,
+      )
+      .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
+      .at(-1);
+    const branchPublished =
+      publication?.status === "passed" &&
+      publication.sha === group.current_sha &&
+      publication.receipt?.resource_type === "branch" &&
+      publication.receipt.branch === group.parent_branch;
+    if (!branchPublished) {
+      blockers.push({
+        code: publication?.status === "unknown"
+          ? "BRANCH_PUBLICATION_UNKNOWN"
+          : "BRANCH_NOT_PUBLISHED",
+        group_id: group.id,
+        message: publication?.status === "unknown"
+          ? `交付单元「${group.title}」的父分支发布回执未知。`
+          : `交付单元「${group.title}」尚未取得匹配当前基线的父分支发布回执。`,
+        resource: blockerResource(ledger, "branch", group.parent_branch),
+      });
+    }
+  }
+
+  if (hasCodexExecDispatch) {
+    const baseline = groupDispatch?.request.development_baseline as any;
+    const baselineReady =
+      baseline &&
+      baseline.clean === true &&
+      baseline.sha === baseline.head &&
+      baseline.sha === group.current_sha;
+    if (!baselineReady) {
+      blockers.push({
+        code: "BASELINE_NOT_VERIFIED",
+        group_id: group.id,
+        message: `交付单元「${group.title}」尚未记录与当前基线匹配的干净工作区回执。`,
+        resource: null,
+      });
+    }
+  }
+  return blockers;
+}
+
+function blockersReadiness(blockers: ReadinessBlocker[]): RuntimeReadiness {
+  return {
+    status: blockers.some((item) => item.code.endsWith("UNKNOWN"))
+      ? blockers.some((item) => !item.code.endsWith("UNKNOWN")) ? "blocked" : "unknown"
+      : "blocked",
+    blockers,
+  };
 }
 
 function groupRuntimeReadiness(
@@ -113,6 +269,31 @@ function groupRuntimeReadiness(
   relevant: boolean,
 ): RuntimeReadiness {
   if (!relevant) return { status: "unknown", blockers: [] };
+  if (group.state === "closed") {
+    return {
+      status: "blocked",
+      blockers: [{
+        code: "GROUP_CLOSED",
+        group_id: group.id,
+        message: `交付单元「${group.title}」已经收口，不能继续运行时派发。`,
+        resource: null,
+      }],
+    };
+  }
+  if (
+    requiresRuntimeEvidence(ledger) &&
+    (ledger.control.ownership !== "bound" || !ledger.control.owner_thread_id)
+  ) {
+    return {
+      status: "unknown",
+      blockers: [{
+        code: "CONTROL_OWNERSHIP_UNKNOWN",
+        group_id: group.id,
+        message: "编排控制权尚未确认，运行时派发保持未知。",
+        resource: null,
+      }],
+    };
+  }
   const coordinator = coordinatorProjection(ledger, group);
   if (coordinator.status === "not_created") {
     return {
@@ -158,7 +339,10 @@ function groupRuntimeReadiness(
       }],
     };
   }
-  return { status: "ready", blockers: [] };
+  const workspaceBlockers = groupWorkspaceBlockers(ledger, group);
+  return workspaceBlockers.length
+    ? blockersReadiness(workspaceBlockers)
+    : { status: "ready", blockers: [] };
 }
 
 function runtimeReadinessProjection(ledger: Ledger, plan: Plan): {

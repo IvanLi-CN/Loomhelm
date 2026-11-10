@@ -165,7 +165,12 @@ function issueEntries(planState?: PlanState): { key: string; message: string }[]
   const entries: { key: string; message: string }[] = [];
   for (const row of planStateIssueRows(planState)) {
     if (row.key === "approval" && row.status !== "approved") {
-      entries.push({ key: "approval", message: "Owner approval 尚未完成。" });
+      entries.push({
+        key: "approval",
+        message: row.status === "unknown"
+          ? "Owner approval 状态未知。"
+          : "Owner approval 尚未完成。",
+      });
     }
     for (const blocker of row.blockers) {
       entries.push({ key: `${blocker.code}:${blocker.group_id ?? ""}`, message: blockerText(blocker) });
