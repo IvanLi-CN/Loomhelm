@@ -8,7 +8,12 @@ import {
   writeExclusiveNoFollow,
   type DirectoryIdentity,
 } from "../../bin/modules/visual/secure_io";
-import { validateLedger, type Ledger } from "../lib/schema";
+import {
+  taskExecutionPolicyDeclarationGaps,
+  validateLedger,
+  validateTaskExecutionPolicies,
+  type Ledger,
+} from "../lib/schema";
 import { requireLedgerCompatibility } from "../lib/service-contract";
 import { versionEnvelope } from "../lib/contract";
 
@@ -186,12 +191,23 @@ export function migrateLocked(
   return { ok: true, code: "APPLIED", revision: candidate.revision, result };
 }
 
-export function contractMigrationCandidate(raw: any): Ledger {
+export function contractMigrationCandidate(
+  raw: any,
+  options: { allowHistoricalTaskExecutionPolicies?: boolean } = {},
+): Ledger {
   const retiredReviews = Number(raw?.__retired_child_reviews ?? 0);
-  requireCondition(
+  const historicalPolicyGaps = taskExecutionPolicyDeclarationGaps(raw);
+  const legacyContract =
     raw?.schema_version === 1 ||
-      (raw?.schema_version === 2 &&
-        (raw?.contract_version === 1 || retiredReviews > 0)),
+    (raw?.schema_version === 2 &&
+      (raw?.contract_version === 1 || retiredReviews > 0));
+  const historicalPolicyMigration =
+    options.allowHistoricalTaskExecutionPolicies === true &&
+    raw?.schema_version === 2 &&
+    raw?.contract_version === 2 &&
+    historicalPolicyGaps.length > 0;
+  requireCondition(
+    legacyContract || historicalPolicyMigration,
     "MIGRATION_NOT_NEEDED",
     "Only legacy and contract-1 ledgers can migrate",
     4,
@@ -220,6 +236,7 @@ export function contractMigrationCandidate(raw: any): Ledger {
       ? task
       : { ...task, lifecycle: structuredClone(unknownLifecycle) },
   );
+  validateTaskExecutionPolicies(candidate.tasks);
   return validateLedger(candidate);
 }
 

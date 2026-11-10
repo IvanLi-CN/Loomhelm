@@ -11,7 +11,12 @@ import {
   commitMigration,
   type LockedLedgerMigrationContext,
 } from "../lib/store-migration";
-import { executionProfile, validateLedger } from "../lib/schema";
+import {
+  executionProfile,
+  taskExecutionPolicyDeclarationGaps,
+  TASK_EXECUTION_POLICY_FIELDS,
+  validateLedger,
+} from "../lib/schema";
 import { migrateProfile } from "../lib/profile-migration";
 import { ContractError, requireCondition } from "../lib/errors";
 import { readCodexCapabilities } from "../lib/codex-agent-api";
@@ -106,9 +111,13 @@ function prepare(
     "Maintenance requires an existing bound owner",
     3,
   );
+  const taskExecutionPolicyGaps =
+    op.action === "contract" ? taskExecutionPolicyDeclarationGaps(raw) : [];
   const candidate =
     op.action === "contract"
-      ? contractMigrationCandidate(raw)
+      ? contractMigrationCandidate(raw, {
+          allowHistoricalTaskExecutionPolicies: true,
+        })
       : structuredClone(ledger);
   if (op.action === "execution-profile") {
     requireLedgerCompatibility(raw, "write");
@@ -132,6 +141,15 @@ function prepare(
     source_readable: manifest.readable.includes(ledgerContract(raw)),
     target_readable: manifest.readable.includes(ledgerContract(candidate)),
     pending_operations: pending,
+    task_execution_policy_migration: taskExecutionPolicyGaps.length
+      ? {
+          mode: "declare-null",
+          fields: TASK_EXECUTION_POLICY_FIELDS.filter((field) =>
+            taskExecutionPolicyGaps.some((gap) => gap.missing_fields.includes(field)),
+          ),
+          tasks: taskExecutionPolicyGaps,
+        }
+      : null,
   };
   return {
     candidate,

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { requireCondition } from "../lib/errors";
 import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
+import { taskExecutionPolicyDeclarationGaps } from "../lib/schema";
 
 export const API_VERSION = 1;
 export const FRONTEND_CONTRACT = 1;
@@ -96,12 +97,7 @@ export function requireLedgerCompatibility(
     "Ledger schema/contract is not supported; explicit migration is required",
   );
   if (mode === "write" && ledgerContract(value) === "schema-2/contract-2") {
-    const tasks = (value as { tasks?: unknown }).tasks;
-    const hasUndeclaredPolicy = Array.isArray(tasks) && tasks.some((item) => {
-      if (!item || typeof item !== "object") return false;
-      const task = item as Record<string, unknown>;
-      return !("execution_owner" in task) || !("conversation_policy" in task) || !("delivery_policy" in task);
-    });
+    const hasUndeclaredPolicy = taskExecutionPolicyDeclarationGaps(value).length > 0;
     requireCondition(
       !hasUndeclaredPolicy,
       "HISTORICAL_LEDGER_READ_ONLY",

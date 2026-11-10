@@ -527,6 +527,7 @@ const eventType = z.enum([
   "merge_resolved",
   "publish_branch_claimed",
   "publish_branch_resolved",
+  "publish_branch_repaired",
   "publish_pr_claimed",
   "publish_pr_resolved",
   "lifecycle_recorded",
@@ -705,6 +706,37 @@ export const ledgerSchema = z
 export type Ledger = z.infer<typeof ledgerSchema>;
 export type Plan = z.infer<typeof plan>;
 export type Task = z.infer<typeof task>;
+
+export const TASK_EXECUTION_POLICY_FIELDS = [
+  "execution_owner",
+  "conversation_policy",
+  "delivery_policy",
+] as const;
+export type TaskExecutionPolicyField = (typeof TASK_EXECUTION_POLICY_FIELDS)[number];
+export type TaskExecutionPolicyDeclarationGap = {
+  task_id: string;
+  missing_fields: TaskExecutionPolicyField[];
+};
+
+export function taskExecutionPolicyDeclarationGaps(
+  value: unknown,
+): TaskExecutionPolicyDeclarationGap[] {
+  const candidate = value as { tasks?: unknown } | null;
+  if (!candidate || !Array.isArray(candidate.tasks)) return [];
+  return candidate.tasks.flatMap((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const task = item as Record<string, unknown>;
+    const missing_fields = TASK_EXECUTION_POLICY_FIELDS.filter(
+      (field) => !Object.prototype.hasOwnProperty.call(task, field),
+    );
+    return missing_fields.length
+      ? [{
+          task_id: typeof task.id === "string" ? task.id : `task-${index}`,
+          missing_fields,
+        }]
+      : [];
+  });
+}
 
 export type TaskExecutionPolicyIssue = { code: string; message: string };
 

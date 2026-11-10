@@ -6,8 +6,10 @@ import {serviceFixture, fixtureRelease, fixtureRun} from "./service-fixture";
 import {buildId} from "../lib/service-release";
 import {compatibilityReport, requireReport} from "../lib/service-compatibility";
 import {maintenanceCheck, maintenanceApply} from "../lib/ledger-maintenance";
+import {requireLedgerCompatibility} from "../lib/service-contract";
 import {serviceCommand} from "../scripts/service";
 import {LedgerStore} from "../lib/store";
+import {contractMigrationCandidate} from "../lib/store-migration";
 import {type ServiceState} from "../lib/service-state";
 
 const roots: string[] = [];
@@ -20,6 +22,21 @@ function setup() {
   const raw=JSON.parse(readFileSync(store.ledgerPath,"utf8")); raw.operations=raw.operations.filter((op:any)=>op.status!=="claimed"&&op.status!=="unknown"); raw.contract_version=1; raw.config.execution_profile=null;
   writeFileSync(store.ledgerPath,JSON.stringify(raw));
   return {...f,store,raw,release};
+}
+function historicalPolicySetup() {
+  const f=setup();
+  const raw=JSON.parse(readFileSync(f.store.ledgerPath,"utf8"));
+  raw.contract_version=2;
+  raw.version=null;
+  raw.config.execution_profile={model:"gpt-6.1-sol",thinking:"medium"};
+  raw.events.push({id:"branch-repair",type:"publish_branch_repaired",subject_id:raw.groups[0].id,actor_id:raw.control.owner_thread_id,occurred_at:"2026-01-01T00:00:00.000Z",recorded_at:"2026-01-01T00:00:00.000Z",data:{evidence_ref:"branch-repair"}});
+  for(const task of raw.tasks) {
+    delete task.execution_owner;
+    delete task.conversation_policy;
+    delete task.delivery_policy;
+  }
+  writeFileSync(f.store.ledgerPath,JSON.stringify(raw));
+  return {...f,raw};
 }
 function releaseFor(state: ServiceState,name: string,patch: object={}) {
   const release=fixtureRelease(state.paths.root,name);
@@ -96,6 +113,50 @@ test("public compatibility and maintenance checks leave state byte-identical",as
   expect(await serviceCommand("ledger-maintenance-check",{run_id:"demo-run",action:"contract"},f.state)).toHaveProperty("operation_digest");
   expect(snap()).toEqual(before);
   await expect(serviceCommand("compatibility-check",{source:f.release.source,rollback:true},f.state)).rejects.toThrow();
+});
+test("contract maintenance repairs historical policy declarations with an auditable replay",async()=>{
+  const f=historicalPolicySetup();
+  const before=readFileSync(f.store.ledgerPath,"utf8");
+  const report:any=maintenanceCheck(f.state,{run_id:"demo-run",action:"contract"});
+  expect(report.source_contract).toBe("schema-2/contract-2");
+  expect(report.target_contract).toBe("schema-2/contract-2");
+  expect(report.task_execution_policy_migration).toMatchObject({mode:"declare-null"});
+  expect(report.task_execution_policy_migration.tasks).toHaveLength(f.raw.tasks.length);
+  expect(()=>contractMigrationCandidate(f.raw)).toThrow("Only legacy and contract-1 ledgers can migrate");
+  const req=request(f.state);
+  const applied:any=await maintenanceApply(f.state,req);
+  expect(applied.code).toBe("APPLIED");
+  const saved=JSON.parse(readFileSync(f.store.ledgerPath,"utf8"));
+  expect(saved.revision).toBe(f.raw.revision+1);
+  expect(saved.control).toEqual(f.raw.control);
+  expect(saved.groups).toEqual(f.raw.groups);
+  expect(saved.events).toEqual(f.raw.events);
+  expect(saved.facts).toEqual(f.raw.facts);
+  expect(saved.operations).toEqual(f.raw.operations);
+  for(const [index,task] of f.raw.tasks.entries()) {
+    const savedTask=saved.tasks[index];
+    for(const key of Object.keys(task)) expect(savedTask[key]).toEqual(task[key]);
+    expect(savedTask.execution_owner).toBeNull();
+    expect(savedTask.conversation_policy).toBeNull();
+    expect(savedTask.delivery_policy).toBeNull();
+  }
+  expect(saved.requests.at(-1)).toMatchObject({command:"ledger-maintenance-apply",committed_revision:f.raw.revision+1});
+  expect(saved.requests.at(-1).result.task_execution_policy_migration).toEqual(report.task_execution_policy_migration);
+  expect(readFileSync(join(f.store.runPath,applied.result.backup),"utf8")).toBe(before);
+  expect(()=>requireLedgerCompatibility(saved,"write")).not.toThrow();
+  const committed=readFileSync(f.store.ledgerPath,"utf8");
+  expect((await maintenanceApply(f.state,req) as any).code).toBe("REPLAYED");
+  expect(readFileSync(f.store.ledgerPath,"utf8")).toBe(committed);
+});
+test("partial historical policy declarations remain read-only without a backup",()=>{
+  const f=historicalPolicySetup();
+  f.raw.tasks[0].execution_owner="main";
+  writeFileSync(f.store.ledgerPath,JSON.stringify(f.raw));
+  const before=readFileSync(f.store.ledgerPath,"utf8");
+  let error:any;
+  try { maintenanceCheck(f.state,{run_id:"demo-run",action:"contract"}); } catch (caught) { error=caught; }
+  expect(error).toMatchObject({code:"TASK_EXECUTION_POLICY_INCOMPLETE"});
+  expect(readFileSync(f.store.ledgerPath,"utf8")).toBe(before);
 });
 test("maintenance commits one backup and audit without impersonation, then profiles independently",async()=>{
   const f=setup();const before=readFileSync(f.store.ledgerPath,"utf8");const req=request(f.state);
