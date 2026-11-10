@@ -41,7 +41,7 @@ const launcherHash=body.files.viewer;delete body.files.viewer;
 if(body.skill_id===${JSON.stringify(SKILL_ID)})delete body.skill_id;
 if(body.skill_version===${JSON.stringify(SKILL_VERSION)})delete body.skill_version;
 if(body.ledger_contract===2)delete body.ledger_contract;
-if(body.viewer_contract===${VIEWER_CONTRACT})delete body.viewer_contract;
+if(body.viewer_contract===2||body.viewer_contract===${VIEWER_CONTRACT})delete body.viewer_contract;
 body.files=Object.fromEntries(Object.entries(body.files).sort(([a],[b])=>a.localeCompare(b)));
 if(hash(JSON.stringify(body))!==${JSON.stringify(resourceIdentity)})throw Error("VIEWER_RESOURCE_IDENTITY_MISMATCH");
 body.files.viewer=launcherHash;
