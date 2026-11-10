@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { installTaskContextMenu, taskPRs, taskUrl } from "../../web/task-context-menu";
-import { pendingTaskTarget } from "../../lib/service-pages";
+import { parseViewerTarget } from "../../lib/service-pages";
 import type { Task, View } from "../../web/model";
 import { parseViewState } from "../../web/view-state";
 const task = { id: "C2", title: "完整任务标题", thread_id: "thread-123", pr: { url: "https://github.com/example/repo/pull/1" } } as Task;
@@ -44,7 +44,7 @@ test("keyboard opening, navigation and Escape; blank space retains native menu",
   document.activeElement!.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); expect(document.querySelector('.task-context-menu')).toBeNull();
   const event = new window.MouseEvent("contextmenu", { bubbles: true, cancelable: true }); document.body.dispatchEvent(event); expect(event.defaultPrevented).toBe(false);
 });
-test("login restore only accepts same-service task links and strips extra state", () => {
-  expect(pendingTaskTarget('/runs/run-a/?selected=task%3AC2&q=hidden&plan=old#secret', 'http://localhost')).toBe('/runs/run-a/?selected=task%3AC2&detail=1');
-  for (const value of ['https://evil.test/runs/run-a/?selected=task:C2', '//evil.test/runs/run-a/?selected=task:C2', '/login?selected=task:C2', '/runs/run-a/?selected=group:G1', '/runs/run-a/?selected=task:<script>', 'http://user:pass@localhost/runs/run-a/?selected=task:C2']) expect(pendingTaskTarget(value, 'http://localhost')).toBeNull();
+test("authentication redirects only accept same-service run links and legal view state", () => {
+  expect(parseViewerTarget('/runs/run-a/?selected=task%3Atask.v2&detail=1&plan=plan.v2&q=hidden', 'http://localhost', { allowHome: false })?.target).toBe('/runs/run-a/?selected=task%3Atask.v2&detail=1&plan=plan.v2&q=hidden');
+  for (const value of ['https://evil.test/runs/run-a/?selected=task:C2', '//evil.test/runs/run-a/?selected=task:C2', '/login?selected=task:C2', '/runs/run-a/../', '/runs/%2e%2e/', '/runs\\run-a/', '/runs/run-a/?selected=other:C2', '/runs/run-a/?selected=task:<script>', 'http://user:pass@localhost/runs/run-a/?selected=task:C2', '/runs/run-a/?ticket=secret', '/runs/run-a/?selected=task:C2&selected=task:C3', '/runs/run-a/?q=%0d%0aLocation:%20https://evil.test']) expect(parseViewerTarget(value, 'http://localhost', { allowHome: false })).toBeNull();
 });

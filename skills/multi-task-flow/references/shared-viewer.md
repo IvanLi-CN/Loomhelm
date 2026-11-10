@@ -6,7 +6,7 @@ All commands use `service.ts <command> --input -`, consuming one JSON object. No
 
 - `ensure`, `renew`, `release`: `{"run_id":"example","thread_id":"main-thread","api_version":1}`.
 - `status`, `doctor`: `{}`. Inspect configured identity and runtime before remediation.
-- `login`: `{}` or `{"run_id":"example"}`. Its returned fragment ticket is sensitive.
+- `login`: `{}` or `{"run_id":"example"}`. Its returned target URL contains a sensitive one-time query ticket.
 
 ## Explicit maintenance
 

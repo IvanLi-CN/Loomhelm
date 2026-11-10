@@ -6,23 +6,75 @@ export function viewerPage(
   return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>:root{color-scheme:light dark;font:15px system-ui}body{max-width:1120px;margin:48px auto;padding:0 24px}header{border-bottom:1px solid #8886;padding-bottom:24px}h1{font-size:28px;font-weight:600}p{line-height:1.7}a{color:inherit}ul{list-style:none;padding:0}li{border-bottom:1px solid #8884;padding:20px 0;display:flex;gap:16px;flex-wrap:wrap}code,small{font-family:monospace}small{opacity:.7}#status{min-height:24px}button{padding:8px 16px}</style><header><small>MULTI TASK FLOW / SHARED VIEWER</small><h1>${title}</h1></header>${body}${script ? `<script src="${script}" defer></script>` : ""}</html>`;
 }
 
-export const loginPage = viewerPage(
-  "连接本地展示服务",
-  '<p id="status" role="status">正在验证一次性登录入口。</p>',
-  "/login.js",
-);
-export function pendingTaskTarget(value: string | null, origin: string): string | null {
-  if (!value) return null;
+const runPathPattern = /^\/runs\/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\/$/;
+const viewIdPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+const viewParamValidators: Record<string, (value: string) => boolean> = {
+  tab: (value) => /^(graph|planned|actual)$/.test(value),
+  layout: (value) => /^(board|grid)$/.test(value),
+  q: (value) => value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value),
+  group: (value) => viewIdPattern.test(value),
+  state: (value) => viewIdPattern.test(value),
+  kind: (value) => viewIdPattern.test(value),
+  plan: (value) => viewIdPattern.test(value),
+  selected: (value) => /^(task|group):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value),
+  detail: (value) => value === "1" || value === "true",
+  zoom: (value) => {
+    const zoom = Number(value);
+    return Number.isFinite(zoom) && zoom >= 0.2 && zoom <= 2.5;
+  },
+  plannedStart: (value) => value.length <= 64 && !Number.isNaN(Date.parse(value)),
+  plannedEnd: (value) => value.length <= 64 && !Number.isNaN(Date.parse(value)),
+  actualStart: (value) => value.length <= 64 && !Number.isNaN(Date.parse(value)),
+  actualEnd: (value) => value.length <= 64 && !Number.isNaN(Date.parse(value)),
+};
+const maxTimelineSpanMs = 10_000 * 365.25 * 24 * 60 * 60 * 1000;
+
+export type ViewerTarget = { target: string; ticket: string | null };
+export function parseViewerTarget(
+  value: string | URL,
+  origin: string,
+  options: { allowHome?: boolean; allowTicket?: boolean } = {},
+): ViewerTarget | null {
+  const allowHome = options.allowHome ?? true;
+  const allowTicket = options.allowTicket ?? false;
   try {
-    const url = new URL(value, origin);
-    if (url.origin !== origin || url.username || url.password || !/^\/runs\/[A-Za-z0-9_-]+\/$/.test(url.pathname)) return null;
-    const selected = url.searchParams.get("selected");
-    if (!selected || !/^task:[A-Za-z0-9_-]{1,128}$/.test(selected)) return null;
-    return url.pathname + "?" + new URLSearchParams({ selected, detail: "1" });
-  } catch { return null; }
+    const rawPath = typeof value === "string" ? value.split(/[?#]/, 1)[0]! : null;
+    if (rawPath && (rawPath.includes("\\") || /(?:^|\/)(?:\.{1,2}|%2e(?:%2e)?)(?:\/|$)/i.test(rawPath))) return null;
+    const url = value instanceof URL ? new URL(value.href) : new URL(value, origin);
+    if (typeof value === "string" && value.trim() !== value) return null;
+    if (url.origin !== origin || url.username || url.password || url.hash) return null;
+    const home = url.pathname === "/";
+    if ((!home || !allowHome) && !runPathPattern.test(url.pathname)) return null;
+    const ticketValues = url.searchParams.getAll("ticket");
+    if (ticketValues.length > 1 || (ticketValues.length > 0 && !allowTicket)) return null;
+    const ticket = ticketValues[0] ?? null;
+    if (ticket !== null && (ticket.length > 100 || /[\u0000-\u001f\u007f]/.test(ticket))) return null;
+    let selected = false;
+    let detail = false;
+    for (const [key, parameter] of url.searchParams) {
+      if (key === "ticket") continue;
+      if (home || /[\u0000-\u001f\u007f]/.test(parameter) || !viewParamValidators[key] || url.searchParams.getAll(key).length !== 1 || !viewParamValidators[key]!(parameter)) return null;
+      if (key === "selected") selected = true;
+      if (key === "detail") detail = true;
+    }
+    if (detail && !selected) return null;
+    for (const [start, end] of [["plannedStart", "plannedEnd"], ["actualStart", "actualEnd"]] as const) {
+      const startValue = url.searchParams.get(start);
+      const endValue = url.searchParams.get(end);
+      if ((startValue === null) !== (endValue === null)) return null;
+      if (startValue && endValue && (Date.parse(startValue) >= Date.parse(endValue) || Date.parse(endValue) - Date.parse(startValue) > maxTimelineSpanMs)) return null;
+    }
+    url.searchParams.delete("ticket");
+    return { target: url.pathname + url.search, ticket };
+  } catch {
+    return null;
+  }
 }
-export const resumeTaskScript = `const pendingTaskTarget=${pendingTaskTarget.toString()};try{const target=pendingTaskTarget(location.href,location.origin);if(target)sessionStorage.setItem("multi-task-flow.pending-task",target)}catch{}`;
-export const loginScript = `const ticket=location.hash.slice(1);history.replaceState(null,"","/login");fetch("/api/v1/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ticket})}).then(async r=>{if(!r.ok)throw Error();const v=await r.json();let target=null;try{const pending=sessionStorage.getItem("multi-task-flow.pending-task");target=(${pendingTaskTarget.toString()})(pending,location.origin);sessionStorage.removeItem("multi-task-flow.pending-task")}catch{}location.replace(target||v.target)}).catch(()=>{document.getElementById("status").textContent="入口已过期或已使用。请通过 service login 重新获取。"});`;
+
+export const authFailedPage = viewerPage(
+  "登录入口失效",
+  '<p id="status" role="status">一次性登录入口已过期或已使用。</p><p>请重新运行 service login 获取新的入口，然后刷新此页面。</p>',
+);
 export const homePage = viewerPage(
   "编排运行",
   '<p id="status" role="status">正在读取运行。</p><ul id="runs"></ul><button id="more" hidden>加载更多</button><p><small id="build"></small></p>',
