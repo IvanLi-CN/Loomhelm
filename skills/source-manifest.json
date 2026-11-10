@@ -15826,7 +15826,7 @@
     },
     {
       "path": "skills/multi-task-flow/scripts/package-client-skills.ts",
-      "installedSha256": "922738ab546e85f9ff53f1660d85d377d6bd5bd640fba9115cfbeb6dd11b8779"
+      "installedSha256": "964a1b33b6abbabf027b899b972f2cf1e6237cb377a789d4bc8703ff864484b1"
     },
     {
       "path": "skills/multi-task-flow/lib/package-source.ts",

@@ -7,6 +7,7 @@ const root = resolve(import.meta.dirname, '../../..');
 const target = resolve(root, 'clients/typescript/toolkit');
 const manifest = JSON.parse(readFileSync(resolve(root, 'skills/source-manifest.json'), 'utf8'));
 const requireDependencies = process.argv.includes('--require-dependencies');
+const productBuild = typeof process.env.LOOMHELM_PRODUCT_BUILD_VERSION === 'string' && process.env.LOOMHELM_PRODUCT_BUILD_VERSION.length > 0;
 const packageMetadata = JSON.parse(readFileSync(resolve(root, 'clients/typescript/package.json'), 'utf8')) as { name?: unknown; version?: unknown };
 if (requireDependencies && (packageMetadata.name !== '@loomhelm/multi-task-flow' || typeof packageMetadata.version !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.test(packageMetadata.version) || packageMetadata.version.split('-')[1]?.split('.').some(part => /^0\d+$/.test(part)))) throw new Error('Package name/version must be @loomhelm/multi-task-flow with exact SemVer');
 // Only this exact disposable resource output is replaced. TS is never emitted.
@@ -15,11 +16,11 @@ if (existsSync(target)) {
   rmSync(target, { recursive: true });
 }
 const outputs = new Map();
-function copy(path, expected) {
+function copy(path, expected, dependency = false) {
   const source = resolve(root, path);
   if (!path.startsWith('skills/') || !source.startsWith(resolve(root, 'skills') + '/')) throw new Error('Unsafe toolkit resource path');
   const stat = lstatSync(source);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || realpathSync(source) !== source) throw new Error('Unsafe toolkit resource: ' + path);
+  if (!stat.isFile() || stat.isSymbolicLink() || (!dependency && stat.nlink !== 1) || realpathSync(source) !== source) throw new Error('Unsafe toolkit resource: ' + path);
   const sha256 = createHash('sha256').update(readFileSync(source)).digest('hex');
   if (expected && sha256 !== expected) throw new Error('Toolkit resource checksum mismatch: ' + path);
   const output = resolve(target, path); mkdirSync(dirname(output), { recursive: true });
@@ -42,13 +43,13 @@ const copyDependencies = (path: string) => {
       const source = resolve(sourceRoot, child);
       const stat = lstatSync(source);
       if (stat.isDirectory()) walk(child);
-      else copy(`${path}/${child}`, undefined);
+      else copy(`${path}/${child}`, undefined, true);
     }
   };
   walk('');
   return true;
 };
-const bundledDependencies = [copyDependencies('skills/node_modules'), copyDependencies('skills/multi-task-flow/node_modules')].filter(Boolean).length;
+const bundledDependencies = productBuild ? 0 : [copyDependencies('skills/node_modules'), copyDependencies('skills/multi-task-flow/node_modules')].filter(Boolean).length;
 const candidateSha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 writeFileSync(resolve(target, 'package.json'), JSON.stringify({ private: true, type: 'module' }) + '\n');
 writeFileSync(resolve(target, 'artifact-manifest.json'), JSON.stringify({ schemaVersion: 2, sourceCommit: manifest.commit, candidateSha, dirty: Boolean(execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' }).trim()), runtime: 'bun@1.4.4', dependenciesBundled: bundledDependencies > 0, files: [...outputs.values()] }, null, 2) + '\n');
