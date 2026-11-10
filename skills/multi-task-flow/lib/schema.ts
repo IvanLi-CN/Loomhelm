@@ -18,6 +18,12 @@ const timestamp = z.iso.datetime({ offset: false });
 const sha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const nullableText = text.nullable();
+const requirementsPath = nullableText.refine(
+  (value) =>
+    value === null ||
+    /^requirements\/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.md$/.test(value),
+  "requirements_path must reference a Markdown file under requirements/",
+);
 const stringMap = z.record(z.string(), z.unknown());
 export const executionPhase = z.enum(["planning", "implementation"]);
 export const planLifecycle = z.enum([
@@ -241,7 +247,7 @@ export const group = z
     cut_sha: sha.nullable(),
     current_sha: sha.nullable(),
     merge_sha: sha.nullable(),
-    requirements_path: nullableText,
+    requirements_path: requirementsPath,
     atoms: z
       .array(
         z
@@ -382,7 +388,7 @@ export const task = z
     branch: nullableText.default(null),
     base_sha: sha.nullable(),
     pr: externalRef.nullable(),
-    requirements_path: nullableText,
+    requirements_path: requirementsPath,
     execution_profile: optionalExecutionProfile,
     execution_profile_source: z
       .enum(["manual", "recommendation"])
@@ -1218,6 +1224,8 @@ export function validateInitialRuntimeState(
   groups: Array<z.infer<typeof group>>,
   tasks: Array<z.infer<typeof task>>,
 ): void {
+  const validRequirementsPath = (value: string | null): boolean =>
+    requirementsPath.safeParse(value).success;
   const bootstraps = groups.filter(
     (candidate) => candidate.delivery_unit_kind === "bootstrap",
   );
@@ -1259,7 +1267,7 @@ export function validateInitialRuntimeState(
       candidate.cut_sha === null &&
       candidate.current_sha === null &&
       candidate.merge_sha === null &&
-      candidate.requirements_path === null &&
+      validRequirementsPath(candidate.requirements_path) &&
       candidate.atoms.every((atom) => atom.status === "planned") &&
       candidate.coordination_execution.state === "unknown" &&
       candidate.coordination_execution.reason === null &&
@@ -1272,7 +1280,7 @@ export function validateInitialRuntimeState(
       candidate.state === "planned" &&
       candidate.base_sha === null &&
       candidate.pr === null &&
-      candidate.requirements_path === null &&
+      validRequirementsPath(candidate.requirements_path) &&
       candidate.started_at === null &&
       candidate.finished_at === null &&
       candidate.blocker === null &&
