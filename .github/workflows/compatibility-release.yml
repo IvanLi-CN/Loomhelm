@@ -1,0 +1,70 @@
+name: Compatibility Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact merged source SHA to inspect and publish
+        required: true
+        type: string
+      package_dir:
+        description: Repository-relative npm package directory
+        required: true
+        default: clients/typescript
+        type: string
+      publish:
+        description: Publish the package under the computed compat-vN dist-tag
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: loomhelm-compatibility-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: Validate the requested source identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: '[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]'
+      - name: Check out the exact source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify compatibility metadata and compute dist-tag
+        id: metadata
+        run: |
+          python3 tools/release/compatibility.py metadata --base HEAD^ --head HEAD --skip-labels > "$RUNNER_TEMP/compatibility.json"
+          python3 - <<'PYTHON' "$RUNNER_TEMP/compatibility.json" "$GITHUB_OUTPUT"
+          import json, sys
+          value=json.load(open(sys.argv[1]))
+          with open(sys.argv[2], 'a') as output:
+              output.write('tag='+value['dist_tag']+'\n')
+          print(json.dumps(value, indent=2, sort_keys=True))
+          PYTHON
+      - name: Verify package metadata without publishing
+        env:
+          TAG: ${{ steps.metadata.outputs.tag }}
+        run: python3 tools/release/compatibility.py publish --package-dir "${{ inputs.package_dir }}" --tag "$TAG" --dry-run
+      - name: Publish compatibility dist-tag
+        if: inputs.publish
+        env:
+          TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          test -n "$NODE_AUTH_TOKEN"
+          npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+          python3 tools/release/compatibility.py publish --package-dir "${{ inputs.package_dir }}" --tag "$TAG"
