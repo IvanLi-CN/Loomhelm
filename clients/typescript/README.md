@@ -1,6 +1,10 @@
-# Loomhelm TypeScript 客户端
+# `@loomhelm/multi-task-flow` CLI
 
 与现有 Go 客户端并存的独立 TypeScript 包，不替换 Go 客户端。生产入口仅支持 Bun 1.4.4，直接执行 TS 源码。独立运行开发辅助能力无需服务端或 Web App；Codex 会话、浏览器与专项操作仍要求对应宿主能力和授权。生产依赖包括 sharp 与 zod，文件安全通过 Bun 内置 FFI 调用系统库，不要求 C 编译器或 Node 头文件。
+
+该包是可发布的 npm 包，名称为 `@loomhelm/multi-task-flow`，版本字段必须是精确 SemVer，不接受范围、build metadata 或带前导零的 prerelease 标识。`loomhelm release validate --version VERSION --dist-tag compat-vN` 校验兼容发布标签；默认 npm tag 与 `compat-vN` 兼容标签都保留同一版本身份，N 必须是正整数。
+
+精确版本发布使用 `bun run publish:exact`；兼容标签发布使用 `npm_config_compat_version=2 bun run publish:compat`。两个脚本都会先校验当前 package version，再调用 Bun 的 npm 发布器；脚本不会自动改写版本或选择兼容版本。
 
 ```sh
 bun install --frozen-lockfile
@@ -63,7 +67,9 @@ bun --no-install src/cli.ts --config config.example.json codex retry DISPATCH_ID
 
 ## Skills 与正式任务流
 
-完整源包位于根 `skills/`，共享支持位于根 `skills/bin/`。`skills/source-manifest.json` 记录固定源提交、源摘要、安装摘要和迁移差异；`skills/catalog.json` 记录入口、脚本及依赖强度。上游合同归档在 `skills/docs/vendor/dot-codex/`，不替代本项目规范。资源打包将 TS 源码、完整资源及浏览器资产复制到 `toolkit/`，不转译、不搜索全局 dot-codex 执行代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根；`skills run` 原样执行 `.ts` 脚本。包的 bin、exports 和类型入口均指向 `src/`。
+完整源包位于根 `skills/`，共享支持位于根 `skills/bin/`。`skills/source-manifest.json` 记录固定源提交、源摘要、安装摘要和迁移差异；`skills/catalog.json` 记录入口、脚本及依赖强度。上游合同归档在 `skills/docs/vendor/dot-codex/`，不替代本项目规范。资源打包将 TS 源码、完整资源、合同、vendor、浏览器资产和已锁定的运行依赖复制到 `toolkit/`，不转译、不搜索全局 dot-codex 执行代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根；`skills run` 原样执行 `.ts` 脚本。包的 bin、exports 和类型入口均指向 `src/`。
+
+发布前使用 `bun run build` 生成完整 toolkit，再使用 `bun run pack:check` 检查 npm 包清单；生产构建要求 `skills/node_modules` 与 `skills/multi-task-flow/node_modules` 已由冻结 lockfile 安装，构建清单会记录每个资源的 SHA-256。`zod`、`sharp` 以及 viewer 所需的运行依赖同时声明在包依赖中，避免只安装 CLI 后执行 Skill 脚本时出现缺包。
 
 所有随包执行代码、合同资源和构建支持都位于 `skills/`：共享脚本在 `skills/bin/`，上游合同在 `skills/docs/vendor/dot-codex/`，维护与构建入口在 `skills/multi-task-flow/scripts/`。vendor 仅检出 `skills/` 即可保留完整源资源，不需要修改用户的 sparse checkout 或安装配置。安装目录内执行 `bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy` 与 `bun install --cwd skills/multi-task-flow --frozen-lockfile` 准备声明的依赖，再执行 `bun --no-install run --cwd skills build` 仅构建浏览器 JS/CSS；本机 TS 无需编译。外部 Git、Codex 宿主工具及条件性 Skills 仍按既有合同检测，不复制到源包中。
 
