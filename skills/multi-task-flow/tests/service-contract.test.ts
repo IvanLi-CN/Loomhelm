@@ -40,6 +40,19 @@ test("schema2 contract2 ledgers without task policy fields are read-only", () =>
   expect(() => requireLedgerCompatibility({ schema_version: 2, contract_version: 2, tasks: [{ id: "legacy" }] }, "write")).toThrow("read-only");
   requireLedgerCompatibility({ schema_version: 2, contract_version: 2, tasks: [{ execution_owner: null, conversation_policy: null, delivery_policy: null }] }, "write");
 });
+test("schema2 contract2 ledgers with incomplete declared task policies stay read-only", () => {
+  let error: any;
+  try {
+    requireLedgerCompatibility({
+      schema_version: 2,
+      contract_version: 2,
+      tasks: [{ execution_owner: "main", conversation_policy: null, delivery_policy: null }],
+    }, "write");
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toMatchObject({ code: "TASK_EXECUTION_POLICY_INCOMPLETE" });
+});
 test("leases are idempotent and preserve independent owners and deadlines", () => {
   const state = fixture();
   const agent = { id: "agent:thread:run", kind: "agent" as const, thread_id: "thread", run_id: "run" };

@@ -149,14 +149,21 @@ test("contract maintenance repairs historical policy declarations with an audita
   expect(readFileSync(f.store.ledgerPath,"utf8")).toBe(committed);
 });
 test("partial historical policy declarations remain read-only without a backup",()=>{
-  const f=historicalPolicySetup();
-  f.raw.tasks[0].execution_owner="main";
-  writeFileSync(f.store.ledgerPath,JSON.stringify(f.raw));
-  const before=readFileSync(f.store.ledgerPath,"utf8");
-  let error:any;
-  try { maintenanceCheck(f.state,{run_id:"demo-run",action:"contract"}); } catch (caught) { error=caught; }
-  expect(error).toMatchObject({code:"TASK_EXECUTION_POLICY_INCOMPLETE"});
-  expect(readFileSync(f.store.ledgerPath,"utf8")).toBe(before);
+  for (const patch of [
+    {execution_owner:"main"},
+    {execution_owner:null,conversation_policy:null},
+  ]) {
+    const f=historicalPolicySetup();
+    Object.assign(f.raw.tasks[0],patch);
+    writeFileSync(f.store.ledgerPath,JSON.stringify(f.raw));
+    const before=readFileSync(f.store.ledgerPath,"utf8");
+    const beforeEntries=readdirSync(f.store.runPath).sort();
+    let error:any;
+    try { maintenanceCheck(f.state,{run_id:"demo-run",action:"contract"}); } catch (caught) { error=caught; }
+    expect(error).toMatchObject({code:"TASK_EXECUTION_POLICY_INCOMPLETE"});
+    expect(readFileSync(f.store.ledgerPath,"utf8")).toBe(before);
+    expect(readdirSync(f.store.runPath).sort()).toEqual(beforeEntries);
+  }
 });
 test("maintenance commits one backup and audit without impersonation, then profiles independently",async()=>{
   const f=setup();const before=readFileSync(f.store.ledgerPath,"utf8");const req=request(f.state);

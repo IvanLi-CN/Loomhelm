@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { requireCondition } from "../lib/errors";
 import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
-import { taskExecutionPolicyDeclarationGaps } from "../lib/schema";
+import {
+  taskExecutionPolicyDeclarationGaps,
+  validateTaskExecutionPolicies,
+} from "../lib/schema";
 
 export const API_VERSION = 1;
 export const FRONTEND_CONTRACT = 1;
@@ -104,6 +107,8 @@ export function requireLedgerCompatibility(
       "schema2/contract2 ledger without task execution policies is read-only; explicit migration is required",
       4,
     );
+    const tasks = (value as { tasks?: unknown }).tasks;
+    if (Array.isArray(tasks)) validateTaskExecutionPolicies(tasks as any);
   }
 }
 

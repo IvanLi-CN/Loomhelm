@@ -9,6 +9,7 @@ import {
   type DirectoryIdentity,
 } from "../../bin/modules/visual/secure_io";
 import {
+  TASK_EXECUTION_POLICY_FIELDS,
   taskExecutionPolicyDeclarationGaps,
   validateLedger,
   validateTaskExecutionPolicies,
@@ -206,6 +207,17 @@ export function contractMigrationCandidate(
     raw?.schema_version === 2 &&
     raw?.contract_version === 2 &&
     historicalPolicyGaps.length > 0;
+  if (historicalPolicyMigration) {
+    const partialPolicy = historicalPolicyGaps.find(
+      (gap) => gap.missing_fields.length !== TASK_EXECUTION_POLICY_FIELDS.length,
+    );
+    requireCondition(
+      !partialPolicy,
+      "TASK_EXECUTION_POLICY_INCOMPLETE",
+      `${partialPolicy?.task_id ?? "task"}: 任务执行归属、对话策略和交付策略必须全部缺失或全部声明`,
+      3,
+    );
+  }
   requireCondition(
     legacyContract || historicalPolicyMigration,
     "MIGRATION_NOT_NEEDED",
