@@ -45,7 +45,7 @@ Re-running the exact command is idempotent. A prepared journal after source seal
 
 获得主人对准确动作的批准、暂停旧写入器后，apply 传入同样动作参数，并添加 `expected_owner_thread_id`、`expected_revision`、`expected_ledger_sha256`、`operation_digest`、唯一 `request_id`、实际 `maintenance_thread_id`、`approval_ref`、`reason` 和 `writers_paused: true`。`approval_ref` 和暂停声明是同 OS 用户维护信任边界内的审计记录，不是独立认证或进程隔离证明。不要冒用原 owner。claimed/unknown 创建、合并和切割操作须由原业务流程对账，维护命令不会替它们收口；服务租约本身不阻塞。
 
-安全顺序是先显式升级至同时可读源/目标合同的 viewer，再批准单 run 合同迁移，再按需单独批准完整 profile 迁移。只有机械、无语义推断、幂等、可恢复且经过备份和 digest 验证的迁移可以自动执行；历史内容不自动清理。若最新 viewer 无法读取某个 run，已配置 `previous_build` 的 viewer 可通过 `GET /api/v1/runs/<run-id>/legacy-view` 请求明确的旧 viewer 只读投影；该端点不创建 lease、不接受 mutation、不推进 owner 或 revision。服务未安装或不支持目标时 apply 拒绝；不为历史展示补造模型或完成事实。维护锁、run 锁覆盖复核和原子提交，完整旧文件写入 `ledger.maintenance-<request_id>.json`，真实维护身份和批准引用保留于账本 request result。每次变更 revision 增加 1；同请求同内容重放，异内容拒绝。
+安全顺序是先显式升级至同时可读源/目标合同的 viewer，再批准单 run 合同迁移，再按需单独批准完整 profile 迁移。只有机械、无语义推断、幂等、可恢复且经过备份和 digest 验证的迁移可以自动执行；历史内容不自动清理。若最新 viewer 无法读取某个 run，已配置 `previous_build` 的 viewer 可通过 `GET /api/v1/runs/<run-id>/legacy-view` 请求明确的旧 viewer 只读投影；该端点不创建 lease、不接受 mutation、不推进 owner 或 revision。服务未安装或不支持目标时 apply 拒绝；不为历史展示补造模型或完成事实。维护锁、run 锁覆盖复核和原子提交，完整旧文件写入 `ledger.maintenance-<request_id>.json`，并以不可变 request identity sidecar 绑定 `request_id`、command 和 `canonical_input`；sidecar 缺失或不匹配时恢复 fail closed。真实维护身份和批准引用保留于账本 request result。每次变更 revision 增加 1；同请求同内容重放，异内容拒绝。
 
 维护迁移完成后，bootstrap 仍由绑定的 main conversation 持有：已完成文档/工作区 atom 只能对应已有的 workspace 和提交事实，`parent_pr` 仍为 `null`、`pr_created` 仍为 `unknown`，直到真实 `publish-pr` receipt 被记录；不得把其他 delivery unit 的实现 PR（例如 PR `#360`）挂到 bootstrap，也不得用迁移补造父 PR 或合并事实。
 

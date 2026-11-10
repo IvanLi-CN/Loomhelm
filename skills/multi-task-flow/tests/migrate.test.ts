@@ -135,6 +135,34 @@ afterEach(() => {
 });
 
 describe("orchestrate migrate", () => {
+  test("ordinary migrate cannot repair historical policy gaps through child-review retirement", async () => {
+    const dataRoot = root();
+    const { ledgerPath } = await createLegacyRun(dataRoot);
+    const historical = JSON.parse(readFileSync(ledgerPath, "utf8"));
+    historical.schema_version = 2;
+    historical.contract_version = 2;
+    historical.facts.push({ kind: "child_review" });
+    for (const task of historical.tasks) {
+      delete task.execution_owner;
+      delete task.conversation_policy;
+      delete task.delivery_policy;
+    }
+    writeFileSync(ledgerPath, JSON.stringify(historical, null, 2) + "\n");
+    const before = readFileSync(ledgerPath, "utf8");
+    const result = await runOrchestrate(
+      dataRoot,
+      "migrate",
+      migrateInput("legacy-run", 7),
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 4,
+      output: { ok: false, code: "HISTORICAL_LEDGER_READ_ONLY" },
+    });
+    expect(readFileSync(ledgerPath, "utf8")).toBe(before);
+    expect(existsSync(join(dataRoot, "runs", "legacy-run", "ledger.migration-v1-migration-1.json"))).toBe(false);
+  });
+
   test("migrates a valid v1 ledger with an incremented revision and complete backup", async () => {
     const dataRoot = root();
     const { ledgerPath, legacy } = await createLegacyRun(dataRoot);

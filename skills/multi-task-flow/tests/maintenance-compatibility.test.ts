@@ -194,6 +194,12 @@ test("backup interruption recovers and commit-response loss replays; conflicting
   }
   const f=setup();const req=request(f.state);const path=join(f.store.runPath,"ledger.maintenance-maint-1.json");writeFileSync(path,"conflict");await expect(maintenanceApply(f.state,req)).rejects.toThrow("different content");expect(readFileSync(path,"utf8")).toBe("conflict");
 });
+test("backup-only interruption rejects a changed request identity",async()=>{
+  const f=setup();const req=request(f.state);const store=new LedgerStore(f.state.paths.data,"demo-run",at=>{if(at==="migration_backup_committed")throw Error("interrupted");});
+  await expect(maintenanceApply(f.state,req,caps,store)).rejects.toThrow("interrupted");
+  await expect(maintenanceApply(f.state,{...req,reason:"different"})).rejects.toThrow("different request");
+  expect(JSON.parse(readFileSync(f.store.ledgerPath,"utf8"))).toEqual(f.raw);
+});
 test("a concurrent writer during capability lookup invalidates the profile request",async()=>{
   const f=setup();await maintenanceApply(f.state,request(f.state));const req=request(f.state,"execution-profile",{execution_profile:{model:"gpt-6-luna",thinking:"high"}});req.request_id="profile-2";
   await expect(maintenanceApply(f.state,req,async()=>{f.store.update(raw=>{raw.revision+=1;return null;});return caps();})).rejects.toThrow("version changed");

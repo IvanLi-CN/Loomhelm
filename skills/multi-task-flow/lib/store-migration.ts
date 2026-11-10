@@ -33,6 +33,11 @@ export type LockedLedgerMigrationContext = {
   runIdentity: DirectoryIdentity;
   onStage: ((stage: string) => void) | undefined;
 };
+type MigrationRequestIdentity = {
+  request_id: string;
+  command: "migrate" | "ledger-maintenance-apply";
+  canonical_input: string;
+};
 
 const migrationIdPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const unknownLifecycle = {
@@ -103,6 +108,15 @@ export function migrateLocked(
     "FORBIDDEN",
     "Only the bound main conversation can migrate an orchestration",
     3,
+  );
+  const historicalPolicyGaps = taskExecutionPolicyDeclarationGaps(raw);
+  requireCondition(
+    !(raw?.schema_version === 2 &&
+      raw?.contract_version === 2 &&
+      historicalPolicyGaps.length > 0),
+    "HISTORICAL_LEDGER_READ_ONLY",
+    "schema2/contract2 ledger with incomplete task execution policies requires explicit maintenance",
+    4,
   );
   // Schema-1 ledgers predate the contract discriminator. Treat them as the
   // legacy read-only shape even when a hand-written fixture retained a newer
@@ -188,7 +202,11 @@ export function migrateLocked(
     committed_revision: candidate.revision,
   });
   validateLedger(candidate);
-  commitMigration(context, oldContent, candidate, backup);
+  commitMigration(context, oldContent, candidate, backup, {
+    request_id: request.request_id,
+    command: "migrate",
+    canonical_input: request.canonical_input,
+  });
   return { ok: true, code: "APPLIED", revision: candidate.revision, result };
 }
 
@@ -264,10 +282,13 @@ export function commitMigration(
   oldContent: string,
   candidate: Ledger,
   backup: string,
+  requestIdentity: MigrationRequestIdentity,
 ): void {
   validateLedger(candidate);
   const nextContent = JSON.stringify(candidate, null, 2) + "\n";
   const backupPath = join(context.runPath, backup);
+  const identityPath = `${backupPath}.request.json`;
+  const identityContent = JSON.stringify(requestIdentity) + "\n";
   if (existsSync(backupPath)) {
     const existingBackup = readRegularNoFollow(
       backupPath,
@@ -282,10 +303,54 @@ export function commitMigration(
       "Migration backup already contains different content",
       3,
     );
+    requireCondition(
+      existsSync(identityPath),
+      "MIGRATION_CONFLICT",
+      "Migration backup request identity is missing",
+      3,
+    );
+    let existingIdentity: Partial<MigrationRequestIdentity>;
+    try {
+      existingIdentity = JSON.parse(
+        readRegularNoFollow(
+          identityPath,
+          context.rootPath,
+          undefined,
+          Number.MAX_SAFE_INTEGER,
+          context.runIdentity,
+        ).toString("utf8"),
+      );
+    } catch {
+      throw new ContractError(
+        "MIGRATION_CONFLICT",
+        "Migration backup request identity is unreadable",
+        3,
+      );
+    }
+    requireCondition(
+      existingIdentity.request_id === requestIdentity.request_id &&
+        existingIdentity.command === requestIdentity.command &&
+        existingIdentity.canonical_input === requestIdentity.canonical_input,
+      "MIGRATION_CONFLICT",
+      "Migration backup belongs to a different request",
+      3,
+    );
   } else {
+    requireCondition(
+      !existsSync(identityPath),
+      "MIGRATION_CONFLICT",
+      "Migration backup request identity exists without its backup",
+      3,
+    );
     writeExclusiveNoFollow(
       backupPath,
       oldContent,
+      context.rootPath,
+      context.runIdentity,
+    );
+    writeExclusiveNoFollow(
+      identityPath,
+      identityContent,
       context.rootPath,
       context.runIdentity,
     );

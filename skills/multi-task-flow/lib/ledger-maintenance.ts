@@ -267,7 +267,11 @@ export async function maintenanceApply(
       result,
       committed_revision: candidate.revision,
     });
-    commitMigration(context, content, candidate, backup);
+    commitMigration(context, content, candidate, backup, {
+      request_id: request.request_id,
+      command: "ledger-maintenance-apply",
+      canonical_input: canonical,
+    });
     return { ok: true, code: "APPLIED", revision: candidate.revision, result };
   });
 }
