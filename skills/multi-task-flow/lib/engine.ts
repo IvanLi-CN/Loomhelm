@@ -3547,7 +3547,7 @@ export function execute(
       checkPR(ledger, pr);
       requireCondition(
         taskExecutionState(target) === "running" &&
-          (!target.pr || stable(target.pr) === stable(pr)),
+          (!taskPrRef(target) || stable(taskPrRef(target)) === stable(pr)),
         "PR_MISMATCH",
         "Task PR cannot be replaced",
         3,
