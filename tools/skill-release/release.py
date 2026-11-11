@@ -340,9 +340,8 @@ def _event_metadata(event_path: Path) -> dict[str, Any]:
     head = _require_object(pull_request.get("head"), "pull_request.head")
     base_sha = _require_string(base.get("sha"), "pull_request.base.sha")
     head_sha = _require_string(head.get("sha"), "pull_request.head.sha")
-    base_ref = _require_string(base.get("ref"), "pull_request.base.ref")
-    if base_ref != "main":
-        raise ReleaseError(f"release gate only accepts PRs targeting main, got {base_ref!r}")
+    # Child PRs target delivery-unit branches; publish-time verification requires main.
+    _require_string(base.get("ref"), "pull_request.base.ref")
     if pull_request.get("draft") is True:
         raise ReleaseError("draft PRs are not release-eligible")
     return {
