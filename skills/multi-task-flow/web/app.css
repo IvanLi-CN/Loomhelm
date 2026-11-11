@@ -693,6 +693,8 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 #atomic-graph .react-flow__handle { opacity:0; width:1px; height:1px; border:0; pointer-events:none; }
 #atomic-graph .react-flow__attribution { background:var(--surface); color:var(--muted); font-size:9px; }
 .atomic-dependency-scope { margin-top:6px; color:var(--muted); font-size:11px; line-height:15px; overflow-wrap:anywhere; }
+.atomic-dependency-facts { margin-top:5px; color:var(--muted); font-size:10px; line-height:14px; overflow-wrap:anywhere; }
+.atomic-dependency-edge-label { position:absolute; pointer-events:none; color:var(--muted); background:var(--surface); padding:1px 4px; border-radius:3px; font-size:10px; white-space:nowrap; }
 .dependency-card { height:100%; width:100%; border:1px solid var(--node-color); border-radius:8px; background:var(--surface); color:var(--text); padding:8px 12px; box-shadow:0 2px 6px #00000012; }
 .dependency-card-meta { display:flex; justify-content:space-between; gap:8px; font-size:11px; line-height:18px; color:var(--muted); margin-bottom:4px; }
 .dependency-card-title { font-size:15px; line-height:21px; font-weight:600; overflow-wrap:anywhere; }

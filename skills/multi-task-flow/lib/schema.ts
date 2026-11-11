@@ -2372,7 +2372,10 @@ export function validateLedger(value: unknown): Ledger {
         "workspace_ready must be backed by a lifecycle event",
       );
     if (item.lifecycle.pr_created === "passed") {
-      const pr = target.type === "group" ? item.parent_pr : item.pr;
+      const binding = target.type === "group" ? item.pr : item.pr;
+      const pr = binding && typeof binding === "object" && "state" in binding
+        ? (binding.state === "published" || binding.state === "open" || binding.state === "merged" || binding.state === "closed" ? binding.pr : null)
+        : target.type === "group" ? item.parent_pr : item.pr;
       const latest = parsed.facts
         .filter(
           (candidate) =>

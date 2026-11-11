@@ -589,8 +589,23 @@ function setTabAria(tab: DashboardTab): void { for (const button of document.que
 
 function renderAtomicGraph(): void {
   if (!data) return;
-  const nodes = (data.atomic_nodes ?? []) as unknown as import("../lib/atomic-orchestration").AtomicNode[];
-  const edges = (data.canonical_atomic_edges ?? []) as unknown as import("../lib/atomic-orchestration").AtomicEdge[];
+  const allNodes = (data.atomic_nodes ?? []) as unknown as import("../lib/atomic-orchestration").AtomicNode[];
+  const taskById = new Map(data.tasks.map((task) => [task.id, task]));
+  const nodes = allNodes.filter((node) => {
+    const scope = node.kind === "work" || node.kind === "milestone" ? node.scope : undefined;
+    const taskId = scope?.kind === "task" ? scope.task_id : null;
+    const deliveryUnitId = scope?.kind === "task" ? scope.delivery_unit_id : scope?.kind === "delivery_unit" ? scope.delivery_unit_id : null;
+    if (viewState.group && deliveryUnitId !== viewState.group) return false;
+    if (node.kind === "work" && taskId) {
+      const task = taskById.get(taskId);
+      if (!task) return false;
+      if (viewState.kind && task.kind !== viewState.kind) return false;
+      if (viewState.state && task.state !== viewState.state && node.state !== viewState.state) return false;
+    }
+    return true;
+  });
+  const visible = new Set(nodes.map((node) => node.id));
+  const edges = ((data.canonical_atomic_edges ?? []) as unknown as import("../lib/atomic-orchestration").AtomicEdge[]).filter((edge) => visible.has(edge.from_node_id) && visible.has(edge.to_node_id));
   atomicGraphController.render(nodes, edges);
 }
 function setTab(tab: DashboardTab, user = true): void { viewState = { ...viewState, tab, ...(tab === "atomic" ? { graphMode: "atomic" as const } : tab === "graph" ? { graphMode: "aggregate" as const } : {}) }; if (user) userChangedTab = true; syncUrl(); render(); }

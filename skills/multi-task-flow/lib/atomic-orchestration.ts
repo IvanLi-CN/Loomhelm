@@ -96,16 +96,30 @@ export type DeliveryUnitExternalFacts = z.infer<typeof deliveryUnitExternalFacts
 
 export type DerivedBusinessStatus = "planned" | "ready" | "running" | "blocked" | "completed";
 
-export function deriveBusinessStatus(nodes: readonly AtomicNode[], scope: { kind: "task"; task_id: string } | { kind: "delivery_unit"; delivery_unit_id: string }): DerivedBusinessStatus {
+export function deriveBusinessStatus(
+  nodes: readonly AtomicNode[],
+  scope: { kind: "task"; task_id: string } | { kind: "delivery_unit"; delivery_unit_id: string },
+  milestoneEvaluations: ReadonlyMap<string, MilestoneEvaluation> = new Map(),
+): DerivedBusinessStatus {
   const scoped = nodes.filter((node) => {
     if (node.kind !== "work" || !node.scope) return false;
     return scope.kind === "task"
       ? node.scope.kind === "task" && node.scope.task_id === scope.task_id
       : node.scope.delivery_unit_id === scope.delivery_unit_id;
   });
-  if (!scoped.length) return "planned";
+  const scopedMilestones = nodes.filter((node): node is Extract<AtomicNode, { kind: "milestone" }> => {
+    if (node.kind !== "milestone" || !node.scope) return false;
+    return scope.kind === "delivery_unit"
+      ? node.scope.delivery_unit_id === scope.delivery_unit_id
+      : node.scope.kind === "task" && node.scope.task_id === scope.task_id;
+  });
+  if (!scoped.length && !scopedMilestones.length) return "planned";
   if (scoped.some((node) => node.kind === "work" && node.state === "blocked")) return "blocked";
-  if (scoped.every((node) => node.kind === "work" && node.state === "completed")) return "completed";
+  if (scopedMilestones.some((node) => {
+    const evaluation = milestoneEvaluations.get(node.id);
+    return evaluation?.status === "blocked";
+  })) return "blocked";
+  if (scoped.every((node) => node.kind === "work" && node.state === "completed") && scopedMilestones.every((node) => milestoneEvaluations.get(node.id)?.status === "satisfied")) return "completed";
   if (scoped.some((node) => node.kind === "work" && (node.state === "running" || node.state === "starting"))) return "running";
   if (scoped.some((node) => node.kind === "work" && node.state === "planned")) return "ready";
   return "planned";
@@ -194,6 +208,16 @@ export function contract3MigrationCandidate(raw: any): any {
     .filter((edge: any) => edge && typeof edge.from_atom_id === "string" && typeof edge.to_atom_id === "string")
     .map((edge: any) => ({ id: edge.id, from_node_id: edge.from_atom_id, to_node_id: edge.to_atom_id, requires: { kind: "source_terminal_success" } }));
   candidate.contract_version = 3;
+  candidate.groups = Array.isArray(candidate.groups) ? candidate.groups.map((group: any) => {
+    if (group.pr && typeof group.pr.state === "string") return group;
+    if (group.parent_pr) return { ...group, pr: { state: "published", pr: group.parent_pr, parent_branch: group.parent_branch ?? "main" } };
+    return { ...group, pr: { state: "unpublished" } };
+  }) : candidate.groups;
+  candidate.tasks = Array.isArray(candidate.tasks) ? candidate.tasks.map((task: any) => {
+    if (task.pr && typeof task.pr.state === "string") return task;
+    if (task.pr && task.branch && task.base_branch) return { ...task, pr: { state: "open", pr: task.pr, branch: task.branch, base_branch: task.base_branch } };
+    return { ...task, pr: { state: "unbound" } };
+  }) : candidate.tasks;
   candidate.atomic_nodes = Array.isArray(raw?.atomic_nodes) && raw.atomic_nodes.length ? raw.atomic_nodes : legacyNodes;
   candidate.atomic_edges = Array.isArray(raw?.atomic_edges) && raw.atomic_edges.length ? raw.atomic_edges : canonicalEdges;
   candidate.plans = Array.isArray(candidate.plans)

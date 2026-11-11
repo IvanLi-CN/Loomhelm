@@ -25,7 +25,7 @@ import {
 import { initialOutput, type AgentOutput } from "../web/agent-output";
 import { localSemanticProjection } from "../lib/contract";
 import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
-import type { AtomicEdge, AtomicNode } from "../lib/atomic-orchestration";
+import { deriveBusinessStatus, evaluateMilestone, type AtomicEdge, type AtomicNode, type MilestoneEvaluation } from "../lib/atomic-orchestration";
 
 export type PlannedInterval = {
   node_id: string;
@@ -43,7 +43,8 @@ function deliveryGateDiagnostics(group: Ledger["groups"][number]): Record<string
   const diagnostics: Record<string, string>[] = [];
   if (group.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     diagnostics.push({ code: "DELIVERY_WORKSPACE_GATE_PENDING", message: "交付单元尚未完成 workspace_ready 原子任务" });
-  if (group.lifecycle.pr_created !== "passed" || !group.parent_pr || prAtom?.status !== "completed")
+  const deliveryPr = group.pr && "state" in group.pr ? ("pr" in group.pr ? group.pr.pr : null) : group.parent_pr;
+  if (group.lifecycle.pr_created !== "passed" || !deliveryPr || prAtom?.status !== "completed")
     diagnostics.push({ code: "DELIVERY_PARENT_PR_GATE_PENDING", message: "父 PR 尚未创建、核验并完成交付原子任务" });
   return diagnostics;
 }
@@ -701,7 +702,7 @@ export function buildView(
             output: task?.owned_surfaces?.join(", ") ?? node.label,
             acceptance: [],
             activity_type: (task?.kind === "verification" || task?.kind === "release" || task?.kind === "deployment" ? task.kind : "contribution") as "contribution" | "verification" | "release" | "deployment",
-            state: task?.state === "running" ? "running" : task?.state === "blocked" ? "blocked" : "planned",
+            state: task?.state === "starting" ? "starting" : task?.state === "running" ? "running" : task?.state === "blocked" ? "blocked" : ["integrated", "completed", "closed"].includes(task?.state ?? "") ? "completed" : "planned",
             scope: { kind: "task" as const, task_id: node.ref_id ?? node.id, delivery_unit_id: task?.group_id ?? node.group_id ?? "unassigned" },
           };
         });
@@ -732,6 +733,37 @@ export function buildView(
     seenAtomicEdges.add(key);
     return true;
   })];
+  const atomicNodeById = new Map(canonicalAtomicNodes.map((node) => [node.id, node]));
+  const milestoneEvaluations = new Map<string, MilestoneEvaluation>();
+  for (const milestone of canonicalAtomicNodes.filter((node): node is Extract<AtomicNode, { kind: "milestone" }> => node.kind === "milestone")) {
+    const incoming = canonicalAtomicEdges.filter((edge) => edge.to_node_id === milestone.id).map((edge) => {
+      const source = atomicNodeById.get(edge.from_node_id);
+      const satisfied = source?.kind === "work" ? source.state === "completed" : false;
+      return { satisfied, blocked: source?.kind === "work" && source.state === "blocked", evidence_refs: source?.kind === "work" ? source.result?.evidence_refs ?? source.runtime?.evidence_refs ?? [] : [] };
+    });
+    const acceptance = milestone.acceptance.map(() => ({ satisfied: false, evidence_refs: [] as string[] }));
+    try { milestoneEvaluations.set(milestone.id, evaluateMilestone(milestone, incoming, acceptance)); } catch { /* invalid legacy milestones remain pending in the compatibility view */ }
+  }
+  const canonicalDisplayNodes = plan.atomic_nodes.length
+    ? canonicalAtomicNodes.map((node) => ({
+        id: node.id,
+        kind: node.kind === "work" ? "task" as const : "milestone" as const,
+        ref_id: node.kind === "work" && node.scope.kind === "task" ? node.scope.task_id : null,
+        group_id: node.scope?.delivery_unit_id ?? null,
+        label: node.title,
+        estimate_minutes: null,
+        estimate_basis: null,
+        estimate_confidence: null,
+      }))
+    : nodeData;
+  const canonicalDisplayEdges = plan.atomic_nodes.length
+    ? canonicalAtomicEdges.map((edge) => ({
+        id: edge.id,
+        from_node_id: edge.from_node_id,
+        to_node_id: edge.to_node_id,
+        requires: "completed" as const,
+      }))
+    : plan.edges;
   const selectedTaskIds = new Set(
     plan.nodes
       .filter((node) => node.kind === "task")
@@ -775,6 +807,7 @@ export function buildView(
             status: runtimeAtoms.get(atom.id)?.status ?? "planned",
           }))
         : [];
+      const derivedStatus = deriveBusinessStatus(canonicalAtomicNodes, { kind: "task", task_id: task.id }, milestoneEvaluations);
       return {
         ...task,
         ...(() => {
@@ -799,6 +832,7 @@ export function buildView(
               ? "ready"
               : "blocked",
         state: runtimeTaskState(task, outputs[task.id]),
+        derived_status: derivedStatus,
         ...(runtimeTaskState(task, outputs[task.id]) === "agent_idle" && task.state !== "agent_idle" ? { agent_resume_state: task.state } : {}),
         atoms: atoms.map((atom) => ({
           ...atom,
@@ -895,6 +929,7 @@ export function buildView(
     semantic_context: localSemanticProjection(ledger, "dashboard_view"),
     groups: atomProjection.groups.map((item) => ({
       ...item,
+      derived_status: deriveBusinessStatus(canonicalAtomicNodes, { kind: "delivery_unit", delivery_unit_id: item.id }, milestoneEvaluations),
       ...(() => {
         const gateDiagnostics = item.delivery_unit_kind === "regular" ? deliveryGateDiagnostics(item) : [];
         return { gateDiagnostics };
@@ -920,8 +955,8 @@ export function buildView(
     follow_prs: ledger.follow_prs,
     plans: planSummary,
     selected_plan_id: plan.id,
-    nodes: nodeData,
-    edges: plan.edges,
+    nodes: canonicalDisplayNodes,
+    edges: canonicalDisplayEdges,
     atomic_edges: plan.atomic_edges,
     atomic_nodes: canonicalAtomicNodes,
     canonical_atomic_edges: canonicalAtomicEdges,

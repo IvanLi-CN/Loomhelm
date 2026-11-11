@@ -1,13 +1,13 @@
 import React, { memo, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { BaseEdge, Handle, MarkerType, Position, ReactFlow, type Edge, type EdgeProps, type Node, type NodeProps, type ReactFlowInstance } from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, Handle, MarkerType, Position, ReactFlow, type Edge, type EdgeProps, type Node, type NodeProps, type ReactFlowInstance } from "@xyflow/react";
 import type { AtomicEdge, AtomicNode } from "../lib/atomic-orchestration";
 import { layoutProjection, type Direction, type GraphLayout } from "./graph-layout";
 import { accessibleNodeLabel, highlightAccessibleSelection, renderAccessibleNodes, type GraphContext } from "./graph";
 import { projectAtomicGraph } from "./graph-projection";
 import type { GraphProjection, GraphProjectionNode } from "./graph-projection";
 
-type AtomicCardData = { title: string; kind: string; state: string; scope: string; color: string; direction: Direction; nodeId: string; taskId: string | null };
+type AtomicCardData = { title: string; kind: string; state: string; scope: string; color: string; direction: Direction; nodeId: string; taskId: string | null; evidence: string[]; blocker: string | null; acceptanceCount: number };
 
 const AtomicCard = memo(function AtomicCard({ data }: NodeProps) {
   const value = data as unknown as AtomicCardData;
@@ -15,13 +15,15 @@ const AtomicCard = memo(function AtomicCard({ data }: NodeProps) {
     <div className="dependency-card-meta"><span>{value.kind}</span><span>{value.state}</span></div>
     <div className="dependency-card-title">{value.title}</div>
     <div className="atomic-dependency-scope">{value.scope}</div>
+    <div className="atomic-dependency-facts">验收 {value.acceptanceCount} · 证据 {value.evidence.length}{value.blocker ? ` · 阻塞：${value.blocker}` : ""}</div>
     <Handle id="source" type="source" position={value.direction === "DOWN" ? Position.Bottom : Position.Right} />
     <Handle id="target" type="target" position={value.direction === "DOWN" ? Position.Top : Position.Left} />
   </div>;
 });
 
 const AtomicRoutedEdge = memo(function AtomicRoutedEdge(props: EdgeProps) {
-  return <BaseEdge id={props.id} path={String(props.data?.path ?? "")} markerEnd={props.markerEnd} style={props.style} interactionWidth={16} />;
+  const label = String(props.data?.requires ?? "");
+  return <><BaseEdge id={props.id} path={String(props.data?.path ?? "")} markerEnd={props.markerEnd} style={props.style} interactionWidth={16} />{label ? <EdgeLabelRenderer><div className="atomic-dependency-edge-label" style={{ transform: `translate(-50%, -50%) translate(${props.labelX}px,${props.labelY}px)` }}>{label}</div></EdgeLabelRenderer> : null}</>;
 });
 
 const nodeTypes = { card: AtomicCard };
@@ -31,7 +33,8 @@ function atomicProjection(nodes: readonly AtomicNode[], edges: readonly AtomicEd
   const projected = projectAtomicGraph(nodes, edges);
   const projectionNodes: GraphProjectionNode[] = projected.nodes.map((node) => {
     const source = nodes.find((candidate) => candidate.id === node.id);
-    const taskId = source?.kind === "work" && source.scope.kind === "task" ? source.scope.task_id : null;
+    const scope = source?.kind === "work" || source?.kind === "milestone" ? source.scope : undefined;
+    const taskId = scope?.kind === "task" ? scope.task_id : null;
     const nodeKind = source?.kind === "milestone" ? "milestone" : taskId ? "task" : "other";
     return {
       id: node.id,
@@ -39,15 +42,18 @@ function atomicProjection(nodes: readonly AtomicNode[], edges: readonly AtomicEd
       nodeKind,
       sourceNodeId: node.id,
       refId: nodeKind === "task" ? taskId : nodeKind === "milestone" ? node.id : null,
-      groupId: source?.scope.kind === "task" ? source.scope.delivery_unit_id : source?.scope.delivery_unit_id ?? null,
-      plannedGroupId: source?.scope.kind === "task" ? source.scope.delivery_unit_id : source?.scope.delivery_unit_id ?? null,
+      groupId: scope?.kind === "task" ? scope.delivery_unit_id : scope?.kind === "delivery_unit" ? scope.delivery_unit_id : null,
+      plannedGroupId: scope?.kind === "task" ? scope.delivery_unit_id : scope?.kind === "delivery_unit" ? scope.delivery_unit_id : null,
       taskKind: source?.kind === "work" ? source.activity_type : null,
       state: node.status,
       stateLabel: node.status,
       stateIcon: null,
       title: node.title,
       graphLabel: node.title,
-      fullLabel: `${node.kind}：${node.title}；范围：${node.scope}；状态：${node.status}`,
+      fullLabel: `${node.kind}：${node.title}；范围：${node.scope}；状态：${node.status}；验收条件：${node.acceptance_count}；证据：${node.evidence.length}${node.blocker ? `；阻塞：${node.blocker}` : ""}`,
+      evidence: node.evidence,
+      blocker: node.blocker,
+      acceptance_count: node.acceptance_count,
     };
   });
   const projectionEdges = projected.edges.map((edge) => ({
@@ -100,6 +106,9 @@ export function createAtomicGraphController(context: GraphContext) {
           direction,
           nodeId: node.id,
           taskId,
+          evidence: node.evidence ?? [],
+          blocker: node.blocker ?? null,
+          acceptanceCount: node.acceptance_count ?? 0,
         },
       };
     });
@@ -110,7 +119,7 @@ export function createAtomicGraphController(context: GraphContext) {
       type: "routed",
       sourceHandle: "source",
       targetHandle: "target",
-      data: { path: edge.path },
+      data: { path: edge.path, requires: edge.paths.flatMap((path) => path.requires).join("、") },
       markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: context.css("--muted", "#789096") },
       style: { stroke: context.css("--muted", "#789096"), strokeWidth: 1.5 },
     }));

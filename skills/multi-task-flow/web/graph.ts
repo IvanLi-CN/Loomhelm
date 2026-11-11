@@ -52,6 +52,9 @@ function dependencyLabels(projection: GraphProjection, nodeId: string, direction
 export function accessibleNodeLabel(node: GraphProjectionNode, projection: GraphProjection): string {
   const parts = [`${nodeKindLabel(node)}：${node.title}`];
   if (node.stateLabel) parts.push(`状态：${node.stateLabel}`);
+  if (node.acceptance_count !== undefined) parts.push(`验收条件：${node.acceptance_count}`);
+  if (node.evidence?.length) parts.push(`证据：${node.evidence.length}`);
+  if (node.blocker) parts.push(`阻塞：${node.blocker}`);
   const incoming = dependencyLabels(projection, node.id, "incoming");
   const outgoing = dependencyLabels(projection, node.id, "outgoing");
   if (incoming.length) parts.push(`前驱：${incoming.join("；")}`);
