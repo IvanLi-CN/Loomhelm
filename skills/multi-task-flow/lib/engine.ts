@@ -3761,7 +3761,7 @@ export function execute(
       const groupId = parse(id, payload.group_id);
       const owner = find(ledger.groups, (item) => item.id === groupId, "Group");
       const mode = z
-        .enum(["child", "parent", "follow"])
+        .enum(["child", "parent", "parent-followup", "follow"])
         .default("child")
         .parse(payload.mode);
       const pr = parse(externalRef, payload.pr);
@@ -3844,7 +3844,7 @@ export function execute(
           "Task publication is still pending",
           4,
         );
-      } else if (mode === "parent") {
+      } else if (mode === "parent" || mode === "parent-followup") {
         requireCondition(
           ownsGroup(ledger, request.actor, owner),
           "FORBIDDEN",
@@ -3857,22 +3857,49 @@ export function execute(
           "Only an active group can merge its parent PR",
           4,
         );
-        requireCondition(
-          owner.parent_pr &&
-            stable(owner.parent_pr) === stable(pr) &&
-            owner.current_sha === headSha,
-          "PR_MISMATCH",
-          "Parent PR and current head must match",
-          3,
-        );
-        requireCondition(
-          legacyLedger(ledger) ||
-            (owner.lifecycle.pr_created === "passed" &&
-              prReceipt(ledger, groupId, pr, expectedSha, headSha)),
-          "PR_NOT_READY",
-          "Parent PR must be provider-published before merge",
-          4,
-        );
+        if (mode === "parent") {
+          requireCondition(
+            owner.parent_pr &&
+              stable(owner.parent_pr) === stable(pr) &&
+              owner.current_sha === headSha,
+            "PR_MISMATCH",
+            "Parent PR and current head must match",
+            3,
+          );
+        } else {
+          const originalParent = parse(externalRef, payload.original_parent_pr);
+          requireCondition(
+            owner.parent_pr && stable(owner.parent_pr) === stable(originalParent),
+            "PR_MISMATCH",
+            "Follow-up merge must identify the registered parent PR",
+            3,
+          );
+          requireCondition(
+            pr.id !== originalParent.id &&
+              pr.provider === ledger.repository.provider &&
+              pr.repository === `${ledger.repository.owner}/${ledger.repository.name}`,
+            "PR_MISMATCH",
+            "Follow-up merge must identify a distinct PR in the bound repository",
+            3,
+          );
+          requireCondition(
+            typeof payload.original_parent_merge_sha === "string" &&
+              /^[a-f0-9]{40}$/.test(payload.original_parent_merge_sha),
+            "EVIDENCE_REQUIRED",
+            "Follow-up merge must retain the original parent merge SHA",
+            5,
+          );
+        }
+        if (mode === "parent") {
+          requireCondition(
+            legacyLedger(ledger) ||
+              (owner.lifecycle.pr_created === "passed" &&
+                prReceipt(ledger, groupId, pr, expectedSha, headSha)),
+            "PR_NOT_READY",
+            "Parent PR must be provider-published before merge",
+            4,
+          );
+        }
         requireCondition(
           ledger.tasks
             .filter(
@@ -4057,7 +4084,7 @@ export function execute(
             3,
           );
         const subject =
-          op.request.mode === "parent"
+          op.request.mode === "parent" || op.request.mode === "parent-followup"
             ? owner.id
             : op.request.mode === "follow"
               ? op.request.follow_pr_id
@@ -4068,7 +4095,7 @@ export function execute(
           "Merge fact does not match the claimed PR",
           5,
         );
-        if (op.request.mode === "parent") {
+        if (op.request.mode === "parent" || op.request.mode === "parent-followup") {
           requireCondition(
             !ledger.follow_prs.some(
               (item) =>
@@ -4080,6 +4107,9 @@ export function execute(
           );
           owner.state = "merged";
           owner.merge_sha = evidence.sha;
+          if (op.request.mode === "parent-followup") {
+            owner.current_sha = evidence.sha;
+          }
           if (owner.lifecycle && !legacyLedger(ledger))
             owner.lifecycle.pr_merged = "passed";
           for (const task of ledger.tasks.filter(
