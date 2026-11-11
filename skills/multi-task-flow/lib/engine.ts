@@ -2945,6 +2945,39 @@ export function execute(
         notification_request: notificationDeliveryRequest(notice),
       };
     }
+    case "task-equivalent-integrate": {
+      const taskId = parse(id, payload.task_id);
+      ownerOfTask(ledger, request, taskId);
+      const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
+      const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
+      requireCondition(isContributionKind(target.kind), "TASK_MISMATCH", "Only contribution tasks can be equivalently integrated", 3);
+      requireCondition(["blocked", "agent_idle", "running"].includes(target.state), "INVALID_TRANSITION", "Task is not awaiting integration", 3);
+      requireCondition(target.atoms.every((atom) => atom.status === "completed"), "ATOMS_PENDING", "Complete the task atoms before integration", 4);
+      const taskPr = parse(externalRef, payload.task_pr);
+      const parentPr = parse(externalRef, payload.parent_pr);
+      checkPR(ledger, taskPr);
+      checkPR(ledger, parentPr);
+      requireCondition(target.pr && stable(target.pr) === stable(taskPr), "PR_MISMATCH", "Equivalent integration task PR does not match the registered PR", 3);
+      requireCondition(owner.parent_pr && stable(owner.parent_pr) === stable(parentPr), "PR_MISMATCH", "Equivalent integration parent PR does not match the delivery unit", 3);
+      const taskHeadSha = z.string().regex(/^[a-f0-9]{40}$/).parse(payload.task_head_sha);
+      const parentMergeSha = z.string().regex(/^[a-f0-9]{40}$/).parse(payload.parent_merge_sha);
+      const commits = z.array(z.string().regex(/^[a-f0-9]{40}$/)).min(1).parse(payload.integration_commits);
+      const evidenceRef = z.string().min(1).parse(payload.evidence_ref);
+      target.state = "integrated";
+      target.finished_at = now();
+      addEvent(ledger, request, "task_integrated", taskId, {
+        task_id: taskId,
+        task_pr: taskPr,
+        task_head_sha: taskHeadSha,
+        parent_pr: parentPr,
+        parent_merge_sha: parentMergeSha,
+        integration_commits: commits,
+        evidence_ref: evidenceRef,
+        equivalent_integration: true,
+        child_pr_state: "open",
+      });
+      return { task_id: taskId, state: target.state, equivalent_integration: true };
+    }
     case "atom-update": {
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
