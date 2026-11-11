@@ -22,7 +22,7 @@ export interface RuntimeBuildInfo {
 
 function validatedIdentity(artifact: ToolkitArtifactManifest): PackageIdentity {
   const identity = validatePackageIdentity(artifact.identity);
-  if (identity.packageName !== artifact.packageName || identity.packageVersion !== artifact.packageVersion || identity.compatibilityLine !== artifact.compatibilityLine || identity.skillVersion !== artifact.skillVersion || identity.sourceSha !== artifact.sourceSha || identity.mergeSha !== artifact.mergeSha || identity.buildId !== artifact.buildId || identity.tarballDigest !== artifact.tarballDigest || identity.gitTag !== artifact.gitTag) throw new Error('Toolkit artifact identity mismatch');
+  if (identity.packageName !== artifact.packageName || identity.packageVersion !== artifact.packageVersion || identity.compatibilityLine !== artifact.compatibilityLine || identity.skillVersion !== artifact.skillVersion || identity.sourceSha !== artifact.sourceSha || identity.mergeSha !== artifact.mergeSha || identity.dirty !== artifact.dirty || identity.buildId !== artifact.buildId || identity.tarballDigest !== artifact.tarballDigest || identity.gitTag !== artifact.gitTag) throw new Error('Toolkit artifact identity mismatch');
   const { buildId, ...withoutBuildId } = identity;
   const files = artifact.files as readonly ToolkitArtifactFile[];
   if (identityDigest({ ...withoutBuildId, files }) !== buildId) throw new Error('Toolkit artifact build ID mismatch');
