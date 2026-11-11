@@ -21,7 +21,7 @@ Build from clean committed source after `bun --no-install run build` in the Skil
 
 ## Contracts
 
-Build ID, source SHA, API major, frontend contract, ledger schema/contract, ledger revision, run ID and plan ID are independent. This release publishes API v1 and frontend contract 1. Readable ledgers include schema 1 with absent legacy contract or contract 1, and schema 2 with contract 1 or 2. Only schema 2 with contract 2 is writable; legacy contracts remain read-only until explicit migration. No unpublished previous API is advertised. Future releases must explicitly publish every supported current/previous major and ledger combination. The newest reader must dual-read every supported historical shape; an older viewer is an isolated read-only fallback only when the newest reader cannot safely interpret that shape. Unsupported runs are marked individually; a CLI fails incompatible handshakes rather than installing or rewriting data.
+Build ID, source SHA, API major, frontend contract, ledger schema/contract, ledger revision, run ID and plan ID are independent. This release publishes API v1 and frontend contract 1. Readable ledgers include schema 1 with absent legacy contract or contract 1, and schema 2 with contract 1, 2 or 3. Schema 2 contract 2 remains writable for compatibility, while new development baseline synchronization requires contract 3; legacy contracts remain read-only until explicit migration. No unpublished previous API is advertised. Future releases must explicitly publish every supported current/previous major and ledger combination. The newest reader must dual-read every supported historical shape; an older viewer is an isolated read-only fallback only when the newest reader cannot safely interpret that shape. Unsupported runs are marked individually; a CLI fails incompatible handshakes rather than installing or rewriting data.
 
 ## Exact-source import and recovery
 
@@ -35,7 +35,7 @@ Re-running the exact command is idempotent. A prepared journal after source seal
 
 只有当前构建可写而目标不可写的新增降级需要主人逐次确认。展示准确报告后，`upgrade` 或 `rollback` 可附加 `write_downgrade_approval: { report_digest, approval_ref, maintenance_thread_id }`。应用持锁重算报告，run 内容或构建变化即拒绝旧确认；没有降级时不接受多余确认。`install` 无当前构建时只要求读取兼容。错误的 `details` 包含具体 run、能力及预检报告；不要根据通用错误盲目迁移所有 run。
 
-合同迁移使用 `ledger-maintenance-check` 和 `ledger-maintenance-apply`，不是目录导入的历史 `import/migrate` 别名。普通 orchestration `migrate` 与 `execution-profile-migrate` 仍只允许绑定 main；维护入口使用真实维护身份，不恢复原会话、不改 owner、不取得业务控制权。
+合同迁移使用 `ledger-maintenance-check` 和 `ledger-maintenance-apply`，不是目录导入的历史 `import/migrate` 别名。`schema-2/contract-2` 到 `schema-2/contract-3` 的迁移只更新合同判别和版本 envelope，保留 backup、source digest、owner、revision 证据，不补造 `baseline_verified` 或历史同步 event；普通 orchestration `migrate` 与 `execution-profile-migrate` 仍只允许绑定 main。维护入口使用真实维护身份，不恢复原会话、不改 owner、不取得业务控制权。
 
 历史 `schema-2/contract-2` 账本若任一任务缺少 `execution_owner`、`conversation_policy` 或 `delivery_policy`，普通写入会在 `requireLedgerCompatibility(..., "write")` 处先返回 `HISTORICAL_LEDGER_READ_ONLY`，因此不会进入 engine，也不会自动推断策略；完整声明但语义冲突或值非法的历史策略同样保持只读并要求显式恢复；这条只读链与缺失默认 execution profile 是两个独立门禁。
 

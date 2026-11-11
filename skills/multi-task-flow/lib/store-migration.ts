@@ -484,6 +484,20 @@ export function contractMigrationCandidate(
   return validateLedger(candidate);
 }
 
+export function contractV3MigrationCandidate(raw: any): Ledger {
+  requireCondition(
+    raw?.schema_version === 2 && raw?.contract_version === 2,
+    "MIGRATION_NOT_NEEDED",
+    "Only schema-2/contract-2 ledgers can migrate to contract-3",
+    4,
+  );
+  requireLedgerCompatibility(raw, "read");
+  const candidate = structuredClone(validateLedger(raw));
+  candidate.contract_version = 3;
+  candidate.version = versionEnvelope;
+  return validateLedger(candidate);
+}
+
 function retireChildReviews(raw: any): any {
   const copy = structuredClone(raw);
   if (Array.isArray(copy.facts))

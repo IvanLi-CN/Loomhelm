@@ -12,6 +12,7 @@ import {
   changeReason,
   collectCutAssignmentEvidence,
   cutEvidence,
+  baselineReceipt,
   externalRef,
   fact,
   group,
@@ -426,6 +427,61 @@ function requireDevelopmentTarget(
       "Lifecycle publication applies only to contribution tasks",
       3,
     );
+}
+
+function developmentDispatch(
+  ledger: Ledger,
+  targetType: "group" | "task",
+  targetId: string,
+  operationId: string,
+): Ledger["operations"][number] {
+  const operation = find(
+    ledger.operations,
+    (item) =>
+      item.id === operationId &&
+      item.kind === "dispatch" &&
+      item.target_id === targetId &&
+      (item.request.target_type ?? "task") === targetType,
+    "Codex dispatch",
+  );
+  requireCondition(
+    operation.status === "succeeded" &&
+      operation.request.native_request_id &&
+      object(operation.request.creation_parameters).transport === "codex-exec",
+    "DISPATCH_NOT_READY",
+    "Baseline synchronization requires a succeeded codex-exec dispatch",
+    4,
+  );
+  const evidence = object(operation.request.creation_result).native_evidence;
+  requireCondition(
+    object(evidence).native_request_id === operation.request.native_request_id &&
+      typeof object(evidence).workspace_path === "string" &&
+      typeof object(evidence).initial_head === "string" &&
+      typeof object(evidence).thread_id === "string",
+    "EVIDENCE_REQUIRED",
+    "Baseline synchronization requires immutable native workspace evidence",
+    5,
+  );
+  return operation;
+}
+
+function lineageEventMatches(
+  ledger: Ledger,
+  eventId: string,
+  targetType: "group" | "task",
+  targetId: string,
+  shaValue: string,
+): boolean {
+  const event = ledger.events.find((item) => item.id === eventId);
+  if (!event || event.subject_id !== targetId) return false;
+  const snapshot = event.data.group_snapshot ? object(event.data.group_snapshot) : {};
+  if (targetType === "group")
+    return ["group_updated", "group_base_reconciled", "merge_resolved", "cut_applied"].includes(event.type) &&
+      [event.data.sha, event.data.current_sha, event.data.merge_sha, event.data.cut_sha,
+        snapshot.current_sha, snapshot.merge_sha, snapshot.cut_sha].includes(shaValue);
+  return ["task_rebased", "merge_resolved"].includes(event.type) &&
+    [event.data.sha, event.data.base_sha, event.data.merge_sha,
+      snapshot.current_sha, snapshot.merge_sha].includes(shaValue);
 }
 function addEvent(
   ledger: Ledger,
@@ -1970,6 +2026,199 @@ export function execute(
       op.updated_at = now();
       return { operation_id: op.id, native_request_id: nativeId };
     }
+    case "development-baseline-sync": {
+      requireCondition(
+        ledger.contract_version === 3,
+        "INCOMPATIBLE_LEDGER",
+        "Baseline synchronization requires an explicit contract-3 migration",
+        4,
+      );
+      const targetType = z.enum(["group", "task"]).parse(payload.target_type);
+      const targetId = parse(id, payload.target_id);
+      const target = lifecycleTarget(ledger, targetType, targetId) as any;
+      requireOwner(ledger, request, targetType, targetId);
+      const mode = z.enum(["initial", "refresh"]).parse(payload.mode);
+      const dispatchOperationId = parse(id, payload.dispatch_operation_id);
+      const dispatch = developmentDispatch(
+        ledger,
+        targetType,
+        targetId,
+        dispatchOperationId,
+      );
+      const baseline = parse(baselineReceipt, payload.baseline);
+      requireCondition(
+        baseline.sha === baseline.head,
+        "BASELINE_MISMATCH",
+        "Workspace HEAD must match the verified development baseline",
+        4,
+      );
+      const currentBaseline = dispatch.request.development_baseline;
+      const expectedPrevious = payload.expected_previous_baseline === null
+        ? null
+        : parse(baselineReceipt, payload.expected_previous_baseline);
+      if (mode === "initial") {
+        requireCondition(
+          currentBaseline === undefined && expectedPrevious === null,
+          "BASELINE_CONFLICT",
+          "Initial synchronization requires an empty development baseline",
+          4,
+        );
+      } else {
+        requireCondition(
+          currentBaseline !== undefined &&
+            expectedPrevious !== null &&
+            stable(currentBaseline) === stable(expectedPrevious),
+          "BASE_CHANGED",
+          "Refresh synchronization must bind the current development baseline",
+          5,
+        );
+      }
+      const owner = targetType === "group"
+        ? target
+        : find(ledger.groups, (item) => item.id === target.group_id, "Group");
+      const postMerge =
+        targetType === "task" &&
+        ["release", "deployment", "verification"].includes(target.kind);
+      const expectedLineage = targetType === "group"
+        ? target.current_sha
+        : postMerge
+          ? owner.merge_sha
+          : owner.current_sha;
+      const expectedLineageSha = payload.expected_lineage_sha === null
+        ? null
+        : parse(z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), payload.expected_lineage_sha);
+      requireCondition(
+        expectedLineageSha === expectedLineage,
+        "BASE_CHANGED",
+        "Synchronization must bind the current target lineage",
+        5,
+      );
+      requireCondition(
+        expectedLineage !== null && baseline.sha === expectedLineage,
+        "BASELINE_MISMATCH",
+        "Workspace baseline must match the current target lineage",
+        4,
+      );
+      if (targetType === "task")
+        requireCondition(
+          target.base_sha === expectedLineage,
+          "TASK_BASE_REQUIRED",
+          "Synchronize only after task-base establishes the current parent lineage",
+          4,
+        );
+      const lineageEventId = string(payload.lineage_event_id);
+      const targetLineageEvent = lineageEventMatches(
+        ledger,
+        lineageEventId,
+        targetType,
+        targetId,
+        baseline.sha,
+      );
+      const groupLineageEvent =
+        targetType === "task" &&
+        lineageEventMatches(ledger, lineageEventId, "group", owner.id, baseline.sha);
+      requireCondition(
+        (mode === "initial" && lineageEventId === "initial") ||
+          targetLineageEvent || groupLineageEvent,
+        "LINEAGE_MISMATCH",
+        "Synchronization must reference the fact that established the target lineage",
+        5,
+      );
+      requireCondition(
+        !ledger.operations.some(
+          (item) =>
+            (item.target_id === targetId || (targetType === "task" && item.target_id === owner.id)) &&
+            activeOperation(item) &&
+            ["merge", "cut"].includes(item.kind),
+        ),
+        "OPERATION_PENDING",
+        "Cannot synchronize a workspace while merge or cut is pending",
+        4,
+      );
+      const branch = string(payload.branch);
+      const resourceIds = z.array(id).min(1).parse(payload.resource_ids);
+      const resources = resourceIds.map((resourceId) =>
+        find(ledger.resources, (resource) => resource.id === resourceId, "Workspace resource"),
+      );
+      requireCondition(
+        resources.some((resource) => resource.kind === "worktree" && resource.target === targetId && resource.status === "active"),
+        "WORKSPACE_NOT_READY",
+        "Baseline synchronization requires an active target worktree",
+        4,
+      );
+      requireCondition(
+        resources.some((resource) => resource.kind === "branch" && resource.target === branch && resource.status === "active"),
+        "WORKSPACE_NOT_READY",
+        "Baseline synchronization requires an active target branch resource",
+        4,
+      );
+      const expectedBranch = targetType === "group" ? target.parent_branch : target.branch;
+      requireCondition(
+        expectedBranch === null || expectedBranch === branch,
+        "TARGET_MISMATCH",
+        "Synchronization branch differs from the target branch",
+        3,
+      );
+      const nativeEvidence = object(dispatch.request.creation_result).native_evidence;
+      const nativeThreadId = string(object(nativeEvidence).thread_id);
+      requireCondition(
+        (targetType === "group" ? target.agent_thread_id : target.thread_id) === nativeThreadId,
+        "NATIVE_REQUEST_CONFLICT",
+        "Synchronization target is not bound to the dispatch workspace thread",
+        5,
+      );
+      const evidenceRef = string(payload.evidence_ref);
+      const previousBaseline = currentBaseline === undefined ? null : parse(baselineReceipt, currentBaseline);
+      if (targetType === "group" && expectedLineage === null) target.current_sha = baseline.sha;
+      dispatch.request.development_baseline = baseline;
+      const factId = `${request.request_id}-fact`;
+      ledger.facts.push({
+        id: factId,
+        kind: "baseline_verified",
+        subject_id: targetId,
+        status: "passed",
+        source: baseline.source,
+        observed_at: baseline.fetched_at ?? now(),
+        sha: baseline.sha,
+        evidence_ref: evidenceRef,
+        baseline: {
+          target_type: targetType,
+          target_id: targetId,
+          dispatch_operation_id: dispatchOperationId,
+          native_request_id: dispatch.request.native_request_id,
+          thread_id: nativeThreadId,
+          mode,
+          previous_baseline: previousBaseline,
+          lineage_event_id: lineageEventId,
+          lineage_sha: baseline.sha,
+          branch,
+          resource_ids: resourceIds,
+          receipt: baseline,
+          observed_at: now(),
+        },
+      });
+      addEvent(ledger, request, "development_baseline_synchronized", targetId, {
+        fact_id: factId,
+        target_type: targetType,
+        target_id: targetId,
+        dispatch_operation_id: dispatchOperationId,
+        native_request_id: dispatch.request.native_request_id,
+        mode,
+        previous_sha: previousBaseline?.sha ?? null,
+        sha: baseline.sha,
+        lineage_event_id: lineageEventId,
+        evidence_ref: evidenceRef,
+        target_snapshot: structuredClone(target),
+      });
+      return {
+        target_type: targetType,
+        target_id: targetId,
+        mode,
+        previous_sha: previousBaseline?.sha ?? null,
+        sha: baseline.sha,
+        fact_id: factId,
+      };
+    }
     case "lifecycle-record": {
       const targetType = z.enum(["group", "task"]).parse(payload.target_type);
       const targetId = parse(id, payload.target_id);
@@ -2027,16 +2276,20 @@ export function execute(
       const cliDispatch = ledger.operations.find(op => op.kind === "dispatch" && op.target_id === targetId && (op.request.target_type ?? "task") === targetType &&
         (op.request.creation_parameters as any)?.transport === "codex-exec" && op.status === "succeeded");
       if (cliDispatch) {
-        const baseline = z.object({ sha: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
-          head: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), clean: z.literal(true),
-          source: z.string().min(1), fetched_at: z.iso.datetime().optional() }).strict().parse(payload.baseline);
+        const baseline = parse(baselineReceipt, payload.baseline);
         requireCondition(baseline.sha === baseline.head, "BASELINE_MISMATCH", "Align HEAD to the verified baseline before development", 4);
         requireCondition(!cliDispatch.request.development_baseline || stable(cliDispatch.request.development_baseline) === stable(baseline),
           "BASELINE_CONFLICT", "Creation baseline is immutable; use the explicit synchronization workflow", 4);
+        if (ledger.contract_version === 3)
+          requireCondition(!!cliDispatch.request.development_baseline,
+            "BASELINE_REQUIRED", "Record the development baseline before lifecycle readiness", 4);
         if (targetType === "group") {
           requireCondition(!!baseline.fetched_at && Date.parse(baseline.fetched_at) >= Date.parse(cliDispatch.created_at),
             "BASELINE_REQUIRED", "Group baseline requires a fresh remote fetch receipt after dispatch", 4);
-          if (!cliDispatch.request.development_baseline) target.current_sha = baseline.sha;
+          if (ledger.contract_version === 3)
+            requireCondition(target.current_sha === baseline.sha,
+              "BASELINE_NOT_VERIFIED", "Workspace baseline no longer matches the current group lineage", 4);
+          if (!cliDispatch.request.development_baseline && ledger.contract_version !== 3) target.current_sha = baseline.sha;
         } else {
           const group = find(ledger.groups, g => g.id === target.group_id, "Group");
           const postMerge = ["release", "deployment", "verification"].includes(target.kind);
@@ -2048,7 +2301,7 @@ export function execute(
           );
           target.base_sha = baseline.sha;
         }
-        cliDispatch.request.development_baseline = baseline;
+        if (ledger.contract_version !== 3) cliDispatch.request.development_baseline = baseline;
       }
       if (targetType === "group") target.parent_branch ??= branch;
       else target.branch ??= branch;
@@ -2536,6 +2789,17 @@ export function execute(
         const op = ledger.operations.find(op => op.kind === "dispatch" && op.request.target_type !== "group" && op.target_id === taskId && op.status === "succeeded");
         requireCondition(target.lifecycle.workspace_ready === "passed" && !!op?.request.development_baseline,
           "BASELINE_REQUIRED", "Record verified workspace baseline before running", 4);
+        if (ledger.contract_version === 3 && op?.request.development_baseline) {
+          const group = find(ledger.groups, (item) => item.id === target.group_id, "Group");
+          const postMerge = ["release", "deployment", "verification"].includes(target.kind);
+          const lineage = postMerge ? group.merge_sha : group.current_sha;
+          requireCondition(
+            op.request.development_baseline.sha === lineage,
+            "BASELINE_NOT_VERIFIED",
+            "Task workspace baseline no longer matches the current lineage",
+            4,
+          );
+        }
       }
       const previousState = taskExecutionState(target);
       const occupiedSlot = target.state === "agent_idle";
@@ -2871,6 +3135,13 @@ export function execute(
       if (state === "running" && cliDispatches.length) requireCondition(
         owner.lifecycle.workspace_ready === "passed" && !!cliDispatch?.request.development_baseline,
         "BASELINE_REQUIRED", "Record verified group workspace baseline before running", 4);
+      if (state === "running" && cliDispatch?.request.development_baseline && ledger.contract_version === 3)
+        requireCondition(
+          cliDispatch.request.development_baseline.sha === owner.current_sha,
+          "BASELINE_NOT_VERIFIED",
+          "Group workspace baseline no longer matches the current lineage",
+          4,
+        );
       const executionTransitions: Record<string, string[]> = {
         unknown: ["unknown", "idle", "running", "waiting", "blocked"],
         idle: ["idle", "running", "waiting", "blocked"],

@@ -80,7 +80,7 @@ test("candidate reader failure uses an executed previous viewer read-only proof"
   const oldManifest={...oldBody,writable:["schema-2/contract-2"]};
   const oldId=buildId(oldManifest); writeFileSync(join(old.source,"manifest.json"),JSON.stringify({...oldManifest,build_id:oldId})); cpSync(old.source,join(f.state.paths.releases,oldId),{recursive:true});
   f.state.saveConfig({...f.state.config(),current_build:oldId});
-  const target=releaseFor(f.state,"target",{readable:["schema-2/contract-2"]});
+  const target=releaseFor(f.state,"target",{readable:["schema-2/contract-2","schema-2/contract-3"]});
   const report=compatibilityReport(f.state,target.manifest,target.source);
   expect(report.errors).toEqual([]);
   expect(report.runs[0]).toMatchObject({fallback_build_id:oldId,fallback_readable:true,target_readable:false});
@@ -100,7 +100,7 @@ test("new write loss needs exact approval; changes invalidate it",()=>{
 });
 test("unreadable, malformed, symlinked and incompatible custom runs cannot be approved away",()=>{
   const f=setup();
-  const target=releaseFor(f.state,"future",{readable:["schema-2/contract-2"]});
+  const target=releaseFor(f.state,"future",{readable:["schema-2/contract-2","schema-2/contract-3"]});
   expect(compatibilityReport(f.state,target.manifest).errors[0]?.capability).toBe("read");
   const view=join(f.store.runPath,"view");mkdirSync(view,{recursive:true});writeFileSync(join(view,"view.manifest.json"),JSON.stringify({api_version:9,frontend_contract:1}));
   expect(compatibilityReport(f.state,f.release.manifest).errors[0]?.capability).toBe("custom_view");
@@ -186,6 +186,25 @@ test("semantically invalid historical policy declarations remain read-only",()=>
   expect(()=>maintenanceCheck(f.state,{run_id:"demo-run",action:"contract"})).toThrow("semantically invalid");
   expect(readFileSync(f.store.ledgerPath,"utf8")).toBe(before);
 });
+test("contract maintenance migrates contract-2 to contract-3 with auditable backup and no baseline history",async()=>{
+  const f=setup();
+  const contract2=structuredClone(f.raw);
+  contract2.contract_version=2;
+  contract2.config.execution_profile=null;
+  writeFileSync(f.store.ledgerPath,JSON.stringify(contract2));
+  const before=readFileSync(f.store.ledgerPath,"utf8");
+  const req=request(f.state);
+  const checked=maintenanceCheck(f.state,{run_id:"demo-run",action:"contract"});
+  expect(checked.source_contract).toBe("schema-2/contract-2");
+  expect(checked.target_contract).toBe("schema-2/contract-3");
+  const result:any=await maintenanceApply(f.state,req);
+  expect(result.code).toBe("APPLIED");
+  const saved=JSON.parse(readFileSync(f.store.ledgerPath,"utf8"));
+  expect(saved.contract_version).toBe(3);
+  expect(saved.facts.some((fact:any)=>fact.kind==="baseline_verified")).toBe(false);
+  expect(readFileSync(join(f.store.runPath,result.result.backup),"utf8")).toBe(before);
+  expect((await maintenanceApply(f.state,req) as any).code).toBe("REPLAYED");
+});
 test("maintenance rejects stale targets, owner, revision, digest and incompatible viewer",async()=>{
   const f=setup();const req=request(f.state);
   for(const patch of [{expected_owner_thread_id:"other"},{expected_revision:-1},{expected_ledger_sha256:"a".repeat(64)},{operation_digest:"a".repeat(64)},{writers_paused:false}]) await expect(maintenanceApply(f.state,{...req,...patch})).rejects.toThrow();
@@ -259,7 +278,7 @@ test("two independent CLI writers serialize one migration and replay the same re
   expect(JSON.parse(readFileSync(f.store.ledgerPath,"utf8")).revision).toBe(f.raw.revision+1);
 });
 test("the public CLI returns exact blocker details without stopping service control",async()=>{
-  const f=setup();const rejected=releaseFor(f.state,"reject",{readable:["schema-2/contract-2"]});
+  const f=setup();const rejected=releaseFor(f.state,"reject",{readable:["schema-2/contract-2","schema-2/contract-3"]});
   const child=Bun.spawn([process.execPath,join(import.meta.dir,"../scripts/service.ts"),"upgrade","--input","-"],{env:{...process.env,MULTI_TASK_FLOW_PROFILE:"test",MULTI_TASK_FLOW_ROOT:f.root},stdin:"pipe",stdout:"pipe",stderr:"pipe"});
   child.stdin.write(JSON.stringify({source:rejected.source}));child.stdin.end();
   const stderr=await new Response(child.stderr).text();expect(await child.exited).not.toBe(0);
