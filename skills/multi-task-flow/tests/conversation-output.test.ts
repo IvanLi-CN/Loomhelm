@@ -111,6 +111,19 @@ describe("conversation output projection", () => {
       expect(f.provider.snapshot().outputs.a).toMatchObject({ agent_state: "idle", runtime_turn_id: "latest-turn" });
     } finally { f.provider.stop(); }
   });
+  test("does not let an unloaded history read overwrite a later active status", async () => {
+    const f = fixture(async method => method === "thread/read"
+      ? { thread: { status: { type: "notLoaded" } } }
+      : method === "thread/turns/list"
+        ? { data: [{ id: "old-turn", status: "completed", items: [] }] }
+        : { data: [{ ...message("done", "old final"), completedAtMs: 1 }] });
+    try {
+      await tick();
+      f.event("thread/status/changed", { status: { type: "active" } });
+      await tick();
+      expect(f.provider.snapshot().outputs.a).toMatchObject({ agent_state: "active", runtime_turn_id: null });
+    } finally { f.provider.stop(); }
+  });
   test("full turn fallback happens only on an explicit unsupported-method error", async () => {
     const calls: string[] = [];
     const f = fixture(async (method, params) => { if (method === "thread/read") return {}; calls.push(method); if (method === "thread/items/list") throw new Error("method not found"); expect(params.itemsView).toBe("full"); return { data: [{ id: "turn", status: "completed", items: [message("old", "old").item, message("new", "final", "final_answer").item] }] }; });
