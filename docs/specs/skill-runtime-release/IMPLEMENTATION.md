@@ -26,7 +26,7 @@
 | `REQ-SRR-011` | publish workflow checkout exact protected merge SHA，验证 merged PR receipt，并把 merge/source SHA 写入 candidate manifest。 | 只有受保护 main 上的实际 workflow run 才能产生可发布 provenance。 |
 | `REQ-SRR-012` | publish workflow 以同一 merge SHA 生成 draft/final 单 tarball，注入并验证 digest，上传后再比较 registry bytes，promotion 不重建。 | 实际 npm registry 发布与未知结果恢复仍未发生。 |
 | `REQ-SRR-013` | workflow 和 `release.py` 支持 `multi-task-flow-vX.Y.Z` immutable tag、`compat-vN`/`latest`/可选 `stable` 的单调 promotion、并发隔离和对账入口。 | 真实 tag、dist-tag 和中断恢复 receipt 仍需 owner-approved workflow。 |
-| `REQ-SRR-014` | SPEC/IMPLEMENTATION/HISTORY、ADR 0029、客户端 README、Skill 文档和 workflow README 现已覆盖 CLI、版本矩阵、viewer/TTL、迁移、回滚、失败恢复和发布操作。 | npm publication、用户服务升级和 owner/provider 凭据仍是明确的外部前置，不在文档提交中伪造完成。 |
+| `REQ-SRR-014` | SPEC/IMPLEMENTATION/HISTORY、ADR 0029、客户端 README、现有 Skill viewer 说明和 workflow README 现已覆盖 CLI、版本矩阵、viewer/TTL、迁移、回滚、失败恢复和发布操作。 | npm publication、用户服务升级和 owner/provider 凭据仍是明确的外部前置，不在文档提交中伪造完成。 |
 
 ## Verification Commands
 
