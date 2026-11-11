@@ -1,4 +1,4 @@
-export type DashboardTab = "graph" | "planned" | "actual";
+export type DashboardTab = "graph" | "atomic" | "planned" | "actual";
 export type GraphMode = "aggregate" | "atomic";
 export type TaskLayout = "board" | "grid";
 export type Selection = { kind: "task" | "group" | "milestone"; id: string };
@@ -29,7 +29,7 @@ export const DEFAULT_VIEW_STATE: ViewState = {
 };
 
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-const tabs = new Set<DashboardTab>(["graph", "planned", "actual"]);
+const tabs = new Set<DashboardTab>(["graph", "atomic", "planned", "actual"]);
 const graphModes = new Set<GraphMode>(["aggregate", "atomic"]);
 const taskLayouts = new Set<TaskLayout>(["board", "grid"]);
 
@@ -93,8 +93,9 @@ export function parseViewState(search: string, validation: ViewStateValidation =
   const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
   const rawZoom = Number(params.get("zoom"));
   const zoom = Number.isFinite(rawZoom) && rawZoom >= zoomBounds.min && rawZoom <= zoomBounds.max ? Math.round(rawZoom * 100) / 100 : DEFAULT_VIEW_STATE.zoom;
-  const tab = tabs.has(params.get("tab") as DashboardTab) ? params.get("tab") as DashboardTab : DEFAULT_VIEW_STATE.tab;
   const graphMode = graphModes.has(params.get("graph") as GraphMode) ? params.get("graph") as GraphMode : DEFAULT_VIEW_STATE.graphMode;
+  const requestedTab = tabs.has(params.get("tab") as DashboardTab) ? params.get("tab") as DashboardTab : DEFAULT_VIEW_STATE.tab;
+  const tab = requestedTab === "graph" && graphMode === "atomic" ? "atomic" : requestedTab;
   const layout = taskLayouts.has(params.get("layout") as TaskLayout) ? params.get("layout") as TaskLayout : defaultTaskLayout(validation.groups?.size ?? 0);
   const selected = parseSelection(params.get("selected"), validation);
   const [plannedStart, plannedEnd] = validDateRange(params.get("plannedStart"), params.get("plannedEnd"));
@@ -151,7 +152,7 @@ export function sanitizeViewState(state: ViewState, validation: ViewStateValidat
 export function serializeViewState(state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab, defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout): string {
   const params = new URLSearchParams();
   if (state.tab !== defaultTab) params.set("tab", state.tab);
-  if (state.graphMode !== DEFAULT_VIEW_STATE.graphMode) params.set("graph", state.graphMode);
+  if (state.graphMode !== DEFAULT_VIEW_STATE.graphMode && state.tab !== "atomic") params.set("graph", state.graphMode);
   if (state.layout !== defaultLayout) params.set("layout", state.layout);
   if (state.query) params.set("q", state.query);
   if (state.group) params.set("group", state.group);

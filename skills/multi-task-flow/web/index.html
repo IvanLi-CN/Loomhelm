@@ -43,7 +43,8 @@
             <div class="view-header">
             <div class="view-heading"><span class="view-meta">observability</span><span id="view-context" class="view-context">运行视图</span><span id="view-count" class="view-count"></span></div>
             <div class="tabs" role="tablist" aria-label="视图">
-              <button id="tab-graph" type="button" role="tab" aria-selected="true" aria-controls="graph-view" data-tab="graph">依赖图</button>
+              <button id="tab-graph" type="button" role="tab" aria-selected="true" aria-controls="graph-view" data-tab="graph">任务与交付单元依赖</button>
+              <button id="tab-atomic" type="button" role="tab" aria-selected="false" aria-controls="graph-view" data-tab="atomic">原子任务依赖</button>
               <button id="tab-planned" type="button" role="tab" aria-selected="false" aria-controls="planned-view" data-tab="planned">理论安排</button>
               <button id="tab-actual" type="button" role="tab" aria-selected="false" aria-controls="actual-view" data-tab="actual">实际进度</button>
             </div>
@@ -55,8 +56,6 @@
             <div class="menu-control dropdown" data-menu="state-filter"><button id="state-filter-trigger" type="button" class="menu-trigger btn btn-ghost btn-sm" aria-label="按状态筛选" aria-haspopup="listbox" aria-expanded="false" aria-controls="state-filter-menu"><span id="state-filter-value">全部状态</span><i data-lucide="chevron-down" aria-hidden="true"></i></button><ul id="state-filter-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="按状态筛选"></ul></div>
             <div class="menu-control dropdown" data-menu="kind-filter"><button id="kind-filter-trigger" type="button" class="menu-trigger btn btn-ghost btn-sm" aria-label="按任务类型筛选" aria-haspopup="listbox" aria-expanded="false" aria-controls="kind-filter-menu"><span id="kind-filter-value">全部类型</span><i data-lucide="chevron-down" aria-hidden="true"></i></button><ul id="kind-filter-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="按任务类型筛选"></ul></div>
             <div class="graph-tools" id="graph-tools">
-              <button type="button" id="graph-mode-aggregate" class="btn btn-ghost btn-sm" aria-pressed="true">任务/交付单元</button>
-              <button type="button" id="graph-mode-atomic" class="btn btn-ghost btn-sm" aria-pressed="false">原子依赖</button>
               <button type="button" id="zoom-out" class="icon-button" data-tooltip="缩小" aria-label="缩小"><i data-lucide="minus"></i></button>
               <button type="button" id="zoom-in" class="icon-button" data-tooltip="放大" aria-label="放大"><i data-lucide="plus"></i></button>
               <button type="button" id="fit" class="icon-button" data-tooltip="适应视图" aria-label="适应视图"><i data-lucide="maximize-2"></i></button>
@@ -73,7 +72,7 @@
             <div id="plan-state" class="notice plan-state" aria-label="计划与运行状态" hidden></div>
             <div id="plan-warning" class="notice notice-warning" role="status" hidden></div>
             <div id="load-error" class="notice notice-error" role="alert" hidden></div>
-            <div id="graph-view" class="canvas-view" role="tabpanel" aria-labelledby="tab-graph"><div id="graph-projection-warning" class="notice notice-warning" role="status" hidden></div><div id="graph" aria-label="任务依赖图"></div><div id="graph-a11y" class="graph-a11y" role="list" aria-label="依赖图节点列表"></div><div id="graph-empty" class="empty" hidden>暂无任务</div></div>
+            <div id="graph-view" class="canvas-view" role="tabpanel" aria-labelledby="tab-graph"><div id="graph-projection-warning" class="notice notice-warning" role="status" hidden></div><div id="graph" aria-label="任务依赖图"></div><div id="atomic-graph" aria-label="原子任务依赖图" hidden></div><div id="graph-a11y" class="graph-a11y" role="list" aria-label="依赖图节点列表"></div><div id="graph-empty" class="empty" hidden>暂无任务</div></div>
             <div id="planned-view" class="timeline-view" role="tabpanel" aria-labelledby="tab-planned" hidden><div id="planned-timeline"></div><div class="axis-timezone"></div><div id="planned-unknown" class="unknown"></div></div>
             <div id="actual-view" class="timeline-view" role="tabpanel" aria-labelledby="tab-actual" hidden><div id="actual-timeline"></div><div class="axis-timezone"></div><div id="actual-unknown" class="unknown"></div></div>
           </div>

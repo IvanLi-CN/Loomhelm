@@ -679,22 +679,59 @@ export function buildView(
   }));
   const canonicalAtomicNodes: AtomicNode[] = plan.atomic_nodes.length
     ? plan.atomic_nodes
-    : plan.atoms.map((atom) => ({
-        kind: "work" as const,
-        id: atom.id,
-        title: atom.title,
-        purpose: atom.purpose,
-        output: atom.output,
-        acceptance: [],
-        activity_type: "contribution" as const,
-        state: "planned" as const,
-        scope: { kind: "task" as const, task_id: atom.task_id, delivery_unit_id: ledger.tasks.find((task) => task.id === atom.task_id)?.group_id ?? "unassigned" },
-      }));
-  const canonicalAtomicEdges: AtomicEdge[] = plan.atomic_edges.map((edge) =>
+    : plan.nodes
+        .filter((node) => node.kind === "task" || node.kind === "milestone")
+        .map((node) => {
+          const task = node.kind === "task" && node.ref_id ? ledger.tasks.find((item) => item.id === node.ref_id) : undefined;
+          if (node.kind === "milestone") {
+            return {
+              kind: "milestone" as const,
+              id: node.id,
+              title: node.label,
+              state: "planned" as const,
+              scope: { kind: "delivery_unit" as const, delivery_unit_id: node.group_id ?? "unassigned" },
+              acceptance: [],
+            };
+          }
+          return {
+            kind: "work" as const,
+            id: node.id,
+            title: node.label,
+            purpose: node.label,
+            output: task?.owned_surfaces?.join(", ") ?? node.label,
+            acceptance: [],
+            activity_type: (task?.kind === "verification" || task?.kind === "release" || task?.kind === "deployment" ? task.kind : "contribution") as "contribution" | "verification" | "release" | "deployment",
+            state: task?.state === "running" ? "running" : task?.state === "blocked" ? "blocked" : "planned",
+            scope: { kind: "task" as const, task_id: node.ref_id ?? node.id, delivery_unit_id: task?.group_id ?? node.group_id ?? "unassigned" },
+          };
+        });
+  const existingAtomicNodeIds = new Set(canonicalAtomicNodes.map((node) => node.id));
+  for (const node of plan.nodes.filter((item) => item.kind === "milestone" && !existingAtomicNodeIds.has(item.id))) {
+    canonicalAtomicNodes.push({
+      kind: "milestone",
+      id: node.id,
+      title: node.label,
+      state: "planned",
+      scope: { kind: "delivery_unit", delivery_unit_id: node.group_id ?? "unassigned" },
+      acceptance: [],
+    });
+  }
+  const canonicalAtomicNodeIds = new Set(canonicalAtomicNodes.map((node) => node.id));
+  const declaredAtomicEdges: AtomicEdge[] = plan.atomic_edges.map((edge) =>
     "from_node_id" in edge
       ? edge
       : { id: edge.id, from_node_id: edge.from_atom_id, to_node_id: edge.to_atom_id, requires: { kind: "source_terminal_success" as const } },
   );
+  const legacyAtomicEdges: AtomicEdge[] = plan.edges
+    .filter((edge) => canonicalAtomicNodeIds.has(edge.from_node_id) && canonicalAtomicNodeIds.has(edge.to_node_id))
+    .map((edge) => ({ id: edge.id, from_node_id: edge.from_node_id, to_node_id: edge.to_node_id, requires: { kind: edge.requires as "source_terminal_success" } }));
+  const seenAtomicEdges = new Set(declaredAtomicEdges.map((edge) => `${edge.from_node_id}->${edge.to_node_id}`));
+  const canonicalAtomicEdges: AtomicEdge[] = [...declaredAtomicEdges, ...legacyAtomicEdges.filter((edge) => {
+    const key = `${edge.from_node_id}->${edge.to_node_id}`;
+    if (seenAtomicEdges.has(key)) return false;
+    seenAtomicEdges.add(key);
+    return true;
+  })];
   const selectedTaskIds = new Set(
     plan.nodes
       .filter((node) => node.kind === "task")

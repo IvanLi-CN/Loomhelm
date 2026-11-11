@@ -1,17 +1,27 @@
 # Unified atomic orchestration implementation
 
+本文是主题 SPEC 的实现映射。设计边界、持久化与派生结构以同目录的 `SPEC.md` 为唯一长期合同；这里记录代码入口、迁移边界和验证入口，不能重新定义领域语义。
+
 ## Canonical persistence
 
-`atomic_nodes` and `atomic_edges` are persisted in the plan and ledger contract. Task and DeliveryUnit records retain compatibility shells and do not persist member arrays or independently authored business status.
+`skills/multi-task-flow/lib/atomic-orchestration.ts` 定义 AtomicNode、AtomicEdge、TaskPrBinding、DeliveryUnitExternalFacts、里程碑条件和执行策略的判别联合；`skills/multi-task-flow/lib/schema.ts` 将它们接入 ledger/plan 校验。`atomic_nodes` 与 `atomic_edges` 是 contract 3 的持久化编排事实。Task 与 DeliveryUnit 只保留兼容外壳、身份、执行策略和外部事实，不保存可独立编辑的 `atom_ids`、`task_ids`、`milestone_ids` 或业务状态。
 
-## Evaluation
+## Evaluation and projection
 
-The evaluator treats an empty condition set as invalid at planning time. For a planned milestone, each incoming edge condition and each explicit acceptance criterion contributes one condition; blocked or failed conditions produce `blocked`, all satisfied conditions produce `satisfied`, and otherwise the result is `pending`.
+`evaluateMilestone` 对所有入边条件和所有显式验收条件执行全量 AND：空条件在 planned 阶段拒绝；存在明确失败时为 `blocked`；全部满足时为 `satisfied`；其余为 `pending`。评估结果是带事实版本的运行时投影或事件事实，不能替代 milestone 定义。Task/DeliveryUnit 的业务状态必须从同一原子图、里程碑评估和外部事实读取，Agent idle/waiting/disconnected 只进入独立 runtime observation。
+
+## PR and starting gates
+
+贡献 Task 使用 `TaskPrBinding` 表达 unbound/open/merged/closed。贡献 work 原子或贡献 Task 进入 `starting` 前，所属 DeliveryUnit 必须有 `pr` 和 `parent_branch`；启动输入不要求提交 hash。DeliveryUnit 集成 PR 的 canonical 字段是 `pr`，旧 `parent_pr` 仅作为只读兼容输入。
 
 ## Migration
 
-Contract 2 task atoms are converted to contribution work nodes when their task and delivery-unit identity is unambiguous. Group atoms and semantic coordination work are rejected for explicit plan revision. The source ledger is backed up and the conversion is idempotent.
+`skills/multi-task-flow/lib/store-migration.ts` 负责 contract 2 到 contract 3 的备份、revision fencing 和幂等迁移。Task.atoms 只有在 Task 与 DeliveryUnit 身份明确时才能机械转换为 contribution work；Group.atoms、coordination task/session 和无法确定语义的旧节点必须进入显式计划修订，不能猜测成 coordination 原子。
 
 ## Viewer
 
-The aggregate graph is the default. The atomic graph is derived from the same canonical nodes and edges and includes scope, condition kind, evidence references, derived status and blocker information.
+聚合依赖图保持默认入口；原子依赖图由同一 `atomic_nodes`/`atomic_edges` 生成。`skills/multi-task-flow/web/atomic-graph-view.tsx` 使用 React Flow 与 ELK，展示节点范围、状态、条件边并支持缩放、平移、方向切换、节点选择、任务详情联动和可访问节点列表。任务图与交付单元图是读取投影，不是第二份依赖真相。
+
+## Verification
+
+Schema、迁移、评估、图投影和网页交互分别由 `skills/multi-task-flow/tests/` 下对应测试覆盖。任何新增字段或状态必须同时更新主题 SPEC、schema/domain 测试、viewer projection 测试和兼容迁移测试；不得只修改临时设计文件或网页文案。

@@ -685,6 +685,14 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .dependency-layout-tools > span { margin-right:auto; color:var(--muted); }
 .dependency-layout-tools select, .dependency-layout-tools button { background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 10px; }
 #graph .react-flow { height:calc(100% - 59px); background:var(--surface); }
+#atomic-graph { height: min(900px, max(640px, calc(100vh - 300px))); position: relative; background:var(--surface); }
+#atomic-graph .react-flow { height:calc(100% - 59px); background:var(--surface); }
+#atomic-graph .react-flow__node-card { pointer-events:none !important; }
+#atomic-graph .react-flow__node-card > .atomic-dependency-card { pointer-events:auto; }
+#atomic-graph .react-flow__node.selected .atomic-dependency-card { outline:2px solid var(--accent); outline-offset:3px; }
+#atomic-graph .react-flow__handle { opacity:0; width:1px; height:1px; border:0; pointer-events:none; }
+#atomic-graph .react-flow__attribution { background:var(--surface); color:var(--muted); font-size:9px; }
+.atomic-dependency-scope { margin-top:6px; color:var(--muted); font-size:11px; line-height:15px; overflow-wrap:anywhere; }
 .dependency-card { height:100%; width:100%; border:1px solid var(--node-color); border-radius:8px; background:var(--surface); color:var(--text); padding:8px 12px; box-shadow:0 2px 6px #00000012; }
 .dependency-card-meta { display:flex; justify-content:space-between; gap:8px; font-size:11px; line-height:18px; color:var(--muted); margin-bottom:4px; }
 .dependency-card-title { font-size:15px; line-height:21px; font-weight:600; overflow-wrap:anywhere; }
@@ -702,14 +710,18 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .dependency-layout-pending { position:absolute; bottom:12px; left:12px; color:var(--muted); font-size:12px; }
 .atomic-graph-surface { min-height:420px; overflow:auto; background:var(--surface); }
 .atomic-graph-header { padding:12px 16px; border-bottom:1px solid var(--border); color:var(--text); font-size:13px; font-weight:600; }
-.atomic-graph-body { display:grid; grid-template-columns:minmax(0, 1fr) minmax(220px, .42fr); gap:16px; padding:16px; }
-.atomic-graph-cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); align-content:start; gap:12px; }
+.atomic-graph-canvas { position:relative; min-width:920px; min-height:420px; padding:28px 24px; overflow:auto; }
+.atomic-graph-links { position:absolute; inset:0; z-index:0; overflow:visible; color:var(--muted); pointer-events:none; }
+.atomic-graph-nodes { position:relative; z-index:1; display:grid; column-gap:72px; row-gap:22px; align-items:stretch; }
 .atomic-graph-card { min-height:84px; padding:10px 12px; border:1px solid var(--accent); border-radius:8px; background:var(--surface); color:var(--text); box-shadow:0 2px 6px #00000012; }
 .atomic-graph-card-meta { display:flex; justify-content:space-between; gap:8px; margin-bottom:6px; color:var(--muted); font-size:11px; }
 .atomic-graph-card strong { display:block; font-size:13px; line-height:18px; }
 .atomic-graph-card small { display:block; margin-top:7px; color:var(--muted); font-size:11px; line-height:15px; }
-.atomic-graph-edges { display:flex; flex-direction:column; gap:7px; padding:10px 12px; border-left:1px solid var(--border); color:var(--muted); font-size:11px; line-height:16px; }
-@media (max-width: 760px) { .atomic-graph-body { grid-template-columns:1fr; } .atomic-graph-edges { border-left:0; border-top:1px solid var(--border); } }
+.atomic-edge { fill:none; stroke:var(--muted); stroke-width:1.5; opacity:.9; }
+.atomic-edge-integrated { stroke:var(--success, #3aa675); }
+.atomic-edge-merged { stroke:var(--accent, #5b9cff); }
+.atomic-edge-label { fill:var(--muted); font-size:10px; paint-order:stroke; stroke:var(--surface); stroke-width:4px; stroke-linejoin:round; }
+@media (max-width: 760px) { .atomic-graph-canvas { min-width:760px; } }
 
 .dependency-state-idle { display:inline-flex; align-items:center; gap:4px; color:var(--warning); }
 

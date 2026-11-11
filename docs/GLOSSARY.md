@@ -24,7 +24,7 @@
 
 ### 交付 Agent 就绪
 
-regular 交付单元在激活前已经绑定独立交付 Agent conversation，并具备后续 parent branch、parent PR 和收口所需的身份。Proposal 阶段可以是未绑定状态，但未绑定不是就绪事实。
+regular 交付单元在激活前已经具备其 delivery-unit scoped work 所需的执行策略，并具备后续 parent branch、集成 PR 和收口所需的身份。Proposal 阶段可以是未绑定状态，但未绑定不是就绪事实。
 
 ### 任务 Agent
 
@@ -34,9 +34,9 @@ _Avoid_: 子任务审核人、临时接管 Agent
 
 ### 交付 Agent
 
-拥有一个 regular 交付单元的 parent branch 和 parent PR，对 parent PR、合并后的 CI、已声明的合并后交付义务和收口负责。不合并、rebase 或重新审核正常路径中的 child PR；bootstrap 由 Main Agent 直接兼任交付 Agent。
+拥有一个 regular 交付单元的 parent branch 和集成 PR，对集成 PR、合并后的 CI、已声明的合并后交付义务和收口负责。不合并、rebase 或重新审核正常路径中的 child PR；bootstrap 由 Main Agent 直接承担交付单元执行策略。
 
-_Avoid_: 交付协调者、child PR 审核人、任务接管者
+_Avoid_: 交付协调者、coordination Task、child PR 审核人、任务接管者
 
 ### 主 Agent
 
