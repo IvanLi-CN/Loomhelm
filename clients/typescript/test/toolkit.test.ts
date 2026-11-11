@@ -1,7 +1,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cp, mkdtemp, readFile, rm, realpath, mkdir, writeFile, readdir } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, realpath, mkdir, symlink, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { identityDigest, SkillsRuntime } from '../src/index.ts';
@@ -45,6 +45,15 @@ test('rejects toolkit files that are absent from the signed inventory', async ()
     await cp(runtime.root, toolkit, { recursive: true });
     await writeFile(join(toolkit, 'unlisted.txt'), 'tampered');
     await assert.rejects(new SkillsRuntime(toolkit).list(), /Unlisted toolkit resource: unlisted\.txt/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('rejects a toolkit root symlink before validating or executing resources', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'loomhelm-root-link-')));
+  const link = join(root, 'toolkit-link');
+  try {
+    await symlink(runtime.root, link, 'dir');
+    await assert.rejects(new SkillsRuntime(link).validate(), /Unsafe toolkit root/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -102,8 +111,7 @@ test('missing runtime dependencies fail without registry access or cache writes'
     const buildId=identityDigest({...identityWithoutBuildId,files});
     await writeFile(join(root,'artifact-manifest.json'),JSON.stringify({...template,files,identity:{...template.identity,buildId},buildId},null,2));
     // Force fallback mode to exercise absence even when the test checkout has ancestor node_modules.
-    const result=await new SkillsRuntime(root).run(script,[],{cwd:root,timeoutMs:10000,env:{...process.env,HOME:join(root,'home'),BUN_INSTALL_CACHE_DIR:join(root,'cache'),BUN_OPTIONS:'--install=fallback',BUN_RUNTIME_TRANSPILER_CACHE_PATH:'0'}});
-    assert.notEqual(result.code,0); assert.doesNotMatch(result.stdout,/unexpected execution/);
+    await assert.rejects(new SkillsRuntime(root).run(script,[],{cwd:root,timeoutMs:10000,env:{...process.env,HOME:join(root,'home'),BUN_INSTALL_CACHE_DIR:join(root,'cache'),BUN_OPTIONS:'--install=fallback',BUN_RUNTIME_TRANSPILER_CACHE_PATH:'0'}}), /Missing toolkit dependency/);
     assert.equal(requests,0,'runtime must not contact a registry');
     assert.deepEqual(await readdir(join(root,'cache')),[],'runtime must not write a package cache');
   } finally {registry.stop(true);await rm(root,{recursive:true,force:true});}

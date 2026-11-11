@@ -12,6 +12,7 @@ export interface ToolkitResource { path: string; source?: string; sourceSha256?:
 export interface ToolkitManifest { schemaVersion: 1; commit: string; skills: string[]; files: ToolkitResource[]; additions?: ToolkitResource[] }
 export interface ToolkitOmittedResource { path: string; reason: string }
 export interface ToolkitArtifactFile { path: string; sha256: string }
+export interface ToolkitDependency { name: string; version: string; path: string; entry: string }
 export interface ToolkitArtifactManifest {
   schemaVersion: 2;
   packageName: string;
@@ -29,6 +30,7 @@ export interface ToolkitArtifactManifest {
   tarballDigest: string | null;
   gitTag: string | null;
   dependenciesBundled: boolean;
+  dependencies: ToolkitDependency[];
   omittedResources: ToolkitOmittedResource[];
   files: ToolkitArtifactFile[];
 }
@@ -41,6 +43,10 @@ function isSafeResourcePath(path: string): boolean {
   return !isAbsolute(path) && !path.split(/[\\/]/).some(part => !part || part === '.' || part === '..');
 }
 
+function isSafePackageName(name: string): boolean {
+  return /^@?[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)?$/.test(name);
+}
+
 /** The packaged resources are authoritative; never fall back to a host checkout. */
 export class SkillsRuntime {
   constructor(readonly root = fileURLToPath(new URL('../toolkit/', import.meta.url))) {}
@@ -51,16 +57,41 @@ export class SkillsRuntime {
   }
   async artifact(): Promise<ToolkitArtifactManifest> {
     const value = JSON.parse(await readFile(resolve(this.root, 'artifact-manifest.json'), 'utf8')) as ToolkitArtifactManifest & { identity?: unknown };
-    if (value.schemaVersion !== 2 || value.packageName !== '@loomhelm/multi-task-flow' || value.runtime !== 'bun@1.4.4' || typeof value.sourceCommit !== 'string' || !/^[a-f0-9]{40}$/.test(value.sourceCommit) || typeof value.sourceSha !== 'string' || !/^[a-f0-9]{40}$/.test(value.sourceSha) || typeof value.candidateSha !== 'string' || !/^[a-f0-9]{40}$/.test(value.candidateSha) || value.candidateSha !== value.sourceSha || typeof value.dirty !== 'boolean' || value.dependenciesBundled !== true || !Array.isArray(value.omittedResources) || value.omittedResources.some(item => !item || typeof item.path !== 'string' || !isSafeResourcePath(item.path) || typeof item.reason !== 'string' || item.reason.length === 0) || new Set(value.omittedResources.map(item => item.path)).size !== value.omittedResources.length || !Array.isArray(value.files) || value.files.some(file => !file || typeof file.path !== 'string' || !isSafeResourcePath(file.path) || !/^[a-f0-9]{64}$/.test(file.sha256)) || new Set(value.files.map(file => file.path)).size !== value.files.length || !value.identity) throw new Error('Invalid toolkit artifact manifest');
+    if (value.schemaVersion !== 2 || value.packageName !== '@loomhelm/multi-task-flow' || value.runtime !== 'bun@1.4.4' || typeof value.sourceCommit !== 'string' || !/^[a-f0-9]{40}$/.test(value.sourceCommit) || typeof value.sourceSha !== 'string' || !/^[a-f0-9]{40}$/.test(value.sourceSha) || typeof value.candidateSha !== 'string' || !/^[a-f0-9]{40}$/.test(value.candidateSha) || value.candidateSha !== value.sourceSha || typeof value.dirty !== 'boolean' || value.dependenciesBundled !== true || !Array.isArray(value.dependencies) || value.dependencies.length === 0 || value.dependencies.some(item => !item || !isSafePackageName(item.name) || typeof item.version !== 'string' || item.version.length === 0 || !isSafeResourcePath(item.path) || !isSafeResourcePath(item.entry)) || new Set(value.dependencies.map(item => item.name)).size !== value.dependencies.length || !Array.isArray(value.omittedResources) || value.omittedResources.some(item => !item || typeof item.path !== 'string' || !isSafeResourcePath(item.path) || typeof item.reason !== 'string' || item.reason.length === 0) || new Set(value.omittedResources.map(item => item.path)).size !== value.omittedResources.length || !Array.isArray(value.files) || value.files.some(file => !file || typeof file.path !== 'string' || !isSafeResourcePath(file.path) || !/^[a-f0-9]{64}$/.test(file.sha256)) || new Set(value.files.map(file => file.path)).size !== value.files.length || !value.identity) throw new Error('Invalid toolkit artifact manifest');
     const identity = validatePackageIdentity(value.identity);
-    if (identity.packageName !== value.packageName || identity.packageVersion !== value.packageVersion || identity.compatibilityLine !== value.compatibilityLine || identity.skillVersion !== value.skillVersion || identity.sourceSha !== value.sourceSha || identity.mergeSha !== value.mergeSha || identity.buildId !== value.buildId || identity.tarballDigest !== value.tarballDigest || identity.gitTag !== value.gitTag) throw new Error('Toolkit artifact identity mismatch');
+    if (identity.packageName !== value.packageName || identity.packageVersion !== value.packageVersion || identity.compatibilityLine !== value.compatibilityLine || identity.skillVersion !== value.skillVersion || identity.sourceSha !== value.sourceSha || identity.mergeSha !== value.mergeSha || identity.dirty !== value.dirty || identity.buildId !== value.buildId || identity.tarballDigest !== value.tarballDigest || identity.gitTag !== value.gitTag) throw new Error('Toolkit artifact identity mismatch');
     const { buildId, ...withoutBuildId } = identity;
     if (identityDigest({ ...withoutBuildId, files: value.files }) !== buildId) throw new Error('Toolkit artifact build ID mismatch');
+    for (const dependency of value.dependencies) {
+      try {
+        const dependencyRoot = resolve(this.root, dependency.path);
+        const dependencyManifest = resolve(dependencyRoot, 'package.json');
+        if (await realpath(dependencyRoot) !== dependencyRoot || !(await stat(dependencyRoot)).isDirectory() || await realpath(dependencyManifest) !== dependencyManifest || !(await stat(dependencyManifest)).isFile()) throw new Error('Unsafe toolkit dependency: ' + dependency.name);
+        const metadata = JSON.parse(await readFile(dependencyManifest, 'utf8')) as { name?: string; version?: string };
+        if (metadata.name !== dependency.name || metadata.version !== dependency.version) throw new Error('Toolkit dependency identity mismatch: ' + dependency.name);
+        const entry = resolve(dependencyRoot, dependency.entry);
+        const entryRel = relative(dependencyRoot, entry);
+        if (isAbsolute(entryRel) || entryRel === '..' || entryRel.startsWith(`..${sep}`) || await realpath(entry) !== entry || !(await stat(entry)).isFile()) throw new Error('Unsafe toolkit dependency entry: ' + dependency.name);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('Missing toolkit dependency: ' + dependency.name);
+        throw error;
+      }
+    }
+    const packageManifest = resolve(this.root, '..', 'package.json');
+    try {
+      const packageMetadata = JSON.parse(await readFile(packageManifest, 'utf8')) as { dependencies?: Record<string, unknown> };
+      for (const dependency of value.dependencies) if (packageMetadata.dependencies?.[dependency.name] !== dependency.version) throw new Error('Toolkit package dependency declaration mismatch: ' + dependency.name);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
     return value;
   }
   private async validateArtifact(): Promise<ToolkitArtifactManifest> {
-    const artifact = await this.artifact();
+    const rootStat = await lstat(this.root);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('Unsafe toolkit root');
     const root = await realpath(this.root);
+    if (root !== resolve(this.root)) throw new Error('Unsafe toolkit root');
+    const artifact = await this.artifact();
     const seen = new Set<string>();
     for (const file of artifact.files) {
       if (!file || typeof file.path !== 'string' || !isSafeResourcePath(file.path) || seen.has(file.path) || !/^[a-f0-9]{64}$/.test(file.sha256)) throw new Error('Invalid resource inventory path');

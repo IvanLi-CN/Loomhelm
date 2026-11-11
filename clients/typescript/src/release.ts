@@ -30,6 +30,7 @@ export interface PackageIdentity {
   skillVersion: string;
   sourceSha: string;
   mergeSha: string | null;
+  dirty: boolean;
   contracts: PackageContracts;
   buildId: string;
   tarballDigest: string | null;
@@ -108,6 +109,7 @@ export function validatePackageIdentity(value: unknown): PackageIdentity {
   if (!SHA1.test(sourceSha)) throw new Error('Invalid package identity field: sourceSha');
   const mergeSha = nullableString(raw.mergeSha, 'mergeSha');
   if (mergeSha !== null && !SHA1.test(mergeSha)) throw new Error('Invalid package identity field: mergeSha');
+  if (typeof raw.dirty !== 'boolean') throw new Error('Invalid package identity field: dirty');
   const contracts = objectValue(raw.contracts, 'contracts');
   const normalizedContracts: PackageContracts = {
     ledgerContract: positiveInteger(contracts.ledgerContract, 'contracts.ledgerContract'),
@@ -122,7 +124,7 @@ export function validatePackageIdentity(value: unknown): PackageIdentity {
   if (tarballDigest !== null && !SHA256.test(tarballDigest)) throw new Error('Invalid package identity field: tarballDigest');
   const gitTag = nullableString(raw.gitTag, 'gitTag');
   if (gitTag !== null && gitTag !== `multi-task-flow-v${packageVersion}`) throw new Error('Package identity Git tag does not match package version');
-  return { packageName, packageVersion, compatibilityLine, skillVersion, sourceSha, mergeSha, contracts: normalizedContracts, buildId, tarballDigest, gitTag };
+  return { packageName, packageVersion, compatibilityLine, skillVersion, sourceSha, mergeSha, dirty: raw.dirty, contracts: normalizedContracts, buildId, tarballDigest, gitTag };
 }
 
 export function identityDigest(value: Omit<PackageIdentity, 'buildId'> & { files: readonly { path: string; sha256: string }[] }): string {

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { canonicalTarballDigest, packPackageTarball, removeTarballDirectory } from '../src/release-tarball.ts';
 import { compatibilityDistTag, identityDigest, isCompatibilityDistTag, isExactSemVer, parseCompatibilityDistTag, parseExactSemVer, validatePackageIdentity, validatePublication } from '../src/release.ts';
 
 test('accepts exact SemVer and rejects ranges, build metadata, and leading zeroes', () => {
@@ -31,6 +33,7 @@ test('validates independent package identity dimensions', () => {
     skillVersion: '2.7.2',
     sourceSha: 'a'.repeat(40),
     mergeSha: null,
+    dirty: false,
     contracts: { ledgerContract: 2, apiVersion: 1, frontendContract: 1, viewerContract: 5, serviceVersion: '1' },
     buildId: 'b'.repeat(64),
     tarballDigest: null,
@@ -52,4 +55,21 @@ test('release validation binds the requested version to the packaged artifact', 
   const missingProvenance = spawnSync(process.execPath, ['--no-install', cli, 'release', 'validate', '--version', '0.1.0', '--require-provenance'], { encoding: 'utf8' });
   assert.notEqual(missingProvenance.status, 0);
   assert.match(missingProvenance.stderr + missingProvenance.stdout, /Publication requires (a clean toolkit artifact|artifact merge provenance)/);
+});
+
+test('publication digest is computed from real npm-compatible tarball contents', () => {
+  const packageRoot = resolve(import.meta.dir, '..');
+  const first = packPackageTarball(packageRoot);
+  const second = packPackageTarball(packageRoot);
+  try {
+    const firstDigest = canonicalTarballDigest(first);
+    assert.match(firstDigest, /^[a-f0-9]{64}$/);
+    assert.equal(canonicalTarballDigest(second), firstDigest);
+    const packageJson = JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf8')) as { scripts?: { 'publish:exact'?: string; 'publish:compat'?: string } };
+    assert.doesNotMatch(packageJson.scripts?.['publish:exact'] ?? '', /bun pm publish/);
+    assert.doesNotMatch(packageJson.scripts?.['publish:compat'] ?? '', /bun pm publish/);
+  } finally {
+    removeTarballDirectory(first);
+    removeTarballDirectory(second);
+  }
 });
