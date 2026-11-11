@@ -309,7 +309,9 @@ function exactApprovedAction(
       item.kind === kind &&
       item.group_id === (targetType === "group" ? targetId : null) &&
       item.task_id === (targetType === "task" ? targetId : null) &&
-      item.target_identity === targetIdentity,
+      (item.target
+        ? item.target.type === targetType && item.target.id === targetId
+        : item.target_identity === targetIdentity),
     "Planned publication action",
   );
   // Every publication action already present in an approved implementation
@@ -957,6 +959,12 @@ export function execute(
         proposed.approval_id === null,
         "INVALID_PLAN",
         "A proposed plan cannot already be approved",
+      );
+      requireCondition(
+        proposed.actions.every((action) => action.target !== undefined),
+        "LEGACY_PLAN_ACTION",
+        "New plans must use structured action targets",
+        3,
       );
       requireCondition(
         !ledger.plans.some((item) => item.id === proposed.id),

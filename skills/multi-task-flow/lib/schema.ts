@@ -206,7 +206,15 @@ export const plannedAction = z
     kind: z.enum(["publish_branch", "publish_pr", "release", "deploy"]),
     task_id: id.nullable().default(null),
     group_id: id.nullable().default(null),
-    target_identity: text,
+    target: z
+      .object({
+        type: z.enum(["task", "group"]),
+        id,
+      })
+      .strict()
+      .optional(),
+    /** Legacy read-only identity; new plans must use target. */
+    target_identity: text.optional(),
   })
   .strict();
 export const plan = z
@@ -1323,6 +1331,23 @@ export function validatePlan(candidate: Plan): void {
     "MISSING_PLAN_TARGET",
     "Every planned action must belong to a task or group node",
   );
+  for (const action of candidate.actions) {
+    if (action.target) {
+      requireCondition(
+        action.target.type === "task"
+          ? action.task_id === action.target.id
+          : action.group_id === action.target.id,
+        "PLAN_TARGET_MISMATCH",
+        "Planned action target must match its task/group owner",
+      );
+    } else {
+      requireCondition(
+        action.target_identity !== undefined,
+        "MISSING_PLAN_TARGET",
+        "Planned action must use a structured target",
+      );
+    }
+  }
   requireCondition(
     candidate.actions.every(
       (action) =>
@@ -1974,6 +1999,32 @@ export function validateLedger(value: unknown): Ledger {
     "DUPLICATE_REQUEST",
     "Request IDs must be unique",
   );
+  const factIds = new Set(parsed.facts.map((item) => item.id));
+  const taskIds = new Set(parsed.tasks.map((item) => item.id));
+  const groupIds = new Set(parsed.groups.map((item) => item.id));
+  const resourceIds = new Set(parsed.resources.map((item) => item.id));
+  for (const operation of parsed.operations) {
+    requireCondition(
+      operation.receipt_fact_id === null ||
+        factIds.has(operation.receipt_fact_id),
+      "MISSING_FACT",
+      "Operation receipt_fact_id must reference an existing fact",
+    );
+    requireCondition(
+      taskIds.has(operation.target_id) ||
+        groupIds.has(operation.target_id) ||
+        resourceIds.has(operation.target_id),
+      "UNKNOWN_OPERATION_TARGET",
+      "Operation target must reference a task, group, or resource",
+    );
+  }
+  for (const fact of parsed.facts) {
+    requireCondition(
+      taskIds.has(fact.subject_id) || groupIds.has(fact.subject_id),
+      "UNKNOWN_FACT_SUBJECT",
+      "Fact subject must reference a task or group",
+    );
+  }
   for (const notice of parsed.notifications) {
     requireCondition(
       notice.ledger_status === "committed",
