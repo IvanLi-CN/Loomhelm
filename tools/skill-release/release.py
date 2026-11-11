@@ -583,6 +583,96 @@ def validate_tarball(
     }
 
 
+def _gh_api(repository: str, path: str, *, method: str = "GET", fields: Mapping[str, str] | None = None) -> Any:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise ReleaseError("invalid GitHub repository")
+    command = ["gh", "api", f"repos/{repository}/{path}", "--method", method]
+    for name, value in (fields or {}).items():
+        command.extend(["-f", f"{name}={value}"])
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode:
+        if method == "GET" and "404" in result.stderr:
+            return None
+        raise ReleaseError("GitHub tag operation failed; reconcile before retry")
+    if not result.stdout.strip():
+        return None
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ReleaseError("GitHub returned a non-JSON tag response") from error
+
+
+def github_tag_commit(repository: str, tag: str) -> str | None:
+    """Resolve a lightweight or annotated tag without ever following a mutable ref twice."""
+    reference = _gh_api(repository, f"git/ref/tags/{tag}")
+    if reference is None:
+        return None
+    object_value = _require_object(reference.get("object"), "GitHub tag object")
+    visited: set[str] = set()
+    while True:
+        object_type = _require_string(object_value.get("type"), "GitHub tag object type")
+        object_sha = _require_string(object_value.get("sha"), "GitHub tag object SHA")
+        if object_sha in visited:
+            raise ReleaseError("GitHub tag object cycle detected")
+        visited.add(object_sha)
+        if object_type == "commit":
+            if not SHA1.fullmatch(object_sha):
+                raise ReleaseError("GitHub tag commit is not a full SHA-1")
+            return object_sha
+        if object_type != "tag":
+            raise ReleaseError("GitHub tag does not resolve to a commit")
+        tag_object = _gh_api(repository, f"git/tags/{object_sha}")
+        if tag_object is None:
+            raise ReleaseError("GitHub annotated tag object is missing")
+        object_value = _require_object(tag_object.get("object"), "GitHub annotated tag object")
+
+
+def ensure_github_tag(repository: str, tag: str, commit_sha: str) -> str:
+    if not tag.startswith(RELEASE_TAG_PREFIX):
+        raise ReleaseError("GitHub tag must use the immutable multi-task-flow-vX.Y.Z format")
+    Version(tag.removeprefix(RELEASE_TAG_PREFIX))
+    if not SHA1.fullmatch(commit_sha):
+        raise ReleaseError("GitHub tag commit must be a full SHA-1")
+    existing = github_tag_commit(repository, tag)
+    if existing is not None:
+        if existing != commit_sha:
+            raise ReleaseError("GitHub tag already points to a different commit")
+        return existing
+    try:
+        _gh_api(
+            repository,
+            "git/refs",
+            method="POST",
+            fields={"ref": f"refs/tags/{tag}", "sha": commit_sha},
+        )
+    except ReleaseError:
+        reconciled = github_tag_commit(repository, tag)
+        if reconciled == commit_sha:
+            return reconciled
+        raise
+    reconciled = github_tag_commit(repository, tag)
+    if reconciled != commit_sha:
+        raise ReleaseError("GitHub tag creation did not produce the requested immutable identity")
+    return reconciled
+
+
+def dist_tag_action(current: str | None, target: str) -> str:
+    """Return the only safe action for a monotonic npm dist-tag promotion."""
+    target_version = Version(target)
+    if current is None or not current.strip() or current.strip() == "null":
+        return "promote"
+    try:
+        value = json.loads(current)
+    except json.JSONDecodeError as error:
+        raise ReleaseError("npm returned invalid dist-tag metadata") from error
+    if not isinstance(value, str):
+        raise ReleaseError("npm dist-tag metadata is not a version string")
+    current_version = Version(value)
+    if current_version > target_version:
+        raise ReleaseError("dist-tag points to a newer version; refusing regression")
+    return "keep" if current_version == target_version else "promote"
+
+
 def _labels_argument(value: str | None) -> list[str]:
     if value is None:
         return []
@@ -615,6 +705,17 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--merge-sha")
     validate.add_argument("--compatibility-line")
     validate.add_argument("--allow-missing-tag", action="store_true")
+
+    tag = subparsers.add_parser("verify-tag", help="verify an immutable GitHub tag")
+    tag.add_argument("--repository", required=True)
+    tag.add_argument("--tag", required=True)
+    tag.add_argument("--sha", required=True)
+    tag.add_argument("--create", action="store_true")
+    tag.add_argument("--allow-missing", action="store_true")
+
+    policy = subparsers.add_parser("dist-tag-policy", help="check monotonic npm dist-tag promotion")
+    policy.add_argument("--current")
+    policy.add_argument("--target", required=True)
     return parser
 
 
@@ -643,6 +744,23 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "tarball-digest":
             print(canonical_tarball_digest(args.tarball.resolve()))
+            return 0
+        if args.command == "verify-tag":
+            if args.create:
+                resolved = ensure_github_tag(args.repository, args.tag, args.sha)
+            else:
+                resolved = github_tag_commit(args.repository, args.tag)
+                if resolved is None:
+                    if not args.allow_missing:
+                        raise ReleaseError("GitHub tag is absent")
+                    print(json.dumps({"tag": args.tag, "sha": None}, sort_keys=True))
+                    return 0
+                if resolved != args.sha:
+                    raise ReleaseError("GitHub tag points to a different commit")
+            print(json.dumps({"tag": args.tag, "sha": resolved}, sort_keys=True))
+            return 0
+        if args.command == "dist-tag-policy":
+            print(dist_tag_action(args.current, args.target))
             return 0
         result = validate_tarball(
             args.tarball.resolve(),
