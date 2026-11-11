@@ -23,6 +23,7 @@ const object = (v: unknown): JsonRecord | null =>
     : null;
 const key = (turn: unknown, item: unknown) => JSON.stringify([turn, item]);
 const terminalTurnStatuses = new Set(["completed", "interrupted", "failed"]);
+const activeTurnStatuses = new Set(["inProgress", "started", "running"]);
 
 type ThreadState = {
   output: AgentOutput;
@@ -238,7 +239,10 @@ export class ConversationOutputs {
           if (status === "idle" || status === "notLoaded") {
             const page = await connection.request("thread/turns/list", { threadId: thread, sortDirection: "desc", limit: 1, itemsView: "full" });
             const latest = Array.isArray(page.data) ? object(page.data[0]) : null;
-            if (state.nativeStatus !== "active" && typeof latest?.id === "string" && latest.id.trim() && terminalTurnStatuses.has(String(latest.status))) {
+            if (typeof latest?.id === "string" && latest.id.trim() && activeTurnStatuses.has(String(latest.status))) {
+              runtime = "active";
+              runtimeTurnId = latest.id;
+            } else if (state.nativeStatus !== "active" && typeof latest?.id === "string" && latest.id.trim() && terminalTurnStatuses.has(String(latest.status))) {
               runtime = "idle";
               runtimeTurnId = latest.id;
             }
