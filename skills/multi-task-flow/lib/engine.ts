@@ -3662,7 +3662,7 @@ export function execute(
         review.source === request.actor.thread_id &&
         review.quality?.task_id === taskId &&
         review.quality.thread_id === request.actor.thread_id &&
-        stable(review.quality.pr) === stable(target.pr) &&
+        stable(review.quality.pr) === stable(taskPrRef(target)) &&
         review.quality.base_sha === owner.current_sha &&
         review.quality.head_sha === review.sha,
         "EVIDENCE_REQUIRED",
