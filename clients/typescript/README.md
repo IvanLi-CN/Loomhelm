@@ -12,6 +12,33 @@ bunx --bun --package @loomhelm/multi-task-flow@compat-v1 multi-task-flow flow vi
 
 `compat-v1` 是显式兼容线，不等于 npm package version。package version、compatibility line、Skill version、source/merge SHA、合同版本、build ID 和 digest 在包内 artifact manifest 中分别记录；不从调用者传入的 dist-tag 或 `latest` 推断身份。破坏 CLI 输入输出、账本语义或 viewer/service 边界的变更必须建立新的兼容线，旧兼容线继续保留为可安装版本。
 
+## 版本化安装与内部版本矩阵
+
+可重复的生产安装必须固定 package version；`@compat-v1` 只用于接收同一兼容线内经过门禁的最新版本，`latest` 不构成身份或兼容性证明。运行前置条件是 `bun --version` 返回 `1.4.4`；Bun 由宿主提供，包不会替换或升级它。
+
+```sh
+bunx --bun --package @loomhelm/multi-task-flow@0.2.0 multi-task-flow skills list
+bunx --bun --package @loomhelm/multi-task-flow@compat-v1 multi-task-flow skills list
+bunx --bun --package @loomhelm/multi-task-flow@0.2.0 multi-task-flow flow view --input - < view-request.json
+```
+
+当前源码投影的内部合同矩阵如下；`source_sha`、`merge_sha`、`build_id` 和 `tarball_digest` 是每个候选构建的独立身份字段，不能由这张静态表推断。
+
+| 维度 | 当前值 |
+| - | - |
+| package | `@loomhelm/multi-task-flow@0.2.0` |
+| compatibility line | `compat-v1` |
+| Skill | `2.7.2` |
+| ledger contract | `3` |
+| API | `1` |
+| frontend | `1` |
+| viewer | `5` |
+| service | `1` |
+
+破坏 CLI 输入输出、账本写入语义、viewer API、frontend 或 service 边界时，必须提升 `compat-vN`；仅提升 package SemVer 不会扩大旧兼容线的合同。包发布仍需经过仓库 release gate 和精确 merge SHA 验证，当前源码投影不等于已经发布到 npm。
+
+npm 发布需要 `@loomhelm` scope 的 registry 配置、可写的 automation token 和 owner-approved release workflow；token 不得写入 README、PR body、日志或 artifact。缺少 registry/auth 时只执行本地 build、pack 和 tarball 校验，不把本地候选称为已发布包。
+
 ```sh
 bun install --frozen-lockfile
 bun install --cwd skills/multi-task-flow --frozen-lockfile
@@ -111,3 +138,26 @@ viewer 新包采用 v2 清单，覆盖启动 shell、TS、依赖及网页的逐�
 公共类型从 `src/index.ts` 导出；源码包直接提供 TS 导出与类型，类型检查使用 noEmit。`runtime` 集中进程、文件和锁适配；`tasks` 负责纯状态规则、事实持久化和收据；`git` 独立于服务端调用本机 Git。生产资源不包含 Node 加载器或编译 JS 回退。
 
 本包提供 [客户端设计](../../docs/design/client.md) 所定义的独立核心、Codex app-server 接线、Skills/工程工作流入口、dispatch 和持久任务编排。Connected mode 仍未实现；不能将本包测试通过解释为整个产品范围均已验收。
+
+## Viewer service 运维
+
+viewer service 由单一 loopback gateway 管理，实际 worker 通过 owner-only Unix socket 受控；直接 ledger CLI 不经过 viewer HTTP，也不能借 viewer 路由绕过 ledger owner、revision 或 command identity。以下命令均从已安装 Skill 根目录执行，输入必须是一个 JSON 对象并通过 stdin 传入：`bun --no-install run <skill>/scripts/service.ts <command> --input -`。
+
+```sh
+bun --no-install run <skill>/scripts/service.ts status --input - < status.json
+bun --no-install run <skill>/scripts/service.ts doctor --input - < empty.json
+bun --no-install run <skill>/scripts/service.ts ensure --input - < ensure.json
+bun --no-install run <skill>/scripts/service.ts compatibility-check --input - < candidate.json
+bun --no-install run <skill>/scripts/service.ts upgrade --input - < candidate.json
+bun --no-install run <skill>/scripts/service.ts rollback --input - < rollback.json
+```
+
+`ensure` 的 actor 至少包含 `{ "run_id": "<run-id>", "thread_id": "<thread-id>", "api_version": 1 }`；它会核对安装 manifest、generation、PID、port 和 health identity，并在旧实例停止后重新建立租约。`status` 或 `doctor` 先确认安装、运行阶段和当前 build；启动失败时保留 runtime 状态并检查配置 user service 的 launchd 记录，不删除 data 或 release 目录。
+
+agent lease 默认 60 分钟，browser lease 默认 5 分钟；浏览器页面应每 60 秒续租。所有租约过期后服务进入 stopping，账本和发布目录保留，下一次 `ensure` 负责恢复；不要通过删除 runtime、抢占端口或手工杀死不属于当前 generation/PID 的进程来“修复”。`credential-rotate` 或 `credential-revoke` 会撤销 browser sessions，之后必须重新获取一次性登录票据；`login` 返回的 URL 只使用一次且 60 秒过期。
+
+升级顺序是 `status`/`doctor`、`compatibility-check`、`upgrade`、health 验证；回退使用 `compatibility-check` 的 `{ "rollback": true }` 报告后再执行 `rollback`。候选不可读、custom view 不兼容、generation/PID 不匹配或旧 reader 也无法安全读取时必须停在 preflight；不得强制切换、自动反向迁移或盲目重试未知发布结果。
+
+历史账本的合同迁移使用 `ledger-maintenance-check` 和 `ledger-maintenance-apply`，不是 `import`/`migrate` 别名。check 先产生 source/target contract、owner、revision、ledger digest、pending operations 和 operation digest；apply 必须携带原 owner thread、expected revision、expected ledger SHA-256、operation digest、maintenance identity、approval reference、reason 和 `writers_paused: true`，并保留完整 backup。迁移只允许机械补齐合同 envelope，不补造 baseline、event、owner 或业务策略。
+
+最新 reader 对受支持历史格式执行双读；旧 reader 仅在最新 reader 无法安全解释时进入隔离只读 fallback。fallback 不得取得 lease、修改 revision、写入 ledger 或伪装成当前 service；损坏或无法证明安全读取的 run 单独标记并 fail closed。恢复时先按 `run_id`、build/source/merge identity、generation、PID、ledger SHA-256 和 provider receipt 对账，再决定重试或回退。

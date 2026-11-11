@@ -382,7 +382,6 @@ try {
     const creationParameters = {
       title: payload.title,
       prompt: payload.prompt,
-      role: operation.request.target_type === "group" ? "Delivery Agent" : "Task Agent",
       cwd: process.cwd(),
       execution_profile: profile,
       transport: "codex-exec",

@@ -22,6 +22,12 @@ ADR 0028 继续约束独立版本 envelope、source/build identity、generation/
 
 后续发布记录必须同时保存 package version、compatibility line、Skill version、merge SHA、build ID、tarball digest、Git tag、registry metadata 和验证证据；缺少任一身份字段时不得声称发布完成。
 
+## Documentation Baseline
+
+当前源码合同已同步到客户端 README、Multi-task Flow Skill 和 workflow README，覆盖精确 package/Bun 入口、`compat-vN` 与内部版本矩阵、direct ledger CLI、gateway/worker 边界、agent/browser TTL、latest reader 双读、旧 reader 只读 fallback、maintenance migration、rollback、label gate、exact merge SHA、single tarball、immutable tag、dist-tag promotion 和失败恢复。
+
+这次文档同步只记录已经存在的源码合同和可执行 workflow，不创建 npm 凭据、不安装或升级用户 service，也不把本地 build、PR gate 或候选 tarball 视为 registry publication。后续真实发布仍须由 owner-approved workflow 产生完整 identity 和 provider receipt。
+
 ## Related Documents
 
 - [Topic specification](SPEC.md)
