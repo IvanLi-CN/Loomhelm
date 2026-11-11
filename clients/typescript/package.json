@@ -52,7 +52,7 @@
     "compatibilityLine": "compat-v1",
     "skillVersion": "2.7.2",
     "contracts": {
-      "ledger": 2,
+      "ledger": 3,
       "api": 1,
       "frontend": 1,
       "viewer": 5,
