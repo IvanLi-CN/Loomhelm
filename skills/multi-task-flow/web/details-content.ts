@@ -73,7 +73,28 @@ function durationValue(start: string | null, end: string | null): HTMLElement {
   return value;
 }
 
-function atomList(atoms: Task["atoms"] | Group["atoms"], dependencies: (index: number) => DependencyTooltipItem[]): HTMLElement | string {
+function coordinatorValue(group: Group): string {
+  const status = group.coordinator?.status ?? (group.delivery_unit_kind === "bootstrap"
+    ? group.agent_thread_id ? "bound" : "unknown"
+    : group.agent_thread_id ? "bound" : "not_created");
+  if (status === "bound") return group.delivery_unit_kind === "bootstrap" ? "主对话已绑定" : "已绑定";
+  return status === "not_created" ? "尚未创建" : "未知";
+}
+
+function readinessValue(group: Group): string {
+  const readiness = group.runtime_readiness;
+  if (!readiness) return "未知";
+  const status = readiness.status === "ready" ? "Ready" : readiness.status === "blocked" ? "Blocked" : "Unknown";
+  const blockers = readiness.blockers.map((blocker) => {
+    const resource = blocker.resource
+      ? ` · 资源：${blocker.resource.status === "not_created" ? "尚未创建" : "未知"}`
+      : "";
+    return `${blocker.message}${resource}`;
+  });
+  return [status, ...blockers].join(" · ");
+}
+
+function atomList(atoms: Task["atoms"] | Group["atoms"], dependencies: (index: number) => DependencyTooltipItem[], focusedAtomId?: string | null, parent?: { kind: "task" | "group"; id: string }): HTMLElement | string {
   if (!atoms?.length) return "未配置原子任务";
   const list = document.createElement("ol");
   list.className = "atom-list";
@@ -83,8 +104,10 @@ function atomList(atoms: Task["atoms"] | Group["atoms"], dependencies: (index: n
   for (const [index, atom] of atoms.entries()) {
     const item = document.createElement("li");
     item.dataset.status = atom.status;
+    if (parent) { item.dataset.contextKind = "atom"; item.dataset.contextId = atom.id; item.dataset.contextParentKind = parent.kind; item.dataset.contextParentId = parent.id; }
     item.tabIndex = 0;
     if (atom.id === current?.id) item.dataset.current = "true";
+    if (atom.id === focusedAtomId) { item.dataset.focused = "true"; item.setAttribute("aria-current", "true"); }
     item.append(renderStatusRow({ name: atom.title, status: atom.status, completedAt: atom.completed_at }));
     list.append(item);
     wrapper.append(attachDependencyTooltip(item, dependencies(index), `${atom.title}，查看依赖`));
@@ -163,7 +186,7 @@ export function createDetailContent(context: DetailContentContext) {
         const source = data.tasks.flatMap((item) => item.atoms ?? item.planned_atoms ?? []).find((atom) => atom.id === edge.from_atom_id);
         return { name: source?.title ?? edge.from_atom_id, state: "", status: source?.status ?? "unknown", completedAt: source?.completed_at };
       });
-    }));
+    }, null, { kind: "task", id: task.id }));
     field(container, "前驱", renderDependencyTooltip(predecessors, predecessors.length ? `查看 ${predecessors.length} 项依赖` : "无依赖"));
     field(container, "后继", renderDependencyTooltip(successors, successors.length ? `查看 ${successors.length} 项依赖` : "无依赖"));
     const projectedNode = projection.nodes.find((item) => item.sourceNodeId === node?.id);
@@ -208,7 +231,7 @@ export function createDetailContent(context: DetailContentContext) {
     restore();
   };
 
-  const showGroup = (group: Group): void => {
+  const showGroup = (group: Group, focusedAtomId: string | null = null): void => {
     const data = context.getData();
     if (!data) return;
     const tasks = data.tasks.filter((task) => task.group_id === group.id);
@@ -226,9 +249,11 @@ export function createDetailContent(context: DetailContentContext) {
         items.push({ name: titles[atom.lifecycle_stage], state: "", status: status === "passed" ? "completed" : status === "failed" ? "blocked" : "planned", completedAt: group.lifecycle_completed_at?.[atom.lifecycle_stage] });
       }
       return items;
-    }));
+    }, focusedAtomId, { kind: "group", id: group.id }));
     if (group.coordination_execution?.state === "waiting") field(container, "协调等待", group.coordination_execution.reason ?? "等待贡献任务");
     if (group.coordination_execution?.state === "blocked") field(container, "协调阻塞", group.coordination_execution.reason ?? "未知原因");
+    field(container, "交付协调者", coordinatorValue(group));
+    field(container, "运行就绪", readinessValue(group));
     field(container, "任务数", `${tasks.length} 个任务`);
     if (historicalTaskIds.length) field(container, "历史执行任务", historicalTaskIds.map((id) => data.tasks.find((task) => task.id === id)?.title ?? id).join("、"));
     field(container, "持续时间", durationValue(group.started_at ?? null, group.finished_at ?? null));
@@ -259,5 +284,13 @@ export function createDetailContent(context: DetailContentContext) {
     const progress = atoms.length === 0 ? "未配置原子任务" : atoms.every((item) => item.status === "completed") ? `${atoms.length}/${atoms.length} · 已完成` : atom ? `${atoms.indexOf(atom) + 1}/${atoms.length} · ${atom.title}` : `0/${atoms.length} · 待开始`;
     return renderGroupPreview({ title: group.title, state: context.labels[executionState] ?? executionState, atomProgress: progress, duration: formatDuration(group.started_at ?? null, group.finished_at ?? null), conversation: group.delivery_unit_kind === "bootstrap" ? "主对话" : group.agent_thread_id ? "已创建" : "尚未创建", parentPr: context.safeExternal(group.parent_pr?.url ?? null) ? "已关联" : "尚未创建" });
   };
-  return { clearDetails, showTask, showGroup, taskPreview, groupPreview };
+  const showMilestone = (nodeId: string, group: Group): void => {
+    const data = context.getData();
+    const node = data?.nodes.find((item) => item.id === nodeId && item.kind === "milestone");
+    const focusedAtomId = group.atoms?.find((atom) => atom.lifecycle_stage === "pr_merged")?.id ?? group.planned_atoms?.find((atom) => atom.lifecycle_stage === "pr_merged")?.id ?? null;
+    showGroup(group, focusedAtomId);
+    const summary = document.getElementById("details-summary");
+    if (summary && node) summary.replaceChildren(text("div", node.label, "detail-title"), text("div", "里程碑", "detail-state"));
+  };
+  return { clearDetails, showTask, showGroup, showMilestone, taskPreview, groupPreview };
 }

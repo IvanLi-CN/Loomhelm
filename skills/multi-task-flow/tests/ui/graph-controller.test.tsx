@@ -2,6 +2,7 @@ import { expect, mock, test } from 'bun:test';
 import React, { act } from 'react';
 import { createSingleDeliveryUnitLedger } from '../../examples/single-delivery-unit/ledger';
 import { buildView } from '../../lib/view';
+import { emptyBootstrapView } from '../service-fixture';
 import type { GraphContext } from '../../web/graph';
 import type { GraphLayout } from '../../web/graph-layout';
 import type { GraphProjection } from '../../web/graph-projection';
@@ -51,4 +52,32 @@ test('pending projection refreshes deduplicate, retain latest state and reject s
   const current = elements.get('graph')!.innerHTML;
   await act(async () => { requests[2]!.resolve(placed(requests[2]!.projection)); });
   expect(elements.get('graph')!.innerHTML).toBe(current);
+});
+
+test('renders an empty delivery unit as a graph and accessible node', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, requestAnimationFrame: (callback: FrameRequestCallback) => { callback(0); return 0; } });
+  const view = emptyBootstrapView();
+  const elements = new Map(['graph', 'graph-empty', 'graph-projection-warning', 'graph-a11y'].map(id => [id, document.createElement('div')]));
+  const context: GraphContext = {
+    element: id => elements.get(id)! as any, getData: () => view,
+    getViewState: () => ({ zoom: 1 }), setZoom: () => {}, css: (_name, fallback) => fallback,
+    stateColor: () => '#888', groupColor: () => '#888', getSelected: () => ({ task: null, group: null }),
+    taskPreview: () => document.createElement('div'), groupPreview: () => document.createElement('div'),
+    showHoverPreview: () => {}, hideHoverPreview: () => {}, recordPointerType: () => {}, selectTask: () => {}, selectGroup: () => {},
+  };
+  const requests: { projection: GraphProjection; resolve: (result: GraphLayout) => void }[] = [];
+  let controller!: ReturnType<typeof createGraphController>;
+
+  await act(async () => { controller = createGraphController(context, projection => new Promise(resolve => requests.push({ projection, resolve }))); controller.render(view.tasks); });
+  await act(async () => { requests[0]!.resolve(placed(requests[0]!.projection)); });
+  expect(elements.get('graph')!.querySelector('[data-node="group:bootstrap"]')).not.toBeNull();
+  expect(elements.get('graph-empty')!.hidden).toBe(true);
+  const fullLabel = elements.get('graph-a11y')!.querySelector<HTMLButtonElement>('[data-graph-node-id="group:bootstrap"]')?.getAttribute('aria-label');
+  expect(fullLabel).toContain('交付单元：版本化 Skill 发布合同');
+  expect(fullLabel).toContain('后继：后续实现任务');
+
+  await act(async () => { controller.render([], new Set(['bootstrap'])); });
+  await act(async () => { requests[1]!.resolve(placed(requests[1]!.projection)); });
+  expect(elements.get('graph')!.querySelector('[data-node="group:bootstrap"]')).not.toBeNull();
+  expect(elements.get('graph-empty')!.hidden).toBe(true);
 });

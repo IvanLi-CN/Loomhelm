@@ -50,8 +50,9 @@ export function isDetailInteraction(target: Element | null): boolean {
   return Boolean(target?.closest(DETAIL_INTERACTION_SELECTOR));
 }
 
-export function selectedObjectFocusSelector(selection: { kind: "task" | "group"; id: string } | null): string | null {
+export function selectedObjectFocusSelector(selection: { kind: "task" | "group" | "milestone"; id: string } | null): string | null {
   if (!selection) return null;
+  if (selection.kind === "milestone") return `[data-graph-node-id="${selection.id}"], [data-context-kind="milestone"][data-context-id="${selection.id}"]`;
   const attribute = selection.kind === "task" ? "data-task-id" : "data-group-id";
   return `[${attribute}="${selection.id}"] .task-card-select, [${attribute}="${selection.id}"] .task-column-select`;
 }

@@ -15,7 +15,9 @@ function closeTooltips(except: HTMLElement | null = null): void {
     if (except && (tooltip.contains(except) || (triggerId && document.getElementById(triggerId) === except))) continue;
     tooltip.classList.remove("is-open");
     tooltip.hidden = true;
-    if (triggerId) document.getElementById(triggerId)?.setAttribute("aria-expanded", "false");
+    if (triggerId && tooltip.getAttribute("role") === "dialog") {
+      document.getElementById(triggerId)?.setAttribute("aria-expanded", "false");
+    }
   }
 }
 
@@ -160,7 +162,7 @@ export function installTextTooltips(root: HTMLElement = document.body): () => vo
     binding.tooltip.remove();
   };
   const sync = (): void => {
-    const eligible = new Set(root.querySelectorAll<HTMLElement>("button.icon-button[data-tooltip], a.icon-button[data-tooltip], a.brand-mark[data-tooltip]"));
+    const eligible = new Set(root.querySelectorAll<HTMLElement>("button.icon-button[data-tooltip], a.icon-button[data-tooltip], a.brand-mark[data-tooltip], summary.profile-trigger[data-tooltip]"));
     for (const [trigger, binding] of bindings) {
       if (!root.contains(trigger) || !eligible.has(trigger)) {
         removeBinding(trigger, binding);

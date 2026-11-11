@@ -22,10 +22,12 @@ const object = (v: unknown): JsonRecord | null =>
     ? (v as JsonRecord)
     : null;
 const key = (turn: unknown, item: unknown) => JSON.stringify([turn, item]);
+const terminalTurnStatuses = new Set(["completed", "interrupted", "failed"]);
 
 type ThreadState = {
   output: AgentOutput;
   version: number;
+  nativeStatus: "active" | "idle" | "unknown";
   activeTurnId: string | null;
   items: Map<
     string,
@@ -84,6 +86,7 @@ export class ConversationOutputs {
         this.threads.set(thread, {
           output: initialOutput(thread),
           version: 0,
+          nativeStatus: "unknown",
           activeTurnId: null,
           items: new Map(),
           rank: 0,
@@ -223,20 +226,31 @@ export class ConversationOutputs {
       void (async () => {
         let runtime: "active" | "idle" | "unknown" = "unknown";
         let runtimeTurnId: string | null = null;
+        let observedNativeStatus: "active" | "idle" | "unknown" = "unknown";
         try {
           const metadata = await metadataRead;
           const status = object(object(metadata.thread)?.status)?.type;
-          if (status === "active") runtime = "active";
-          if (status === "idle") {
+          if (status === "active") { observedNativeStatus = "active"; runtime = "active"; }
+          else if (status === "idle") observedNativeStatus = "idle";
+          // Codex reports completed threads that are not loaded in the current
+          // app session as `notLoaded`. Confirm the latest turn before treating
+          // that runtime as idle; an active or missing turn remains unknown.
+          if (status === "idle" || status === "notLoaded") {
             const page = await connection.request("thread/turns/list", { threadId: thread, sortDirection: "desc", limit: 1, itemsView: "full" });
             const latest = Array.isArray(page.data) ? object(page.data[0]) : null;
-            if (typeof latest?.id === "string" && latest.id.trim() && ["completed", "interrupted", "failed"].includes(String(latest.status))) {
+            if (state.nativeStatus !== "active" && typeof latest?.id === "string" && latest.id.trim() && terminalTurnStatuses.has(String(latest.status))) {
               runtime = "idle";
               runtimeTurnId = latest.id;
             }
           }
         } catch { /* Runtime observation is independent of readable output history. */ }
         if (!valid()) return;
+        if (state.nativeStatus === "active" && runtime !== "active") {
+          runtime = "active";
+          runtimeTurnId = null;
+        } else {
+          state.nativeStatus = observedNativeStatus;
+        }
         state.activeTurnId = runtimeTurnId;
         this.set(state, { ...state.output, agent_state: runtime, runtime_turn_id: runtimeTurnId });
       })();
@@ -299,13 +313,15 @@ export class ConversationOutputs {
     if (method === "thread/status/changed") {
       const status = object(params.status)?.type;
       state.version++;
+      state.nativeStatus = status === "active" ? "active" : status === "idle" ? "idle" : "unknown";
       state.activeTurnId = null;
       this.set(state, { ...state.output, agent_state: status === "active" ? "active" : "unknown", runtime_turn_id: null, observed_at: new Date().toISOString() });
-      if (status === "idle" && this.connection) void this.load(thread, this.connection, this.generation);
+      if ((status === "idle" || status === "notLoaded") && this.connection) void this.load(thread, this.connection, this.generation);
       return;
     }
     if (method === "turn/started") {
       state.version++;
+      state.nativeStatus = "active";
       state.activeTurnId = typeof object(params.turn)?.id === "string" ? object(params.turn)!.id as string : null;
       this.set(state, { ...state.output, agent_state: "active", turn_id: typeof object(params.turn)?.id === "string" ? object(params.turn)!.id as string : state.output.turn_id });
       return;

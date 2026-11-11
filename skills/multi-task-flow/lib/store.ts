@@ -326,6 +326,7 @@ export class LedgerStore {
         ledger = normalizeLegacyLedger(ledger);
         const result = fn(ledger);
         if (isDomainLedger) validateLedger(ledger);
+        requireLedgerCompatibility(ledger, "write");
         const nextContent = JSON.stringify(ledger, null, 2) + "\n";
         if (nextContent !== oldContent) {
           writeAtomicNoFollow(

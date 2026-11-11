@@ -5,13 +5,18 @@ import { readFileSync, realpathSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { connectSocket, record, rpc, socketPath } from "../lib/codex-rpc";
 
-export const INITIALIZATION_PROMPT = "这是对话初始化握手。只回复‘初始化完成’，然后立即结束本轮。不要调用工具、读取文件、修改文件、执行任务或等待后续消息。正式任务将在创建进程退出并完成账本绑定后另行发送。";
+export type AgentRole = "Delivery Agent" | "Task Agent";
+export function initializationPrompt(role: AgentRole): string {
+  return `你是本次 multi-task-flow 运行中的 ${role}，由主 Agent 委派到独立工作区。主 Agent 稍后会发送正式派发消息，其中包含 run/task 身份、仓库、开发基线、负责范围、验收要求和阻塞规则。在收到正式派发前，请不要开始正式任务。`;
+}
+export const INITIALIZATION_PROMPT = initializationPrompt("Task Agent");
 export type CliRun = {
   thread_id?: string; exit_code: number | null; turn_completed: boolean;
   events: string[]; error?: string;
 };
 export type CliCreationInput = {
   title: string; prompt: string; model: string; thinking: string; cwd?: string;
+  role?: AgentRole;
   repository?: RepositoryIdentity;
   native_request_id?: string;
   onThreadStarted?: (threadId: string) => void;
@@ -46,7 +51,7 @@ export async function runInitialization(input: CliCreationInput): Promise<CliRun
   try {
     const execution = await runProcess({
       command: "codex", args: ["exec", "-C", input.cwd ?? process.cwd(), "--worktree", "--json", "-m", input.model,
-        "-c", `model_reasoning_effort=${JSON.stringify(input.thinking)}`, INITIALIZATION_PROMPT],
+        "-c", `model_reasoning_effort=${JSON.stringify(input.thinking)}`, initializationPrompt(input.role ?? "Task Agent")],
       cwd: input.cwd ?? process.cwd(), signal: controller.signal,
       env: { ...process.env, MULTI_TASK_FLOW_NATIVE_REQUEST_ID: input.native_request_id },
       timeoutMs: Number.isFinite(configured) && configured >= 1000 && configured <= 600_000 ? configured : 300_000,

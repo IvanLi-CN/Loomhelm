@@ -6,6 +6,8 @@ import {
   renameSync,
   readFileSync,
   realpathSync,
+  writeFileSync,
+  chmodSync,
   watch,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,6 +36,16 @@ const moduleRoot = resolve(import.meta.dir, "..");
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mtf-source-preview-")));
 const assetsDir = join(root, "assets");
 mkdirSync(assetsDir);
+// Keep the source preview deterministic and sufficiently dense for validating
+// long PR popovers without querying or depending on a live repository.
+const previewTools = join(root, "tools");
+mkdirSync(previewTools);
+const previewChecks = ["Blue–Green Control Contract", "Quality Gates", "Product Release Contract", "Compatibility Release Gate", "Bootstrap Verification", "React Doctor", "Repository Verification", "Go Race Tests", "Go Shuffle Tests", "Repository Contracts", "TypeScript Client (Bun)", "Skills Native macOS", "Candidate Producer"].flatMap((name, index) => [{ name, conclusion: index === 6 ? "CANCELLED" : "SUCCESS" }, { name, conclusion: "SUCCESS" }]);
+const previewPR = JSON.stringify({ number: 71, title: "feat: refine card resource popovers", url: "https://github.com/IvanLi-CN/Loomhelm/pull/71", state: "MERGED", mergedAt: null, mergeable: "MERGEABLE", statusCheckRollup: previewChecks });
+const previewGh = join(previewTools, "gh");
+writeFileSync(previewGh, `#!/bin/sh\nprintf '%s' ${JSON.stringify(previewPR)}\n`);
+chmodSync(previewGh, 0o700);
+process.env.PATH = `${previewTools}:${process.env.PATH ?? ""}`;
 async function build() {
   const child = Bun.spawn(
     [

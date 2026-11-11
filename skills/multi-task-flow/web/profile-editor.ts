@@ -11,7 +11,8 @@ export type ProfileEditorContext = {
 export function createProfileEditor(context: ProfileEditorContext, target: ProfileTarget, id: string, current: ExecutionProfile | null, effective: ExecutionProfile | null, freezeReason: string | null, recommendation: string | null = null): HTMLElement {
   const wrapper = document.createElement("div");
   wrapper.className = "execution-profile-editor";
-  if (freezeReason) {
+  const runReadOnly = target === "run" && Boolean(freezeReason);
+  if (freezeReason && !runReadOnly) {
     const value = document.createElement("p"); value.className = "profile-caption";
     value.textContent = effective ? `${effective.model} · ${effective.thinking}` : "执行配置待迁移";
     const reason = document.createElement("p"); reason.className = "profile-caption"; reason.textContent = `只读：${freezeReason}`;
@@ -19,14 +20,27 @@ export function createProfileEditor(context: ProfileEditorContext, target: Profi
   }
   const dropdown = document.createElement("details"); dropdown.className = "profile-dropdown";
   const trigger = document.createElement("summary"); trigger.className = "profile-trigger";
-  trigger.setAttribute("aria-label", target === "run" ? "默认执行配置" : "编辑执行配置");
-  trigger.textContent = target === "run" ? "默认执行配置" : effective ? `${effective.model} · ${effective.thinking}` : "选择模型与思考强度";
-  trigger.append(menuChevron());
+  if (target === "run") {
+    const label = "默认执行配置";
+    trigger.dataset.tooltip = label;
+    trigger.setAttribute("aria-label", label);
+    if (runReadOnly) trigger.setAttribute("aria-disabled", "true");
+    const icon = document.createElement("i"); icon.dataset.lucide = "settings-2"; icon.setAttribute("aria-hidden", "true");
+    trigger.append(icon);
+  } else {
+    trigger.setAttribute("aria-label", "编辑执行配置");
+    trigger.textContent = effective ? `${effective.model} · ${effective.thinking}` : "选择模型与思考强度";
+    trigger.append(menuChevron());
+  }
   const panel = document.createElement("div"); panel.className = "profile-panel";
   const caption = document.createElement("p"); caption.className = "profile-caption";
   caption.textContent = target === "run" ? "用于没有独立配置的新对话。" : current ? "当前对象使用独立配置。" : "当前对象使用运行默认值。";
   panel.append(caption);
   if (recommendation) { const reason = document.createElement("p"); reason.className = "profile-caption"; reason.textContent = recommendation; panel.append(reason); }
+  if (runReadOnly) {
+    const reason = document.createElement("p"); reason.className = "profile-caption"; reason.textContent = `只读：${freezeReason}`;
+    panel.append(reason); dropdown.append(trigger, panel); wrapper.append(dropdown); return wrapper;
+  }
   const options = (context.capabilities ?? []).map((item) => ({ value: item.model, label: item.model }));
   if (target !== "run") options.unshift({ value: "", label: "使用运行默认值" });
   if (current && !options.some((item) => item.value === current.model)) options.push({ value: current.model, label: `${current.model}（不可用）` });

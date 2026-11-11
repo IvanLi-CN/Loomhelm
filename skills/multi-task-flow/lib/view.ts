@@ -36,6 +36,17 @@ export type PlannedInterval = {
 
 const RELATIVE_EPOCH = Date.parse("2000-01-01T00:00:00.000Z");
 
+function deliveryGateDiagnostics(group: Ledger["groups"][number]): Record<string, string>[] {
+  const workspaceAtom = group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
+  const prAtom = group.atoms.find((atom) => atom.lifecycle_stage === "pr_created");
+  const diagnostics: Record<string, string>[] = [];
+  if (group.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
+    diagnostics.push({ code: "DELIVERY_WORKSPACE_GATE_PENDING", message: "交付单元尚未完成 workspace_ready 原子任务" });
+  if (group.lifecycle.pr_created !== "passed" || !group.parent_pr || prAtom?.status !== "completed")
+    diagnostics.push({ code: "DELIVERY_PARENT_PR_GATE_PENDING", message: "父 PR 尚未创建、核验并完成交付原子任务" });
+  return diagnostics;
+}
+
 function formalExecutionWarnings(ledger: Ledger): Record<string, unknown>[] {
   return ledger.groups.flatMap((group) => {
     if (group.state !== "active" || group.coordination_execution.state !== "running")
@@ -61,6 +72,367 @@ function formalExecutionWarnings(ledger: Ledger): Record<string, unknown>[] {
       reason: "交付单元正在运行，但没有正式 task dispatch 或任务对话记录。",
     }];
   });
+}
+
+type ReadinessBlocker = {
+  code: string;
+  group_id: string | null;
+  message: string;
+  resource: {
+    kind: "conversation" | "worktree" | "branch" | "pr";
+    status: "not_created" | "unknown";
+    target_id: string | null;
+  } | null;
+};
+
+type RuntimeReadiness = {
+  status: "ready" | "blocked" | "unknown";
+  blockers: ReadinessBlocker[];
+};
+
+function planGroupIds(ledger: Ledger, plan: Plan): Set<string> {
+  const taskIds = new Set(
+    plan.nodes
+      .filter((node) => node.kind === "task" && node.ref_id)
+      .map((node) => node.ref_id),
+  );
+  const groupIds = new Set(
+    plan.nodes
+      .map((node) => node.group_id)
+      .filter((groupId): groupId is string => groupId !== null),
+  );
+  for (const task of ledger.tasks) {
+    if (taskIds.has(task.id)) groupIds.add(task.group_id);
+  }
+  return groupIds;
+}
+
+function requiresRuntimeEvidence(ledger: Ledger): boolean {
+  return !(ledger.source_schema_version === 1 && ledger.contract_version !== 2);
+}
+
+function planSchedulingIssues(ledger: Ledger, plan: Plan): PlanCompletenessIssue[] {
+  if (ledger.source_schema_version === 1) return [];
+  const contributionTasks = ledger.tasks.filter(
+    (task) => task.disposition === "active" && isContributionKind(task.kind),
+  );
+  const groupIds = new Set(contributionTasks.map((task) => task.group_id));
+  const missing: string[] = [];
+  for (const groupId of groupIds) {
+    for (const kind of ["publish_branch", "publish_pr"] as const) {
+      if (!plan.actions.some(
+        (action) =>
+          action.kind === kind &&
+          action.group_id === groupId &&
+          action.task_id === null,
+      )) missing.push(`${kind}:group:${groupId}`);
+    }
+  }
+  for (const task of contributionTasks) {
+    if (!plan.actions.some((action) => action.task_id === task.id)) continue;
+    for (const kind of ["publish_branch", "publish_pr"] as const) {
+      if (!plan.actions.some(
+        (action) =>
+          action.kind === kind &&
+          action.task_id === task.id &&
+          action.group_id === null,
+      )) missing.push(`${kind}:task:${task.id}`);
+    }
+  }
+  return missing.length
+    ? [{
+        code: "PLAN_NOT_DISPATCHABLE",
+        message: `贡献任务执行需要批准的发布动作：${missing.join(", ")}`,
+      }]
+    : [];
+}
+
+function taskSchedulingIssues(ledger: Ledger): Array<PlanCompletenessIssue & { group_id: string }> {
+  if (ledger.source_schema_version === 1) return [];
+  return ledger.tasks.flatMap((task) =>
+    taskExecutionPolicyIssues(task).map((issue) => ({ ...issue, group_id: task.group_id })),
+  );
+}
+
+function activeGroupDispatch(
+  ledger: Ledger,
+  groupId: string,
+): Ledger["operations"][number] | null {
+  return ledger.operations.find(
+    (operation) =>
+      operation.kind === "dispatch" &&
+      operation.target_id === groupId &&
+      operation.request.target_type === "group" &&
+      ["claimed", "unknown", "succeeded"].includes(operation.status),
+  ) ?? null;
+}
+
+function coordinatorProjection(ledger: Ledger, group: Ledger["groups"][number]) {
+  if (group.delivery_unit_kind === "bootstrap") {
+    return ledger.control.owner_thread_id
+      ? { status: "bound" as const, thread_id: ledger.control.owner_thread_id }
+      : { status: "unknown" as const, thread_id: null };
+  }
+  return group.agent_thread_id
+    ? { status: "bound" as const, thread_id: group.agent_thread_id }
+    : activeGroupDispatch(ledger, group.id)
+      ? { status: "unknown" as const, thread_id: null }
+    : { status: "not_created" as const, thread_id: null };
+}
+
+function blockerResource(
+  ledger: Ledger,
+  kind: "worktree" | "branch",
+  targetId: string,
+): ReadinessBlocker["resource"] {
+  return {
+    kind,
+    status: ledger.resources.some(
+      (resource) => resource.kind === kind && resource.target === targetId,
+    ) ? "unknown" : "not_created",
+    target_id: targetId,
+  };
+}
+
+function groupWorkspaceBlockers(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+): ReadinessBlocker[] {
+  if (!requiresRuntimeEvidence(ledger)) return [];
+  const hasContributionWork = ledger.tasks.some(
+    (task) =>
+      task.group_id === group.id &&
+      task.disposition === "active" &&
+      isContributionKind(task.kind) &&
+      !["integrated", "completed", "closed"].includes(task.state),
+  );
+  const groupDispatch = activeGroupDispatch(ledger, group.id);
+  const hasCodexExecDispatch =
+    groupDispatch?.status === "succeeded" &&
+    (groupDispatch.request.creation_parameters as any)?.transport === "codex-exec";
+  if (!hasContributionWork && !hasCodexExecDispatch) return [];
+
+  const blockers: ReadinessBlocker[] = [];
+  if (group.lifecycle.workspace_ready !== "passed") {
+    blockers.push({
+      code: "WORKSPACE_NOT_READY",
+      group_id: group.id,
+      message: `交付单元「${group.title}」尚未记录通过的工作区就绪事实。`,
+      resource: blockerResource(ledger, "worktree", group.id),
+    });
+    return blockers;
+  }
+
+  const worktreeReady = ledger.resources.some(
+    (resource) =>
+      resource.kind === "worktree" &&
+      resource.target === group.id &&
+      resource.status === "active",
+  );
+  if (!worktreeReady) {
+    blockers.push({
+      code: "WORKSPACE_NOT_READY",
+      group_id: group.id,
+      message: `交付单元「${group.title}」缺少可用的活动工作区。`,
+      resource: blockerResource(ledger, "worktree", group.id),
+    });
+  }
+
+  if (!group.parent_branch || !group.current_sha) {
+    blockers.push({
+      code: "BASE_NOT_READY",
+      group_id: group.id,
+      message: `交付单元「${group.title}」缺少可核对的父分支基线。`,
+      resource: blockerResource(ledger, "branch", group.parent_branch ?? group.id),
+    });
+  } else {
+    const branchReady = ledger.resources.some(
+      (resource) =>
+        resource.kind === "branch" &&
+        resource.target === group.parent_branch &&
+        resource.status === "active",
+    );
+    if (!branchReady) {
+      blockers.push({
+        code: "WORKSPACE_NOT_READY",
+        group_id: group.id,
+        message: `交付单元「${group.title}」缺少活动父分支资源。`,
+        resource: blockerResource(ledger, "branch", group.parent_branch),
+      });
+    }
+  }
+
+  if (hasContributionWork && group.parent_branch && group.current_sha) {
+    const publication = ledger.facts
+      .filter(
+        (fact) =>
+          fact.kind === "branch_published" && fact.subject_id === group.id,
+      )
+      .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
+      .at(-1);
+    const branchPublished =
+      publication?.status === "passed" &&
+      publication.sha === group.current_sha &&
+      publication.receipt?.resource_type === "branch" &&
+      publication.receipt.branch === group.parent_branch;
+    if (!branchPublished) {
+      blockers.push({
+        code: publication?.status === "unknown"
+          ? "BRANCH_PUBLICATION_UNKNOWN"
+          : "BRANCH_NOT_PUBLISHED",
+        group_id: group.id,
+        message: publication?.status === "unknown"
+          ? `交付单元「${group.title}」的父分支发布回执未知。`
+          : `交付单元「${group.title}」尚未取得匹配当前基线的父分支发布回执。`,
+        resource: blockerResource(ledger, "branch", group.parent_branch),
+      });
+    }
+  }
+
+  if (hasCodexExecDispatch) {
+    const baseline = groupDispatch?.request.development_baseline as any;
+    const baselineReady =
+      baseline &&
+      baseline.clean === true &&
+      baseline.sha === baseline.head &&
+      baseline.sha === group.current_sha;
+    if (!baselineReady) {
+      blockers.push({
+        code: "BASELINE_NOT_VERIFIED",
+        group_id: group.id,
+        message: `交付单元「${group.title}」尚未记录与当前基线匹配的干净工作区回执。`,
+        resource: null,
+      });
+    }
+  }
+  return blockers;
+}
+
+function blockersReadiness(blockers: ReadinessBlocker[]): RuntimeReadiness {
+  return {
+    status: blockers.some((item) => item.code.endsWith("UNKNOWN"))
+      ? blockers.some((item) => !item.code.endsWith("UNKNOWN")) ? "blocked" : "unknown"
+      : "blocked",
+    blockers,
+  };
+}
+
+function groupRuntimeReadiness(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+  relevant: boolean,
+): RuntimeReadiness {
+  if (!relevant) return { status: "unknown", blockers: [] };
+  if (group.state === "closed") {
+    return {
+      status: "blocked",
+      blockers: [{
+        code: "GROUP_CLOSED",
+        group_id: group.id,
+        message: `交付单元「${group.title}」已经收口，不能继续运行时派发。`,
+        resource: null,
+      }],
+    };
+  }
+  if (
+    requiresRuntimeEvidence(ledger) &&
+    (ledger.control.ownership !== "bound" || !ledger.control.owner_thread_id)
+  ) {
+    return {
+      status: "unknown",
+      blockers: [{
+        code: "CONTROL_OWNERSHIP_UNKNOWN",
+        group_id: group.id,
+        message: "编排控制权尚未确认，运行时派发保持未知。",
+        resource: null,
+      }],
+    };
+  }
+  const coordinator = coordinatorProjection(ledger, group);
+  if (coordinator.status === "not_created") {
+    return {
+      status: "blocked",
+      blockers: [{
+        code: "COORDINATOR_NOT_BOUND",
+        group_id: group.id,
+        message: `普通交付单元「${group.title}」尚未绑定交付协调者，运行时派发保持阻断。`,
+        resource: { kind: "conversation", status: "not_created", target_id: group.id },
+      }],
+    };
+  }
+  if (coordinator.status === "unknown") {
+    return {
+      status: "unknown",
+      blockers: [{
+        code: "COORDINATOR_UNKNOWN",
+        group_id: group.id,
+        message: `交付单元「${group.title}」的交付协调者绑定未知。`,
+        resource: { kind: "conversation", status: "unknown", target_id: group.id },
+      }],
+    };
+  }
+  if (group.state === "planned") {
+    return {
+      status: "blocked",
+      blockers: [{
+        code: "GROUP_NOT_ACTIVE",
+        group_id: group.id,
+        message: `交付单元「${group.title}」尚未激活，任务运行时派发保持阻断。`,
+        resource: null,
+      }],
+    };
+  }
+  if (group.state === "blocked") {
+    return {
+      status: "blocked",
+      blockers: [{
+        code: "GROUP_BLOCKED",
+        group_id: group.id,
+        message: `交付单元「${group.title}」当前处于阻塞状态。`,
+        resource: null,
+      }],
+    };
+  }
+  const workspaceBlockers = groupWorkspaceBlockers(ledger, group);
+  return workspaceBlockers.length
+    ? blockersReadiness(workspaceBlockers)
+    : { status: "ready", blockers: [] };
+}
+
+function runtimeReadinessProjection(ledger: Ledger, plan: Plan): {
+  summary: RuntimeReadiness;
+  byGroup: Map<string, RuntimeReadiness>;
+} {
+  const groupIds = planGroupIds(ledger, plan);
+  const byGroup = new Map(
+    ledger.groups.map((group) => [group.id, groupRuntimeReadiness(ledger, group, groupIds.has(group.id))]),
+  );
+  const summaries = [...byGroup.values()].filter((item) => item.blockers.length > 0);
+  const blockers = summaries
+    .filter((item) => {
+      const group = ledger.groups.find((candidate) => candidate.id === item.blockers[0]?.group_id);
+      if (!group) return true;
+      if (group.state === "planned" && item.blockers.every((blocker) => blocker.code === "COORDINATOR_NOT_BOUND")) return false;
+      if (group.state === "closed" || group.state === "blocked") {
+        return ledger.tasks.some((task) =>
+          task.group_id === group.id &&
+          task.disposition === "active" &&
+          ["planned", "ready"].includes(task.state) &&
+          !task.thread_id,
+        );
+      }
+      return true;
+    })
+    .flatMap((item) => item.blockers);
+  return {
+    summary: {
+      status: blockers.some((item) => item.code.endsWith("UNKNOWN"))
+        ? blockers.some((item) => !item.code.endsWith("UNKNOWN")) ? "blocked" : "unknown"
+        : blockers.length ? "blocked" : "ready",
+      blockers,
+    },
+    byGroup,
+  };
 }
 
 export function plannedIntervals(plan: Plan, maxRunning: number): PlannedInterval[] {
@@ -254,8 +626,47 @@ export function buildView(
     (item) => item.id === ledger.execution_plan_id,
   )!;
   const completenessIssues = planCompletenessIssues(plan);
+  const schedulingPlanIssues = planSchedulingIssues(ledger, plan);
+  const schedulingTaskIssues = taskSchedulingIssues(ledger);
   const isApprovedExecution =
     activePlan.id === executionPlan.id && activePlan.lifecycle === "approved";
+  const runtimeProjection = runtimeReadinessProjection(ledger, plan);
+  const approvalPending =
+    activePlan.id !== executionPlan.id || activePlan.lifecycle !== "approved";
+  const schedulingBlockers: ReadinessBlocker[] = [
+    ...(approvalPending
+      ? [{
+          code: "OWNER_APPROVAL_PENDING",
+          group_id: null,
+          message: "Owner approval 尚未完成，运行时派发保持阻断。",
+          resource: null,
+        }]
+      : []),
+    ...completenessIssues.map((issue) => ({
+      code: issue.code,
+      group_id: null,
+      message: issue.message,
+      resource: null,
+    })),
+    ...schedulingPlanIssues.map((issue) => ({
+      code: issue.code,
+      group_id: null,
+      message: issue.message,
+      resource: null,
+    })),
+    ...schedulingTaskIssues.map((issue) => ({
+      code: issue.code,
+      group_id: issue.group_id,
+      message: issue.message,
+      resource: null,
+    })),
+    ...runtimeProjection.summary.blockers,
+  ];
+  const schedulingStatus = approvalPending || completenessIssues.length || schedulingPlanIssues.length || schedulingTaskIssues.length
+    ? "blocked"
+    : runtimeProjection.summary.status === "ready"
+      ? "eligible"
+      : runtimeProjection.summary.status;
   const nodeData = plan.nodes.map((node) => ({
     ...node,
     planned_group_id: node.group_id,
@@ -310,17 +721,24 @@ export function buildView(
         : [];
       return {
         ...task,
+        ...(() => {
+          const gateDiagnostics = owner && isContributionKind(task.kind) ? deliveryGateDiagnostics(owner) : [];
+          return { gateDiagnostics };
+        })(),
         dispatch_diagnostics: [
           ...taskExecutionPolicyIssues(task),
           ...(owner && owner.delivery_unit_kind === "regular" && !owner.agent_thread_id
             ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }]
             : []),
+          ...((owner && isContributionKind(task.kind)) ? deliveryGateDiagnostics(owner) : []),
         ],
         dispatch_readiness:
           task.execution_owner === null && task.conversation_policy === null && task.delivery_policy === null
             ? "unknown"
             : taskExecutionPolicyIssues(task).length > 0
               ? "blocked"
+              : owner && isContributionKind(task.kind) && deliveryGateDiagnostics(owner).length > 0
+                ? "blocked"
               : owner && (owner.delivery_unit_kind === "bootstrap" || !!owner.agent_thread_id)
               ? "ready"
               : "blocked",
@@ -391,15 +809,28 @@ export function buildView(
       approval_pending:
         activePlan.id !== executionPlan.id ||
         activePlan.lifecycle !== "approved",
-      scheduling_eligible: isApprovedExecution && completenessIssues.length === 0,
+      scheduling_eligible: schedulingStatus === "eligible",
       dispatch_readiness: ledger.groups.every((item) => item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id) && allTasksDispatchReady ? "ready" : "blocked",
       delivery_agent_readiness: ledger.groups.some((item) => item.delivery_unit_kind === "regular" && !item.agent_thread_id) ? "unbound" : "bound",
+      proposal: {
+        status: completenessIssues.length === 0 ? "complete" : "blocked",
+        issues: completenessIssues,
+      },
+      approval: {
+        status: isApprovedExecution ? "approved" : "not_approved",
+        approval_id: isApprovedExecution ? activePlan.approval_id : null,
+      },
+      scheduling: {
+        status: schedulingStatus,
+        blockers: schedulingBlockers,
+      },
+      runtime_readiness: runtimeProjection.summary,
       completeness: {
         status: completenessIssues.length === 0 ? "complete" : "blocked",
         issues: completenessIssues,
       },
       authorization_label: isApprovedExecution
-        ? completenessIssues.length === 0
+        ? schedulingStatus === "eligible"
           ? "Schedulable"
           : "Not schedulable"
         : "Not approved",
@@ -408,10 +839,19 @@ export function buildView(
     semantic_context: localSemanticProjection(ledger, "dashboard_view"),
     groups: atomProjection.groups.map((item) => ({
       ...item,
+      ...(() => {
+        const gateDiagnostics = item.delivery_unit_kind === "regular" ? deliveryGateDiagnostics(item) : [];
+        return { gateDiagnostics };
+      })(),
       delivery_agent_readiness: item.delivery_unit_kind === "bootstrap" ? "not_applicable" : item.agent_thread_id ? "bound" : "unbound",
-      dispatch_readiness: item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id ? "ready" : "blocked",
-      dispatch_diagnostics: item.delivery_unit_kind === "regular" && !item.agent_thread_id ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }] : [],
+      dispatch_readiness: item.delivery_unit_kind === "bootstrap" || (!!item.agent_thread_id && deliveryGateDiagnostics(item).length === 0) ? "ready" : "blocked",
+      dispatch_diagnostics: [
+        ...(item.delivery_unit_kind === "regular" && !item.agent_thread_id ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }] : []),
+        ...(item.delivery_unit_kind === "regular" ? deliveryGateDiagnostics(item) : []),
+      ],
       ...profileProjection(ledger, "group", item),
+      coordinator: coordinatorProjection(ledger, item),
+      runtime_readiness: runtimeProjection.byGroup.get(item.id) ?? { status: "unknown", blockers: [] },
       latest_agent_output: outputs[`group:${item.id}`] ?? initialOutput(item.delivery_unit_kind === "bootstrap" ? ledger.control.owner_thread_id : item.agent_thread_id),
       started_at: ledger.events.find(e => e.type === "group_execution_updated" && e.data.group_id === item.id && e.data.state === "running")?.occurred_at ?? null,
       finished_at: ledger.events.find(e => e.type === "group_updated" && e.subject_id === item.id && e.data.state === "closed")?.occurred_at ?? null,
@@ -448,6 +888,18 @@ export function buildView(
       ...completenessIssues.map((issue) => ({
         code: issue.code,
         reason: issue.message,
+      })),
+      ...schedulingPlanIssues.map((issue) => ({
+        code: issue.code,
+        reason: issue.message,
+      })),
+      ...schedulingTaskIssues.map((issue) => ({
+        code: issue.code,
+        reason: issue.message,
+      })),
+      ...runtimeProjection.summary.blockers.map((blocker) => ({
+        code: blocker.code,
+        reason: blocker.message,
       })),
     ],
     warnings: [

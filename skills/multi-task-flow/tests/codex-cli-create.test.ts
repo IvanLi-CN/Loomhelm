@@ -3,11 +3,20 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCliThread, runInitialization, INITIALIZATION_PROMPT, verifyRepositoryIdentity, type CliRun } from "../lib/codex-cli-create";
+import { createCliThread, initializationPrompt, runInitialization, INITIALIZATION_PROMPT, verifyRepositoryIdentity, type CliRun } from "../lib/codex-cli-create";
 
 const input = { title: "test", prompt: "DO NOT EXECUTE THIS TASK", cwd: process.cwd(), model: "gpt-6.1-sol", thinking: "max" };
 const completed: CliRun = { thread_id: "thread-a", exit_code: 0, turn_completed: true, events: ["thread.started", "turn.completed"] };
 const read = async () => ({ id: "thread-a", cwd: "/codex/owned", model: input.model, reasoningEffort: input.thinking });
+
+test("initialization prompt gives the creation phase enough context without authorizing work", () => {
+  expect(INITIALIZATION_PROMPT).toContain("Task Agent");
+  expect(initializationPrompt("Delivery Agent")).toContain("Delivery Agent");
+  expect(INITIALIZATION_PROMPT).toContain("主 Agent 稍后会发送正式派发消息");
+  expect(INITIALIZATION_PROMPT).toContain("不要开始正式任务");
+  expect(INITIALIZATION_PROMPT).not.toContain("初始化完成");
+  expect(INITIALIZATION_PROMPT).not.toContain("请简短回复");
+});
 
 test("bind requires both process exit and initialization completion, preserving identity on every ambiguous result", async () => {
   for (const result of [ { ...completed, exit_code: 1 }, { ...completed, exit_code: null }, { ...completed, turn_completed: false }, { ...completed, error: "timeout" } ]) {

@@ -20,6 +20,60 @@ export type CoordinationExecution = {
   waiting_for_task_ids: string[];
 };
 
+export type ReadinessResource = {
+  kind: "conversation" | "worktree" | "branch" | "pr";
+  status: "not_created" | "unknown";
+  target_id: string | null;
+};
+
+export type ReadinessBlocker = {
+  code: string;
+  group_id: string | null;
+  message: string;
+  resource: ReadinessResource | null;
+};
+
+export type ReadinessSummary = {
+  status: "ready" | "blocked" | "unknown";
+  blockers: ReadinessBlocker[];
+};
+
+export type PlanState = {
+  active_plan_id: string;
+  execution_plan_id: string;
+  lifecycle: string;
+  phase?: "planning" | "implementation";
+  approval_pending: boolean;
+  scheduling_eligible?: boolean;
+  dispatch_readiness?: "ready" | "blocked" | "unknown";
+  delivery_agent_readiness?: "bound" | "unbound" | "not_applicable" | "unknown";
+  authorization_label?: string;
+  proposal?: {
+    status: "complete" | "blocked" | "unknown";
+    issues: { code: string; message: string }[];
+  };
+  approval?: {
+    status: "approved" | "not_approved" | "unknown";
+    approval_id: string | null;
+  };
+  scheduling?: {
+    status: "eligible" | "blocked" | "unknown";
+    blockers: ReadinessBlocker[];
+  };
+  runtime_readiness?: ReadinessSummary;
+  completeness?: {
+    status: "complete" | "blocked";
+    issues: { code: string; message: string }[];
+  };
+  revision?: {
+    change_class: string;
+    approval_required: boolean;
+    reason: { category: string; summary: string; evidence_refs: string[] } | null;
+    change_set: { added: { path: string }[]; removed: { path: string }[]; modified: { path: string }[] };
+    paused_task_ids: string[];
+  } | null;
+};
+
 export type Task = {
   id: string;
   title: string;
@@ -78,6 +132,8 @@ export type Group = {
   state: string;
   parent_pr: { url: string | null } | null;
   requirements_path: string | null;
+  coordinator?: { status: "bound" | "not_created" | "unknown"; thread_id: string | null };
+  runtime_readiness?: ReadinessSummary;
   atoms?: GroupAtom[];
   planned_atoms?: GroupAtom[];
   lifecycle?: Partial<Record<GroupAtom["lifecycle_stage"] & string, string>>;
@@ -130,28 +186,7 @@ export type View = {
   execution_phase?: "planning" | "implementation";
   active_plan_id?: string;
   execution_plan_id?: string;
-  plan_state?: {
-    active_plan_id: string;
-    execution_plan_id: string;
-    lifecycle: string;
-    phase?: "planning" | "implementation";
-    approval_pending: boolean;
-    scheduling_eligible?: boolean;
-    dispatch_readiness?: "ready" | "blocked" | "unknown";
-    delivery_agent_readiness?: "bound" | "unbound" | "not_applicable" | "unknown";
-    authorization_label?: string;
-    completeness?: {
-      status: "complete" | "blocked";
-      issues: { code: string; message: string }[];
-    };
-    revision?: {
-      change_class: string;
-      approval_required: boolean;
-      reason: { category: string; summary: string; evidence_refs: string[] } | null;
-      change_set: { added: { path: string }[]; removed: { path: string }[]; modified: { path: string }[] };
-      paused_task_ids: string[];
-    } | null;
-  };
+  plan_state?: PlanState;
   plans: { id: string; created_at: string; approval_id?: string | null; lifecycle?: string; is_active?: boolean; is_execution?: boolean; change_class?: string | null }[];
   selected_plan_id: string;
   follow_prs: { origin_task_id: string; origin_group_id: string; state: string; pr: { url: string | null } }[];
