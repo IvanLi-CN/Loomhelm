@@ -25,6 +25,10 @@ import {
 } from "../lib/service-pages";
 import { readBodyWithinLimit } from "../lib/server-files";
 import { verifyRelease } from "../lib/service-release";
+import { parseViewerRoute } from "../scripts/viewer-gateway";
+import { startUnixViewerWorkerServer, viewerWorkerSocketPath } from "../scripts/viewer-socket";
+import { createUnixViewerWorker, dataVersionOf, workerKeyOf } from "../scripts/viewer-worker";
+import { createWorkerGeneration, ViewerWorkerPool } from "../scripts/viewer-runtime";
 
 const json = (
   value: unknown,
@@ -149,6 +153,48 @@ function pathIsLegacyView(pathname: string, method: string): boolean {
   return method === "GET" && /\/legacy-view\/?$/.test(pathname);
 }
 
+function releaseWorkerResponse(
+  response: Response,
+  release: () => void,
+  onFailure?: () => void | Promise<unknown>,
+): Response {
+  if (!response.body) {
+    release();
+    return response;
+  }
+  const reader = response.body.getReader();
+  let released = false;
+  const finish = () => {
+    if (released) return;
+    released = true;
+    release();
+  };
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          finish();
+          controller.close();
+        } else controller.enqueue(chunk.value);
+      } catch (error) {
+        finish();
+        void Promise.resolve(onFailure?.()).catch(() => undefined);
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      finish();
+      await reader.cancel(reason);
+    },
+  });
+  return new Response(stream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 export async function startSharedViewer(
   state: ServiceState,
   manifest: ReleaseManifest,
@@ -163,6 +209,7 @@ export async function startSharedViewer(
       "INVALID_PROFILE",
       "Source reload requires an isolated profile",
     );
+  state.initialize();
   const auth = new ServiceAuth(state);
   const fallbackViewer = (() => {
     let previous: string | null = null;
@@ -177,7 +224,8 @@ export async function startSharedViewer(
   })();
   const resources = new Map<string, ReturnType<typeof createRunDashboard>>();
   const warnings = new Map<string, string | null>();
-  const getRun = (id: string) => {
+  let timeoutServer: Pick<Awaited<ReturnType<typeof Runtime.serve>>, "timeout"> | undefined;
+  function getRun(id: string) {
     safeId(id);
     const existing = resources.get(id);
     if (existing) return existing;
@@ -201,11 +249,57 @@ export async function startSharedViewer(
     });
     resources.set(id, run);
     return run;
-  };
-  const server = await Runtime.serve({
+  }
+  const workerGeneration = state.runtime().generation ?? createWorkerGeneration();
+  const workerPool = new ViewerWorkerPool({
+    workerFactory: async (workerKey) => {
+      const generation = createWorkerGeneration(workerGeneration);
+      const socketPath = viewerWorkerSocketPath(
+        join(state.paths.state, "workers"),
+        workerKey,
+        generation,
+      );
+      const workerServer = await startUnixViewerWorkerServer({
+        socketPath,
+        workerKey,
+        generation,
+        handle: async (request, context) => {
+          const requestUrl = new URL(request.url);
+          const route = parseViewerRoute(requestUrl);
+          if (!route || route.runId !== context.runId)
+            throw new Error("viewer worker route identity mismatch");
+          const run = getRun(context.runId);
+          const path =
+            requestUrl.pathname.startsWith("/api/v1/") &&
+            !route.path.startsWith("/api/")
+              ? "/api" + route.path
+              : route.path;
+          return run.handle(
+            request,
+            {
+              timeout(request, timeout) {
+                timeoutServer?.timeout(request, timeout);
+              },
+            },
+            path,
+          );
+        },
+      });
+      return createUnixViewerWorker({
+        socketPath,
+        workerKey,
+        generation,
+        stop: () => workerServer.stop(),
+      });
+    },
+  });
+  let server: Awaited<ReturnType<typeof Runtime.serve>>;
+  try {
+    server = await Runtime.serve({
     hostname: "127.0.0.1",
     port,
     async fetch(request, currentServer) {
+      timeoutServer = currentServer;
       const host = `127.0.0.1:${currentServer.port}`;
       const origin = request.headers.get("origin");
       if (
@@ -338,7 +432,6 @@ export async function startSharedViewer(
           catch { throw new ContractError("LEDGER_UNREADABLE", "Stored run ledger is unreadable", 2); }
           return json({ run_id: id, build_id: manifest.build_id, fallback_build_id: state.config().previous_build, read_only: true, view: readOnlyView(fallbackViewer, raw, url.searchParams.get("plan") ?? undefined) });
         }
-        const run = getRun(id);
         let path = "/" + match[2]!;
         if (url.pathname.startsWith("/api/v1/")) path = "/api/" + match[2]!;
         if (path === "/api/service" && request.method === "GET")
@@ -352,21 +445,46 @@ export async function startSharedViewer(
           actor.kind === "browser"
         )
           return json(state.renewBrowser(actor.id));
-        const response = await run.handle(request, currentServer, path);
+        const ledger = new LedgerStore(state.paths.data, id).read();
+        requireLedgerCompatibility(ledger);
+        const version = dataVersionOf(
+          ledger,
+          manifest.viewer_contract,
+          manifest.build_id,
+        );
+        const workerKey = workerKeyOf(version);
+        const lease = await workerPool.acquire(workerKey);
+        let response: Response;
+        try {
+          response = await lease.worker.handle(request, currentServer, path, {
+            runId: id,
+            workerKey,
+            generation: lease.generation,
+          });
+        } catch (error) {
+          lease.release();
+          await workerPool.invalidate(workerKey, lease.generation);
+          throw error;
+        }
+        const leasedResponse = releaseWorkerResponse(
+          response,
+          lease.release,
+          () => workerPool.invalidate(workerKey, lease.generation),
+        );
         if (
           path === "/" &&
-          response.ok &&
-          response.headers.get("content-type")?.startsWith("text/html")
+          leasedResponse.ok &&
+          leasedResponse.headers.get("content-type")?.startsWith("text/html")
         ) {
           return html(
-            (await response.text()) +
+            (await leasedResponse.text()) +
               '<script src="/service-client.js" defer></script>' +
               (sourceRevision
                 ? '<script src="/source-client.js" defer></script>'
                 : ""),
           );
         }
-        return response;
+        return leasedResponse;
       } catch (error) {
         const code =
           error instanceof ContractError
@@ -385,7 +503,11 @@ export async function startSharedViewer(
         return json({ code }, status);
       }
     },
-  });
+    });
+  } catch (error) {
+    await workerPool.stop();
+    throw error;
+  }
   return {
     port: server.port!,
     get watcherCount() {
@@ -393,10 +515,11 @@ export async function startSharedViewer(
         .length;
     },
     async stop() {
+      await server.stop(true);
+      await workerPool.stop();
       for (const run of resources.values()) run.stop();
       resources.clear();
       warnings.clear();
-      await server.stop(true);
     },
   };
 }

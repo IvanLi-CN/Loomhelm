@@ -1,0 +1,77 @@
+name: Skill Release Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: loomhelm-skill-release-gate-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pull-request:
+    name: Validate Skill release decision
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the exact PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check release label and projection
+        run: >-
+          python3 tools/skill-release/release.py gate
+          --repo-root .
+          --base "${{ github.event.pull_request.base.sha }}"
+          --head "${{ github.event.pull_request.head.sha }}"
+          --event-path "$GITHUB_EVENT_PATH"
+
+  merge-queue:
+    name: Revalidate Skill release decision on merge queue
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+      MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+      MERGE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+      MERGE_HEAD_OWNER: ${{ github.repository_owner }}
+    steps:
+      - name: Check out the exact merge-group head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.merge_group.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve the queued PR
+        run: |
+          set -euo pipefail
+          gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
+            -f state=all -f base=main -f head="$MERGE_HEAD_OWNER:$MERGE_HEAD_REF" \
+            > "$RUNNER_TEMP/skill-release-pulls.json"
+          python3 - "$RUNNER_TEMP/skill-release-pulls.json" "$RUNNER_TEMP/skill-release-event.json" <<'PY'
+          import json
+          import sys
+
+          source, destination = sys.argv[1:]
+          pulls = json.loads(open(source, encoding="utf-8").read())
+          candidates = [pull for pull in pulls if pull.get("base", {}).get("ref") == "main"]
+          if len(candidates) != 1:
+              raise SystemExit("merge queue must resolve exactly one main PR")
+          json.dump({"pull_request": candidates[0]}, open(destination, "w", encoding="utf-8"))
+          PY
+      - name: Revalidate label and projection against the queue base
+        run: >-
+          python3 tools/skill-release/release.py gate
+          --repo-root .
+          --base "$MERGE_BASE_SHA"
+          --head "$MERGE_HEAD_SHA"
+          --event-path "$RUNNER_TEMP/skill-release-event.json"

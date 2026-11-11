@@ -37,7 +37,7 @@ export function checkSkillsInstallation(root, { probe = false } = {}) {
   // The independent client declares and prepares its packaged toolkit dependencies.
   const clientPackage = resolve(root,'../package.json');
   try {
-    if (sourceComplete && root.endsWith('/toolkit') && existsSync(clientPackage) && JSON.parse(readFileSync(clientPackage,'utf8')).name === '@loomhelm/client') dependencyRoots.push(resolve(root,'../node_modules'));
+    if (sourceComplete && root.endsWith('/toolkit') && existsSync(clientPackage) && JSON.parse(readFileSync(clientPackage,'utf8')).name === '@loomhelm/multi-task-flow') dependencyRoots.push(resolve(root,'../node_modules'));
   } catch { /* Invalid parent metadata cannot authorize a dependency fallback. */ }
   const dependencyMissing = Object.entries(declared).filter(([name,version]) => !dependencyRoots.some(directory => {
     const file=resolve(directory,name,'package.json');
