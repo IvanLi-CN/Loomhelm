@@ -43,6 +43,7 @@ jobs:
       MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
       MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
       MERGE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+      MERGE_HEAD_OWNER: ${{ github.repository_owner }}
     steps:
       - name: Check out the exact merge-group head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -54,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
-            -f state=all -f base=main -f head="$GITHUB_REPOSITORY:$MERGE_HEAD_REF" \
+            -f state=all -f base=main -f head="$MERGE_HEAD_OWNER:$MERGE_HEAD_REF" \
             > "$RUNNER_TEMP/skill-release-pulls.json"
           python3 - "$RUNNER_TEMP/skill-release-pulls.json" "$RUNNER_TEMP/skill-release-event.json" <<'PY'
           import json
