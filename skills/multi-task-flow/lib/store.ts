@@ -31,7 +31,7 @@ import {
   writeExclusiveNoFollow,
   type DirectoryIdentity,
 } from "../../bin/modules/visual/secure_io";
-import { normalizeLegacyLedger } from "../lib/schema";
+import { normalizeLegacyLedger, validateLedger } from "../lib/schema";
 import { orchestrationRoot } from "../lib/service-paths";
 import { requireLedgerCompatibility } from "../lib/service-contract";
 import {
@@ -319,8 +319,13 @@ export class LedgerStore {
         );
         if (ledger?.schema_version !== undefined)
           requireLedgerCompatibility(ledger, "write");
+        const isDomainLedger =
+          typeof ledger.orchestration_id === "string" &&
+          Array.isArray(ledger.plans) &&
+          Array.isArray(ledger.tasks);
         ledger = normalizeLegacyLedger(ledger);
         const result = fn(ledger);
+        if (isDomainLedger) validateLedger(ledger);
         requireLedgerCompatibility(ledger, "write");
         const nextContent = JSON.stringify(ledger, null, 2) + "\n";
         if (nextContent !== oldContent) {

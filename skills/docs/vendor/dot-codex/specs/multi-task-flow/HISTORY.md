@@ -1,5 +1,9 @@
 # Multi-task Flow History
 
+## Schema contract boundary
+
+- 2026-11-11：新增 `SCHEMA.md` 和 `SCHEMA-CONSTRAINTS.md`，分别定义账本数据结构与跨字段约束。
+
 ## 输出提示边界整改
 
 移除旧 `title` 迁移后保留的正文、标题与进度文字提示，以及资源图标的重复通用提示；规范明确全文只通过详情与对话浮层展示。已确认的合成页面截图保存在本主题资产中。
