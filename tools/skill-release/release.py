@@ -14,7 +14,7 @@ import tarfile
 from dataclasses import dataclass
 from functools import total_ordering
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 
 PACKAGE_NAME = "@loomhelm/multi-task-flow"
@@ -444,10 +444,22 @@ def archive_files(tarball: Path) -> dict[str, bytes]:
     return files
 
 
+def _locale_sorted(values: Iterable[Any], key: Callable[[Any], str]) -> list[Any]:
+    previous_locale = locale.setlocale(locale.LC_COLLATE)
+    try:
+        try:
+            locale.setlocale(locale.LC_COLLATE, "en_US.UTF-8")
+        except locale.Error as error:
+            raise ReleaseError("en-US collation is required to verify TypeScript release identity") from error
+        return sorted(values, key=lambda value: locale.strxfrm(key(value)))
+    finally:
+        locale.setlocale(locale.LC_COLLATE, previous_locale)
+
+
 def canonical_tarball_digest(tarball: Path) -> str:
     files = archive_files(tarball)
     digest = hashlib.sha256()
-    for path in sorted(files):
+    for path in _locale_sorted(files, lambda value: value):
         if path == "toolkit/artifact-manifest.json":
             continue
         digest.update(path.encode("utf-8"))
@@ -493,15 +505,7 @@ def identity_digest(identity: Mapping[str, Any], files: Iterable[Mapping[str, st
     body = dict(identity)
     body.pop("buildId", None)
     file_values = [dict(item) for item in files]
-    previous_locale = locale.setlocale(locale.LC_COLLATE)
-    try:
-        try:
-            locale.setlocale(locale.LC_COLLATE, "en_US.UTF-8")
-        except locale.Error as error:
-            raise ReleaseError("en-US collation is required to verify the TypeScript build ID") from error
-        body["files"] = sorted(file_values, key=lambda item: locale.strxfrm(item["path"]))
-    finally:
-        locale.setlocale(locale.LC_COLLATE, previous_locale)
+    body["files"] = _locale_sorted(file_values, lambda item: item["path"])
     encoded = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
