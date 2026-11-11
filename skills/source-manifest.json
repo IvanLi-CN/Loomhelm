@@ -15947,6 +15947,10 @@
     {
       "path": "skills/multi-task-flow/tests/atomic-orchestration-schema.test.ts",
       "installedSha256": "719f03add0990d73b4303745766b51ae2ee545c18883c9c8a9f11fc3a0d9f66d"
+    },
+    {
+      "path": "skills/multi-task-flow/web/atomic-graph-view.tsx",
+      "installedSha256": ""
     }
   ],
   "exclusions": [
