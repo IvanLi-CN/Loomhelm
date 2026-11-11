@@ -107,6 +107,22 @@ class ReleasePolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseError, "strictly advance"):
                 evaluate_gate(root, base=head, head=rollback, labels=["release:skill"])
 
+    def test_first_skill_release_may_introduce_projection_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._init_repo(root)
+            package_path = root / "clients/typescript/package.json"
+            package = json.loads(package_path.read_text(encoding="utf-8"))
+            package.pop("loomhelm")
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+            base = self._commit(root, "legacy package without Skill projection")
+            package["loomhelm"] = ROOT_FILES["clients/typescript/package.json"]["loomhelm"]
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+            head = self._commit(root, "establish Skill projection")
+            result = evaluate_gate(root, base=base, head=head, labels=["release:skill"])
+            self.assertIsNone(result.base_version)
+            self.assertEqual(result.head_version, "0.1.0")
+
     def test_skip_requires_reason_and_cannot_drift_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

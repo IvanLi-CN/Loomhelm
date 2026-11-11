@@ -276,6 +276,22 @@ def load_projection(root: Path, revision: str | None = None) -> Projection:
     )
 
 
+def load_base_projection(root: Path, revision: str) -> Projection | None:
+    """Load a release baseline, allowing the repository's first Skill projection.
+
+    The first Skill release is allowed to introduce ``package.loomhelm``. Older
+    mainline commits predate that metadata, so treating the missing object as a
+    normal release baseline would reject the very PR that establishes it.
+    Other malformed or partially present metadata remains a hard failure.
+    """
+    try:
+        return load_projection(root, revision)
+    except ReleaseError as error:
+        if str(error) == "package.loomhelm must be an object":
+            return None
+        raise
+
+
 def changed_paths(root: Path, base: str, head: str) -> tuple[str, ...]:
     try:
         result = subprocess.run(
@@ -366,13 +382,15 @@ def evaluate_gate(
 
     normalised_labels = _normalise_labels(labels)
     decision = next(label for label in normalised_labels if label in RELEASE_LABELS)
-    base_projection = load_projection(root, base)
+    base_projection = load_base_projection(root, base)
     head_projection = load_projection(root, head)
 
     if decision == "release:skip":
         reason = (skip_reason or "").strip()
         if not reason:
             raise ReleaseError("release:skip requires an explicit skip reason")
+        if base_projection is None:
+            raise ReleaseError("release:skip cannot establish the first Skill projection")
         if base_projection.canonical_identity() != head_projection.canonical_identity():
             raise ReleaseError("release:skip cannot change package or Skill canonical identity")
         return GateResult(
@@ -385,17 +403,17 @@ def evaluate_gate(
             reason,
         )
 
-    if not head_projection.version > base_projection.version:
+    if base_projection is not None and not head_projection.version > base_projection.version:
         raise ReleaseError(
             f"release version must strictly advance {base_projection.package_version}; "
             f"got {head_projection.package_version}"
         )
-    if head_projection.compatibility.number < base_projection.compatibility.number:
+    if base_projection is not None and head_projection.compatibility.number < base_projection.compatibility.number:
         raise ReleaseError("compatibility line cannot move backwards")
     return GateResult(
         True,
         decision,
-        base_projection.package_version,
+        base_projection.package_version if base_projection is not None else None,
         head_projection.package_version,
         head_projection.compatibility_line,
         paths,
