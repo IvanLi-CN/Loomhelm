@@ -16,6 +16,7 @@ from release import (
     load_projection,
     parse_compatibility,
     validate_tarball,
+    _event_metadata,
 )
 
 
@@ -141,6 +142,31 @@ class ReleasePolicyTests(unittest.TestCase):
             for labels in ([], ["release:skill", "release:skip"], ["release:cli"]):
                 with self.subTest(labels=labels), self.assertRaises(ReleaseError):
                     evaluate_gate(root, base=base, head=head, labels=labels)
+
+    def test_event_metadata_accepts_delivery_unit_base_branch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            event_path.write_text(
+                json.dumps(
+                    {
+                        "pull_request": {
+                            "labels": [{"name": "release:skip"}],
+                            "base": {
+                                "ref": "th/skill-runtime-fresh-20261111",
+                                "sha": "a" * 40,
+                            },
+                            "head": {"ref": "th/skill-runtime-release-ci-20261111", "sha": "b" * 40},
+                            "draft": False,
+                            "body": "<!-- release-skip: release automation -->",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            metadata = _event_metadata(event_path)
+            self.assertEqual(metadata["base_sha"], "a" * 40)
+            self.assertEqual(metadata["head_sha"], "b" * 40)
+            self.assertEqual(metadata["skip_reason"], "release automation")
 
     def test_tarball_digest_and_identity_are_verified(self):
         with tempfile.TemporaryDirectory() as directory:
