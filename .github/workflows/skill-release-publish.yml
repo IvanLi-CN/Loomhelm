@@ -1,0 +1,315 @@
+name: Skill Runtime Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Merged pull request number carrying the release decision
+        required: true
+        type: string
+      merge_sha:
+        description: Exact merge commit SHA from the protected main branch
+        required: true
+        type: string
+      publish:
+        description: Publish and promote the verified package after candidate validation
+        required: true
+        default: false
+        type: boolean
+      stable:
+        description: Explicitly move the stable dist-tag after exact, compat, and latest verification
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: loomhelm-skill-runtime-release-${{ inputs.merge_sha }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify merged Skill release candidate
+    runs-on: ubuntu-24.04
+    outputs:
+      decision: ${{ steps.gate.outputs.decision }}
+      reason: ${{ steps.gate.outputs.reason }}
+      version: ${{ steps.gate.outputs.version }}
+      compatibility_line: ${{ steps.gate.outputs.compatibility_line }}
+      artifact_name: ${{ steps.artifact.outputs.artifact_name }}
+    steps:
+      - name: Check out the exact merge SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.merge_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Bun 1.4.4
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.4.4
+      - name: Verify protected merge receipt
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+        run: |
+          set -euo pipefail
+          test "$MERGE_SHA" = "$(git rev-parse HEAD)"
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" > "$RUNNER_TEMP/skill-release-pr.json"
+          python3 - "$RUNNER_TEMP/skill-release-pr.json" "$MERGE_SHA" "$RUNNER_TEMP/skill-release-event.json" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          pr_path, merge_sha, event_path, output_path = sys.argv[1:]
+          pr = json.loads(open(pr_path, encoding="utf-8").read())
+          if pr.get("state") != "closed" or not pr.get("merged_at"):
+              raise SystemExit("release requires a merged pull request")
+          if pr.get("merge_commit_sha") != merge_sha or pr.get("base", {}).get("ref") != "main":
+              raise SystemExit("pull request merge receipt does not match the requested main SHA")
+          if pr.get("draft") is True:
+              raise SystemExit("draft pull requests cannot be released")
+          parents = subprocess.check_output(
+              ["git", "show", "-s", "--format=%P", merge_sha], text=True
+          ).split()
+          if not parents:
+              raise SystemExit("merge SHA has no protected base parent")
+          json.dump({"pull_request": pr}, open(event_path, "w", encoding="utf-8"))
+          with open(output_path, "a", encoding="utf-8") as output:
+              output.write(f"base_sha={parents[0]}\n")
+          PY
+      - name: Revalidate release label, version, and projection
+        id: gate
+        env:
+          BASE_SHA: ${{ steps.merge.outputs.base_sha }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+        run: |
+          set -euo pipefail
+          python3 tools/skill-release/release.py gate \
+            --repo-root . \
+            --base "$BASE_SHA" \
+            --head "$MERGE_SHA" \
+            --event-path "$RUNNER_TEMP/skill-release-event.json" \
+            > "$RUNNER_TEMP/skill-release-gate.json"
+          python3 - "$RUNNER_TEMP/skill-release-gate.json" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+
+          result = json.loads(open(sys.argv[1], encoding="utf-8").read())
+          if not result.get("relevant"):
+              raise SystemExit("the merged PR is not in the Skill release content boundary")
+          with open(sys.argv[2], "a", encoding="utf-8") as output:
+              output.write(f"decision={result['decision']}\n")
+              output.write(f"version={result['head_version'] or ''}\n")
+              output.write(f"compatibility_line={result['compatibility_line'] or ''}\n")
+              output.write(f"reason={result.get('reason') or ''}\n")
+          PY
+      - name: Verify immutable tag precondition
+        if: steps.gate.outputs.decision == 'release:skill'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+          VERSION: ${{ steps.gate.outputs.version }}
+        run: >-
+          python3 tools/skill-release/release.py verify-tag
+          --repository "$GITHUB_REPOSITORY"
+          --tag "multi-task-flow-v$VERSION"
+          --sha "$MERGE_SHA"
+          --allow-missing
+      - name: Build and validate one candidate tarball
+        id: artifact
+        if: steps.gate.outputs.decision == 'release:skill'
+        env:
+          MERGE_SHA: ${{ inputs.merge_sha }}
+          VERSION: ${{ steps.gate.outputs.version }}
+          COMPATIBILITY_LINE: ${{ steps.gate.outputs.compatibility_line }}
+        run: |
+          set -euo pipefail
+          bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy
+          bun install --cwd skills/multi-task-flow --frozen-lockfile
+          bun install --cwd clients/typescript --frozen-lockfile
+          bun run --cwd skills/multi-task-flow build
+          version_tag="multi-task-flow-v$VERSION"
+          draft_dir="$RUNNER_TEMP/skill-release-draft"
+          final_dir="$RUNNER_TEMP/skill-release-final"
+          rm -rf "$draft_dir" "$final_dir"
+          mkdir -p "$draft_dir" "$final_dir"
+          export LOOMHELM_REQUIRE_MERGE_SHA=1
+          export LOOMHELM_MERGE_SHA="$MERGE_SHA"
+          export LOOMHELM_GIT_TAG="$version_tag"
+          export LOOMHELM_TARBALL_DIGEST=
+          (cd clients/typescript && bun --no-install run build)
+          (cd clients/typescript && bun pm pack --destination "$draft_dir" --ignore-scripts --quiet)
+          mapfile -t drafts < <(find "$draft_dir" -type f -name '*.tgz' -print)
+          test "${#drafts[@]}" -eq 1
+          digest="$(python3 tools/skill-release/release.py tarball-digest "${drafts[0]}")"
+          export LOOMHELM_TARBALL_DIGEST="$digest"
+          (cd clients/typescript && bun --no-install run build)
+          (cd clients/typescript && bun pm pack --destination "$final_dir" --ignore-scripts --quiet)
+          mapfile -t finals < <(find "$final_dir" -type f -name '*.tgz' -print)
+          test "${#finals[@]}" -eq 1
+          python3 tools/skill-release/release.py validate-tarball "${finals[0]}" \
+            --version "$VERSION" \
+            --merge-sha "$MERGE_SHA" \
+            --compatibility-line "$COMPATIBILITY_LINE"
+          cp "${finals[0]}" "$RUNNER_TEMP/skill-package.tgz"
+          printf 'artifact_name=skill-release-%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Upload the verified candidate tarball
+        if: steps.gate.outputs.decision == 'release:skill'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: skill-release-${{ steps.gate.outputs.version }}
+          path: ${{ runner.temp }}/skill-package.tgz
+          if-no-files-found: error
+          retention-days: 14
+
+  record-skip:
+    name: Record explicit Skill release skip
+    needs: verify
+    if: needs.verify.outputs.decision == 'release:skip'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Write skip receipt
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          COMPATIBILITY_LINE: ${{ needs.verify.outputs.compatibility_line }}
+          REASON: ${{ needs.verify.outputs.reason }}
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/skill-release-skip.json" <<'PY'
+          import json
+          import os
+          import sys
+
+          json.dump(
+              {
+                  "decision": "release:skip",
+                  "pr_number": os.environ["PR_NUMBER"],
+                  "merge_sha": os.environ["MERGE_SHA"],
+                  "package_version": os.environ["VERSION"],
+                  "compatibility_line": os.environ["COMPATIBILITY_LINE"],
+                  "reason": os.environ["REASON"],
+              },
+              open(sys.argv[1], "w", encoding="utf-8"),
+              indent=2,
+          )
+          PY
+      - name: Upload skip receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: skill-release-skip-${{ inputs.merge_sha }}
+          path: ${{ runner.temp }}/skill-release-skip.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish and promote verified Skill package
+    needs: verify
+    if: inputs.publish == true && needs.verify.outputs.decision == 'release:skill'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      NPM_CONFIG_USERCONFIG: ${{ github.workspace }}/.skill-release.npmrc
+      PACKAGE_NAME: '@loomhelm/multi-task-flow'
+      MERGE_SHA: ${{ inputs.merge_sha }}
+      VERSION: ${{ needs.verify.outputs.version }}
+      COMPATIBILITY_LINE: ${{ needs.verify.outputs.compatibility_line }}
+    steps:
+      - name: Check out the exact merge SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.merge_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download the verified candidate tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: skill-release-${{ needs.verify.outputs.version }}
+          path: ${{ runner.temp }}/skill-release
+      - name: Configure npm registry authentication
+        run: |
+          set -euo pipefail
+          cat > "$NPM_CONFIG_USERCONFIG" <<'EOF'
+          registry=https://registry.npmjs.org/
+          @loomhelm:registry=https://registry.npmjs.org/
+          //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+          always-auth=true
+          EOF
+      - name: Create or reconcile immutable release tag
+        run: >-
+          python3 tools/skill-release/release.py verify-tag
+          --repository "$GITHUB_REPOSITORY"
+          --tag "multi-task-flow-v$VERSION"
+          --sha "$MERGE_SHA"
+          --create
+      - name: Publish exact package and reconcile registry identity
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/skill-release/skill-package.tgz"
+          test -f "$tarball"
+          python3 tools/skill-release/release.py validate-tarball "$tarball" \
+            --version "$VERSION" \
+            --merge-sha "$MERGE_SHA" \
+            --compatibility-line "$COMPATIBILITY_LINE"
+          metadata="$RUNNER_TEMP/skill-release-metadata.json"
+          exact_exists=false
+          if npm view "$PACKAGE_NAME@$VERSION" --json > "$metadata" 2>/dev/null; then
+            exact_exists=true
+          fi
+          if [ "$exact_exists" = false ]; then
+            if npm publish "$tarball" --access public --tag "$VERSION" --userconfig "$NPM_CONFIG_USERCONFIG"; then
+              :
+            else
+              if ! npm view "$PACKAGE_NAME@$VERSION" --json > "$metadata" 2>/dev/null; then
+                echo "npm publish outcome is unknown; reconcile the exact package identity before retrying" >&2
+                exit 1
+              fi
+              exact_exists=true
+            fi
+          fi
+          test "$exact_exists" = true
+          npm view "$PACKAGE_NAME@$VERSION" --json > "$metadata"
+          registry_url="$(python3 -c 'import json, os, sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert value.get("version") == os.environ["VERSION"], "registry version does not match the release candidate"; dist=value.get("dist") or {}; url=dist.get("tarball"); assert url, "registry metadata has no tarball URL"; print(url)' "$metadata")"
+          downloaded="$RUNNER_TEMP/skill-release-registry.tgz"
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $NODE_AUTH_TOKEN" \
+            "$registry_url" -o "$downloaded"
+          registry_result="$(python3 tools/skill-release/release.py validate-tarball "$downloaded" \
+            --version "$VERSION" --merge-sha "$MERGE_SHA" --compatibility-line "$COMPATIBILITY_LINE")"
+          printf '%s\n' "$registry_result"
+          candidate_result="$(python3 tools/skill-release/release.py validate-tarball "$tarball" \
+            --version "$VERSION" --merge-sha "$MERGE_SHA" --compatibility-line "$COMPATIBILITY_LINE")"
+          python3 -c 'import json, sys; candidate, registry = (json.loads(item) for item in sys.argv[1:]); assert candidate["tarballDigest"] == registry["tarballDigest"], "registry tarball digest differs from the verified candidate"' "$candidate_result" "$registry_result"
+      - name: Promote compatibility and latest dist-tags monotonically
+        run: |
+          set -euo pipefail
+          promote() {
+            local tag="$1"
+            local current
+            current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null || true)"
+            action="$(python3 tools/skill-release/release.py dist-tag-policy --current "$current" --target "$VERSION")"
+            if [ "$action" = promote ]; then
+              npm dist-tag add "$PACKAGE_NAME@$VERSION" "$tag" --userconfig "$NPM_CONFIG_USERCONFIG"
+            elif [ "$action" != keep ]; then
+              echo "unsupported dist-tag action: $action" >&2
+              exit 1
+            fi
+            current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null || true)"
+            test "$current" = "\"$VERSION\""
+          }
+          promote "$COMPATIBILITY_LINE"
+          promote latest
+          if [ "${{ inputs.stable }}" = true ]; then
+            promote stable
+          fi
