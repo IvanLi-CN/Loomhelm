@@ -10,6 +10,7 @@ from release import (
     ReleaseError,
     Version,
     canonical_tarball_digest,
+    dist_tag_action,
     evaluate_gate,
     identity_digest,
     load_projection,
@@ -79,6 +80,13 @@ class ReleasePolicyTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ReleaseError, "Skill version"):
                 load_projection(root)
+
+    def test_dist_tag_promotion_is_monotonic(self):
+        self.assertEqual(dist_tag_action(None, "1.0.0"), "promote")
+        self.assertEqual(dist_tag_action('"0.9.0"', "1.0.0"), "promote")
+        self.assertEqual(dist_tag_action('"1.0.0"', "1.0.0"), "keep")
+        with self.assertRaisesRegex(ReleaseError, "newer version"):
+            dist_tag_action('"1.1.0"', "1.0.0")
 
     def test_release_skill_requires_strict_version_progression(self):
         with tempfile.TemporaryDirectory() as directory:
