@@ -366,6 +366,37 @@ function approveV2(ledger: ReturnType<typeof v2Fixture>) {
     approval_id: "parent-approved-v2",
   }));
 }
+
+test("contribution dispatch is blocked until the parent PR gate is complete", () => {
+  const ledger = v2Fixture();
+  approveV2(ledger);
+  ledger.groups[0].atoms = [
+    { id: "workspace", title: "Prepare parent", purpose: "Prepare", output: "Ready", lifecycle_stage: "workspace_ready", status: "planned" },
+    { id: "parent-pr", title: "Create parent PR", purpose: "Publish", output: "Created", lifecycle_stage: "pr_created", status: "planned" },
+  ];
+  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
+  expect(() => apply(ledger, "dispatch-claim", request(ledger, "blocked-before-parent-pr", {
+    task_id: "a",
+    operation_id: "dispatch-before-parent-pr",
+  }))).toThrow("parent PR is created and verified");
+  try {
+    apply(ledger, "dispatch-claim", request(ledger, "blocked-before-parent-pr-details", {
+      task_id: "a",
+      operation_id: "dispatch-before-parent-pr-details",
+    }));
+  } catch (error) {
+    expect((error as any).code).toBe("DELIVERY_GATE_PENDING");
+    expect((error as any).details.missing).toEqual(["workspace_ready", "parent_pr"]);
+    expect((error as any).details.recovery).toContain("retry dispatch-claim");
+  }
+  ledger.tasks[0].thread_id = "task-a-thread";
+  ledger.tasks[0].state = "starting";
+  expect(() => apply(ledger, "task-update", request(ledger, "blocked-task-start", {
+    task_id: "a",
+    state: "running",
+    occurred_at: at,
+  }, { role: "task", thread_id: "task-a-thread" }))).toThrow("parent PR is created and verified");
+});
 function providerBranchReceipt(branch: string, sha: string) {
   return {
     provider: "github",
@@ -825,7 +856,7 @@ describe("orchestration state", () => {
           operation_id: "dispatch-b",
         }),
       ),
-    ).toThrow("provider-published delivery-unit branch");
+    ).toThrow("parent PR is created and verified");
     apply(
       ledger,
       "group-base",
@@ -1042,7 +1073,7 @@ describe("orchestration state", () => {
           operation_id: "blocked-dispatch",
         }),
       ),
-    ).toThrow("provider-published delivery-unit branch");
+      ).toThrow("parent PR is created and verified");
   });
   test("release facts cannot be written without an operation receipt", () => {
     const ledger = fixture();

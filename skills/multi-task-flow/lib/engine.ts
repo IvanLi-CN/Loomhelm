@@ -182,6 +182,37 @@ function authorizedAction(ledger: Ledger, action: string): void {
 function legacyLedger(ledger: Ledger): boolean {
   return ledger.source_schema_version === 1 && ledger.contract_version !== 2;
 }
+function requireContributionDispatchGate(
+  ledger: Ledger,
+  owner: Ledger["groups"][number],
+): void {
+  if (legacyLedger(ledger)) return;
+  const workspaceAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
+  const prAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "pr_created");
+  const missing: string[] = [];
+  if (owner.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
+    missing.push("workspace_ready");
+  if (owner.lifecycle.pr_created !== "passed" || !owner.parent_pr || prAtom?.status !== "completed")
+    missing.push("parent_pr");
+  if (missing.length)
+    throw new ContractError(
+      "DELIVERY_GATE_PENDING",
+      "Contribution task cannot start before the delivery-unit parent PR is created and verified",
+      4,
+      {
+        target_type: "group",
+        target_id: owner.id,
+        missing,
+        recovery: [
+          "lifecycle-record workspace_ready",
+          "group-atom-update workspace_ready completed",
+          "publish-pr-claim + publish-pr-resolve for the parent PR",
+          "group-atom-update pr_created completed",
+          "retry dispatch-claim",
+        ],
+      },
+    );
+}
 function ensureSchedulable(ledger: Ledger, candidate: Plan): void {
   if (legacyLedger(ledger) || ledger.source_schema_version === 1) return;
   validateTaskExecutionPolicies(ledger.tasks);
@@ -1466,6 +1497,7 @@ export function execute(
         );
       }
       if (isContributionKind(target.kind)) {
+        requireContributionDispatchGate(ledger, owner);
         requireCondition(
           owner.parent_branch &&
             target.base_sha &&
@@ -2499,6 +2531,10 @@ export function execute(
       }
       const previousState = taskExecutionState(target);
       const occupiedSlot = target.state === "agent_idle";
+      if (state === "running" && isContributionKind(target.kind)) {
+        const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
+        requireContributionDispatchGate(ledger, owner);
+      }
       if (state === "running" && previousState !== "starting" && !occupiedSlot) {
         requireCondition(
           ready(ledger, target.id),
