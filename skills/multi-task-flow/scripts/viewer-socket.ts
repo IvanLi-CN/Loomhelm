@@ -151,8 +151,8 @@ function assertPrivateSocketDirectory(path: string): void {
 
 function prepareSocketPath(path: string): void {
   assertPrivateSocketDirectory(path);
-  if (!existsSync(path)) return;
-  const stat = lstatSync(path);
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (!stat) return;
   if (!stat.isSocket() || stat.isSymbolicLink())
     throw new Error("socket path is occupied by a non-socket");
   unlinkSync(path);
@@ -233,6 +233,10 @@ async function serveRequest(
     return;
   }
   const reader = response.body.getReader();
+  const cancelOnClose = () => {
+    void reader.cancel().catch(() => undefined);
+  };
+  socket.once("close", cancelOnClose);
   try {
     while (!socket.destroyed) {
       const chunk = await reader.read();
@@ -244,6 +248,7 @@ async function serveRequest(
       );
     }
   } finally {
+    socket.removeListener("close", cancelOnClose);
     reader.releaseLock();
   }
   if (!socket.destroyed) writeFrame(socket, { type: "end", id: frame.id }, maximum);
@@ -259,6 +264,10 @@ export async function startUnixViewerWorkerServer(
   const server: Server = createServer((socket) => {
     const decoder = new FrameDecoder(maximum);
     let handled = false;
+    // Client cancellation is a normal stream lifecycle event. The server
+    // must absorb the resulting EPIPE instead of turning it into an uncaught
+    // process error while the worker is draining its response body.
+    socket.on("error", () => undefined);
     socket.on("data", (chunk: Buffer) => {
       let frames: Frame[];
       try {
@@ -311,10 +320,8 @@ export async function startUnixViewerWorkerServer(
       stopped = true;
       server.close();
       await once(server, "close").catch(() => undefined);
-      if (existsSync(options.socketPath)) {
-        const stat = lstatSync(options.socketPath);
-        if (stat.isSocket() && !stat.isSymbolicLink()) unlinkSync(options.socketPath);
-      }
+      const stat = lstatSync(options.socketPath, { throwIfNoEntry: false });
+      if (stat?.isSocket() && !stat.isSymbolicLink()) unlinkSync(options.socketPath);
     },
   };
 }

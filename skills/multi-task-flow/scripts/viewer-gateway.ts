@@ -40,7 +40,11 @@ function routePath(url: URL): { runId: string; path: string } | null {
   return { runId: match[1]!, path: path === "/" ? "/" : path };
 }
 
-function releaseAfterBody(response: Response, release: () => void): Response {
+function releaseAfterBody(
+  response: Response,
+  release: () => void,
+  onFailure?: () => void | Promise<unknown>,
+): Response {
   if (!response.body) {
     release();
     return response;
@@ -62,6 +66,7 @@ function releaseAfterBody(response: Response, release: () => void): Response {
         } else controller.enqueue(chunk.value);
       } catch (error) {
         finish();
+        void Promise.resolve(onFailure?.()).catch(() => undefined);
         controller.error(error);
       }
     },
@@ -107,10 +112,16 @@ class SharedViewerGatewayImpl implements SharedViewerGateway {
           const response = await lease.worker.handle(request, currentServer, resolved.path, {
             runId: resolved.runId,
             workerKey: resolved.workerKey,
+            generation: lease.generation,
           });
-          return releaseAfterBody(response, lease.release);
+          return releaseAfterBody(
+            response,
+            lease.release,
+            () => pool.invalidate(resolved.workerKey, lease.generation),
+          );
         } catch (error) {
           lease.release();
+          await pool.invalidate(resolved.workerKey, lease.generation);
           throw error;
         }
       },

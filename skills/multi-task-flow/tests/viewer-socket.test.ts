@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { lstatSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { lstatSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -99,4 +99,21 @@ test("stopping a Unix worker removes only its own socket", async () => {
   });
   await server.stop();
   expect(() => lstatSync(socketPath)).toThrow();
+});
+
+test("Unix worker transport rejects dangling socket symlinks", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "viewer-socket-")));
+  roots.push(root);
+  const workerKey = "schema-2/contract-2@release-a";
+  const generation = createWorkerGeneration();
+  const socketPath = viewerWorkerSocketPath(root, workerKey, generation);
+  symlinkSync(join(root, "missing.sock"), socketPath);
+  await expect(
+    startUnixViewerWorkerServer({
+      socketPath,
+      workerKey,
+      generation,
+      handle: () => new Response("ok"),
+    }),
+  ).rejects.toThrow("non-socket");
 });
