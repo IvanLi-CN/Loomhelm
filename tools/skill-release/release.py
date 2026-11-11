@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import locale
 import re
 import subprocess
 import sys
@@ -491,7 +492,16 @@ def _validate_identity(identity: Mapping[str, Any]) -> None:
 def identity_digest(identity: Mapping[str, Any], files: Iterable[Mapping[str, str]]) -> str:
     body = dict(identity)
     body.pop("buildId", None)
-    body["files"] = sorted((dict(item) for item in files), key=lambda item: item["path"])
+    file_values = [dict(item) for item in files]
+    previous_locale = locale.setlocale(locale.LC_COLLATE)
+    try:
+        try:
+            locale.setlocale(locale.LC_COLLATE, "en_US.UTF-8")
+        except locale.Error as error:
+            raise ReleaseError("en-US collation is required to verify the TypeScript build ID") from error
+        body["files"] = sorted(file_values, key=lambda item: locale.strxfrm(item["path"]))
+    finally:
+        locale.setlocale(locale.LC_COLLATE, previous_locale)
     encoded = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
