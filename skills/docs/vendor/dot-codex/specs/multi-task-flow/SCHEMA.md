@@ -25,7 +25,7 @@ Ledger
 ## 2. `Ledger` 字段
 
 | 路径 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
+| - | - | - | - |
 | `schema_version` | `2` | 是 | 持久化结构版本。 |
 | `source_schema_version` | `1 \| null` | 否 | 兼容迁移时记录来源版本。 |
 | `contract_version` | `1 \| 2` | 是 | 领域合同版本。 |
@@ -53,7 +53,7 @@ Ledger
 ## 3. 公共类型
 
 | 类型 | 定义 |
-| --- | --- |
+| - | - |
 | `Id` | `/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/`。 |
 | `Text` | 去除首尾空格后长度大于 0 的字符串。 |
 | `Timestamp` | 不带 UTC offset 的 ISO datetime。 |
@@ -68,7 +68,7 @@ Ledger
 ### `Plan`
 
 | 字段 | 类型 | 说明 |
-| --- | --- | --- |
+| - | - | - |
 | `id` | `Id` | 计划 ID。 |
 | `supersedes_id` | `Id \| null` | 被当前计划替代的旧计划。 |
 | `approval_id` | `Text \| null` | 批准记录 ID。 |
@@ -88,7 +88,7 @@ Ledger
 ### 原子项
 
 | 类型 | 字段 | 取值 |
-| --- | --- | --- |
+| - | - | - |
 | `AtomPlan` | `id`, `title`, `task_id`, `purpose`, `output` | 全部为必填文本或 ID。 |
 | `GroupAtomPlan` | `id`, `title`, `group_id`, `purpose`, `output`, `lifecycle_stage` | `lifecycle_stage` 为 `workspace_ready`、`pr_created`、`pr_merged`、`closed` 或 `null`。 |
 | `AtomEdge` | `id`, `from_atom_id`, `to_atom_id` | 三个字段均为 ID。 |
@@ -98,7 +98,7 @@ Ledger
 `Node` 字段如下：
 
 | 字段 | 类型 |
-| --- | --- |
+| - | - |
 | `id` | `Id` |
 | `kind` | `main_start`、`main_end`、`group_start`、`group_end`、`task`、`milestone` |
 | `ref_id` | `Id \| null` |
@@ -113,7 +113,7 @@ Ledger
 ### `PlannedAction`
 
 | 字段 | 类型 |
-| --- | --- |
+| - | - |
 | `id` | `Id` |
 | `kind` | `publish_branch`、`publish_pr`、`release`、`deploy` |
 | `task_id` | `Id \| null`，默认 `null` |
@@ -130,7 +130,7 @@ Ledger
 ### `Group`
 
 | 字段 | 类型 |
-| --- | --- |
+| - | - |
 | `id`, `title` | `Id`, `Text` |
 | `delivery_unit_kind` | `bootstrap` 或 `regular`，默认 `regular` |
 | `owner_kind` | `main` 或 `group`，默认 `group` |
@@ -152,7 +152,7 @@ Ledger
 ### `Task`
 
 | 字段 | 类型 |
-| --- | --- |
+| - | - |
 | `id` | `Id` |
 | `title` | `Text` |
 | `kind` | 见下方枚举 |
@@ -195,7 +195,7 @@ delivery_policy: parent_pr | child_pr | evidence | none | null
 ### `Operation`
 
 | 字段 | 类型 |
-| --- | --- |
+| - | - |
 | `id` | `Id` |
 | `kind` | `dispatch`、`merge`、`cut`、`publish_branch`、`publish_pr`、`release`、`deploy` |
 | `actor_id` | `Text` |
@@ -219,7 +219,7 @@ delivery_policy: parent_pr | child_pr | evidence | none | null
 ## 7. 其他集合
 
 | 类型 | 字段 |
-| --- | --- |
+| - | - |
 | `FollowPr` | `id`, `origin_task_id`, `origin_group_id`, `pr`, `target_branch`, `state`, `merge_fact_id`, `affected_task_ids`。 |
 | `Milestone` | `id`, `target_type`, `target_id`, `title`, `evidence_ref`, `recorded_at`, `recorded_by`。 |
 | `Request` | `request_id`, `command`, `canonical_input`, `result`, `committed_revision`。 |
