@@ -3,15 +3,18 @@ import { z } from "zod";
 
 export type ViewerWorkerKey = string;
 export const viewerWorkerKeySchema = z.string().min(1).refine((value) => !value.includes("\0"));
+export type ViewerWorkerGeneration = string;
 
 export type ViewerWorkerRequestContext = {
   runId: string;
   workerKey: ViewerWorkerKey;
+  generation?: ViewerWorkerGeneration;
 };
 
 export interface ViewerWorker {
   readonly id: string;
   readonly key: ViewerWorkerKey;
+  readonly generation?: ViewerWorkerGeneration;
   handle(
     request: Request,
     server: unknown,
@@ -27,6 +30,7 @@ export type ViewerWorkerFactory = (
 
 type WorkerEntry = {
   worker: ViewerWorker;
+  generation: ViewerWorkerGeneration;
   lastUsedAt: number;
   activeRequests: number;
   stopping: Promise<void> | null;
@@ -41,6 +45,7 @@ export type ViewerWorkerPoolOptions = {
 
 export type ViewerWorkerLease = {
   worker: ViewerWorker;
+  readonly generation: ViewerWorkerGeneration;
   release(): void;
 };
 
@@ -105,7 +110,12 @@ export class ViewerWorkerPool {
             await worker.stop?.();
             throw new Error("viewer worker pool is stopped");
           }
-          return { worker, lastUsedAt: this.now(), activeRequests: 0, stopping: null };
+          const generation = worker.generation ?? createWorkerGeneration();
+          if (!generation || generation.includes("\0")) {
+            await worker.stop?.();
+            throw new Error("viewer worker factory returned an invalid generation");
+          }
+          return { worker, generation, lastUsedAt: this.now(), activeRequests: 0, stopping: null };
         })();
         this.pending.set(key, creation);
       }
@@ -125,6 +135,7 @@ export class ViewerWorkerPool {
     let released = false;
     return {
       worker: entry.worker,
+      generation: entry.generation,
       release: () => {
         if (released) return;
         released = true;
@@ -139,6 +150,11 @@ export class ViewerWorkerPool {
   async sweep(now = this.now()): Promise<ViewerWorkerKey[]> {
     const removed: ViewerWorkerKey[] = [];
     for (const [key, entry] of this.entries) {
+      if (entry.stopping) {
+        await entry.stopping;
+        removed.push(key);
+        continue;
+      }
       if (entry.activeRequests > 0 || now - entry.lastUsedAt < this.ttlMs) continue;
       const stopping = Promise.resolve(entry.worker.stop?.()).catch(() => undefined).finally(() => {
         if (this.entries.get(key)?.worker === entry.worker) this.entries.delete(key);
@@ -166,5 +182,9 @@ export function versionedWorkerKey(dataContract: string, viewerVersion: string):
 }
 
 export function createWorkerId(prefix = "viewer-worker"): string {
+  return `${prefix}-${randomUUID()}`;
+}
+
+export function createWorkerGeneration(prefix = "viewer-generation"): ViewerWorkerGeneration {
   return `${prefix}-${randomUUID()}`;
 }

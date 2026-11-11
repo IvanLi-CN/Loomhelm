@@ -3,7 +3,13 @@ import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { ledgerContract } from "../lib/service-contract";
-import { versionedWorkerKey, type ViewerWorker, type ViewerWorkerKey } from "./viewer-runtime";
+import { connectUnixViewerWorker, type UnixViewerWorkerClientOptions } from "./viewer-socket";
+import {
+  createWorkerId,
+  versionedWorkerKey,
+  type ViewerWorker,
+  type ViewerWorkerKey,
+} from "./viewer-runtime";
 
 export type ViewerDataVersion = {
   dataContract: string;
@@ -31,6 +37,38 @@ export function workerKeyOf(version: ViewerDataVersion): ViewerWorkerKey {
   viewerDataVersionSchema.parse(version);
   const release = version.buildId ?? `viewer-contract-${version.viewerContract}`;
   return versionedWorkerKey(version.dataContract, release);
+}
+
+/** A previous release is never allowed to receive a mutating request. */
+export function readOnlyWorkerKeyOf(version: ViewerDataVersion): ViewerWorkerKey {
+  const key = workerKeyOf(version);
+  return versionedWorkerKey(key, "read-only");
+}
+
+export type UnixViewerWorkerOptions = Omit<UnixViewerWorkerClientOptions, "id"> & {
+  id?: string;
+  stop?: () => void | Promise<void>;
+};
+
+/** Adapt a version-fenced Unix-socket worker to the gateway worker contract. */
+export function createUnixViewerWorker(
+  options: UnixViewerWorkerOptions,
+): ViewerWorker {
+  const key = options.workerKey;
+  const generation = options.generation;
+  return {
+    id: options.id ?? createWorkerId("unix-viewer-worker"),
+    key,
+    generation,
+    handle(request, _server, _path, context) {
+      return connectUnixViewerWorker(
+        { ...options, id: options.id },
+        request,
+        { ...context, ...(context.generation ? {} : { generation }) },
+      );
+    },
+    stop: options.stop,
+  };
 }
 
 export type WorkerSelection = {
