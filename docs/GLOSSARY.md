@@ -54,6 +54,26 @@ _Avoid_: 交付协调者审核
 
 每个任务显式声明执行 owner、对话策略和交付方式，三者共同决定任务由谁执行、是否创建新对话以及如何交付结果；任务存在本身不等于必须创建 Task Agent 或 child PR。
 
+### AtomicNode
+
+统一原子编排图中的节点，分为可执行的 work 原子和只表达条件的 milestone 原子；AtomicNode 是任务与交付单元投影共同读取的 canonical 编排事实。
+
+### AtomicEdge
+
+连接两个 AtomicNode 的有向依赖边，表达后继节点需要满足的前置条件；AtomicEdge 与 AtomicNode 共同构成唯一的原子依赖图。
+
+### DeliveryUnit
+
+交付范围的平级领域对象，按 `delivery_unit_id` 汇总原子、任务和外部交付事实，负责整合、父 PR 和收口范围；DeliveryUnit 不拥有 Task，也不保存独立的原子副本。旧实现中的 Group 只作为兼容名称。
+
+### 里程碑
+
+没有 Agent 执行或执行 owner 的特殊 AtomicNode，由所有入边条件和所有显式验收条件的全量 AND 规则判定是否达成；planned 里程碑至少要有一个入边条件或显式验收条件。
+
+### 里程碑评估
+
+由统一评估器根据里程碑定义、原子依赖、外部事实和 evidence 生成的 `pending`、`satisfied` 或 `blocked` 投影；评估结果可缓存，但不能替代 canonical 定义和事实。
+
 ### 验证证据
 
 通过结构化报告、日志、CI 结果、演练结果或校验结果证明任务完成的交付方式，不创建 child PR；它不是 Agent 身份，也不是代码质量复核。

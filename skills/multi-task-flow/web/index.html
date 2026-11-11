@@ -55,6 +55,8 @@
             <div class="menu-control dropdown" data-menu="state-filter"><button id="state-filter-trigger" type="button" class="menu-trigger btn btn-ghost btn-sm" aria-label="按状态筛选" aria-haspopup="listbox" aria-expanded="false" aria-controls="state-filter-menu"><span id="state-filter-value">全部状态</span><i data-lucide="chevron-down" aria-hidden="true"></i></button><ul id="state-filter-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="按状态筛选"></ul></div>
             <div class="menu-control dropdown" data-menu="kind-filter"><button id="kind-filter-trigger" type="button" class="menu-trigger btn btn-ghost btn-sm" aria-label="按任务类型筛选" aria-haspopup="listbox" aria-expanded="false" aria-controls="kind-filter-menu"><span id="kind-filter-value">全部类型</span><i data-lucide="chevron-down" aria-hidden="true"></i></button><ul id="kind-filter-menu" class="custom-menu menu menu-sm dropdown-content" role="listbox" tabindex="-1" aria-label="按任务类型筛选"></ul></div>
             <div class="graph-tools" id="graph-tools">
+              <button type="button" id="graph-mode-aggregate" class="btn btn-ghost btn-sm" aria-pressed="true">任务/交付单元</button>
+              <button type="button" id="graph-mode-atomic" class="btn btn-ghost btn-sm" aria-pressed="false">原子依赖</button>
               <button type="button" id="zoom-out" class="icon-button" data-tooltip="缩小" aria-label="缩小"><i data-lucide="minus"></i></button>
               <button type="button" id="zoom-in" class="icon-button" data-tooltip="放大" aria-label="放大"><i data-lucide="plus"></i></button>
               <button type="button" id="fit" class="icon-button" data-tooltip="适应视图" aria-label="适应视图"><i data-lucide="maximize-2"></i></button>

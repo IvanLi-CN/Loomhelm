@@ -25,6 +25,7 @@ import {
 import { initialOutput, type AgentOutput } from "../web/agent-output";
 import { localSemanticProjection } from "../lib/contract";
 import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
+import type { AtomicEdge, AtomicNode } from "../lib/atomic-orchestration";
 
 export type PlannedInterval = {
   node_id: string;
@@ -676,6 +677,24 @@ export function buildView(
           null)
         : node.group_id,
   }));
+  const canonicalAtomicNodes: AtomicNode[] = plan.atomic_nodes.length
+    ? plan.atomic_nodes
+    : plan.atoms.map((atom) => ({
+        kind: "work" as const,
+        id: atom.id,
+        title: atom.title,
+        purpose: atom.purpose,
+        output: atom.output,
+        acceptance: [],
+        activity_type: "contribution" as const,
+        state: "planned" as const,
+        scope: { kind: "task" as const, task_id: atom.task_id, delivery_unit_id: ledger.tasks.find((task) => task.id === atom.task_id)?.group_id ?? "unassigned" },
+      }));
+  const canonicalAtomicEdges: AtomicEdge[] = plan.atomic_edges.map((edge) =>
+    "from_node_id" in edge
+      ? edge
+      : { id: edge.id, from_node_id: edge.from_atom_id, to_node_id: edge.to_atom_id, requires: { kind: "source_terminal_success" as const } },
+  );
   const selectedTaskIds = new Set(
     plan.nodes
       .filter((node) => node.kind === "task")
@@ -867,6 +886,8 @@ export function buildView(
     nodes: nodeData,
     edges: plan.edges,
     atomic_edges: plan.atomic_edges,
+    atomic_nodes: canonicalAtomicNodes,
+    canonical_atomic_edges: canonicalAtomicEdges,
     planned_intervals: plannedIntervals(plan, ledger.config.max_running_tasks),
     actual_intervals: actualIntervals(ledger),
     actual_milestones: plan.nodes

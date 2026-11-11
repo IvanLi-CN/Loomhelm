@@ -700,6 +700,16 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 #graph .react-flow__handle { opacity:0; width:1px; height:1px; border:0; pointer-events:none; }
 #graph .react-flow__attribution { background:var(--surface); color:var(--muted); font-size:9px; }
 .dependency-layout-pending { position:absolute; bottom:12px; left:12px; color:var(--muted); font-size:12px; }
+.atomic-graph-surface { min-height:420px; overflow:auto; background:var(--surface); }
+.atomic-graph-header { padding:12px 16px; border-bottom:1px solid var(--border); color:var(--text); font-size:13px; font-weight:600; }
+.atomic-graph-body { display:grid; grid-template-columns:minmax(0, 1fr) minmax(220px, .42fr); gap:16px; padding:16px; }
+.atomic-graph-cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); align-content:start; gap:12px; }
+.atomic-graph-card { min-height:84px; padding:10px 12px; border:1px solid var(--accent); border-radius:8px; background:var(--surface); color:var(--text); box-shadow:0 2px 6px #00000012; }
+.atomic-graph-card-meta { display:flex; justify-content:space-between; gap:8px; margin-bottom:6px; color:var(--muted); font-size:11px; }
+.atomic-graph-card strong { display:block; font-size:13px; line-height:18px; }
+.atomic-graph-card small { display:block; margin-top:7px; color:var(--muted); font-size:11px; line-height:15px; }
+.atomic-graph-edges { display:flex; flex-direction:column; gap:7px; padding:10px 12px; border-left:1px solid var(--border); color:var(--muted); font-size:11px; line-height:16px; }
+@media (max-width: 760px) { .atomic-graph-body { grid-template-columns:1fr; } .atomic-graph-edges { border-left:0; border-top:1px solid var(--border); } }
 
 .dependency-state-idle { display:inline-flex; align-items:center; gap:4px; color:var(--warning); }
 

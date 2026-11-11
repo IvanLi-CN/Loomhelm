@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { projectAtomicGraph } from "../web/graph-projection";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
 import { buildView } from "../lib/view";
 import { emptyBootstrapView } from "./service-fixture";
@@ -10,6 +11,14 @@ function demoView(): View {
 }
 
 describe("dashboard graph projection", () => {
+  test("projects canonical atomic scope, evidence and edge conditions", () => {
+    const projection = projectAtomicGraph([
+      { kind: "work", id: "w-1", title: "Code", purpose: "Code", output: "Patch", acceptance: [], activity_type: "contribution", state: "completed", scope: { kind: "task", task_id: "t-1", delivery_unit_id: "du-1" }, runtime: { started_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", evidence_refs: ["receipt:1"] }, result: { completed_at: "2026-01-01T00:00:00Z", evidence_refs: ["receipt:1"] } },
+      { kind: "milestone", id: "m-1", title: "Merged", state: "planned", scope: { kind: "delivery_unit", delivery_unit_id: "du-1" }, acceptance: [{ kind: "node_satisfied", node_id: "w-1" }] },
+    ] as any, [{ id: "e-1", from_node_id: "w-1", to_node_id: "m-1", requires: { kind: "source_terminal_success" } }] as any);
+    expect(projection.nodes[0]).toMatchObject({ scope: "task:t-1 / delivery-unit:du-1", evidence: ["receipt:1"] });
+    expect(projection.edges[0]).toMatchObject({ source: "w-1", target: "m-1", requires: "source_terminal_success" });
+  });
   test("keeps every task and milestone once while hiding boundary node text", () => {
     const view = demoView();
     const projection = buildGraphProjection(view);

@@ -1,5 +1,6 @@
 import type { Node, Task, View } from "./model";
 import { stateIconName, stateLabel, type StateIconName } from "./labels";
+import type { AtomicEdge, AtomicNode } from "../lib/atomic-orchestration";
 
 export const HIDDEN_BOUNDARY_KINDS = new Set(["main_start", "main_end", "group_start", "group_end"]);
 
@@ -68,6 +69,32 @@ export type GraphProjection = {
   boundaryDependencies: GraphBoundaryDependency[];
   warnings: string[];
 };
+
+export type AtomicGraphProjectionNode = {
+  id: string;
+  kind: "work" | "milestone";
+  title: string;
+  scope: string;
+  status: string;
+  evidence: string[];
+  blocker: string | null;
+};
+
+export type AtomicGraphProjection = {
+  nodes: AtomicGraphProjectionNode[];
+  edges: { id: string; source: string; target: string; requires: string }[];
+};
+
+export function projectAtomicGraph(nodes: readonly AtomicNode[], edges: readonly AtomicEdge[]): AtomicGraphProjection {
+  return {
+    nodes: nodes.map((node) => {
+      if (node.kind === "milestone") return { id: node.id, kind: "milestone", title: node.title, scope: "milestone", status: node.state, evidence: node.acceptance.map((item) => item.kind), blocker: null };
+      const scope = node.scope.kind === "task" ? `task:${node.scope.task_id} / delivery-unit:${node.scope.delivery_unit_id}` : `delivery-unit:${node.scope.delivery_unit_id}`;
+      return { id: node.id, kind: "work", title: node.title, scope, status: node.state, evidence: node.result?.evidence_refs ?? node.runtime?.evidence_refs ?? [], blocker: node.blocker?.message ?? null };
+    }),
+    edges: edges.map((edge) => ({ id: edge.id, source: edge.from_node_id, target: edge.to_node_id, requires: edge.requires.kind })),
+  };
+}
 
 export function fitGraphLabel(value: string, limit: { lines: number; columns: number }): string {
   const normalized = value.replace(/\s+/g, " ").trim();

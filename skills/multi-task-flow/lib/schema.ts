@@ -4,6 +4,7 @@ import { posix as posixPath } from "node:path";
 import { z } from "zod";
 import { topologicalOrder, validateGrouping } from "../lib/graph";
 import { requireCondition } from "../lib/errors";
+import { atomicNode, atomicEdge as canonicalAtomicEdge, taskPrBinding, deliveryUnitExternalFacts, validateAtomicGraph } from "../lib/atomic-orchestration";
 
 export const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
 const text = z.string().trim().min(1);
@@ -234,7 +235,9 @@ export const plan = z
     start_at: timestamp.nullable(),
     atoms: z.array(atomPlan),
     group_atoms: z.array(groupAtomPlan).default([]),
-    atomic_edges: z.array(atomEdge),
+    /** Legacy atom edges remain readable; canonical contract-3 edges use node IDs and requires unions. */
+    atomic_edges: z.array(z.union([atomEdge, canonicalAtomicEdge])),
+    atomic_nodes: z.array(atomicNode).default([]),
     nodes: z.array(node),
     edges: z.array(edge),
     cut_rules: z.array(cutRule),
@@ -251,6 +254,8 @@ export const group = z
     agent_thread_id: nullableText,
     state: z.enum(["planned", "active", "merged", "closed", "blocked"]),
     parent_branch: nullableText,
+    /** Canonical DeliveryUnit PR; parent_pr remains a read-only compatibility alias. */
+    pr: z.union([externalRef, deliveryUnitExternalFacts]).nullable().default(null),
     parent_pr: externalRef.nullable(),
     cut_sha: sha.nullable(),
     current_sha: sha.nullable(),
@@ -395,7 +400,7 @@ export const task = z
     owned_surfaces: z.array(text),
     branch: nullableText.default(null),
     base_sha: sha.nullable(),
-    pr: externalRef.nullable(),
+    pr: z.union([externalRef, taskPrBinding]).nullable().default(null),
     requirements_path: requirementsPath,
     execution_profile: optionalExecutionProfile,
     execution_profile_source: z
@@ -678,6 +683,9 @@ export const ledgerSchema = z
       })
       .strict(),
     plans: z.array(plan).min(1),
+    /** Contract-3 canonical graph snapshot; legacy readers may derive this from the active plan. */
+    atomic_nodes: z.array(atomicNode).default([]),
+    atomic_edges: z.array(z.union([atomEdge, canonicalAtomicEdge])).default([]),
     active_plan_id: id,
     execution_plan_id: id,
     groups: z.array(group),
@@ -1369,6 +1377,7 @@ export function validatePlan(candidate: Plan): void {
     candidate.atoms,
     candidate.group_atoms,
     candidate.atomic_edges,
+    candidate.atomic_nodes,
     candidate.nodes,
     candidate.edges,
     candidate.cut_rules,
@@ -1380,7 +1389,18 @@ export function validatePlan(candidate: Plan): void {
       "Plan IDs must be unique within each collection",
     );
   }
-  validateGrouping(candidate.atoms, candidate.atomic_edges);
+  if (candidate.atomic_nodes.length || candidate.atomic_edges.some((edge) => "from_node_id" in edge)) {
+    requireCondition(
+      candidate.atomic_edges.every((edge) => "from_node_id" in edge && "to_node_id" in edge),
+      "ATOMIC_CONTRACT_REQUIRED",
+      "Contract-3 atomic plans must use node-based atomic edges",
+    );
+    validateAtomicGraph(candidate.atomic_nodes, candidate.atomic_edges as any);
+  }
+  validateGrouping(
+    candidate.atoms,
+    candidate.atomic_edges.filter((edge): edge is z.infer<typeof atomEdge> => "from_atom_id" in edge),
+  );
   topologicalOrder(
     candidate.nodes.map((item) => item.id),
     candidate.edges.map((item) => ({
@@ -1464,7 +1484,7 @@ export function validatePlan(candidate: Plan): void {
       (item) => `${item.from_node_id}:${item.to_node_id}:${item.requires}`,
     ),
   );
-  for (const atomDependency of candidate.atomic_edges) {
+  for (const atomDependency of candidate.atomic_edges.filter((edge): edge is z.infer<typeof atomEdge> => "from_atom_id" in edge)) {
     const from = atoms.get(atomDependency.from_atom_id)!;
     const to = atoms.get(atomDependency.to_atom_id)!;
     if (from.task_id !== to.task_id) {
@@ -1942,6 +1962,8 @@ export function normalizeLegacyLedger(value: unknown): unknown {
             : 1,
     execution_plan_id: raw.execution_plan_id ?? raw.active_plan_id,
     milestones: Array.isArray(raw.milestones) ? raw.milestones : [],
+    atomic_nodes: Array.isArray(raw.atomic_nodes) ? raw.atomic_nodes : [],
+    atomic_edges: Array.isArray(raw.atomic_edges) ? raw.atomic_edges : [],
     groups: Array.isArray(raw.groups)
       ? raw.groups.map((item) =>
           item && typeof item === "object"
@@ -2075,6 +2097,14 @@ function validateDeliveryUnits(ledger: Ledger): void {
 export function validateLedger(value: unknown): Ledger {
   const parsed = ledgerSchema.parse(normalizeLegacyLedger(value));
   validateDeliveryUnits(parsed);
+  if (parsed.atomic_nodes.length || parsed.atomic_edges.some((edge) => "from_node_id" in edge)) {
+    requireCondition(
+      parsed.atomic_edges.every((edge) => "from_node_id" in edge && "to_node_id" in edge),
+      "ATOMIC_CONTRACT_REQUIRED",
+      "Root contract-3 atomic snapshot must use node-based atomic edges",
+    );
+    validateAtomicGraph(parsed.atomic_nodes, parsed.atomic_edges as any);
+  }
   for (const collection of [
     parsed.plans,
     parsed.groups,
