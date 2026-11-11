@@ -1,5 +1,4 @@
 #!/usr/bin/env -S bun --no-install
-import { buildInfo } from './build-info.ts';
 import { LocalClient } from './client.ts';
 import { StateLock } from './runtime/lock.ts';
 import { loadConfig } from './config.ts';
@@ -9,19 +8,23 @@ import type { Operation } from './tasks/model.ts';
 import { runCodexCommand } from './cli/codex.ts';
 import { runSkillsCommand } from './cli/skills.ts';
 import { runFlowCommand } from './cli/flow.ts';
+import { runReleaseCommand } from './cli/release.ts';
+import { buildInfoFromArtifact } from './runtime-identity.ts';
+import { SkillsRuntime } from './toolkit.ts';
 import { fileURLToPath } from 'node:url';
 
 async function main(args: string[]): Promise<void> {
-  if (args.length === 1 && (args[0] === "--version" || args[0] === "version")) { console.log(JSON.stringify(buildInfo)); return; }
+  if (args.length === 1 && (args[0] === "--version" || args[0] === "version")) { console.log(JSON.stringify(buildInfoFromArtifact(await new SkillsRuntime().validate()))); return; }
   let configPath: string | undefined;
   if (args[0] === '--config') { args.shift(); configPath = args.shift(); if (!configPath) throw new Error('Missing config path'); }
   const [command, ...rest] = args;
   if (command === 'help' || !command) {
-    console.log('loomhelm [--config PATH] status|tasks|receipts|recover-lock TOKEN|apply OPERATION_ID JSON|run OPERATION_ID TASK_ID COMMAND_JSON|git-status PATH|worktree REPO ABS_PATH BRANCH [BASE]|codex COMMAND ...|flow COMMAND ...|skills COMMAND ...|workflow COMMAND ...'); return;
+    console.log('multi-task-flow [--config PATH] status|tasks|receipts|recover-lock TOKEN|apply OPERATION_ID JSON|run OPERATION_ID TASK_ID COMMAND_JSON|git-status PATH|worktree REPO ABS_PATH BRANCH [BASE]|codex COMMAND ...|flow COMMAND ...|skills COMMAND ...|release COMMAND ...|workflow COMMAND ...'); return;
   }
   if (command === 'skills') { await runSkillsCommand(rest); return; }
   if (command === 'codex') { await runCodexCommand(rest, configPath); return; }
   if (command === 'flow') { await runFlowCommand(rest, configPath); return; }
+  if (command === 'release') { await runReleaseCommand(rest); return; }
   if (command === 'workflow') {
     if (rest[0] === 'verify') throw new Error('WORKFLOW_LEGACY_COMMAND_UNSUPPORTED: use local-verify for local validation only; follow the migrated engineering Skills for delivery gates');
     if (!rest.length) throw new Error('Usage: workflow skills PROJECT_SKILLS_DIR [USER_SKILLS_DIR] | local-verify MANIFEST_JSON_PATH');

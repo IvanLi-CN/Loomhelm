@@ -15826,7 +15826,7 @@
     },
     {
       "path": "skills/multi-task-flow/scripts/check-skills-installation.ts",
-      "installedSha256": "afb45e6a0748a20f2e750b57cc8d874529b0ba321f5285b9cd4962d4719bb81b"
+      "installedSha256": "cc7e01e3734069d89791fa46ebfac58cb3da35896a04674b14b7752517e00fef"
     },
     {
       "path": "skills/multi-task-flow/scripts/import-client-skills.ts",
@@ -15834,7 +15834,7 @@
     },
     {
       "path": "skills/multi-task-flow/scripts/package-client-skills.ts",
-      "installedSha256": "e4c0350952e2c339cd8110b4d1d487a0449713a0d8dc3fc499d3a4e628034d86"
+      "installedSha256": "57dba75285dbce7721af7acf9b2b381de003ccc4347767c131637b40c7322ee0"
     },
     {
       "path": "skills/multi-task-flow/lib/package-source.ts",
