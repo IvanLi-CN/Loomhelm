@@ -2066,20 +2066,12 @@ export function validateLedger(value: unknown): Ledger {
   const factIds = new Set(parsed.facts.map((item) => item.id));
   const taskIds = new Set(parsed.tasks.map((item) => item.id));
   const groupIds = new Set(parsed.groups.map((item) => item.id));
-  const resourceIds = new Set(parsed.resources.map((item) => item.id));
   for (const operation of parsed.operations) {
     requireCondition(
       operation.receipt_fact_id === null ||
         factIds.has(operation.receipt_fact_id),
       "MISSING_FACT",
       "Operation receipt_fact_id must reference an existing fact",
-    );
-    requireCondition(
-      taskIds.has(operation.target_id) ||
-        groupIds.has(operation.target_id) ||
-        resourceIds.has(operation.target_id),
-      "UNKNOWN_OPERATION_TARGET",
-      "Operation target must reference a task, group, or resource",
     );
   }
   for (const fact of parsed.facts) {

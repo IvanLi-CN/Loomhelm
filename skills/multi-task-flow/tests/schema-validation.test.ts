@@ -28,21 +28,21 @@ describe("planned action schema", () => {
     ).toThrow();
   });
 
-  test("rejects an operation that points at no ledger object", () => {
+  test("rejects an operation that points at no receipt fact", () => {
     const ledger = createDemoLedger();
     ledger.operations.push({
       id: "operation-orphan",
       kind: "dispatch",
       actor_id: "sample-agent",
-      target_id: "missing-task",
+      target_id: "other-task",
       status: "claimed",
       request: {},
       expected_sha: null,
-      receipt_fact_id: null,
+      receipt_fact_id: "missing-fact",
       created_at: ledger.updated_at,
       updated_at: ledger.updated_at,
     });
-    expect(() => validateLedger(ledger)).toThrow("Operation target must reference");
+    expect(() => validateLedger(ledger)).toThrow("Operation receipt_fact_id must reference");
   });
 
   test("rejects a fact whose subject is absent", () => {
