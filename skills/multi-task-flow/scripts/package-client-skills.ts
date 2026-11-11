@@ -113,7 +113,7 @@ function dependencyMetadata(sourceRoot: string, name: string, expectedVersion: s
     return sourceEntry.startsWith(`${packageRoot}${sep}`) && existsSync(sourceEntry) && lstatSync(sourceEntry).isFile() && realpathSync(sourceEntry) === sourceEntry;
   });
   if (!entry) throw new Error(`Unsafe prepared dependency entry: ${name}`);
-  return { name, version: expectedVersion, entry };
+  return { name, version: expectedVersion, entry: entry.replace(/^\.\//, '') };
 }
 function copyPackageManifest(): void {
   const files = manifest.files.filter(file => !packageOmissionPaths.has(file.path));
