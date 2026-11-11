@@ -113,3 +113,32 @@ Per-run custom HTML/CSS/JS remains supported under `data/runs/<run-id>/view/`. I
 For examples and external fixtures, use the generic read-only source-directory viewer. It accepts an absolute source run-data directory, validates its ledger and filesystem identity, assigns a random `view-<id>` presentation identity, and serves it through the same singleton. It reads the source in place, never publishes it under formal `data/runs`, never permits orchestration writes, and removes the mapping when its explicit browser view lease expires. Do not add an example-specific service mode or treat a source view as a real run.
 
 `serve.ts` remains an internal synthetic/legacy validation helper, not the formal run entry or an upgrade fallback. The explicitly installed shared user service uses the system-service exception for its background lifecycle. See `references/shared-viewer.md` for fixed-port ownership, compatibility, maintenance and migration recovery.
+
+## Packaged runtime and release identity
+
+The standalone package is `@loomhelm/multi-task-flow`; reproducible callers pin `@0.1.0`, while `@compat-v1` is a moving compatibility-line dist-tag and `latest` is never an identity proof. Production execution requires Bun `1.4.4`; the package does not install or upgrade Bun, and the source Skill package remains independent from the parent repository checkout.
+
+```sh
+bunx --bun --package @loomhelm/multi-task-flow@0.1.0 multi-task-flow skills list
+bunx --bun --package @loomhelm/multi-task-flow@compat-v1 multi-task-flow flow view --input - < view-request.json
+```
+
+The current source projection is `package=0.1.0`, `compatibility=compat-v1`, `skill=2.7.2`, `ledger=3`, `api=1`, `frontend=1`, `viewer=5`, and `service=1`; each candidate additionally carries `source_sha`, `merge_sha`, `build_id`, and `tarball_digest`. A breaking CLI, ledger, viewer, frontend, or service contract requires a new compatibility line; package SemVer alone does not widen an old line. See [`clients/typescript/README.md`](../../clients/typescript/README.md), [`docs/specs/skill-runtime-release/SPEC.md`](../../docs/specs/skill-runtime-release/SPEC.md), and [`docs/adr/0029-skill-runtime-release-and-service-boundary.md`](../../docs/adr/0029-skill-runtime-release-and-service-boundary.md) for the user-facing matrix and architecture contract.
+
+The direct `flow COMMAND --input -` path is the local ledger boundary and does not call the viewer gateway. Gateway HTTP/SSE is only the authenticated presentation and coordination surface; it cannot bypass owner, revision, command identity, compatibility, or approval checks. The installed service uses one loopback gateway and owner-only Unix-socket workers, with generation/PID fencing and leases recorded outside the ledger.
+
+## Viewer lifecycle and recovery
+
+Use `bun --no-install run <skill>/scripts/service.ts <command> --input -` with one JSON object on stdin. The operator sequence is `status` or `doctor`, then `ensure`, then `login` for a browser entry; candidate changes add `compatibility-check` before `upgrade`, and rollback adds `compatibility-check` with `{ "rollback": true }` before `rollback`. `install`, upgrade, rollback, credential rotation, import, and maintenance migration are owner-authorized operations; ordinary task agents may only inspect, ensure, renew, release, and obtain login entry points.
+
+Agent leases last 60 minutes and browser leases last 5 minutes; connected pages renew every 60 seconds. When all leases expire the current generation enters stopping and the service preserves run data, release bundles, logs, backups, and ledger identity. A later `ensure` may recover a stopped or crashed instance only after health checks prove the configured build, generation, PID, and port; do not delete runtime state, steal a port, or kill a process belonging to another identity.
+
+`login` returns a single-use URL with a 60-second TTL; treat it as a credential and never place it in a ledger, PR, or ordinary log. `credential-rotate` and `credential-revoke` revoke browser sessions, after which callers obtain a fresh ticket. Unknown startup, upgrade, or publish outcomes are reconciled against the exact run/build/source/merge identity before any retry.
+
+The newest viewer dual-reads every supported historical ledger shape. An older reader is an isolated read-only fallback only when the newest reader cannot safely interpret that run; it cannot acquire leases, write revisions, mutate ledger data, or impersonate the current service. Corrupt or unproven data fails closed per run. `ledger-maintenance-check` must produce the source/target contract, owner, revision, ledger digest, pending operations, and operation digest before `ledger-maintenance-apply`; apply requires the original owner thread, expected revision and digest, maintenance identity, approval reference, reason, paused writers, and a complete backup. Maintenance performs only mechanical contract migration and never invents historical baseline, event, owner, or business-policy facts.
+
+## Skill release gate
+
+Changes under `.github/workflows/`, `clients/typescript/`, `skills/`, or `tools/skill-release/` require exactly one PR label: `release:skill` or `release:skip`. `release:skip` must include an explicit skip reason and must leave the canonical package, compatibility, Skill, ledger, API, frontend, viewer, and service projection unchanged; `release:skill` must advance exact SemVer and may not move the compatibility line backward.
+
+The gate evaluates the exact PR base/head projection and revalidates it in merge queue and the publish workflow. A release candidate must use the protected main merge SHA, create or reconcile the immutable `multi-task-flow-v<version>` tag, build exactly one tarball from that SHA, inject and validate its digest, and publish that same tarball. Promotion is monotonic and ordered for the exact version, its `compat-vN` line, `latest`, and optional `stable`; promotion never rebuilds. If registry publication is ambiguous, query the exact package and compare the registry tarball digest before retrying. See [`../.github/workflows/README.md`](../../.github/workflows/README.md) for the operator runbook.
