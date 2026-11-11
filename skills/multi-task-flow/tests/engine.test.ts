@@ -3035,3 +3035,127 @@ test("native group retry ignores a failed attempt and still requires a fresh mai
   expect(ledger.groups[0].current_sha).toBe(head);
   invoke("group-execution-update", "group-start", { group_id: "g", state: "running" }, groupActor);
 });
+
+test("contract-3 baseline sync refreshes an advanced lineage without changing native creation evidence", () => {
+  const ledger = fixture();
+  approve(ledger);
+  ledger.contract_version = 3;
+  apply(ledger, "dispatch-claim", request(ledger, "baseline-claim", { task_id: "a", operation_id: "baseline-op" }));
+  apply(ledger, "dispatch-bind-request", request(ledger, "baseline-bind", {
+    operation_id: "baseline-op",
+    native_request_id: "baseline-native",
+    creation_parameters: {
+      title: "task",
+      prompt: "formal",
+      cwd: "/repo",
+      transport: "codex-exec",
+      execution_profile: ledger.config.execution_profile,
+    },
+  }));
+  apply(ledger, "dispatch-progress", request(ledger, "baseline-progress", {
+    operation_id: "baseline-op",
+    native_request_id: "baseline-native",
+    thread_id: "baseline-thread",
+  }));
+  apply(ledger, "dispatch-resolve", request(ledger, "baseline-resolve", {
+    operation_id: "baseline-op",
+    outcome: "succeeded",
+    thread_id: "baseline-thread",
+    native_evidence: {
+      source: "multi-task-flow-cli",
+      native_tool_name: "codex exec",
+      operation_id: "baseline-op",
+      native_request_id: "baseline-native",
+      ...ledger.config.execution_profile,
+      created_at: at,
+      evidence_ref: "codex:baseline",
+      thread_id: "baseline-thread",
+      workspace_path: "/owned/baseline",
+      initial_head: head,
+      exit_code: 0,
+      turn_completed: true,
+    },
+  }));
+  ledger.resources = [
+    { id: "baseline-wt", kind: "worktree", target: "a", status: "active", evidence_ref: "owned" },
+    { id: "baseline-branch", kind: "branch", target: "task-a", status: "active", evidence_ref: "branch" },
+  ];
+  const actor = { role: "task" as const, thread_id: "baseline-thread" };
+  ledger.groups[0]!.current_sha = base;
+  ledger.tasks[0]!.base_sha = base;
+  const initialBaseline = { sha: base, head: base, clean: true as const, source: "workspace-verifier" };
+  apply(ledger, "development-baseline-sync", request(ledger, "baseline-initial", {
+    target_type: "task",
+    target_id: "a",
+    dispatch_operation_id: "baseline-op",
+    mode: "initial",
+    expected_previous_baseline: null,
+    expected_lineage_sha: base,
+    lineage_event_id: "initial",
+    branch: "task-a",
+    resource_ids: ["baseline-wt", "baseline-branch"],
+    baseline: initialBaseline,
+    evidence_ref: "git:initial",
+  }, actor));
+  expect(ledger.operations[0]!.request.development_baseline).toEqual(initialBaseline);
+  expect(ledger.facts.at(-1)!.kind).toBe("baseline_verified");
+  expect(ledger.events.at(-1)!.type).toBe("development_baseline_synchronized");
+  const initialHead = (ledger.operations[0]!.request.creation_result as any).native_evidence.initial_head;
+
+  ledger.groups[0]!.current_sha = head;
+  ledger.tasks[0]!.base_sha = head;
+  ledger.events.push({
+    id: "lineage-advance",
+    type: "group_base_reconciled",
+    subject_id: "g",
+    actor_id: "group-thread",
+    occurred_at: at,
+    recorded_at: at,
+    data: { sha: head, previous_sha: base },
+  });
+  const refreshed = { sha: head, head, clean: true as const, source: "workspace-verifier" };
+  apply(ledger, "development-baseline-sync", request(ledger, "baseline-refresh", {
+    target_type: "task",
+    target_id: "a",
+    dispatch_operation_id: "baseline-op",
+    mode: "refresh",
+    expected_previous_baseline: initialBaseline,
+    expected_lineage_sha: head,
+    lineage_event_id: "lineage-advance",
+    branch: "task-a",
+    resource_ids: ["baseline-wt", "baseline-branch"],
+    baseline: refreshed,
+    evidence_ref: "git:refresh",
+  }, actor));
+  expect(ledger.operations[0]!.request.development_baseline).toEqual(refreshed);
+  expect((ledger.operations[0]!.request.creation_result as any).native_evidence.initial_head).toBe(initialHead);
+  expect(ledger.facts.filter((item) => item.kind === "baseline_verified")).toHaveLength(2);
+  expect((apply(ledger, "development-baseline-sync", request(ledger, "baseline-refresh", {
+    target_type: "task",
+    target_id: "a",
+    dispatch_operation_id: "baseline-op",
+    mode: "refresh",
+    expected_previous_baseline: initialBaseline,
+    expected_lineage_sha: head,
+    lineage_event_id: "lineage-advance",
+    branch: "task-a",
+    resource_ids: ["baseline-wt", "baseline-branch"],
+    baseline: refreshed,
+    evidence_ref: "git:refresh",
+  }, actor)) as any).code).toBe("REPLAYED");
+  const before = JSON.stringify(ledger);
+  expect(() => apply(ledger, "development-baseline-sync", request(ledger, "stale-refresh", {
+    target_type: "task",
+    target_id: "a",
+    dispatch_operation_id: "baseline-op",
+    mode: "refresh",
+    expected_previous_baseline: initialBaseline,
+    expected_lineage_sha: base,
+    lineage_event_id: "lineage-advance",
+    branch: "task-a",
+    resource_ids: ["baseline-wt", "baseline-branch"],
+    baseline: initialBaseline,
+    evidence_ref: "git:stale",
+  }, actor))).toThrow("current development baseline");
+  expect(JSON.stringify(ledger)).toBe(before);
+});

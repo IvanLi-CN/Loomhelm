@@ -439,6 +439,32 @@ export const providerReceipt = z
     evidence_ref: text,
   })
   .strict();
+export const baselineReceipt = z
+  .object({
+    sha,
+    head: sha,
+    clean: z.literal(true),
+    source: text,
+    fetched_at: timestamp.optional(),
+  })
+  .strict();
+export const baselineAudit = z
+  .object({
+    target_type: z.enum(["group", "task"]),
+    target_id: id,
+    dispatch_operation_id: id,
+    native_request_id: text,
+    thread_id: text,
+    mode: z.enum(["initial", "refresh"]),
+    previous_baseline: baselineReceipt.nullable(),
+    lineage_event_id: text,
+    lineage_sha: sha,
+    branch: text,
+    resource_ids: z.array(id).min(1),
+    receipt: baselineReceipt,
+    observed_at: timestamp,
+  })
+  .strict();
 export const fact = z
   .object({
     id,
@@ -452,6 +478,7 @@ export const fact = z
       "published",
       "deployed",
       "verified",
+      "baseline_verified",
     ]),
     subject_id: id,
     status: z.enum(["passed", "failed", "unknown"]),
@@ -478,6 +505,7 @@ export const fact = z
       .nullable()
       .optional(),
     receipt: providerReceipt.nullable().optional(),
+    baseline: baselineAudit.nullable().optional(),
   })
   .strict();
 export const cutEvidence = z
@@ -525,6 +553,7 @@ const eventType = z.enum([
   "group_atom_updated",
   "group_execution_updated",
   "group_base_reconciled",
+  "development_baseline_synchronized",
   "atom_updated",
   "link_verification",
   "task_ready",
@@ -616,7 +645,7 @@ export const ledgerSchema = z
   .object({
     schema_version: z.literal(2),
     source_schema_version: z.literal(1).nullable().default(null),
-    contract_version: z.union([z.literal(1), z.literal(2)]),
+    contract_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     version: z.object({
       skill_id: text,
       skill_version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
@@ -1904,7 +1933,13 @@ export function normalizeLegacyLedger(value: unknown): unknown {
     source_schema_version:
       raw.schema_version === 1 ? 1 : (raw.source_schema_version ?? null),
     contract_version:
-      raw.schema_version === undefined ? 1 : raw.contract_version === 2 ? 2 : 1,
+      raw.schema_version === undefined
+        ? 1
+        : raw.contract_version === 3
+          ? 3
+          : raw.contract_version === 2
+            ? 2
+            : 1,
     execution_plan_id: raw.execution_plan_id ?? raw.active_plan_id,
     milestones: Array.isArray(raw.milestones) ? raw.milestones : [],
     groups: Array.isArray(raw.groups)

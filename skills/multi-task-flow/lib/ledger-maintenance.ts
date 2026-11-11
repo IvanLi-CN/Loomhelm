@@ -8,6 +8,7 @@ import { ledgerContract, requireLedgerCompatibility } from "../lib/service-contr
 import {
   stable,
   contractMigrationCandidate,
+  contractV3MigrationCandidate,
   commitMigration,
   migrationBackupName,
   verifyMigrationBackup,
@@ -17,6 +18,7 @@ import {
   executionProfile,
   taskExecutionPolicyDeclarationGaps,
   TASK_EXECUTION_POLICY_FIELDS,
+  validateTaskExecutionPolicies,
   validateLedger,
 } from "../lib/schema";
 import { migrateProfile } from "../lib/profile-migration";
@@ -115,11 +117,26 @@ function prepare(
   );
   const taskExecutionPolicyGaps =
     op.action === "contract" ? taskExecutionPolicyDeclarationGaps(raw) : [];
+  if (op.action === "contract" && ledger.contract_version === 2 && taskExecutionPolicyGaps.length === 0) {
+    try {
+      validateTaskExecutionPolicies(raw.tasks ?? []);
+    } catch (error) {
+      if (error instanceof ContractError)
+        throw new ContractError(
+          "HISTORICAL_LEDGER_READ_ONLY",
+          "Historical task execution policies are semantically invalid; explicit recovery is required",
+          4,
+        );
+      throw error;
+    }
+  }
   const candidate =
     op.action === "contract"
-      ? contractMigrationCandidate(raw, {
-          allowHistoricalTaskExecutionPolicies: true,
-        })
+      ? ledger.contract_version === 2 && taskExecutionPolicyGaps.length === 0
+        ? contractV3MigrationCandidate(raw)
+        : contractMigrationCandidate(raw, {
+            allowHistoricalTaskExecutionPolicies: true,
+          })
       : structuredClone(ledger);
   if (op.action === "execution-profile") {
     requireLedgerCompatibility(raw, "write");
