@@ -15966,7 +15966,7 @@
     },
     {
       "path": "skills/multi-task-flow/lib/atomic-orchestration.ts",
-      "installedSha256": "0d8a648a8a91918166c2b90e00ce3f87606c4fb43492f3dcad701203e35287a6"
+      "installedSha256": "f132c6814401b82abe0cbd2d52bb409c483ff5f3095c83eb7007bae70b3c8834"
     },
     {
       "path": "skills/multi-task-flow/tests/atomic-orchestration-schema.test.ts",

@@ -210,12 +210,18 @@ export function contract3MigrationCandidate(raw: any): any {
   candidate.contract_version = 3;
   candidate.groups = Array.isArray(candidate.groups) ? candidate.groups.map((group: any) => {
     if (group.pr && typeof group.pr.state === "string") return group;
-    if (group.parent_pr) return { ...group, pr: { state: "published", pr: group.parent_pr, parent_branch: group.parent_branch ?? "main" } };
+    if (group.parent_pr) {
+      const state = group.state === "merged" ? "merged" : group.state === "closed" ? "closed" : "published";
+      return { ...group, pr: state === "merged" ? { state, pr: group.parent_pr, parent_branch: group.parent_branch ?? "main", merge_sha: group.merge_sha ?? "0000000000000000000000000000000000000000" } : state === "closed" ? { state, pr: group.parent_pr, parent_branch: group.parent_branch ?? "main", closed_at: group.finished_at ?? new Date(0).toISOString(), closed_reason: "provider_closed" } : { state, pr: group.parent_pr, parent_branch: group.parent_branch ?? "main" } };
+    }
     return { ...group, pr: { state: "unpublished" } };
   }) : candidate.groups;
   candidate.tasks = Array.isArray(candidate.tasks) ? candidate.tasks.map((task: any) => {
     if (task.pr && typeof task.pr.state === "string") return task;
-    if (task.pr && task.branch && task.base_branch) return { ...task, pr: { state: "open", pr: task.pr, branch: task.branch, base_branch: task.base_branch } };
+    if (task.pr && task.branch && task.base_branch) {
+      const state = task.state === "integrated" || task.state === "completed" ? "merged" : task.state === "closed" ? "closed" : "open";
+      return { ...task, pr: state === "merged" ? { state, pr: task.pr, branch: task.branch, merge_sha: task.merge_sha ?? "0000000000000000000000000000000000000000" } : state === "closed" ? { state, pr: task.pr, branch: task.branch, closed_at: task.finished_at ?? new Date(0).toISOString(), closed_reason: "provider_closed" } : { state, pr: task.pr, branch: task.branch, base_branch: task.base_branch } };
+    }
     return { ...task, pr: { state: "unbound" } };
   }) : candidate.tasks;
   candidate.atomic_nodes = Array.isArray(raw?.atomic_nodes) && raw.atomic_nodes.length ? raw.atomic_nodes : legacyNodes;
