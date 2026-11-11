@@ -2104,6 +2104,12 @@ export function validateLedger(value: unknown): Ledger {
       "Root contract-3 atomic snapshot must use node-based atomic edges",
     );
     validateAtomicGraph(parsed.atomic_nodes, parsed.atomic_edges as any);
+    for (const group of parsed.groups) {
+      requireCondition(deliveryUnitExternalFacts.safeParse(group.pr).success, "ATOMIC_CONTRACT_REQUIRED", "Contract-3 DeliveryUnit PR must use DeliveryUnitExternalFacts", 3);
+    }
+    for (const task of parsed.tasks.filter((item) => isContributionKind(item.kind))) {
+      requireCondition(taskPrBinding.safeParse(task.pr).success, "ATOMIC_CONTRACT_REQUIRED", "Contract-3 contribution Task PR must use TaskPrBinding", 3);
+    }
   }
   for (const collection of [
     parsed.plans,

@@ -669,15 +669,6 @@ export function buildView(
     : runtimeProjection.summary.status === "ready"
       ? "eligible"
       : runtimeProjection.summary.status;
-  const nodeData = plan.nodes.map((node) => ({
-    ...node,
-    planned_group_id: node.group_id,
-    group_id:
-      node.kind === "task"
-        ? (ledger.tasks.find((task) => task.id === node.ref_id)?.group_id ??
-          null)
-        : node.group_id,
-  }));
   const canonicalAtomicNodes: AtomicNode[] = plan.atomic_nodes.length
     ? plan.atomic_nodes
     : plan.nodes
@@ -706,6 +697,11 @@ export function buildView(
             scope: { kind: "task" as const, task_id: node.ref_id ?? node.id, delivery_unit_id: task?.group_id ?? node.group_id ?? "unassigned" },
           };
         });
+  const nodeData = plan.nodes.map((node) => ({
+    ...node,
+    planned_group_id: node.group_id,
+    group_id: node.kind === "task" ? (ledger.tasks.find((task) => task.id === node.ref_id)?.group_id ?? null) : node.group_id,
+  }));
   const existingAtomicNodeIds = new Set(canonicalAtomicNodes.map((node) => node.id));
   for (const node of plan.nodes.filter((item) => item.kind === "milestone" && !existingAtomicNodeIds.has(item.id))) {
     canonicalAtomicNodes.push({
@@ -744,26 +740,22 @@ export function buildView(
     const acceptance = milestone.acceptance.map(() => ({ satisfied: false, evidence_refs: [] as string[] }));
     try { milestoneEvaluations.set(milestone.id, evaluateMilestone(milestone, incoming, acceptance)); } catch { /* invalid legacy milestones remain pending in the compatibility view */ }
   }
-  const canonicalDisplayNodes = plan.atomic_nodes.length
-    ? canonicalAtomicNodes.map((node) => ({
+  const canonicalDisplayNodes = plan.atomic_nodes.length ? canonicalAtomicNodes.map((node) => ({
         id: node.id,
         kind: node.kind === "work" ? "task" as const : "milestone" as const,
-        ref_id: node.kind === "work" && node.scope.kind === "task" ? node.scope.task_id : null,
+        ref_id: node.kind === "work" && node.scope?.kind === "task" ? node.scope.task_id : null,
         group_id: node.scope?.delivery_unit_id ?? null,
         label: node.title,
         estimate_minutes: null,
         estimate_basis: null,
         estimate_confidence: null,
-      }))
-    : nodeData;
-  const canonicalDisplayEdges = plan.atomic_nodes.length
-    ? canonicalAtomicEdges.map((edge) => ({
+      })) : nodeData;
+  const canonicalDisplayEdges = plan.atomic_nodes.length ? canonicalAtomicEdges.map((edge) => ({
         id: edge.id,
         from_node_id: edge.from_node_id,
         to_node_id: edge.to_node_id,
-        requires: "completed" as const,
-      }))
-    : plan.edges;
+        requires: edge.requires.kind === "source_terminal_success" ? "completed" as const : edge.requires.criterion.kind === "pr_published" || edge.requires.criterion.kind === "release_published" ? "published" as const : edge.requires.criterion.kind === "pr_merged" ? "merged" as const : edge.requires.criterion.kind === "ci_passed" ? "ci_passed" as const : edge.requires.criterion.kind === "deployment_succeeded" ? "deployed" as const : "verified" as const,
+      })) : plan.edges;
   const selectedTaskIds = new Set(
     plan.nodes
       .filter((node) => node.kind === "task")

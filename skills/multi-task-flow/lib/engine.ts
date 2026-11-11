@@ -187,6 +187,10 @@ function deliveryUnitPr(owner: Ledger["groups"][number]): ExternalRef | null {
   if (owner.pr && "state" in owner.pr) return "pr" in owner.pr ? owner.pr.pr : null;
   return owner.parent_pr;
 }
+function taskPrRef(task: Ledger["tasks"][number]): ExternalRef | null {
+  if (task.pr && "state" in task.pr) return "pr" in task.pr ? task.pr.pr : null;
+  return task.pr;
+}
 function requireContributionDispatchGate(
   ledger: Ledger,
   owner: Ledger["groups"][number],
@@ -3804,7 +3808,7 @@ export function execute(
           4,
         );
         requireCondition(
-          stable(target.pr) === stable(pr),
+          stable(taskPrRef(target)) === stable(pr),
           "PR_MISMATCH",
           "Merge PR differs from the registered child PR",
           3,
@@ -3830,7 +3834,7 @@ export function execute(
                 item.quality.thread_id === target.thread_id &&
                 item.quality.base_sha === owner.current_sha &&
                 item.quality.head_sha === headSha &&
-                stable(item.quality.pr) === stable(target.pr) &&
+                stable(item.quality.pr) === stable(taskPrRef(target)) &&
                 ledger.events.some(
                   (event) =>
                     event.type === "fact_observed" &&
