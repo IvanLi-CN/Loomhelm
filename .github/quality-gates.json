@@ -16,6 +16,7 @@
     "Bootstrap Verification",
     "React Doctor",
     "Repository Verification",
+    "Skills Native macOS",
     "Candidate Build",
     "Blue-Green Control Contract",
     "TypeScript Client (Bun)",
@@ -25,7 +26,6 @@
   ],
   "informational_checks": [
     "Candidate Reproducibility",
-    "Skills Native macOS",
     "Go Race Tests",
     "Go Shuffle Tests"
   ],
