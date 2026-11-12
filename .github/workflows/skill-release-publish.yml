@@ -180,6 +180,7 @@ jobs:
           PY
           }
           (cd clients/typescript && bun --no-install run build)
+          set_package_metadata clients/typescript/package.json
           set_package_metadata clients/typescript/toolkit/package.json
           (cd clients/typescript && bun pm pack --destination "$draft_dir" --ignore-scripts --quiet)
           mapfile -t drafts < <(find "$draft_dir" -type f -name '*.tgz' -print)
@@ -187,6 +188,7 @@ jobs:
           digest="$(python3 tools/skill-release/release.py tarball-digest "${drafts[0]}")"
           export LOOMHELM_TARBALL_DIGEST="$digest"
           (cd clients/typescript && bun --no-install run build)
+          set_package_metadata clients/typescript/package.json
           set_package_metadata clients/typescript/toolkit/package.json
           (cd clients/typescript && bun pm pack --destination "$final_dir" --ignore-scripts --quiet)
           mapfile -t finals < <(find "$final_dir" -type f -name '*.tgz' -print)

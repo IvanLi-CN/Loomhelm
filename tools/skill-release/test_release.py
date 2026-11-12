@@ -102,6 +102,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("release:skill-initial-publication", workflow)
         self.assertIn("registry_version_missing", workflow)
         self.assertIn("https://github.com/IvanLi-CN/Loomhelm", workflow)
+        self.assertEqual(workflow.count("set_package_metadata clients/typescript/package.json"), 2)
         self.assertIn('promote "$COMPATIBILITY_LINE"', workflow)
         self.assertIn("promote latest", workflow)
 
