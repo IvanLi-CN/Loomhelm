@@ -217,10 +217,9 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      id-token: write
     env:
       GH_TOKEN: ${{ github.token }}
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      NPM_CONFIG_USERCONFIG: ${{ github.workspace }}/.skill-release.npmrc
       PACKAGE_NAME: '@loomhelm/multi-task-flow'
       MERGE_SHA: ${{ inputs.merge_sha }}
       VERSION: ${{ needs.verify.outputs.version }}
@@ -237,15 +236,14 @@ jobs:
         with:
           name: skill-release-${{ needs.verify.outputs.version }}
           path: ${{ runner.temp }}/skill-release
-      - name: Configure npm registry authentication
-        run: |
-          set -euo pipefail
-          cat > "$NPM_CONFIG_USERCONFIG" <<'EOF'
-          registry=https://registry.npmjs.org/
-          @loomhelm:registry=https://registry.npmjs.org/
-          //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
-          always-auth=true
-          EOF
+      - name: Set up Node.js and npm Trusted Publishing
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Ensure npm supports OIDC dist-tags
+        run: npm install --global npm@11.21.0
       - name: Create or reconcile immutable release tag
         run: >-
           python3 tools/skill-release/release.py verify-tag
@@ -268,7 +266,8 @@ jobs:
             exact_exists=true
           fi
           if [ "$exact_exists" = false ]; then
-            if npm publish "$tarball" --access public --tag "$VERSION" --userconfig "$NPM_CONFIG_USERCONFIG"; then
+            # npm rejects a SemVer range as a dist-tag; publish first under the declared compatibility line.
+            if npm publish "$tarball" --access public --tag "$COMPATIBILITY_LINE"; then
               :
             else
               if ! npm view "$PACKAGE_NAME@$VERSION" --json > "$metadata" 2>/dev/null; then
@@ -282,9 +281,7 @@ jobs:
           npm view "$PACKAGE_NAME@$VERSION" --json > "$metadata"
           registry_url="$(python3 -c 'import json, os, sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert value.get("version") == os.environ["VERSION"], "registry version does not match the release candidate"; dist=value.get("dist") or {}; url=dist.get("tarball"); assert url, "registry metadata has no tarball URL"; print(url)' "$metadata")"
           downloaded="$RUNNER_TEMP/skill-release-registry.tgz"
-          curl --fail --silent --show-error --location \
-            -H "Authorization: Bearer $NODE_AUTH_TOKEN" \
-            "$registry_url" -o "$downloaded"
+          curl --fail --silent --show-error --location "$registry_url" -o "$downloaded"
           registry_result="$(python3 tools/skill-release/release.py validate-tarball "$downloaded" \
             --version "$VERSION" --merge-sha "$MERGE_SHA" --compatibility-line "$COMPATIBILITY_LINE")"
           printf '%s\n' "$registry_result"
@@ -300,7 +297,7 @@ jobs:
             current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null || true)"
             action="$(python3 tools/skill-release/release.py dist-tag-policy --current "$current" --target "$VERSION")"
             if [ "$action" = promote ]; then
-              npm dist-tag add "$PACKAGE_NAME@$VERSION" "$tag" --userconfig "$NPM_CONFIG_USERCONFIG"
+              npm dist-tag add "$PACKAGE_NAME@$VERSION" "$tag"
             elif [ "$action" != keep ]; then
               echo "unsupported dist-tag action: $action" >&2
               exit 1

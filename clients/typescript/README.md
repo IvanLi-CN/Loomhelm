@@ -17,18 +17,18 @@ bunx --bun --package @loomhelm/multi-task-flow@compat-v1 multi-task-flow flow vi
 可重复的生产安装必须固定 package version；`@compat-v1` 只用于接收同一兼容线内经过门禁的最新版本，`latest` 不构成身份或兼容性证明。运行前置条件是 `bun --version` 返回 `1.4.4`；Bun 由宿主提供，包不会替换或升级它。
 
 ```sh
-bunx --bun --package @loomhelm/multi-task-flow@0.2.0 multi-task-flow skills list
+bunx --bun --package @loomhelm/multi-task-flow@0.2.6 multi-task-flow skills list
 bunx --bun --package @loomhelm/multi-task-flow@compat-v1 multi-task-flow skills list
-bunx --bun --package @loomhelm/multi-task-flow@0.2.0 multi-task-flow flow view --input - < view-request.json
+bunx --bun --package @loomhelm/multi-task-flow@0.2.6 multi-task-flow flow view --input - < view-request.json
 ```
 
 当前源码投影的内部合同矩阵如下；`source_sha`、`merge_sha`、`build_id` 和 `tarball_digest` 是每个候选构建的独立身份字段，不能由这张静态表推断。
 
 | 维度 | 当前值 |
 | - | - |
-| package | `@loomhelm/multi-task-flow@0.2.0` |
+| package | `@loomhelm/multi-task-flow@0.2.6` |
 | compatibility line | `compat-v1` |
-| Skill | `2.7.3` |
+| Skill | `2.7.6` |
 | ledger contract | `3` |
 | API | `1` |
 | frontend | `1` |
@@ -37,7 +37,7 @@ bunx --bun --package @loomhelm/multi-task-flow@0.2.0 multi-task-flow flow view -
 
 破坏 CLI 输入输出、账本写入语义、viewer API、frontend 或 service 边界时，必须提升 `compat-vN`；仅提升 package SemVer 不会扩大旧兼容线的合同。包发布仍需经过仓库 release gate 和精确 merge SHA 验证，当前源码投影不等于已经发布到 npm。
 
-npm 发布需要 `@loomhelm` scope 的 registry 配置、可写的 automation token 和 owner-approved release workflow；token 不得写入 README、PR body、日志或 artifact。缺少 registry/auth 时只执行本地 build、pack 和 tarball 校验，不把本地候选称为已发布包。
+npm 发布需要 npm Trusted Publisher 绑定 `IvanLi-CN/Loomhelm` 与 `skill-release-publish.yml`，以及 owner-approved release workflow；不使用长期 npm 写入 token。缺少 Trusted Publisher 或 workflow receipt 时只执行本地 build、pack 和 tarball 校验，不把本地候选称为已发布包。
 
 ```sh
 bun install --frozen-lockfile

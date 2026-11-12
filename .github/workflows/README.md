@@ -8,9 +8,9 @@ Skill release boundary 包含 `.github/workflows/`、`clients/typescript/`、`sk
 
 | Dimension | Current projection |
 | - | - |
-| package | `@loomhelm/multi-task-flow@0.2.2` |
+| package | `@loomhelm/multi-task-flow@0.2.6` |
 | compatibility line | `compat-v1` |
-| Skill | `2.7.2` |
+| Skill | `2.7.6` |
 | ledger contract | `3` |
 | API | `1` |
 | frontend | `1` |
@@ -37,11 +37,11 @@ PR gate 使用 PR 的 exact base SHA 和 head SHA；merge queue 会重新解析�
 3. `release:skill` 路径先用 `verify-tag --allow-missing` 检查 `multi-task-flow-v<version>`，再以同一个 merge SHA 和 Bun `1.4.4` 构建一个 draft tarball，计算 digest，将 digest 写入 manifest 后重新生成最终 tarball，并用 `validate-tarball` 验证版本、merge SHA、compatibility line 和 digest。
 4. 候选包必须把运行时 Skill 依赖（当前包括 `zod` 与 `sharp`）完整封装在 tarball 内；发布前必须在全新临时目录执行隔离安装后的 `orchestrate init`/`show` smoke test，禁止依赖发布包外的 workspace `node_modules`。
 5. 最终只上传这一份验证过的 tarball；promotion 阶段下载它，不重新 build，不从另一个 checkout 生成替代 bytes。
-6. publish 先用 `npm view @loomhelm/multi-task-flow@<version>` 对账 exact package；不存在时发布相同 tarball，随后下载 registry tarball 并比较 `tarballDigest`。
+6. publish 先用 `npm view @loomhelm/multi-task-flow@<version>` 对账 exact package；不存在时使用相同 tarball，并以声明的 `compat-vN` 作为初始 npm dist-tag 发布，不能把 package version 当作 tag（npm 会将有效 SemVer 视为非法 tag），随后下载 registry tarball 并比较 `tarballDigest`。发布 job 通过 npm Trusted Publishing 使用 GitHub OIDC，不读取长期 npm 写入 token。
 7. exact package 对账成功后，以 `dist-tag-policy` 单调提升 `compat-vN` 和 `latest`，必要时再提升 `stable`；任何更高版本占用、digest 不同或 tag 回退都会停止流程。
 8. `release:skip` 路径不生成发布包，只上传包含 PR、merge SHA、当前 package version、compatibility line 和 skip reason 的 skip receipt。
 
-npm 写入需要 `https://registry.npmjs.org/`、`@loomhelm` scope 配置和 `NPM_TOKEN` secret；这些是 workflow 外部前置，不写入仓库或 PR。owner approval、GitHub token 权限和 registry token 必须在受控 workflow environment 中提供；本地 `bun pm pack` 或 gate 通过不代表完成 npm publication。
+npm 写入需要在 npm 包设置中绑定 GitHub owner `IvanLi-CN`、repository `Loomhelm` 和 workflow filename `skill-release-publish.yml`，并允许 `npm publish` 与 `npm dist-tag`；workflow publish job 需要 `id-token: write`，且使用 GitHub-hosted runner 与 npm CLI 11.21.0 或更高版本。owner approval、GitHub token 权限和 npm Trusted Publisher 配置必须在受控 workflow environment 中提供；本地 `bun pm pack` 或 gate 通过不代表完成 npm publication。
 
 ## Ledger and viewer compatibility
 

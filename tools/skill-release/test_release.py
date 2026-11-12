@@ -41,6 +41,9 @@ ROOT_FILES = {
     ),
 }
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+PUBLISH_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/skill-release-publish.yml"
+
 
 def git(root: Path, *args: str) -> str:
     return subprocess.run(
@@ -88,6 +91,16 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertEqual(dist_tag_action('"1.0.0"', "1.0.0"), "keep")
         with self.assertRaisesRegex(ReleaseError, "newer version"):
             dist_tag_action('"1.1.0"', "1.0.0")
+
+    def test_publish_workflow_uses_npm_trusted_publishing(self):
+        workflow = PUBLISH_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("id-token: write", workflow)
+        self.assertNotIn("NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}", workflow)
+        self.assertNotIn("NPM_CONFIG_USERCONFIG", workflow)
+        self.assertIn('npm publish "$tarball" --access public --tag "$COMPATIBILITY_LINE"', workflow)
+        self.assertIn("npm@11.21.0", workflow)
+        self.assertIn('promote "$COMPATIBILITY_LINE"', workflow)
+        self.assertIn("promote latest", workflow)
 
     def test_release_skill_requires_strict_version_progression(self):
         with tempfile.TemporaryDirectory() as directory:
