@@ -166,13 +166,28 @@ jobs:
           export LOOMHELM_MERGE_SHA="$MERGE_SHA"
           export LOOMHELM_GIT_TAG="$version_tag"
           export LOOMHELM_TARBALL_DIGEST=
+          set_package_metadata() {
+            python3 - "$1" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+          package = json.load(open(path, encoding="utf-8"))
+          package["repository"] = {"type": "git", "url": "https://github.com/IvanLi-CN/Loomhelm"}
+          with open(path, "w", encoding="utf-8") as output:
+              json.dump(package, output, indent=2)
+              output.write("\n")
+          PY
+          }
           (cd clients/typescript && bun --no-install run build)
+          set_package_metadata clients/typescript/toolkit/package.json
           (cd clients/typescript && bun pm pack --destination "$draft_dir" --ignore-scripts --quiet)
           mapfile -t drafts < <(find "$draft_dir" -type f -name '*.tgz' -print)
           test "${#drafts[@]}" -eq 1
           digest="$(python3 tools/skill-release/release.py tarball-digest "${drafts[0]}")"
           export LOOMHELM_TARBALL_DIGEST="$digest"
           (cd clients/typescript && bun --no-install run build)
+          set_package_metadata clients/typescript/toolkit/package.json
           (cd clients/typescript && bun pm pack --destination "$final_dir" --ignore-scripts --quiet)
           mapfile -t finals < <(find "$final_dir" -type f -name '*.tgz' -print)
           test "${#finals[@]}" -eq 1
