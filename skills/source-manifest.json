@@ -14121,7 +14121,8 @@
       "sourceBlob": "2b8f25c6bbb59d20f7a85a08b57ed86b35c50687",
       "sourceSha256": "830424a1dd3420f8279db5db7cd3bb71600acc05bccfd36d8d41c2b18bc834b8",
       "installedSha256": "99869d8935e4293495714b183f54b84e5e7cc96d0a1329a29f2c5793c3a91e0b",
-      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation",
+      "sha256": "459c7a03207a2f8f43c41efec389e104216b3a16b610875d92434538e1219860"
     },
     {
       "source": "skills/multi-task-flow/lib/conversation-history.ts",
