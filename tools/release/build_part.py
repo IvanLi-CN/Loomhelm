@@ -127,8 +127,6 @@ def build(record, part, output):
             # Bun's root lock omits the root package version. Frozen install proves
             # dependency consistency; package.json and source stamp own identity.
             run('bun','install','--cwd',str(stage),'--frozen-lockfile','--production','--ignore-scripts','--backend=copy')
-            for relative in ('skills/node_modules','skills/multi-task-flow/node_modules'):
-                shutil.copytree(ROOT/relative,stage/'toolkit'/relative)
             archive(stage,output/f'ts-client-{machine}.tar.gz',epoch)
         else: raise ReleaseError('unknown build partition')
 

@@ -163,7 +163,11 @@ const copyDependencies = (path: string, dependencyNames?: string[]): boolean => 
     const relativeSource = relative(resolvedRoot, resolvedSource);
     const stat = lstatSync(source);
     if (relativeSource.startsWith(`..${sep}`) || relativeSource === '..' || !stat.isFile() || stat.isSymbolicLink() || resolvedSource !== source) throw new Error('Unsafe prepared dependency: ' + destination);
-    record(destination, readFileSync(resolvedSource));
+    const output = resolve(target, destination);
+    mkdirSync(dirname(output), { recursive: true });
+    const contents = readFileSync(resolvedSource);
+    cpSync(resolvedSource, output);
+    record(destination, contents);
     preparedFiles += 1;
   };
   const walk = (relativePath: string): void => {
