@@ -254,7 +254,8 @@ const packageIdentityBase = {
 };
 const generatedPackage = JSON.stringify({ private: true, type: 'module', packageName: packageMetadata.name, packageVersion: buildVersion, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion }, null, 2) + '\n';
 writeFileSync(resolve(target, 'package.json'), generatedPackage);
-const finalInventory = [...outputs.values()].sort((left, right) => left.path.localeCompare(right.path));
+// Build identity must be independent of the runner's process locale.
+const finalInventory = [...outputs.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
 const buildId = createHash('sha256').update(JSON.stringify({ ...packageIdentityBase, files: finalInventory })).digest('hex');
 const identity = { ...packageIdentityBase, buildId };
 const artifact = { schemaVersion: 2, packageName: packageMetadata.name, packageVersion: buildVersion, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion, sourceCommit: manifest.commit, sourceSha, mergeSha: packageIdentityBase.mergeSha, candidateSha: sourceSha, dirty, runtime: 'bun@1.4.4', identity, buildId, tarballDigest, gitTag, dependenciesBundled, dependencies: preparedDependencies, omittedResources: packageOmissions, files: finalInventory };
