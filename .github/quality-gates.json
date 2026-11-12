@@ -29,7 +29,25 @@
     "Go Race Tests",
     "Go Shuffle Tests"
   ],
-  "waivers": [],
+  "waivers": [
+    {
+      "id": "skill-release-0.2.6-product-package-macos-queue",
+      "check_name": "Product Package (macos-15)",
+      "scope": "PR #161 / @loomhelm/multi-task-flow@0.2.6 / protected candidate merge SHA 9ceb989d06c612c075974a44e603b964befb9e5e",
+      "status": "approved-waiver",
+      "approved_by": "owner",
+      "approved_at": "2026-11-12T13:32:04Z",
+      "expires_at": "2026-11-13T00:00:00Z",
+      "ticket": "owner-approval-2026-11-12",
+      "reason": "The GitHub-hosted macos-15 runner remained queued for 15 minutes and the required job was cancelled before starting; this is runner capacity failure rather than a package verification failure.",
+      "substitute_evidence": [
+        "Candidate Build passed for the exact protected release source.",
+        "Candidate Reproducibility passed for the exact candidate identity.",
+        "Product Package (ubuntu-24.04) passed the corresponding release package verification.",
+        "Skills Native macOS passed the native Skill and Bun FFI checks in the same candidate run."
+      ]
+    }
+  ],
   "expected_pr_workflows": [
     {
       "workflow": "Candidate CI",

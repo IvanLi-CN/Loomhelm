@@ -28,6 +28,8 @@ Skill release boundary 包含 `.github/workflows/`、`clients/typescript/`、`sk
 
 PR gate 使用 PR 的 exact base SHA 和 head SHA；merge queue 会重新解析唯一的 main PR 并以 queue base/head 再跑一次 gate。不要以工作区当前分支、PR title、历史 workflow 结果或本地 package version 代替 provider 传入的 SHA 和 label 证据。
 
+一次性 gate waiver 必须写入 `.github/quality-gates.json`，绑定明确的 PR、发布版本和 source/merge SHA，记录 owner approval、原始阻塞原因、替代证据和失效边界。waiver 不能把 pending、cancelled 或 skipped check 改写为普通 success，也不能替代发布 workflow 对 exact package、registry digest、immutable tag、dist-tags 和 provenance receipt 的核验；它只允许受保护发布流程在明确记录的 runner capacity 失败下继续对账。永久 gate 变化必须单独修改 `required_checks`/`informational_checks` 合同并通过完整验证。
+
 发布 workflow 的输入是 `pr_number`、`merge_sha`、`publish` 和 `stable`。`merge_sha` 必须是 protected main 的实际 merge commit；`publish=false` 只验证候选并上传验证 artifact，`publish=true` 才进入 npm 写入；`stable=true` 仅在 exact、compatibility line 和 latest 都验证成功后提升 stable。
 
 ## Candidate and publish sequence
