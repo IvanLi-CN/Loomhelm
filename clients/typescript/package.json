@@ -50,7 +50,7 @@
   },
   "loomhelm": {
     "compatibilityLine": "compat-v1",
-    "skillVersion": "2.7.4",
+    "skillVersion": "2.7.5",
     "contracts": {
       "ledger": 3,
       "api": 1,
