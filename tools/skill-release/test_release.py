@@ -95,13 +95,22 @@ class ReleasePolicyTests(unittest.TestCase):
     def test_publish_workflow_uses_compatibility_line_for_initial_npm_tag(self):
         workflow = PUBLISH_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(
-            'npm publish "$tarball" --access public --tag "$COMPATIBILITY_LINE" --userconfig "$NPM_CONFIG_USERCONFIG"',
+            'id-token: write',
             workflow,
         )
         self.assertNotIn(
-            'npm publish "$tarball" --access public --tag "$VERSION" --userconfig "$NPM_CONFIG_USERCONFIG"',
+            'NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}',
             workflow,
         )
+        self.assertIn(
+            'npm publish "$tarball" --access public --tag "$COMPATIBILITY_LINE"',
+            workflow,
+        )
+        self.assertNotIn(
+            '--userconfig "$NPM_CONFIG_USERCONFIG"',
+            workflow,
+        )
+        self.assertIn("npm@11.21.0", workflow)
         self.assertIn('promote "$COMPATIBILITY_LINE"', workflow)
         self.assertIn("promote latest", workflow)
 
