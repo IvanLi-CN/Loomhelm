@@ -101,6 +101,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("npm@11.21.0", workflow)
         self.assertIn("release:skill-initial-publication", workflow)
         self.assertIn("registry_version_missing", workflow)
+        self.assertIn("--reconcile-existing", workflow)
         self.assertIn("https://github.com/IvanLi-CN/Loomhelm", workflow)
         self.assertEqual(workflow.count("set_package_metadata clients/typescript/package.json"), 2)
         self.assertIn(
@@ -156,7 +157,7 @@ class ReleasePolicyTests(unittest.TestCase):
                 registry_version_missing=True,
             )
             self.assertEqual(result.decision, "release:skill-initial-publication")
-            with self.assertRaisesRegex(ReleaseError, "unpublished exact registry version"):
+            with self.assertRaisesRegex(ReleaseError, "unpublished exact registry version or explicit registry reconciliation"):
                 evaluate_gate(
                     root,
                     base=base,
@@ -165,6 +166,16 @@ class ReleasePolicyTests(unittest.TestCase):
                     initial_publication=True,
                     registry_version_missing=False,
                 )
+            reconciled = evaluate_gate(
+                root,
+                base=base,
+                head=head,
+                labels=["release:skill-initial-publication"],
+                initial_publication=True,
+                registry_version_missing=False,
+                reconcile_existing=True,
+            )
+            self.assertEqual(reconciled.decision, "release:skill-initial-publication")
             package_path = root / "clients/typescript/package.json"
             package = json.loads(package_path.read_text(encoding="utf-8"))
             package["version"] = "0.2.0"

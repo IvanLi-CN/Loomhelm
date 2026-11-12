@@ -380,6 +380,7 @@ def evaluate_gate(
     skip_reason: str | None = None,
     initial_publication: bool = False,
     registry_version_missing: bool = False,
+    reconcile_existing: bool = False,
 ) -> GateResult:
     paths = changed_paths(root, base, head)
     if not any(is_release_path(path) for path in paths):
@@ -409,8 +410,8 @@ def evaluate_gate(
         )
 
     if decision == "release:skill-initial-publication":
-        if not initial_publication or not registry_version_missing:
-            raise ReleaseError("initial Skill publication requires an unpublished exact registry version")
+        if not initial_publication or (not registry_version_missing and not reconcile_existing):
+            raise ReleaseError("initial Skill publication requires an unpublished exact registry version or explicit registry reconciliation")
         if base_projection is None:
             raise ReleaseError("initial Skill publication requires an existing main projection")
         if base_projection.canonical_identity() != head_projection.canonical_identity():
@@ -750,6 +751,7 @@ def _build_parser() -> argparse.ArgumentParser:
     gate.add_argument("--event-path", type=Path)
     gate.add_argument("--initial-publication", action="store_true")
     gate.add_argument("--registry-version-missing", action="store_true")
+    gate.add_argument("--reconcile-existing", action="store_true")
 
     digest = subparsers.add_parser("tarball-digest", help="print the canonical tarball digest")
     digest.add_argument("tarball", type=Path)
@@ -796,6 +798,7 @@ def main(argv: list[str] | None = None) -> int:
                 skip_reason=skip_reason,
                 initial_publication=args.initial_publication,
                 registry_version_missing=args.registry_version_missing,
+                reconcile_existing=args.reconcile_existing,
             )
             print(json.dumps(result.as_json(), sort_keys=True))
             return 0
