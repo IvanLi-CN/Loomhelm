@@ -2,9 +2,9 @@
 
 ## 目标
 
-定义原子任务、子任务、交付单元和里程碑的稳定身份与依赖关系。
+定义 AtomicNode、AtomicEdge、Task、DeliveryUnit 和 milestone 的稳定身份与依赖关系。
 
 ## 验收
 
-- 原子任务图和映射后的子任务图均无环。
-- 跨贡献任务的依赖以子 PR 已合入为交接事实。
+- AtomicNode 与 AtomicEdge 是唯一的依赖真相，图必须无环。
+- Task 与 DeliveryUnit 是平级读取投影，不拥有原子副本；跨贡献任务的依赖以显式 edge requirement 和 PR/milestone evidence 表达。

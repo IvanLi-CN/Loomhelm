@@ -300,7 +300,7 @@ describe("phase-aware plan revisions", () => {
     const schema = contractJsonSchema() as { properties?: Record<string, unknown>; [key: string]: unknown };
     expect(schema.properties).toHaveProperty("execution_plan_id");
     expect(schema.properties).toHaveProperty("contract_version");
-    expect(schema["x-contract-version"]).toBe(2);
+    expect(schema["x-contract-version"]).toBe(3);
     expect(schema["x-field-metadata"]).toHaveProperty("plan_revision");
     const projection = localSemanticProjection(fixture(), "plan-propose");
     expect(projection).toMatchObject({ contract_version: 1, operation: "plan-propose", phase: { value: "planning" }, plans: { approval_pending: false } });

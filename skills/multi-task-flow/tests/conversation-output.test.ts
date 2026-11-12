@@ -68,8 +68,9 @@ describe("conversation output projection", () => {
       try {
         await tick();
         const output = f.provider.snapshot().outputs.a!;
-        expect(output.agent_state).toBe(latest?.id && ["completed", "failed", "interrupted"].includes(latest.status!) ? "idle" : "unknown");
-        expect(output.runtime_turn_id).toBe(output.agent_state === "idle" ? "latest" : null);
+        const expected = latest?.id && ["completed", "failed", "interrupted"].includes(latest.status!) ? "idle" : latest?.id && ["inProgress", "started", "running"].includes(latest.status!) ? "active" : "unknown";
+        expect(output.agent_state).toBe(expected);
+        expect(output.runtime_turn_id).toBe(output.agent_state === "idle" || output.agent_state === "active" ? "latest" : null);
         expect(output.turn_id).toBe("turn");
       } finally { f.provider.stop(); }
     }
@@ -109,6 +110,30 @@ describe("conversation output projection", () => {
     try {
       await tick();
       expect(f.provider.snapshot().outputs.a).toMatchObject({ agent_state: "idle", runtime_turn_id: "latest-turn" });
+    } finally { f.provider.stop(); }
+  });
+  test("confirms active for an unloaded thread with an in-progress latest turn", async () => {
+    const f = fixture(async method => method === "thread/read"
+      ? { thread: { status: { type: "notLoaded" } } }
+      : method === "thread/turns/list"
+        ? { data: [{ id: "active-turn", status: "inProgress", items: [] }] }
+        : { data: [{ ...message("old", "old final"), completedAtMs: 1 }] });
+    try {
+      await tick();
+      expect(f.provider.snapshot().outputs.a).toMatchObject({ agent_state: "active", runtime_turn_id: "active-turn" });
+    } finally { f.provider.stop(); }
+  });
+  test("does not let an unloaded history read overwrite a later active status", async () => {
+    const f = fixture(async method => method === "thread/read"
+      ? { thread: { status: { type: "notLoaded" } } }
+      : method === "thread/turns/list"
+        ? { data: [{ id: "old-turn", status: "completed", items: [] }] }
+        : { data: [{ ...message("done", "old final"), completedAtMs: 1 }] });
+    try {
+      await tick();
+      f.event("thread/status/changed", { status: { type: "active" } });
+      await tick();
+      expect(f.provider.snapshot().outputs.a).toMatchObject({ agent_state: "active", runtime_turn_id: null });
     } finally { f.provider.stop(); }
   });
   test("full turn fallback happens only on an explicit unsupported-method error", async () => {

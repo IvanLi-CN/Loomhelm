@@ -27,7 +27,7 @@ afterEach(() => {
 describe("ledger store", () => {
   test("persists the previous complete snapshot", () => {
     const store = new LedgerStore(temporaryRoot(), "test-run");
-    store.create({ schema_version: 2, contract_version: 2, revision: 0 });
+      store.create({ schema_version: 2, contract_version: 2, revision: 0 });
     store.update((ledger) => {
       ledger.revision = 1;
     });
@@ -197,7 +197,7 @@ describe("ledger store", () => {
     test(`recovers the committed ledger when the writer dies at ${stage}`, async () => {
       const root = temporaryRoot();
       const store = new LedgerStore(root, "test-run");
-      store.create({ schema_version: 2, contract_version: 2, revision: 0 });
+    store.create({ schema_version: 2, contract_version: 2, revision: 0 });
       const process = Bun.spawn(
         [
           Bun.which("bun")!,

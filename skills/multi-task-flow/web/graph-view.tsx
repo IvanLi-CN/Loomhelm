@@ -68,5 +68,5 @@ export function createGraphController(context: GraphContext, calculateLayout = l
       requestAnimationFrame(()=>{if(serial!==generation)return;if(!viewportInitialized){instance?.setViewport({x:Math.max(24,(container.clientWidth-result.width)/2),y:24,zoom:1});context.setZoom(1);viewportInitialized=true;} highlightSelection();});
     }).catch(e=>{if(serial!==generation)return;pending=false;error=`依赖图布局失败：${e instanceof Error?e.message:String(e)}`;signature='';update?.();});
   }
-  return {render,highlightSelection,zoomIn:()=>instance?.zoomIn(),zoomOut:()=>instance?.zoomOut(),fit:()=>instance?.fitView({padding:0.08}),rankDir:()=>direction==='DOWN'?'TB':'LR',projection:()=>projection};
+  return {render,reset:()=>{container.replaceChildren();root.render(<Surface/>);},highlightSelection,zoomIn:()=>instance?.zoomIn(),zoomOut:()=>instance?.zoomOut(),fit:()=>instance?.fitView({padding:0.08}),rankDir:()=>direction==='DOWN'?'TB':'LR',projection:()=>projection};
 }

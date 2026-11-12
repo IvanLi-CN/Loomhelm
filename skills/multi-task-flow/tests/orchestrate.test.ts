@@ -737,3 +737,33 @@ describe("orchestrate group-base-reconcile", () => {
     });
   });
 });
+
+describe("orchestrate development-baseline-sync", () => {
+  test("rejects contract-2 ledgers through the CLI without mutation", async () => {
+    const root = temporaryRoot();
+    const input = structuredClone(initialInput);
+    input.run_id = "cli-baseline-sync-run";
+    input.payload.groups[0].delivery_unit_kind = "bootstrap";
+    input.payload.groups[0].owner_kind = "main";
+    expect((await runInit(root, input)).exitCode).toBe(0);
+    const ledgerPath = join(root, "runs", input.run_id, "ledger.json");
+    const before = readFileSync(ledgerPath, "utf8");
+    const legacy = JSON.parse(before);
+    legacy.contract_version = 2;
+    legacy.control.ownership = "bound";
+    legacy.control.owner_thread_id = "main-thread";
+    writeFileSync(ledgerPath, JSON.stringify(legacy));
+    const expected = readFileSync(ledgerPath, "utf8");
+    const result = await runCommand(root, "development-baseline-sync", {
+      run_id: input.run_id,
+      actor: { role: "main", thread_id: "main-thread" },
+      request_id: "cli-baseline-sync-1",
+      expected_revision: 0,
+      payload: { target_type: "group", target_id: "group-1", mode: "initial" },
+    });
+    expect(result.exitCode).toBe(4);
+    expect(result.output).toMatchObject({ ok: false, code: "INCOMPATIBLE_LEDGER" });
+    expect(readFileSync(ledgerPath, "utf8")).toBe(expected);
+    expect(before).not.toBe(expected);
+  });
+});

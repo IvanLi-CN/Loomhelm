@@ -348,3 +348,9 @@ npm exact SemVer 发布成功后，流程才可按声明顺序移动 `compat-vN`
 - [统一手动版本发布](../manual-version-release-delivery/SPEC.md)
 - [实现说明](IMPLEMENTATION.md)
 - [兼容历史](HISTORY.md)
+
+## Owner-facing operation references
+
+- [客户端 package 与 service 运维入口](../../../clients/typescript/README.md)
+- [Multi-task Flow Skill runtime 与 viewer 生命周期](../../../skills/multi-task-flow/SKILL.md)
+- [Skill release workflow runbook](../../../.github/workflows/README.md)

@@ -6,15 +6,15 @@ The flow distinguishes Main Agent, delivery Agent and Task Agent, but a task was
 
 ## Decision
 
-Treat a task as a schedulable and verifiable work item whose execution conversation and delivery artifact are explicit policies rather than defaults. Each task declares an `execution_owner`, `conversation_policy` and `delivery_policy`. Main-owned bootstrap work is executed in the main conversation and normally enters the parent PR; independent implementation work uses a Task Agent and child PR; verification, rehearsal, deployment and release work normally produces structured verification evidence without a child PR. A coordination task is created only when it has an independent, observable deliverable.
+Treat a task as a projection of task-scoped work atoms. Execution conversation and delivery artifact are explicit policies on the TaskDefinition/DeliveryUnitDefinition shells rather than independent orchestration facts. Main-owned bootstrap work is executed in the main conversation and normally enters the DeliveryUnit PR; independent implementation work uses a Task Agent and child PR; verification, rehearsal, deployment and release work normally produces structured evidence. A coordination task is not a canonical object and must not be created merely to represent waiting, integration or delivery-unit management.
 
-Use the delivery Agent as the owner of a regular delivery unit's parent branch, parent PR, merged-SHA CI, predeclared post-merge obligations and closeout. Task Agents own their own child PR merge, rebase, conflict resolution and task evidence. The delivery Agent does not merge, rebase or re-review normal child PRs; it handles only its own parent PR and facts that fail at the delivery-unit boundary. Bootstrap is main-owned and the Main Agent directly serves as its delivery Agent.
+Use the delivery-unit execution policy as the owner of a regular delivery unit's integration branch, integration PR, merged-SHA CI, predeclared post-merge obligations and closeout. Task Agents own their own child PR merge, rebase, conflict resolution and task evidence. The delivery-unit owner does not merge, rebase or re-review normal child PRs; it handles only its own integration PR and facts that fail at the delivery-unit boundary. Bootstrap is main-owned and the Main Agent directly serves this execution policy.
 
 Validate task policy combinations as a closed contract. Reject missing policies for new proposals and reject contradictory combinations such as Main Agent with a Task Agent conversation, a delivery Agent with a child PR, or a child PR without a Task Agent conversation. Historical schema2/contract2 ledgers without these fields remain readable and read-only, display the values as undeclared, and are never silently rewritten.
 
 ## Consequences
 
-The ledger and dashboard can distinguish a work item from its execution conversation and delivery artifact. Plans no longer create child conversations or PRs merely because a task node exists. Delivery-unit integration is limited to parent-PR and closeout facts, while task-level quality and PR ownership remain with the Task Agent.
+The ledger and dashboard distinguish atomic work from execution observations and external delivery facts. Plans no longer create child conversations or PRs merely because an atomic node exists. Delivery-unit integration is represented by delivery-unit scoped milestones, external facts and evidence; task-level PR ownership remains with the contribution Task.
 
 ## References
 

@@ -67,7 +67,7 @@ test('packaged plan checker preserves stdin pass and rejection with the pinned B
   assert.match(reject.stdout, /MISSING_FLOW_TYPE/);
 });
 
-test('canonical ledger initializes and reads unchanged schema2/contract2 state across child runtimes', async () => {
+test('canonical ledger initializes and reads unchanged schema2/contract3 state across child runtimes', async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'loomhelm-canonical-')));
   try {
     const input = await readFile(join(runtime.root, 'skills/multi-task-flow/examples/ledger-initialization/initial.json'), 'utf8');
@@ -77,11 +77,20 @@ test('canonical ledger initializes and reads unchanged schema2/contract2 state a
     const path = join(dir, 'runs/example-run/ledger.json');
     const before = await readFile(path, 'utf8');
     const ledger = JSON.parse(before);
-    assert.equal(ledger.schema_version, 2); assert.equal(ledger.contract_version, 2);
+    assert.equal(ledger.schema_version, 2); assert.equal(ledger.contract_version, 3);
     const viewed = await runtime.run('skills/multi-task-flow/scripts/orchestrate.ts', ['show', '--input', '-'], { input: JSON.stringify({ run_id: 'example-run', actor: { role: 'main', thread_id: 'example-main-thread' } }), env });
     assert.equal(viewed.code, 0, viewed.stdout + viewed.stderr);
     assert.equal(await readFile(path, 'utf8'), before);
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('published toolkit keeps runtime dependencies inside the artifact', async () => {
+  const artifact = await runtime.artifact();
+  const zod = artifact.dependencies.find((dependency) => dependency.name === 'zod');
+  assert.ok(zod);
+  const zodEntry = await readFile(join(runtime.root, zod.path, zod.entry), 'utf8');
+  assert.doesNotMatch(zodEntry, /\.\.\/\.\.\/\.\.\/\.\.\/node_modules/);
+  assert.equal(await readFile(join(runtime.root, zod.path, 'package.json'), 'utf8').then(JSON.parse).then((value) => value.name), 'zod');
 });
 
 test('missing runtime dependencies fail without registry access or cache writes', async () => {

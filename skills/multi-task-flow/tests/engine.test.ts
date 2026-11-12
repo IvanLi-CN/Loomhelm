@@ -366,6 +366,37 @@ function approveV2(ledger: ReturnType<typeof v2Fixture>) {
     approval_id: "parent-approved-v2",
   }));
 }
+
+test("contribution dispatch is blocked until the parent PR gate is complete", () => {
+  const ledger = v2Fixture();
+  approveV2(ledger);
+  ledger.groups[0].atoms = [
+    { id: "workspace", title: "Prepare parent", purpose: "Prepare", output: "Ready", lifecycle_stage: "workspace_ready", status: "planned" },
+    { id: "parent-pr", title: "Create parent PR", purpose: "Publish", output: "Created", lifecycle_stage: "pr_created", status: "planned" },
+  ];
+  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
+  expect(() => apply(ledger, "dispatch-claim", request(ledger, "blocked-before-parent-pr", {
+    task_id: "a",
+    operation_id: "dispatch-before-parent-pr",
+  }))).toThrow("parent PR is created and verified");
+  try {
+    apply(ledger, "dispatch-claim", request(ledger, "blocked-before-parent-pr-details", {
+      task_id: "a",
+      operation_id: "dispatch-before-parent-pr-details",
+    }));
+  } catch (error) {
+    expect((error as any).code).toBe("DELIVERY_GATE_PENDING");
+    expect((error as any).details.missing).toEqual(["workspace_ready", "parent_pr"]);
+    expect((error as any).details.recovery).toContain("retry dispatch-claim");
+  }
+  ledger.tasks[0].thread_id = "task-a-thread";
+  ledger.tasks[0].state = "starting";
+  expect(() => apply(ledger, "task-update", request(ledger, "blocked-task-start", {
+    task_id: "a",
+    state: "running",
+    occurred_at: at,
+  }, { role: "task", thread_id: "task-a-thread" }))).toThrow("parent PR is created and verified");
+});
 function providerBranchReceipt(branch: string, sha: string) {
   return {
     provider: "github",
@@ -825,7 +856,7 @@ describe("orchestration state", () => {
           operation_id: "dispatch-b",
         }),
       ),
-    ).toThrow("provider-published delivery-unit branch");
+    ).toThrow("parent PR is created and verified");
     apply(
       ledger,
       "group-base",
@@ -1042,7 +1073,7 @@ describe("orchestration state", () => {
           operation_id: "blocked-dispatch",
         }),
       ),
-    ).toThrow("provider-published delivery-unit branch");
+      ).toThrow("parent PR is created and verified");
   });
   test("release facts cannot be written without an operation receipt", () => {
     const ledger = fixture();
@@ -2823,6 +2854,64 @@ describe("orchestration state", () => {
 
 });
 
+test("parent follow-up merge reconciles a group after its original parent PR already merged", () => {
+  const ledger = fixture();
+  const originalParentPr = {
+    provider: "github",
+    repository: "example/repo",
+    id: "139",
+    url: "https://github.com/example/repo/pull/139",
+  };
+  const followUpPr = {
+    provider: "github",
+    repository: "example/repo",
+    id: "146",
+    url: "https://github.com/example/repo/pull/146",
+  };
+  ledger.groups[0].parent_pr = originalParentPr;
+  for (const task of ledger.tasks) task.state = "integrated";
+  approve(ledger);
+  const mainBase = "d".repeat(40);
+  const followUpHead = "e".repeat(40);
+  const followUpMerge = "f".repeat(40);
+  apply(ledger, "merge-claim", request(ledger, "claim-parent-followup", {
+    operation_id: "merge-parent-followup",
+    group_id: "g",
+    mode: "parent-followup",
+    original_parent_pr: originalParentPr,
+    original_parent_merge_sha: "c".repeat(40),
+    target_branch: "main",
+    expected_base_sha: mainBase,
+    expected_head_sha: followUpHead,
+    pr: followUpPr,
+  }, groupActor));
+  apply(ledger, "merge-resolve", request(ledger, "resolve-parent-followup", {
+    operation_id: "merge-parent-followup",
+    outcome: "succeeded",
+    provider_evidence: {
+      id: "parent-followup-merged",
+      kind: "pr_merged",
+      subject_id: "g",
+      status: "passed",
+      source: "github",
+      observed_at: at,
+      sha: followUpMerge,
+      evidence_ref: "https://api.github.com/repos/example/repo/pulls/146",
+    },
+    provider_observation: {
+      pr: followUpPr,
+      head_sha: followUpHead,
+      base_sha: mainBase,
+      merge_sha: followUpMerge,
+      state: "merged",
+    },
+  }, groupActor));
+  expect(ledger.groups[0].state).toBe("merged");
+  expect(ledger.groups[0].merge_sha).toBe(followUpMerge);
+  expect(ledger.groups[0].current_sha).toBe(followUpMerge);
+  expect(ledger.groups[0].parent_pr).toEqual(originalParentPr);
+});
+
 describe("native CLI handoff contract", () => {
   function claimed() {
     const ledger = fixture(); approve(ledger);
@@ -3003,4 +3092,128 @@ test("native group retry ignores a failed attempt and still requires a fresh mai
   invoke("lifecycle-record", "fresh-fetch", { ...payload, baseline: { sha: head, head, clean: true, source: "remote:main", fetched_at: new Date().toISOString() } }, groupActor);
   expect(ledger.groups[0].current_sha).toBe(head);
   invoke("group-execution-update", "group-start", { group_id: "g", state: "running" }, groupActor);
+});
+
+test("contract-3 baseline sync refreshes an advanced lineage without changing native creation evidence", () => {
+  const ledger = fixture();
+  approve(ledger);
+  ledger.contract_version = 3;
+  apply(ledger, "dispatch-claim", request(ledger, "baseline-claim", { task_id: "a", operation_id: "baseline-op" }));
+  apply(ledger, "dispatch-bind-request", request(ledger, "baseline-bind", {
+    operation_id: "baseline-op",
+    native_request_id: "baseline-native",
+    creation_parameters: {
+      title: "task",
+      prompt: "formal",
+      cwd: "/repo",
+      transport: "codex-exec",
+      execution_profile: ledger.config.execution_profile,
+    },
+  }));
+  apply(ledger, "dispatch-progress", request(ledger, "baseline-progress", {
+    operation_id: "baseline-op",
+    native_request_id: "baseline-native",
+    thread_id: "baseline-thread",
+  }));
+  apply(ledger, "dispatch-resolve", request(ledger, "baseline-resolve", {
+    operation_id: "baseline-op",
+    outcome: "succeeded",
+    thread_id: "baseline-thread",
+    native_evidence: {
+      source: "multi-task-flow-cli",
+      native_tool_name: "codex exec",
+      operation_id: "baseline-op",
+      native_request_id: "baseline-native",
+      ...ledger.config.execution_profile,
+      created_at: at,
+      evidence_ref: "codex:baseline",
+      thread_id: "baseline-thread",
+      workspace_path: "/owned/baseline",
+      initial_head: head,
+      exit_code: 0,
+      turn_completed: true,
+    },
+  }));
+  ledger.resources = [
+    { id: "baseline-wt", kind: "worktree", target: "a", status: "active", evidence_ref: "owned" },
+    { id: "baseline-branch", kind: "branch", target: "task-a", status: "active", evidence_ref: "branch" },
+  ];
+  const actor = { role: "task" as const, thread_id: "baseline-thread" };
+  ledger.groups[0]!.current_sha = base;
+  ledger.tasks[0]!.base_sha = base;
+  const initialBaseline = { sha: base, head: base, clean: true as const, source: "workspace-verifier" };
+  apply(ledger, "development-baseline-sync", request(ledger, "baseline-initial", {
+    target_type: "task",
+    target_id: "a",
+    dispatch_operation_id: "baseline-op",
+    mode: "initial",
+    expected_previous_baseline: null,
+    expected_lineage_sha: base,
+    lineage_event_id: "initial",
+    branch: "task-a",
+    resource_ids: ["baseline-wt", "baseline-branch"],
+    baseline: initialBaseline,
+    evidence_ref: "git:initial",
+  }, actor));
+  expect(ledger.operations[0]!.request.development_baseline).toEqual(initialBaseline);
+  expect(ledger.facts.at(-1)!.kind).toBe("baseline_verified");
+  expect(ledger.events.at(-1)!.type).toBe("development_baseline_synchronized");
+  const initialHead = (ledger.operations[0]!.request.creation_result as any).native_evidence.initial_head;
+
+  ledger.groups[0]!.current_sha = head;
+  ledger.tasks[0]!.base_sha = head;
+  ledger.events.push({
+    id: "lineage-advance",
+    type: "group_base_reconciled",
+    subject_id: "g",
+    actor_id: "group-thread",
+    occurred_at: at,
+    recorded_at: at,
+    data: { sha: head, previous_sha: base },
+  });
+  const refreshed = { sha: head, head, clean: true as const, source: "workspace-verifier" };
+  apply(ledger, "development-baseline-sync", request(ledger, "baseline-refresh", {
+    target_type: "task",
+    target_id: "a",
+    dispatch_operation_id: "baseline-op",
+    mode: "refresh",
+    expected_previous_baseline: initialBaseline,
+    expected_lineage_sha: head,
+    lineage_event_id: "lineage-advance",
+    branch: "task-a",
+    resource_ids: ["baseline-wt", "baseline-branch"],
+    baseline: refreshed,
+    evidence_ref: "git:refresh",
+  }, actor));
+  expect(ledger.operations[0]!.request.development_baseline).toEqual(refreshed);
+  expect((ledger.operations[0]!.request.creation_result as any).native_evidence.initial_head).toBe(initialHead);
+  expect(ledger.facts.filter((item) => item.kind === "baseline_verified")).toHaveLength(2);
+  expect((apply(ledger, "development-baseline-sync", request(ledger, "baseline-refresh", {
+    target_type: "task",
+    target_id: "a",
+    dispatch_operation_id: "baseline-op",
+    mode: "refresh",
+    expected_previous_baseline: initialBaseline,
+    expected_lineage_sha: head,
+    lineage_event_id: "lineage-advance",
+    branch: "task-a",
+    resource_ids: ["baseline-wt", "baseline-branch"],
+    baseline: refreshed,
+    evidence_ref: "git:refresh",
+  }, actor)) as any).code).toBe("REPLAYED");
+  const before = JSON.stringify(ledger);
+  expect(() => apply(ledger, "development-baseline-sync", request(ledger, "stale-refresh", {
+    target_type: "task",
+    target_id: "a",
+    dispatch_operation_id: "baseline-op",
+    mode: "refresh",
+    expected_previous_baseline: initialBaseline,
+    expected_lineage_sha: base,
+    lineage_event_id: "lineage-advance",
+    branch: "task-a",
+    resource_ids: ["baseline-wt", "baseline-branch"],
+    baseline: initialBaseline,
+    evidence_ref: "git:stale",
+  }, actor))).toThrow("current development baseline");
+  expect(JSON.stringify(ledger)).toBe(before);
 });

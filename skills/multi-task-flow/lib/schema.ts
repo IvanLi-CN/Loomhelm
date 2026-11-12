@@ -4,6 +4,7 @@ import { posix as posixPath } from "node:path";
 import { z } from "zod";
 import { topologicalOrder, validateGrouping } from "../lib/graph";
 import { requireCondition } from "../lib/errors";
+import { atomicNode, atomicEdge as canonicalAtomicEdge, taskPrBinding, deliveryUnitExternalFacts, validateAtomicGraph } from "../lib/atomic-orchestration";
 
 export const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
 const text = z.string().trim().min(1);
@@ -212,7 +213,15 @@ export const plannedAction = z
     kind: z.enum(["publish_branch", "publish_pr", "release", "deploy"]),
     task_id: id.nullable().default(null),
     group_id: id.nullable().default(null),
-    target_identity: text,
+    target: z
+      .object({
+        type: z.enum(["task", "group"]),
+        id,
+      })
+      .strict()
+      .optional(),
+    /** Legacy read-only identity; new plans must use target. */
+    target_identity: text.optional(),
   })
   .strict();
 export const plan = z
@@ -226,7 +235,9 @@ export const plan = z
     start_at: timestamp.nullable(),
     atoms: z.array(atomPlan),
     group_atoms: z.array(groupAtomPlan).default([]),
-    atomic_edges: z.array(atomEdge),
+    /** Legacy atom edges remain readable; canonical contract-3 edges use node IDs and requires unions. */
+    atomic_edges: z.array(z.union([atomEdge, canonicalAtomicEdge])),
+    atomic_nodes: z.array(atomicNode).default([]),
     nodes: z.array(node),
     edges: z.array(edge),
     cut_rules: z.array(cutRule),
@@ -243,6 +254,8 @@ export const group = z
     agent_thread_id: nullableText,
     state: z.enum(["planned", "active", "merged", "closed", "blocked"]),
     parent_branch: nullableText,
+    /** Canonical DeliveryUnit PR; parent_pr remains a read-only compatibility alias. */
+    pr: z.union([externalRef, deliveryUnitExternalFacts]).nullable().default(null),
     parent_pr: externalRef.nullable(),
     cut_sha: sha.nullable(),
     current_sha: sha.nullable(),
@@ -387,7 +400,7 @@ export const task = z
     owned_surfaces: z.array(text),
     branch: nullableText.default(null),
     base_sha: sha.nullable(),
-    pr: externalRef.nullable(),
+    pr: z.union([externalRef, taskPrBinding]).nullable().default(null),
     requirements_path: requirementsPath,
     execution_profile: optionalExecutionProfile,
     execution_profile_source: z
@@ -431,6 +444,32 @@ export const providerReceipt = z
     evidence_ref: text,
   })
   .strict();
+export const baselineReceipt = z
+  .object({
+    sha,
+    head: sha,
+    clean: z.literal(true),
+    source: text,
+    fetched_at: timestamp.optional(),
+  })
+  .strict();
+export const baselineAudit = z
+  .object({
+    target_type: z.enum(["group", "task"]),
+    target_id: id,
+    dispatch_operation_id: id,
+    native_request_id: text,
+    thread_id: text,
+    mode: z.enum(["initial", "refresh"]),
+    previous_baseline: baselineReceipt.nullable(),
+    lineage_event_id: text,
+    lineage_sha: sha,
+    branch: text,
+    resource_ids: z.array(id).min(1),
+    receipt: baselineReceipt,
+    observed_at: timestamp,
+  })
+  .strict();
 export const fact = z
   .object({
     id,
@@ -444,6 +483,7 @@ export const fact = z
       "published",
       "deployed",
       "verified",
+      "baseline_verified",
     ]),
     subject_id: id,
     status: z.enum(["passed", "failed", "unknown"]),
@@ -470,6 +510,7 @@ export const fact = z
       .nullable()
       .optional(),
     receipt: providerReceipt.nullable().optional(),
+    baseline: baselineAudit.nullable().optional(),
   })
   .strict();
 export const cutEvidence = z
@@ -517,6 +558,7 @@ const eventType = z.enum([
   "group_atom_updated",
   "group_execution_updated",
   "group_base_reconciled",
+  "development_baseline_synchronized",
   "atom_updated",
   "link_verification",
   "task_ready",
@@ -608,7 +650,7 @@ export const ledgerSchema = z
   .object({
     schema_version: z.literal(2),
     source_schema_version: z.literal(1).nullable().default(null),
-    contract_version: z.union([z.literal(1), z.literal(2)]),
+    contract_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     version: z.object({
       skill_id: text,
       skill_version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
@@ -641,6 +683,9 @@ export const ledgerSchema = z
       })
       .strict(),
     plans: z.array(plan).min(1),
+    /** Contract-3 canonical graph snapshot; legacy readers may derive this from the active plan. */
+    atomic_nodes: z.array(atomicNode).default([]),
+    atomic_edges: z.array(z.union([atomEdge, canonicalAtomicEdge])).default([]),
     active_plan_id: id,
     execution_plan_id: id,
     groups: z.array(group),
@@ -1332,6 +1377,7 @@ export function validatePlan(candidate: Plan): void {
     candidate.atoms,
     candidate.group_atoms,
     candidate.atomic_edges,
+    candidate.atomic_nodes,
     candidate.nodes,
     candidate.edges,
     candidate.cut_rules,
@@ -1343,7 +1389,18 @@ export function validatePlan(candidate: Plan): void {
       "Plan IDs must be unique within each collection",
     );
   }
-  validateGrouping(candidate.atoms, candidate.atomic_edges);
+  if (candidate.atomic_nodes.length || candidate.atomic_edges.some((edge) => "from_node_id" in edge)) {
+    requireCondition(
+      candidate.atomic_edges.every((edge) => "from_node_id" in edge && "to_node_id" in edge),
+      "ATOMIC_CONTRACT_REQUIRED",
+      "Contract-3 atomic plans must use node-based atomic edges",
+    );
+    validateAtomicGraph(candidate.atomic_nodes, candidate.atomic_edges as any);
+  }
+  validateGrouping(
+    candidate.atoms,
+    candidate.atomic_edges.filter((edge): edge is z.infer<typeof atomEdge> => "from_atom_id" in edge),
+  );
   topologicalOrder(
     candidate.nodes.map((item) => item.id),
     candidate.edges.map((item) => ({
@@ -1387,6 +1444,23 @@ export function validatePlan(candidate: Plan): void {
     "MISSING_PLAN_TARGET",
     "Every planned action must belong to a task or group node",
   );
+  for (const action of candidate.actions) {
+    if (action.target) {
+      requireCondition(
+        action.target.type === "task"
+          ? action.task_id === action.target.id
+          : action.group_id === action.target.id,
+        "PLAN_TARGET_MISMATCH",
+        "Planned action target must match its task/group owner",
+      );
+    } else {
+      requireCondition(
+        action.target_identity !== undefined,
+        "MISSING_PLAN_TARGET",
+        "Planned action must use a structured target",
+      );
+    }
+  }
   requireCondition(
     candidate.actions.every(
       (action) =>
@@ -1410,7 +1484,7 @@ export function validatePlan(candidate: Plan): void {
       (item) => `${item.from_node_id}:${item.to_node_id}:${item.requires}`,
     ),
   );
-  for (const atomDependency of candidate.atomic_edges) {
+  for (const atomDependency of candidate.atomic_edges.filter((edge): edge is z.infer<typeof atomEdge> => "from_atom_id" in edge)) {
     const from = atoms.get(atomDependency.from_atom_id)!;
     const to = atoms.get(atomDependency.to_atom_id)!;
     if (from.task_id !== to.task_id) {
@@ -1879,9 +1953,17 @@ export function normalizeLegacyLedger(value: unknown): unknown {
     source_schema_version:
       raw.schema_version === 1 ? 1 : (raw.source_schema_version ?? null),
     contract_version:
-      raw.schema_version === undefined ? 1 : raw.contract_version === 2 ? 2 : 1,
+      raw.schema_version === undefined
+        ? 1
+        : raw.contract_version === 3
+          ? 3
+          : raw.contract_version === 2
+            ? 2
+            : 1,
     execution_plan_id: raw.execution_plan_id ?? raw.active_plan_id,
     milestones: Array.isArray(raw.milestones) ? raw.milestones : [],
+    atomic_nodes: Array.isArray(raw.atomic_nodes) ? raw.atomic_nodes : [],
+    atomic_edges: Array.isArray(raw.atomic_edges) ? raw.atomic_edges : [],
     groups: Array.isArray(raw.groups)
       ? raw.groups.map((item) =>
           item && typeof item === "object"
@@ -2015,6 +2097,20 @@ function validateDeliveryUnits(ledger: Ledger): void {
 export function validateLedger(value: unknown): Ledger {
   const parsed = ledgerSchema.parse(normalizeLegacyLedger(value));
   validateDeliveryUnits(parsed);
+  if (parsed.atomic_nodes.length || parsed.atomic_edges.some((edge) => "from_node_id" in edge)) {
+    requireCondition(
+      parsed.atomic_edges.every((edge) => "from_node_id" in edge && "to_node_id" in edge),
+      "ATOMIC_CONTRACT_REQUIRED",
+      "Root contract-3 atomic snapshot must use node-based atomic edges",
+    );
+    validateAtomicGraph(parsed.atomic_nodes, parsed.atomic_edges as any);
+    for (const group of parsed.groups) {
+      requireCondition(deliveryUnitExternalFacts.safeParse(group.pr).success, "ATOMIC_CONTRACT_REQUIRED", "Contract-3 DeliveryUnit PR must use DeliveryUnitExternalFacts", 3);
+    }
+    for (const task of parsed.tasks.filter((item) => isContributionKind(item.kind))) {
+      requireCondition(taskPrBinding.safeParse(task.pr).success, "ATOMIC_CONTRACT_REQUIRED", "Contract-3 contribution Task PR must use TaskPrBinding", 3);
+    }
+  }
   for (const collection of [
     parsed.plans,
     parsed.groups,
@@ -2038,6 +2134,24 @@ export function validateLedger(value: unknown): Ledger {
     "DUPLICATE_REQUEST",
     "Request IDs must be unique",
   );
+  const factIds = new Set(parsed.facts.map((item) => item.id));
+  const taskIds = new Set(parsed.tasks.map((item) => item.id));
+  const groupIds = new Set(parsed.groups.map((item) => item.id));
+  for (const operation of parsed.operations) {
+    requireCondition(
+      operation.receipt_fact_id === null ||
+        factIds.has(operation.receipt_fact_id),
+      "MISSING_FACT",
+      "Operation receipt_fact_id must reference an existing fact",
+    );
+  }
+  for (const fact of parsed.facts) {
+    requireCondition(
+      taskIds.has(fact.subject_id) || groupIds.has(fact.subject_id),
+      "UNKNOWN_FACT_SUBJECT",
+      "Fact subject must reference a task or group",
+    );
+  }
   for (const notice of parsed.notifications) {
     requireCondition(
       notice.ledger_status === "committed",
@@ -2264,7 +2378,10 @@ export function validateLedger(value: unknown): Ledger {
         "workspace_ready must be backed by a lifecycle event",
       );
     if (item.lifecycle.pr_created === "passed") {
-      const pr = target.type === "group" ? item.parent_pr : item.pr;
+      const binding = target.type === "group" ? item.pr : item.pr;
+      const pr = binding && typeof binding === "object" && "state" in binding
+        ? (binding.state === "published" || binding.state === "open" || binding.state === "merged" || binding.state === "closed" ? binding.pr : null)
+        : target.type === "group" ? item.parent_pr : item.pr;
       const latest = parsed.facts
         .filter(
           (candidate) =>

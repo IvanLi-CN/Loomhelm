@@ -18,6 +18,7 @@ import {
 } from "../lib/schema";
 import { requireLedgerCompatibility } from "../lib/service-contract";
 import { versionEnvelope } from "../lib/contract";
+import { contract3MigrationCandidate } from "../lib/atomic-orchestration";
 
 export type LedgerMigrationRequest = {
   run_id: string;
@@ -299,6 +300,24 @@ export function migrateLocked(
       throw error;
     }
   }
+  if (raw?.schema_version === 2 && raw?.contract_version === 2) {
+    const current = validateLedger(raw);
+    const prior = current.requests.find((item) => item.request_id === request.request_id);
+    if (prior) {
+      verifyMigrationBackup(context, (prior.result as any).backup, { request_id: request.request_id, command: "migrate", canonical_input: request.canonical_input }, (prior.result as any).source_ledger_sha256, true);
+      return { ok: true, code: "REPLAYED", revision: prior.committed_revision, result: prior.result };
+    }
+    requireCondition(current.revision === request.expected_revision, "REVISION_CONFLICT", "Ledger version changed", 3);
+    const candidate = contract3MigrationCandidate(raw);
+    candidate.revision += 1;
+    candidate.updated_at = new Date().toISOString();
+    const backup = migrationBackupName("migrate", request.request_id);
+    const result = { run_id: request.run_id, source_schema_version: 2, schema_version: 2, contract_version: 3, revision: candidate.revision, backup, source_ledger_sha256: migrationContentDigest(oldContent) };
+    candidate.requests.push({ request_id: request.request_id, command: "migrate", canonical_input: request.canonical_input, result, committed_revision: candidate.revision });
+    validateLedger(candidate);
+    commitMigration(context, oldContent, candidate, backup, { request_id: request.request_id, command: "migrate", canonical_input: request.canonical_input });
+    return { ok: true, code: "APPLIED", revision: candidate.revision, result };
+  }
   // Schema-1 ledgers predate the contract discriminator. Treat them as the
   // legacy read-only shape even when a hand-written fixture retained a newer
   // discriminator field; the explicit migration is the boundary that
@@ -481,6 +500,20 @@ export function contractMigrationCandidate(
       : { ...task, lifecycle: structuredClone(unknownLifecycle) },
   );
   validateTaskExecutionPolicies(candidate.tasks);
+  return validateLedger(candidate);
+}
+
+export function contractV3MigrationCandidate(raw: any): Ledger {
+  requireCondition(
+    raw?.schema_version === 2 && raw?.contract_version === 2,
+    "MIGRATION_NOT_NEEDED",
+    "Only schema-2/contract-2 ledgers can migrate to contract-3",
+    4,
+  );
+  requireLedgerCompatibility(raw, "read");
+  const candidate = structuredClone(validateLedger(raw));
+  candidate.contract_version = 3;
+  candidate.version = versionEnvelope;
   return validateLedger(candidate);
 }
 
