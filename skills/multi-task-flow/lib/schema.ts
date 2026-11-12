@@ -846,6 +846,18 @@ export function validateTaskExecutionPolicies(tasks: readonly Task[], requireCom
 export function isContributionKind(kind: Task["kind"]): boolean {
   return kind === "contribution" || kind === "development";
 }
+export function isCanonicalTaskKind(kind: Task["kind"]): boolean {
+  return ["contribution", "release", "deployment", "verification"].includes(kind);
+}
+export function validateNewTaskKinds(tasks: Task[]): void {
+  for (const item of tasks)
+    requireCondition(
+      isCanonicalTaskKind(item.kind),
+      "INVALID_TASK_KIND",
+      `New task ${item.id} uses retired task kind ${item.kind}; coordination must be represented by delivery-unit coordination state`,
+      3,
+    );
+}
 export type PlanRevision = z.infer<typeof planRevision>;
 export type ExecutionPhase = z.infer<typeof executionPhase>;
 export type ExecutionProfile = z.infer<typeof executionProfile>;
@@ -858,7 +870,7 @@ export function recommendedExecutionProfile(
 ): ExecutionProfile {
   if (["development", "contribution"].includes(kind))
     return { model: "gpt-6.1-sol", thinking: "high" };
-  if (["verification", "coordination", "release", "deployment"].includes(kind))
+  if (["verification", "release", "deployment"].includes(kind))
     return { model: "gpt-6-luna", thinking: "medium" };
   return { ...fallback };
 }

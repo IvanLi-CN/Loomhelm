@@ -28,6 +28,7 @@ import {
   task,
   validateDevPlanHandoff,
   validateInitialRuntimeState,
+  validateNewTaskKinds,
   validateLedger,
   validateSchedulablePlan,
   validatePlan,
@@ -1069,6 +1070,7 @@ export function execute(
       );
       const groups = parse(z.array(group), payload.groups);
       const tasks = parse(z.array(task), payload.tasks);
+      validateNewTaskKinds(tasks.filter((item) => !ledger.tasks.some((old) => old.id === item.id)));
       ensureSchedulable(ledger, proposed);
       for (const item of groups)
         if (

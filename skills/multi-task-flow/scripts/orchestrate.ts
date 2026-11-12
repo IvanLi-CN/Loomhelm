@@ -21,6 +21,7 @@ import {
   task,
   type Ledger,
   validateInitialRuntimeState,
+  validateNewTaskKinds,
   validateLedger,
   validatePlan,
   validateSchedulablePlan,
@@ -223,6 +224,7 @@ try {
         : group;
     });
     validateInitialRuntimeState(groups, parsed.payload.tasks);
+    validateNewTaskKinds(parsed.payload.tasks);
     const timestamp = new Date().toISOString();
     const ledger = validateLedger({
       schema_version: 2,

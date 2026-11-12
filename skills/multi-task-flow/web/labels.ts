@@ -3,7 +3,7 @@ export const TASK_KIND_LABELS: Record<string, string> = {
   release: "发布 release",
   deployment: "部署 deployment",
   verification: "验证 verification",
-  coordination: "协调 coordination",
+  coordination: "协调（历史兼容） coordination (legacy)",
   development: "贡献 contribution（旧账本）",
   other: "协调 coordination（旧账本）",
   milestone: "里程碑 milestone",
