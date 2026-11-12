@@ -117,6 +117,8 @@ jobs:
           )
           if [ "$REGISTRY_VERSION_MISSING" = true ]; then
             gate_args+=(--initial-publication --registry-version-missing)
+          else
+            gate_args+=(--initial-publication --reconcile-existing)
           fi
           python3 tools/skill-release/release.py "${gate_args[@]}" > "$RUNNER_TEMP/skill-release-gate.json"
           python3 - "$RUNNER_TEMP/skill-release-gate.json" "$GITHUB_OUTPUT" <<'PY'

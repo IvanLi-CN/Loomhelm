@@ -67,6 +67,8 @@ Immutable tag 冲突时运行 `verify-tag` 对账现有 tag 的目标 SHA；目�
 
 `npm publish` 返回未知结果时不得立即重试；先查询 exact package、registry metadata 和 tarball digest，只有明确不存在且候选身份仍未被占用时才允许由 owner-approved workflow 重试。dist-tag policy 返回 regression 或 registry 元数据无法解析时停止，不手工把 tag 指向旧版本。
 
+首次发布在 npm 已接受写入但 processing 延迟导致 workflow 退出时，owner-approved retry 可以使用 `--reconcile-existing` gate 路径；该路径只允许同一 initial-publication candidate 进入后续 exact package、registry tarball digest 和 provenance 对账，不能跳过 immutable tag 或 registry identity 校验。
+
 viewer upgrade 先执行 `status`/`doctor`、`compatibility-check` 和 health identity 检查；候选不可读时保留当前 release，若当前 reader 可读则按报告使用隔离只读 fallback。只有明确兼容的 candidate 才能 `upgrade`；rollback 也必须先对账 `rollback=true` 的 compatibility report 和 generation/PID。历史 ledger 迁移只能使用 `ledger-maintenance-check` / `ledger-maintenance-apply`，保留 source SHA-256、owner、revision、operation digest 和 backup，不自动补造历史事实。
 
 agent lease 为 60 分钟，browser lease 为 5 分钟，页面每 60 秒续租；租约过期会停止当前 generation 但不删除 data、logs、release 或 ledger。恢复时先按 run/build/source/merge identity、generation、PID、port 和 provider receipt 对账，再调用 `ensure`；不得抢占未知 listener、删除 runtime 文件或杀死不属于当前 generation 的进程。
