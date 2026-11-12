@@ -1,7 +1,7 @@
 ---
 name: multi-task-flow
 description: Coordinate a dependency-driven Codex task through an isolated JSON ledger, on-demand delivery-unit and task conversations, PR coordination, and an authenticated local dashboard.
-version: 2.7.3
+version: 2.7.6
 ---
 
 # Multi-task flow
@@ -12,7 +12,7 @@ version: 2.7.3
 
 Use for an owner-approved multi-conversation flow with explicit task dependencies. This Skill has its own input contract and runtime lifecycle; it is independent from `$dev-plan` and does not migrate or modify existing runs. Initialization is a mutating runtime action: do not invoke this Skill for read-only review, diagnosis, code exploration, or plan-only work. The 主 Agent（main Agent） creates and manages peer delivery-unit and task conversations as needed. The 交付 Agent（Delivery Agent） owns its parent PR and child PR acceptance; the 任务 Agent（Task Agent） owns its subtask and follow PRs. The 主 Agent（main Agent） schedules; it accepts child PRs only for its own bootstrap delivery unit.
 
-Each run may contain one `bootstrap` delivery unit followed by zero or more `regular` delivery units. Bootstrap is the only main-owned unit: the bound main conversation may commit the initial SPEC/ADR/plan documents and manage the first parent PR. It uses `owner_kind: "main"`, has no delivery-unit conversation binding, and must be first. Regular units retain the delivery-unit-owned contract and require an independent 交付 Agent（Delivery Agent） conversation before activation. Parent PRs are serial by default; regular units may run in parallel only when dependencies allow it. Delivery-unit kind, ownership and delivery-unit conversation binding cannot be rewritten through ordinary delivery-unit updates or plan revisions. This release provides no in-place ownership-transfer command; an existing run retains its current ownership. Initialize the planned bootstrap before publishing its parent PR, then record workspace and publication receipts in the same main-owned workspace.
+Each run may contain one `bootstrap` delivery unit followed by zero or more `regular` delivery units. The first delivery unit MUST be `bootstrap` by default; a first `regular` unit is allowed only when the proposal records an explicit exception reason and evidence. Bootstrap is the only main-owned unit: the bound main conversation may commit the initial SPEC/ADR/plan documents and manage the first parent PR. It uses `owner_kind: "main"`, has no delivery-unit conversation binding, and must be first. Regular units retain the delivery-unit-owned contract and require an independent 交付 Agent（Delivery Agent） conversation before activation. Parent PRs are serial by default; regular units may run in parallel only when dependencies allow it. Delivery-unit kind, ownership and delivery-unit conversation binding cannot be rewritten through ordinary delivery-unit updates or plan revisions. This release provides no in-place ownership-transfer command; an existing run retains its current ownership. Initialize the planned bootstrap before publishing its parent PR, then record workspace and publication receipts in the same main-owned workspace.
 
 This remains an active top-level flow for dependency-driven delivery. An approved run requires at least two task nodes when its topology claims multiple tasks, and the authoritative runtime ledger is the source of truth for task, group, dependency, and closeout state.
 
