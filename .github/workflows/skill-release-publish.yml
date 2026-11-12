@@ -83,19 +83,42 @@ jobs:
           with open(output_path, "a", encoding="utf-8") as output:
               output.write(f"base_sha={parents[0]}\n")
           PY
+      - name: Verify exact npm version is unpublished
+        id: registry
+        env:
+          PACKAGE_NAME: '@loomhelm/multi-task-flow'
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json; print(json.load(open("clients/typescript/package.json", encoding="utf-8"))["version"])')"
+          metadata="$RUNNER_TEMP/skill-release-registry-version.json"
+          error="$RUNNER_TEMP/skill-release-registry-version.err"
+          if npm view "$PACKAGE_NAME@$version" version --json > "$metadata" 2> "$error"; then
+            echo 'registry_version_missing=false' >> "$GITHUB_OUTPUT"
+          elif grep -Eq 'E404|No match found' "$error"; then
+            echo 'registry_version_missing=true' >> "$GITHUB_OUTPUT"
+          else
+            cat "$error" >&2
+            exit 1
+          fi
       - name: Revalidate release label, version, and projection
         id: gate
         env:
           BASE_SHA: ${{ steps.merge.outputs.base_sha }}
           MERGE_SHA: ${{ inputs.merge_sha }}
+          REGISTRY_VERSION_MISSING: ${{ steps.registry.outputs.registry_version_missing }}
         run: |
           set -euo pipefail
-          python3 tools/skill-release/release.py gate \
+          gate_args=(
+            gate
             --repo-root . \
             --base "$BASE_SHA" \
             --head "$MERGE_SHA" \
-            --event-path "$RUNNER_TEMP/skill-release-event.json" \
-            > "$RUNNER_TEMP/skill-release-gate.json"
+            --event-path "$RUNNER_TEMP/skill-release-event.json"
+          )
+          if [ "$REGISTRY_VERSION_MISSING" = true ]; then
+            gate_args+=(--initial-publication --registry-version-missing)
+          fi
+          python3 tools/skill-release/release.py "${gate_args[@]}" > "$RUNNER_TEMP/skill-release-gate.json"
           python3 - "$RUNNER_TEMP/skill-release-gate.json" "$GITHUB_OUTPUT" <<'PY'
           import json
           import sys
@@ -110,7 +133,7 @@ jobs:
               output.write(f"reason={result.get('reason') or ''}\n")
           PY
       - name: Verify immutable tag precondition
-        if: steps.gate.outputs.decision == 'release:skill'
+        if: steps.gate.outputs.decision == 'release:skill' || steps.gate.outputs.decision == 'release:skill-initial-publication'
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_SHA: ${{ inputs.merge_sha }}
@@ -123,7 +146,7 @@ jobs:
           --allow-missing
       - name: Build and validate one candidate tarball
         id: artifact
-        if: steps.gate.outputs.decision == 'release:skill'
+        if: steps.gate.outputs.decision == 'release:skill' || steps.gate.outputs.decision == 'release:skill-initial-publication'
         env:
           MERGE_SHA: ${{ inputs.merge_sha }}
           VERSION: ${{ steps.gate.outputs.version }}
@@ -160,7 +183,7 @@ jobs:
           cp "${finals[0]}" "$RUNNER_TEMP/skill-package.tgz"
           printf 'artifact_name=skill-release-%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
       - name: Upload the verified candidate tarball
-        if: steps.gate.outputs.decision == 'release:skill'
+        if: steps.gate.outputs.decision == 'release:skill' || steps.gate.outputs.decision == 'release:skill-initial-publication'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: skill-release-${{ steps.gate.outputs.version }}
@@ -212,7 +235,7 @@ jobs:
   publish:
     name: Publish and promote verified Skill package
     needs: verify
-    if: inputs.publish == true && needs.verify.outputs.decision == 'release:skill'
+    if: inputs.publish == true && (needs.verify.outputs.decision == 'release:skill' || needs.verify.outputs.decision == 'release:skill-initial-publication')
     runs-on: ubuntu-24.04
     permissions:
       contents: write

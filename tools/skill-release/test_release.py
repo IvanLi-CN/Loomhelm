@@ -99,6 +99,8 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertNotIn("NPM_CONFIG_USERCONFIG", workflow)
         self.assertIn('npm publish "$tarball" --access public --tag "$COMPATIBILITY_LINE"', workflow)
         self.assertIn("npm@11.21.0", workflow)
+        self.assertIn("release:skill-initial-publication", workflow)
+        self.assertIn("registry_version_missing", workflow)
         self.assertIn('promote "$COMPATIBILITY_LINE"', workflow)
         self.assertIn("promote latest", workflow)
 
@@ -119,6 +121,47 @@ class ReleasePolicyTests(unittest.TestCase):
             rollback = self._commit(root, "rollback candidate")
             with self.assertRaisesRegex(ReleaseError, "strictly advance"):
                 evaluate_gate(root, base=head, head=rollback, labels=["release:skill"])
+
+    def test_initial_publication_allows_unpublished_existing_projection_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._init_repo(root)
+            base = git(root, "rev-parse", "HEAD")
+            (root / "tools/skill-release").mkdir(parents=True, exist_ok=True)
+            (root / "tools/skill-release/note.txt").write_text("initial publication", encoding="utf-8")
+            head = self._commit(root, "declare initial publication")
+            result = evaluate_gate(
+                root,
+                base=base,
+                head=head,
+                labels=["release:skill-initial-publication"],
+                initial_publication=True,
+                registry_version_missing=True,
+            )
+            self.assertEqual(result.decision, "release:skill-initial-publication")
+            with self.assertRaisesRegex(ReleaseError, "unpublished exact registry version"):
+                evaluate_gate(
+                    root,
+                    base=base,
+                    head=head,
+                    labels=["release:skill-initial-publication"],
+                    initial_publication=True,
+                    registry_version_missing=False,
+                )
+            package_path = root / "clients/typescript/package.json"
+            package = json.loads(package_path.read_text(encoding="utf-8"))
+            package["version"] = "0.2.0"
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+            drift = self._commit(root, "identity drift")
+            with self.assertRaisesRegex(ReleaseError, "canonical identity"):
+                evaluate_gate(
+                    root,
+                    base=base,
+                    head=drift,
+                    labels=["release:skill-initial-publication"],
+                    initial_publication=True,
+                    registry_version_missing=True,
+                )
 
     def test_first_skill_release_may_introduce_projection_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -168,7 +211,7 @@ class ReleasePolicyTests(unittest.TestCase):
             (root / "tools/skill-release").mkdir(parents=True)
             (root / "tools/skill-release/change.txt").write_text("change", encoding="utf-8")
             head = self._commit(root, "release change")
-            for labels in ([], ["release:skill", "release:skip"], ["release:cli"]):
+            for labels in ([], ["release:skill", "release:skip"], ["release:skill-initial-publication", "release:skip"], ["release:cli"]):
                 with self.subTest(labels=labels), self.assertRaises(ReleaseError):
                     evaluate_gate(root, base=base, head=head, labels=labels)
 
