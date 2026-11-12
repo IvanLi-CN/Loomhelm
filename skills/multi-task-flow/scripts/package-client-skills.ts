@@ -58,8 +58,19 @@ function declareDependencies(metadata: { dependencies?: Record<string, string> }
 const skillsPackageMetadata = JSON.parse(readFileSync(resolve(root, 'skills/package.json'), 'utf8')) as { dependencies?: Record<string, string> };
 const flowPackageMetadata = JSON.parse(readFileSync(resolve(root, 'skills/multi-task-flow/package.json'), 'utf8')) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
 declareDependencies(skillsPackageMetadata, 'skills/node_modules');
-declareDependencies(flowPackageMetadata, 'skills/multi-task-flow/node_modules');
-if (flowPackageMetadata.devDependencies?.playwright) dependencyDeclarations.set('playwright', { name: 'playwright', version: flowPackageMetadata.devDependencies.playwright, resourceRoot: 'skills/multi-task-flow/node_modules' });
+// The viewer's React/ELK dependencies are build-time inputs for the static
+// assets. The portable CLI only needs the runtime Skill dependencies above;
+// shipping the entire frontend dependency tree makes the tarball hundreds of
+// megabytes and slows every `bunx` startup. Keep the package's normal npm
+// dependency declarations for consumers that need the frontend, while bundling
+// only the dependencies executed by Skill scripts.
+if (flowPackageMetadata.dependencies?.zod) {
+  dependencyDeclarations.set('zod', {
+    name: 'zod',
+    version: flowPackageMetadata.dependencies.zod,
+    resourceRoot: 'skills/multi-task-flow/node_modules',
+  });
+}
 const requiredDependencies = [...dependencyDeclarations.values()].sort((left, right) => left.name.localeCompare(right.name));
 // Only this exact disposable resource output is replaced. TS is never emitted.
 if (existsSync(target)) {
@@ -125,7 +136,7 @@ for (const file of [...manifest.files, ...(manifest.additions ?? [])]) if (!pack
 copyPackageManifest();
 copy('skills/catalog.json');
 for (const name of ['index.html','app.js','app.css']) copy(`skills/multi-task-flow/dist/${name}`);
-const copyDependencies = (path: string): boolean => {
+const copyDependencies = (path: string, dependencyNames?: string[]): boolean => {
   const sourceRoot = resolve(root, path);
   if (!existsSync(sourceRoot)) {
     if (requireDependencies) throw new Error(`Prepared dependency directory missing: ${path}`);
@@ -152,7 +163,11 @@ const copyDependencies = (path: string): boolean => {
     const relativeSource = relative(resolvedRoot, resolvedSource);
     const stat = lstatSync(source);
     if (relativeSource.startsWith(`..${sep}`) || relativeSource === '..' || !stat.isFile() || stat.isSymbolicLink() || resolvedSource !== source) throw new Error('Unsafe prepared dependency: ' + destination);
-    record(destination, readFileSync(resolvedSource));
+    const output = resolve(target, destination);
+    mkdirSync(dirname(output), { recursive: true });
+    const contents = readFileSync(resolvedSource);
+    cpSync(resolvedSource, output);
+    record(destination, contents);
     preparedFiles += 1;
   };
   const walk = (relativePath: string): void => {
@@ -169,27 +184,38 @@ const copyDependencies = (path: string): boolean => {
       else copy(`${path}/${child}`, undefined, true);
     }
   };
-  walk('');
-  return preparedFiles > 0;
-};
-const prepareDependencyShims = (): PreparedDependency[] => {
-  const prepared: PreparedDependency[] = [];
-  for (const dependency of requiredDependencies) {
-    const metadata = dependencyMetadata('clients/typescript/node_modules', dependency.name, dependency.version);
-    const shimRoot = `skills/node_modules/${dependency.name}`;
-    writeGenerated(`${shimRoot}/package.json`, Buffer.from(JSON.stringify({ name: dependency.name, version: dependency.version, type: 'module', private: true }, null, 2) + '\n'));
-    const output = resolve(target, shimRoot, 'index.js');
-    const packageEntry = resolve(target, '..', 'node_modules', dependency.name, metadata.entry);
-    const targetRel = relative(dirname(output), packageEntry).split(sep).join('/');
-    const wrapper = `import * as packageExports from ${JSON.stringify(targetRel)};\nexport default packageExports.default;\nexport * from ${JSON.stringify(targetRel)};\n`;
-    writeGenerated(`${shimRoot}/index.js`, Buffer.from(wrapper));
-    prepared.push({ name: dependency.name, version: dependency.version, path: shimRoot, entry: 'index.js' });
+  if (!dependencyNames) {
+    walk('');
+    return preparedFiles > 0;
   }
-  return prepared;
+  const roots = new Map<string, string>();
+  const queue = dependencyNames.map(name => ({ name, relativePath: name }));
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (roots.has(current.relativePath)) continue;
+    const packageJson = resolve(sourceRoot, current.relativePath, 'package.json');
+    if (!existsSync(packageJson)) throw new Error(`Prepared dependency missing: ${current.name}`);
+    roots.set(current.relativePath, current.name);
+    const metadata = JSON.parse(readFileSync(packageJson, 'utf8')) as { dependencies?: Record<string, string>; optionalDependencies?: Record<string, string> };
+    for (const dependencyName of Object.keys(metadata.dependencies ?? {})) {
+      const nested = `${current.relativePath}/node_modules/${dependencyName}`;
+      const root = existsSync(resolve(sourceRoot, nested, 'package.json')) ? nested : dependencyName;
+      if (!roots.has(root)) queue.push({ name: dependencyName, relativePath: root });
+    }
+    for (const dependencyName of Object.keys(metadata.optionalDependencies ?? {})) {
+      const nested = `${current.relativePath}/node_modules/${dependencyName}`;
+      const root = existsSync(resolve(sourceRoot, nested, 'package.json')) ? nested : dependencyName;
+      if (existsSync(resolve(sourceRoot, root, 'package.json')) && !roots.has(root)) queue.push({ name: dependencyName, relativePath: root });
+    }
+  }
+  for (const relativePath of roots.keys()) walk(relativePath);
+  return preparedFiles > 0;
 };
 let preparedDependencies: PreparedDependency[];
 if (productPartitionBuild) {
-  for (const resourceRoot of new Set(requiredDependencies.map(dependency => dependency.resourceRoot))) copyDependencies(resourceRoot);
+  for (const resourceRoot of new Set(requiredDependencies.map(dependency => dependency.resourceRoot))) {
+    copyDependencies(resourceRoot, requiredDependencies.filter(dependency => dependency.resourceRoot === resourceRoot).map(dependency => dependency.name));
+  }
   preparedDependencies = requiredDependencies.map(dependency => {
     const metadata = dependencyMetadata(dependency.resourceRoot, dependency.name, dependency.version);
     const path = `${dependency.resourceRoot}/${dependency.name}`;
@@ -197,7 +223,19 @@ if (productPartitionBuild) {
     return { name: dependency.name, version: dependency.version, path, entry: metadata.entry };
   });
 } else {
-  preparedDependencies = prepareDependencyShims();
+  // The published package must be runnable from an isolated `bunx` install.
+  // Bun's workspace install may materialize dependency entries as shims that
+  // point outside the package; copying the prepared dependency trees keeps
+  // every runtime import inside the tarball and makes the artifact portable.
+  for (const resourceRoot of new Set(requiredDependencies.map(dependency => dependency.resourceRoot))) {
+    copyDependencies(resourceRoot, requiredDependencies.filter(dependency => dependency.resourceRoot === resourceRoot).map(dependency => dependency.name));
+  }
+  preparedDependencies = requiredDependencies.map(dependency => {
+    const metadata = dependencyMetadata(dependency.resourceRoot, dependency.name, dependency.version);
+    const path = `${dependency.resourceRoot}/${dependency.name}`;
+    if (!outputs.has(`${path}/package.json`)) throw new Error(`Prepared dependency was not copied: ${dependency.name}`);
+    return { name: dependency.name, version: dependency.version, path, entry: metadata.entry };
+  });
 }
 const dependenciesBundled = preparedDependencies.length === requiredDependencies.length && requiredDependencies.length > 0;
 if (requireDependencies && !dependenciesBundled) throw new Error('Prepared dependency closure is incomplete');

@@ -15,7 +15,10 @@ from policy import ReleaseError
 
 
 def run_version(argv, record):
-    result=subprocess.run(argv,capture_output=True,text=True,check=True)
+    result=subprocess.run(argv,capture_output=True,text=True)
+    if result.returncode != 0:
+        detail=(result.stderr or result.stdout).strip()
+        raise ReleaseError(f"native package version command failed ({result.returncode}): {detail}")
     info=json.loads(result.stdout)
     print(json.dumps(dict(observation='native-package-version',command=Path(argv[0]).name,**info)),flush=True)
     if (info['version'],info['source_sha'],info['policy'])!=(record['version'],record['merge_sha'],'loomhelm-manual-v1'):raise ReleaseError('native package identity mismatch')

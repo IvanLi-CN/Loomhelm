@@ -8,7 +8,7 @@ Skill release boundary 包含 `.github/workflows/`、`clients/typescript/`、`sk
 
 | Dimension | Current projection |
 | - | - |
-| package | `@loomhelm/multi-task-flow@0.2.0` |
+| package | `@loomhelm/multi-task-flow@0.2.2` |
 | compatibility line | `compat-v1` |
 | Skill | `2.7.2` |
 | ledger contract | `3` |
@@ -35,10 +35,11 @@ PR gate 使用 PR 的 exact base SHA 和 head SHA；merge queue 会重新解析�
 1. `verify` checkout exact `merge_sha`，确认 PR 已 closed/merged、merge receipt 与 SHA 相同、base 为 `main` 且非 draft。
 2. `release.py gate` 重新检查唯一 release label、package projection、Skill frontmatter、`lib/contract.ts` 与 `lib/service-contract.ts` 的 contract fields。
 3. `release:skill` 路径先用 `verify-tag --allow-missing` 检查 `multi-task-flow-v<version>`，再以同一个 merge SHA 和 Bun `1.4.4` 构建一个 draft tarball，计算 digest，将 digest 写入 manifest 后重新生成最终 tarball，并用 `validate-tarball` 验证版本、merge SHA、compatibility line 和 digest。
-4. 最终只上传这一份验证过的 tarball；promotion 阶段下载它，不重新 build，不从另一个 checkout 生成替代 bytes。
-5. publish 先用 `npm view @loomhelm/multi-task-flow@<version>` 对账 exact package；不存在时发布相同 tarball，随后下载 registry tarball 并比较 `tarballDigest`。
-6. exact package 对账成功后，以 `dist-tag-policy` 单调提升 `compat-vN` 和 `latest`，必要时再提升 `stable`；任何更高版本占用、digest 不同或 tag 回退都会停止流程。
-7. `release:skip` 路径不生成发布包，只上传包含 PR、merge SHA、当前 package version、compatibility line 和 skip reason 的 skip receipt。
+4. 候选包必须把运行时 Skill 依赖（当前包括 `zod` 与 `sharp`）完整封装在 tarball 内；发布前必须在全新临时目录执行隔离安装后的 `orchestrate init`/`show` smoke test，禁止依赖发布包外的 workspace `node_modules`。
+5. 最终只上传这一份验证过的 tarball；promotion 阶段下载它，不重新 build，不从另一个 checkout 生成替代 bytes。
+6. publish 先用 `npm view @loomhelm/multi-task-flow@<version>` 对账 exact package；不存在时发布相同 tarball，随后下载 registry tarball 并比较 `tarballDigest`。
+7. exact package 对账成功后，以 `dist-tag-policy` 单调提升 `compat-vN` 和 `latest`，必要时再提升 `stable`；任何更高版本占用、digest 不同或 tag 回退都会停止流程。
+8. `release:skip` 路径不生成发布包，只上传包含 PR、merge SHA、当前 package version、compatibility line 和 skip reason 的 skip receipt。
 
 npm 写入需要 `https://registry.npmjs.org/`、`@loomhelm` scope 配置和 `NPM_TOKEN` secret；这些是 workflow 外部前置，不写入仓库或 PR。owner approval、GitHub token 权限和 registry token 必须在受控 workflow environment 中提供；本地 `bun pm pack` 或 gate 通过不代表完成 npm publication。
 

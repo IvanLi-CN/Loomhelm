@@ -84,6 +84,15 @@ test('canonical ledger initializes and reads unchanged schema2/contract3 state a
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('published toolkit keeps runtime dependencies inside the artifact', async () => {
+  const artifact = await runtime.artifact();
+  const zod = artifact.dependencies.find((dependency) => dependency.name === 'zod');
+  assert.ok(zod);
+  const zodEntry = await readFile(join(runtime.root, zod.path, zod.entry), 'utf8');
+  assert.doesNotMatch(zodEntry, /\.\.\/\.\.\/\.\.\/\.\.\/node_modules/);
+  assert.equal(await readFile(join(runtime.root, zod.path, 'package.json'), 'utf8').then(JSON.parse).then((value) => value.name), 'zod');
+});
+
 test('missing runtime dependencies fail without registry access or cache writes', async () => {
   const root=await realpath(await mkdtemp(join(tmpdir(),'loomhelm-no-install-')));
   let requests=0;
