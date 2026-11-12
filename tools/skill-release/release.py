@@ -544,7 +544,7 @@ def identity_digest(identity: Mapping[str, Any], files: Iterable[Mapping[str, st
     body = dict(identity)
     body.pop("buildId", None)
     file_values = [dict(item) for item in files]
-    body["files"] = _locale_sorted(file_values, lambda item: item["path"])
+    body["files"] = sorted(file_values, key=lambda item: item["path"])
     encoded = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
