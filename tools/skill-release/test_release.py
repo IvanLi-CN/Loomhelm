@@ -119,6 +119,7 @@ class ReleasePolicyTests(unittest.TestCase):
         )
         self.assertIn('promote "$COMPATIBILITY_LINE"', workflow)
         self.assertIn("promote latest", workflow)
+        self.assertIn("canonical_file_differences=", workflow)
 
     def test_release_skill_requires_strict_version_progression(self):
         with tempfile.TemporaryDirectory() as directory:

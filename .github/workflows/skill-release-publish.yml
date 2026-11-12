@@ -194,6 +194,29 @@ jobs:
           (cd clients/typescript && bun pm pack --destination "$final_dir" --ignore-scripts --quiet)
           mapfile -t finals < <(find "$final_dir" -type f -name '*.tgz' -print)
           test "${#finals[@]}" -eq 1
+          final_digest="$(python3 tools/skill-release/release.py tarball-digest "${finals[0]}")"
+          printf 'draft_tarball_digest=%s final_tarball_digest=%s\n' "$digest" "$final_digest"
+          python3 - "${drafts[0]}" "${finals[0]}" <<'PY'
+          import sys
+          import tarfile
+          import hashlib
+
+          def files(path):
+              with tarfile.open(path, 'r:gz') as archive:
+                  return {
+                      member.name.removeprefix('package/'):
+                      hashlib.sha256(archive.extractfile(member).read()).hexdigest()
+                      for member in archive.getmembers()
+                      if member.isfile() and member.name != 'package/toolkit/artifact-manifest.json'
+                  }
+
+          draft, final = (files(path) for path in sys.argv[1:])
+          differences = sorted(set(draft) | set(final))
+          differences = [path for path in differences if draft.get(path) != final.get(path)]
+          print('canonical_file_differences=' + repr(differences[:100]))
+          if differences:
+              raise SystemExit('draft and final canonical tarball files differ')
+          PY
           python3 tools/skill-release/release.py validate-tarball "${finals[0]}" \
             --version "$VERSION" \
             --merge-sha "$MERGE_SHA" \
