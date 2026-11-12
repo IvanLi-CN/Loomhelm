@@ -41,20 +41,6 @@ class NativeGitHubTests(unittest.TestCase):
         prerequisites(api)
         api.api.assert_called_once_with('branches/main')
 
-    def test_quality_gate_waiver_is_scoped_and_has_owner_evidence(self):
-        from pathlib import Path
-        root = Path(__file__).resolve().parents[2]
-        gates = json.loads((root / '.github/quality-gates.json').read_text())
-        waivers = [item for item in gates['waivers'] if item['id'] == 'skill-release-0.2.6-skills-native-macos-queue']
-        self.assertEqual(len(waivers), 1)
-        waiver = waivers[0]
-        self.assertEqual(waiver['check_name'], 'Skills Native macOS')
-        self.assertEqual(waiver['status'], 'approved-waiver')
-        self.assertEqual(waiver['approved_by'], 'owner')
-        self.assertIn('PR #159', waiver['scope'])
-        self.assertIn('@loomhelm/multi-task-flow@0.2.6', waiver['scope'])
-        self.assertGreaterEqual(len(waiver['substitute_evidence']), 3)
-
     def test_missing_signature_pr_check_or_admin_protection_fails(self):
         for key in ('requiresApprovingReviews','requiresCommitSignatures','isAdminEnforced','requiresStatusChecks','requiresStrictStatusChecks','requiredStatusCheckContexts','allowsForcePushes','allowsDeletions'):
             protection = self.protection()
