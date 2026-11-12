@@ -28,7 +28,7 @@ bunx --bun --package @loomhelm/multi-task-flow@0.2.0 multi-task-flow flow view -
 | - | - |
 | package | `@loomhelm/multi-task-flow@0.2.0` |
 | compatibility line | `compat-v1` |
-| Skill | `2.7.2` |
+| Skill | `2.7.3` |
 | ledger contract | `3` |
 | API | `1` |
 | frontend | `1` |
