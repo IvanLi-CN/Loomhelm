@@ -7,4 +7,4 @@
 ## 验收
 
 - 验证结果绑定实际部署身份及其来源 SHA。
-- 结果和证据记入账本与依赖调度的账本，供交付协调者（Delivery coordinator） 在主 Agent（main Agent） 的委派范围内整理收口证据。
+- 结果和证据记入原子账本，由对应 verification 原子或 milestone 消费；交付单元状态由统一评估器整理，不创建协调任务。

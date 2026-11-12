@@ -13951,7 +13951,7 @@
       "path": "skills/multi-task-flow/examples/orchestration-viewer/index.ts",
       "sourceBlob": "dff03ef2840c1ef963dd72e67be25108657a0699",
       "sourceSha256": "5b74a30d4edba20a8215f52c7c341bb1c743ff5ed3aea32d26973cb2e1548797",
-      "installedSha256": "396ac718f3de9925e37094b826cf21a2c5b16349408bb64afb70fe5a6a85b1c5",
+      "installedSha256": "d06cb7e2c66e43acc82bc93483e52f9af47c2782907216a78e0a3f8505365d10",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -13975,7 +13975,7 @@
       "path": "skills/multi-task-flow/examples/orchestration-viewer/requirements/group-core.md",
       "sourceBlob": "e950889423b0fe08e5676aafc4ffe6b62d13415d",
       "sourceSha256": "18b4594bb27a581733f806b91739ff96a52f38d6a18cbd2a5edf062a82997fd5",
-      "installedSha256": "8b9f6c02a13b704497c4dafaf87551bf30315f7c0630aaf851a26ed4a16dc99f",
+      "installedSha256": "8c4455bc9daf6b0e2cf116ee350bc6f358263387dd5bace51aabef2019887b3d",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -13983,7 +13983,7 @@
       "path": "skills/multi-task-flow/examples/orchestration-viewer/requirements/group-dashboard.md",
       "sourceBlob": "82ace22c73225e4796b15d03874f18a213c2929e",
       "sourceSha256": "72eab9db09110edbd680d48a2b919224f0ed9d684a1a720d7c5b145a58568125",
-      "installedSha256": "72eab9db09110edbd680d48a2b919224f0ed9d684a1a720d7c5b145a58568125",
+      "installedSha256": "5df2793739a5b4dcff5a6edde6b205fa877306c6b11c349ebcaa04d5d1d4a8df",
       "adaptation": "unchanged"
     },
     {
@@ -13991,7 +13991,7 @@
       "path": "skills/multi-task-flow/examples/orchestration-viewer/requirements/task-acceptance.md",
       "sourceBlob": "a536ded5a7547062711d87c40cc78c75d69c55bf",
       "sourceSha256": "688492de8ca5845a2a818d3a3910b91fd8eeae8301e9f6d6eeec0387aaa11f08",
-      "installedSha256": "688492de8ca5845a2a818d3a3910b91fd8eeae8301e9f6d6eeec0387aaa11f08",
+      "installedSha256": "7588e800a7fc123290648b520a6c319c6a98c537405f4753a51e78a35727663a",
       "adaptation": "unchanged"
     },
     {
@@ -14007,7 +14007,7 @@
       "path": "skills/multi-task-flow/examples/orchestration-viewer/requirements/task-deploy.md",
       "sourceBlob": "b9dba41285574c95e60bced161a85b9f21b8b7f2",
       "sourceSha256": "ee8ad91df95bbf103d3e2a1f18d87c79a50b562a913e757a9d3d7166b82c1bff",
-      "installedSha256": "ee8ad91df95bbf103d3e2a1f18d87c79a50b562a913e757a9d3d7166b82c1bff",
+      "installedSha256": "df752061ee3f4ba588b5fa5efd9883e984189ac187be25df2212d29bccb693e4",
       "adaptation": "unchanged"
     },
     {
@@ -14031,7 +14031,7 @@
       "path": "skills/multi-task-flow/examples/orchestration-viewer/requirements/task-model.md",
       "sourceBlob": "e3db8e1731762c83a358bc2f352a841089a762a5",
       "sourceSha256": "8216efa113033c469ba8ab902b01bf43417165444fc6fc5e70327fe9537f5e36",
-      "installedSha256": "8216efa113033c469ba8ab902b01bf43417165444fc6fc5e70327fe9537f5e36",
+      "installedSha256": "1b1b9e0dbdadbc2f28e10eb88ad62a2edd0bf6040ce6317b78d673d5bb1ef1fb",
       "adaptation": "unchanged"
     },
     {
@@ -14039,7 +14039,7 @@
       "path": "skills/multi-task-flow/examples/orchestration-viewer/requirements/task-release.md",
       "sourceBlob": "74fd6424216f1d243ea4d6e38bcb5a096392b436",
       "sourceSha256": "7b768842b7037045d6c90c0fd6c5d1144e4c29762fe354f72c12893645f5da0f",
-      "installedSha256": "7b768842b7037045d6c90c0fd6c5d1144e4c29762fe354f72c12893645f5da0f",
+      "installedSha256": "c59048d05a7a180ee7ee913923a44bea2987ba6e76342d682e4ed8b2a109f2b5",
       "adaptation": "unchanged"
     },
     {
@@ -14047,7 +14047,7 @@
       "path": "skills/multi-task-flow/examples/orchestration-viewer/requirements/task-scheduler.md",
       "sourceBlob": "1b7113b239c5d9af15c64b8ac63fd40d90c9ec94",
       "sourceSha256": "5a63baaaa5fbbccb70ca1d03afe716b541f5ac067204d68b6ca900ea81f295b3",
-      "installedSha256": "5a63baaaa5fbbccb70ca1d03afe716b541f5ac067204d68b6ca900ea81f295b3",
+      "installedSha256": "13314e5583d819cb8d2bef4dddf052025aa93e3c20f4bda5f785187e68098eab",
       "adaptation": "unchanged"
     },
     {
@@ -14063,7 +14063,7 @@
       "path": "skills/multi-task-flow/examples/orchestration-viewer/requirements/task-verify.md",
       "sourceBlob": "e533329d8af488c6ab450c7aed667fd7c4891fde",
       "sourceSha256": "94eb575961a59e1576bdf63777ef660c156fedb5f3ff42881a55ebd603f5cfa0",
-      "installedSha256": "d8b61ed2fb0b2a884a24d19575fc5ee0889e6e550613994c2ef3feca97c04e09",
+      "installedSha256": "48fb3284cc93ab9ba1f51c1a254338d06f6c4aaab7e26ab5fddaa261cf0f34a6",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14151,7 +14151,7 @@
       "path": "skills/multi-task-flow/lib/engine.ts",
       "sourceBlob": "ffd435e1e2211f7aecadab3004a909ff2828df07",
       "sourceSha256": "a4d00c849601abdbe2e08ccb26978fba04ca4042b33213e46c1206aa47273a8b",
-      "installedSha256": "eedc0eafca614f4a54f83acf9ed933c6703e7b0707e1c6c1f9ffa356edc85a0d",
+      "installedSha256": "a143cf05f7e1ecac0d5bb5862c5c4ad1d4046f6b5b4b36420774d952b65cfe5f",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14255,7 +14255,7 @@
       "path": "skills/multi-task-flow/lib/schema.ts",
       "sourceBlob": "1e3338e24556d00f99cbbd995751246c7ca3bcab",
       "sourceSha256": "da7eac82624f06e8f15cebeacf8af5fa33825a3de9943b8bd6c0bd19323505bd",
-      "installedSha256": "8755b0abae44ff26a05e3e36f77298e81b4bec3c6b2f1ebd7f7eab558d9c0334",
+      "installedSha256": "1445255fa7d56cbd68b9e9edc0a460f96e259eded3134e6a4c6f11444ea90bd7",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14295,7 +14295,7 @@
       "path": "skills/multi-task-flow/lib/service-compatibility.ts",
       "sourceBlob": "bcb767fdffc0a94cbf0ed01243d42ab16108b730",
       "sourceSha256": "2c062bfd14caa59cadd0a81feef02e8bfe5d9961c933717d4d41ac3211c2a9c8",
-      "installedSha256": "ac401510676116a3fb9da67eed8f6febbe17bd60362a62234f661347f4206720",
+      "installedSha256": "1a018c5064c3ff6a2dbd6b3a4eaf37ee86a78a2c6a16abfb9e96b06b35138e5f",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14367,7 +14367,7 @@
       "path": "skills/multi-task-flow/lib/service-pages.ts",
       "sourceBlob": "3164e9860cfa00bb27f4e6eb1db68134d2492e19",
       "sourceSha256": "c942d6659bc62bdb477fc85ac629a94ae38aa33440d73838e9b8c0491d41594e",
-      "installedSha256": "37b30c316f625b50ed038a3c8066227ab0c96738992e3fafd968f00aff1adbe2",
+      "installedSha256": "18743e38d91e4790b711f8314a5de13151d8f0523d4e0419ca93a20f2a74c679",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14423,7 +14423,7 @@
       "path": "skills/multi-task-flow/lib/store-migration.ts",
       "sourceBlob": "6c190c9e035bc04b48fa171cd68505231052dcd6",
       "sourceSha256": "dd9eb58c4bce8bc790ddec4fa18173822d8972b084fa4b216d9cc815b8fcb19f",
-      "installedSha256": "d058a0e47cb971c971f1bebbc68ac0ac1ea86d1cd74840bcad4688df5400914b",
+      "installedSha256": "adf51dc75af3de06836030594c16e31259d7a09cd600e7959cd4b83bfacda8d3",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14455,7 +14455,7 @@
       "path": "skills/multi-task-flow/lib/view.ts",
       "sourceBlob": "b00e4b31ea1ae1dce408e0c2f45cd103bf958299",
       "sourceSha256": "0a2018fac0ed8b824e1d8c5c709d0ed6e7a851035950e8ed74aa5e846f6be80f",
-      "installedSha256": "eeabf6b47cb50d2cbb09c3775262c3fe572924a4f5b02cca9a06a4d67a4fe894",
+      "installedSha256": "be52009ff2efc06399df0363d2797df327191be3f4b1b8c61b71c253c72d4d73",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14647,7 +14647,7 @@
       "path": "skills/multi-task-flow/tests/graph-projection.test.ts",
       "sourceBlob": "d82a71ff8a8543bb145a71ca14a1f2f5fad2cbeb",
       "sourceSha256": "41a8185449cc2571fda80feacfef352f41f7a0deb4ae59287cca4ff9a32edc18",
-      "installedSha256": "74e90ff6810670e9a82056504ee563d694349454ba5d02ad44ac202e4b541e28",
+      "installedSha256": "5a170842c9906e5fedfccedce4f570396b84c2f356449acfcc162b044527fa94",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14951,7 +14951,7 @@
       "path": "skills/multi-task-flow/web/app.css",
       "sourceBlob": "d780bf6377130ac519e4b7f2441da710b8767401",
       "sourceSha256": "1f59981d582f4ea2b4e012e16792075e82a2036cc05d6227159f487935f28e84",
-      "installedSha256": "0c55e7ccc17c61a56102f1fe795270dd68482b39967a1a15755c335de0ad9089",
+      "installedSha256": "fb41e45551073b55af92b779b567c36afbcec7ad4b4a01ed6cfa475479195502",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14959,7 +14959,7 @@
       "path": "skills/multi-task-flow/web/app.ts",
       "sourceBlob": "ad0cd71bd39e30cda7091c443db26e7b00452d56",
       "sourceSha256": "7de5958eda17175d1e68f79f07093bdd6f545228eb9fadd4b7e21c43a9a25940",
-      "installedSha256": "df6ad787112933e58ab5ddc6edbb1a365f6a6d9d3fbe76d841f4d342cac1cf7c",
+      "installedSha256": "f8573c6c87b63368d246319ef85365ca9d42b279576bf9cbac5b0e1945bd3467",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15015,7 +15015,7 @@
       "path": "skills/multi-task-flow/web/graph-projection.ts",
       "sourceBlob": "807a4281f183ca5539ebbf4183056f5fab2cc68e",
       "sourceSha256": "2245b7f90f7a81be1f97617fcb85aad2bf06c47ea0a32eb72f69d94d4d0d01f9",
-      "installedSha256": "4e633c01b064dbb1c7879fdc90056f6be86c94bfa02d8ee24998b3d2e67ae19d",
+      "installedSha256": "1376c6fda08a0eadad28bef6cd69ab1a66c854bbdc4bc55665ffe0357e34c008",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15023,7 +15023,7 @@
       "path": "skills/multi-task-flow/web/graph.ts",
       "sourceBlob": "296c64face2716700f5bc0cd355537a5cb1b89b0",
       "sourceSha256": "2043fe0c0aadca03c75a8f26413b6955cb4859df8ecdd4e58ccf911a3c0fd143",
-      "installedSha256": "8551b6a4e537535f32a3248136362977222d611337c7ce420affef5c07897f78",
+      "installedSha256": "8068912e2ca477dd4e7da6a2bd8dcaa18e3f35bd97e94be54a700f8aa1736d05",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15047,7 +15047,7 @@
       "path": "skills/multi-task-flow/web/index.html",
       "sourceBlob": "2d86c1b94c2a324b2870b0b05568a41189a46540",
       "sourceSha256": "920f1792a900f707f6152939b810141d08ffa869e452b9e05ad74687010e86df",
-      "installedSha256": "3338f93ba266432b720b1f29ebe90aebf487249f762d0f6788c9484079d5f97a",
+      "installedSha256": "f1b696b1dc26d40ed54e3a758eddc13c0df9f6b306b1fc14023237ebf91b1a0d",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15079,7 +15079,7 @@
       "path": "skills/multi-task-flow/web/model.ts",
       "sourceBlob": "36db8a1490938d3ac6993ec2e602791f1e0df7ca",
       "sourceSha256": "ded10187933c17d3e2bf9a72b9cac373618d5503c04a63b55262f61130aedc61",
-      "installedSha256": "3a2aa4c9625cf9a9bd5e62abbf43fddaedf0e17ca0c9f5538e2599b5a9a8c914",
+      "installedSha256": "cc485121fbdaa906bda647b50808cecb57e252dd09503dd7570b91bf2bd33514",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15175,7 +15175,7 @@
       "path": "skills/multi-task-flow/web/view-state.ts",
       "sourceBlob": "7afd66fedd33889c799e5a9bd7c400906ffa0f7d",
       "sourceSha256": "1f8a4a239a234103b6c5de554d3800c8c522bb0ac948f989a9e11155c378a1b6",
-      "installedSha256": "fdd8a96460d82fb845324cf823b5748105b407994ec00d3853f071b05dfed5fe",
+      "installedSha256": "9bcbd651913ae85223f80bce729dba1a0ac64ec0492c2ab9f22bfa70f23a96d7",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15818,7 +15818,7 @@
     },
     {
       "path": "skills/multi-task-flow/web/graph-view.tsx",
-      "installedSha256": "9b2bf279adf198033fcf184421c260c704a1d7b76d7ae2f43461ac30c3e127bf"
+      "installedSha256": "7b81909679226d0124644d5670195814d486aded33df7d652d74fea1b35793cd"
     },
     {
       "path": "skills/multi-task-flow/web/pr-status.ts",
@@ -15963,6 +15963,18 @@
     {
       "path": "skills/multi-task-flow/tests/task-runtime.test.ts",
       "installedSha256": "883e8878fbd3c4b9fc5e46fd059fccde56f98ee9ecaa89b58e5fd639d6060e21"
+    },
+    {
+      "path": "skills/multi-task-flow/lib/atomic-orchestration.ts",
+      "installedSha256": "f132c6814401b82abe0cbd2d52bb409c483ff5f3095c83eb7007bae70b3c8834"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/atomic-orchestration-schema.test.ts",
+      "installedSha256": "719f03add0990d73b4303745766b51ae2ee545c18883c9c8a9f11fc3a0d9f66d"
+    },
+    {
+      "path": "skills/multi-task-flow/web/atomic-graph-view.tsx",
+      "installedSha256": "6c157adb3cd47c6812b9e06dc7d7ed21486a8ccf7a334a934c9e4aef62745a50"
     }
   ],
   "exclusions": [

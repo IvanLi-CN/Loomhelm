@@ -183,6 +183,14 @@ function authorizedAction(ledger: Ledger, action: string): void {
 function legacyLedger(ledger: Ledger): boolean {
   return ledger.source_schema_version === 1 && ledger.contract_version !== 2;
 }
+function deliveryUnitPr(owner: Ledger["groups"][number]): ExternalRef | null {
+  if (owner.pr && "state" in owner.pr) return "pr" in owner.pr ? owner.pr.pr : null;
+  return owner.parent_pr;
+}
+function taskPrRef(task: Ledger["tasks"][number]): ExternalRef | null {
+  if (task.pr && "state" in task.pr) return "pr" in task.pr ? task.pr.pr : null;
+  return task.pr;
+}
 function requireContributionDispatchGate(
   ledger: Ledger,
   owner: Ledger["groups"][number],
@@ -193,7 +201,7 @@ function requireContributionDispatchGate(
   const missing: string[] = [];
   if (owner.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     missing.push("workspace_ready");
-  if (owner.lifecycle.pr_created !== "passed" || !owner.parent_pr || prAtom?.status !== "completed")
+  if (owner.lifecycle.pr_created !== "passed" || !deliveryUnitPr(owner) || prAtom?.status !== "completed")
     missing.push("parent_pr");
   if (missing.length)
     throw new ContractError(
@@ -2677,8 +2685,30 @@ export function execute(
           "PR lineage changed while publication was pending",
           5,
         );
-        if (targetType === "group") target.parent_pr = receipt.pr;
-        else target.pr = receipt.pr;
+        if (targetType === "group") {
+          if (ledger.contract_version !== 3) target.parent_pr = receipt.pr;
+          else target.pr = {
+              state: "published",
+              pr: receipt.pr,
+              parent_branch: op.request.branch,
+            };
+        } else {
+          requireCondition(
+            typeof target.branch === "string" && target.branch.length > 0 &&
+              typeof op.request.target_branch === "string" && op.request.target_branch.length > 0,
+            "TASK_PR_BINDING_INCOMPLETE",
+            "Task PR publication requires task branch and base branch facts",
+            4,
+          );
+          target.pr = ledger.contract_version !== 3
+            ? receipt.pr
+            : {
+                state: "open",
+                pr: receipt.pr,
+                branch: target.branch,
+                base_branch: op.request.target_branch,
+              };
+        }
         target.lifecycle.pr_created = "passed";
       } else {
         const receipt = providerReceipt.parse(
@@ -2957,8 +2987,8 @@ export function execute(
       const parentPr = parse(externalRef, payload.parent_pr);
       checkPR(ledger, taskPr);
       checkPR(ledger, parentPr);
-      requireCondition(target.pr && stable(target.pr) === stable(taskPr), "PR_MISMATCH", "Equivalent integration task PR does not match the registered PR", 3);
-      requireCondition(owner.parent_pr && stable(owner.parent_pr) === stable(parentPr), "PR_MISMATCH", "Equivalent integration parent PR does not match the delivery unit", 3);
+      requireCondition(target.pr && stable(taskPrRef(target)) === stable(taskPr), "PR_MISMATCH", "Equivalent integration task PR does not match the registered PR", 3);
+      requireCondition(deliveryUnitPr(owner) && stable(deliveryUnitPr(owner)) === stable(parentPr), "PR_MISMATCH", "Equivalent integration parent PR does not match the delivery unit", 3);
       const taskHeadSha = z.string().regex(/^[a-f0-9]{40}$/).parse(payload.task_head_sha);
       const parentMergeSha = z.string().regex(/^[a-f0-9]{40}$/).parse(payload.parent_merge_sha);
       const commits = z.array(z.string().regex(/^[a-f0-9]{40}$/)).min(1).parse(payload.integration_commits);
@@ -3468,7 +3498,7 @@ export function execute(
       );
       requireCondition(
         owner.parent_branch !== null &&
-          owner.parent_pr !== null &&
+          deliveryUnitPr(owner) !== null &&
           owner.current_sha !== null,
         "GROUP_NOT_READY",
         "Group parent branch, PR, and SHA must already be established",
@@ -3503,7 +3533,7 @@ export function execute(
         3,
       );
       requireCondition(
-        stable(observation.parent_pr) === stable(owner.parent_pr),
+        stable(observation.parent_pr) === stable(deliveryUnitPr(owner)),
         "TARGET_MISMATCH",
         "Reconciliation PR must match the group's registered parent PR",
         3,
@@ -3550,7 +3580,7 @@ export function execute(
       checkPR(ledger, pr);
       requireCondition(
         taskExecutionState(target) === "running" &&
-          (!target.pr || stable(target.pr) === stable(pr)),
+          (!taskPrRef(target) || stable(taskPrRef(target)) === stable(pr)),
         "PR_MISMATCH",
         "Task PR cannot be replaced",
         3,
@@ -3561,7 +3591,23 @@ export function execute(
         "Task PR must be bound to a successful provider publication receipt",
         4,
       );
-      target.pr = pr;
+      if (ledger.contract_version !== 3) target.pr = pr;
+      else {
+        const owner = find(ledger.groups, (item) => item.id === target.group_id, "DeliveryUnit");
+        requireCondition(
+          typeof target.branch === "string" && target.branch.length > 0 &&
+            typeof owner.parent_branch === "string" && owner.parent_branch.length > 0,
+          "TASK_PR_BINDING_INCOMPLETE",
+          "Task PR binding requires task branch and DeliveryUnit parent branch facts",
+          4,
+        );
+        target.pr = {
+          state: "open",
+          pr,
+          branch: target.branch,
+          base_branch: owner.parent_branch,
+        };
+      }
       if (target.lifecycle && !legacyLedger(ledger))
         target.lifecycle.pr_created = "passed";
       return { task_id: taskId, pr };
@@ -3649,7 +3695,7 @@ export function execute(
         review.source === request.actor.thread_id &&
         review.quality?.task_id === taskId &&
         review.quality.thread_id === request.actor.thread_id &&
-        stable(review.quality.pr) === stable(target.pr) &&
+        stable(review.quality.pr) === stable(taskPrRef(target)) &&
         review.quality.base_sha === owner.current_sha &&
         review.quality.head_sha === review.sha,
         "EVIDENCE_REQUIRED",
@@ -3795,7 +3841,7 @@ export function execute(
           4,
         );
         requireCondition(
-          stable(target.pr) === stable(pr),
+          stable(taskPrRef(target)) === stable(pr),
           "PR_MISMATCH",
           "Merge PR differs from the registered child PR",
           3,
@@ -3821,7 +3867,7 @@ export function execute(
                 item.quality.thread_id === target.thread_id &&
                 item.quality.base_sha === owner.current_sha &&
                 item.quality.head_sha === headSha &&
-                stable(item.quality.pr) === stable(target.pr) &&
+                stable(item.quality.pr) === stable(taskPrRef(target)) &&
                 ledger.events.some(
                   (event) =>
                     event.type === "fact_observed" &&
@@ -3859,8 +3905,8 @@ export function execute(
         );
         if (mode === "parent") {
           requireCondition(
-            owner.parent_pr &&
-              stable(owner.parent_pr) === stable(pr) &&
+            deliveryUnitPr(owner) &&
+              stable(deliveryUnitPr(owner)) === stable(pr) &&
               owner.current_sha === headSha,
             "PR_MISMATCH",
             "Parent PR and current head must match",
@@ -3869,7 +3915,7 @@ export function execute(
         } else {
           const originalParent = parse(externalRef, payload.original_parent_pr);
           requireCondition(
-            owner.parent_pr && stable(owner.parent_pr) === stable(originalParent),
+            deliveryUnitPr(owner) && stable(deliveryUnitPr(owner)) === stable(originalParent),
             "PR_MISMATCH",
             "Follow-up merge must identify the registered parent PR",
             3,
@@ -3890,16 +3936,14 @@ export function execute(
             5,
           );
         }
-        if (mode === "parent") {
-          requireCondition(
-            legacyLedger(ledger) ||
-              (owner.lifecycle.pr_created === "passed" &&
-                prReceipt(ledger, groupId, pr, expectedSha, headSha)),
-            "PR_NOT_READY",
-            "Parent PR must be provider-published before merge",
-            4,
-          );
-        }
+        if (mode === "parent") requireCondition(
+          legacyLedger(ledger) ||
+            (owner.lifecycle.pr_created === "passed" &&
+              prReceipt(ledger, groupId, pr, expectedSha, headSha)),
+          "PR_NOT_READY",
+          "Parent PR must be provider-published before merge",
+          4,
+        );
         requireCondition(
           ledger.tasks
             .filter(
@@ -4084,7 +4128,7 @@ export function execute(
             3,
           );
         const subject =
-          op.request.mode === "parent" || op.request.mode === "parent-followup"
+          (op.request.mode === "parent" || op.request.mode === "parent-followup")
             ? owner.id
             : op.request.mode === "follow"
               ? op.request.follow_pr_id
@@ -4106,10 +4150,17 @@ export function execute(
             4,
           );
           owner.state = "merged";
-          owner.merge_sha = evidence.sha;
-          if (op.request.mode === "parent-followup") {
-            owner.current_sha = evidence.sha;
+          if (op.request.mode === "parent-followup") owner.current_sha = evidence.sha;
+          if (op.request.mode === "parent") {
+            if (ledger.contract_version !== 3) owner.parent_pr = op.request.pr;
+            else owner.pr = {
+                state: "merged",
+                pr: op.request.pr,
+                parent_branch: owner.parent_branch,
+                merge_sha: evidence.sha,
+              };
           }
+          owner.merge_sha = evidence.sha;
           if (owner.lifecycle && !legacyLedger(ledger))
             owner.lifecycle.pr_merged = "passed";
           for (const task of ledger.tasks.filter(
@@ -4140,6 +4191,18 @@ export function execute(
           );
           owner.current_sha = evidence.sha;
           target.state = "integrated";
+          if (!legacyLedger(ledger)) {
+            const owner = find(ledger.groups, (item) => item.id === target.group_id, "DeliveryUnit");
+            target.pr = ledger.contract_version !== 3
+              ? op.request.pr
+              : {
+                  state: "merged",
+                  pr: op.request.pr,
+                  branch: target.branch,
+                  merge_sha: evidence.sha,
+                };
+            if (owner.pr?.state === "published") owner.pr = { ...owner.pr };
+          }
           target.finished_at = evidence.observed_at;
           if (target.lifecycle && !legacyLedger(ledger))
             target.lifecycle.pr_merged = "passed";
