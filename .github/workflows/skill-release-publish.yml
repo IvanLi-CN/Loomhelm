@@ -181,6 +181,7 @@ jobs:
           }
           (cd clients/typescript && bun --no-install run build)
           set_package_metadata clients/typescript/package.json
+          set_package_metadata clients/typescript/toolkit/package.json
           (cd clients/typescript && bun pm pack --destination "$draft_dir" --ignore-scripts --quiet)
           mapfile -t drafts < <(find "$draft_dir" -type f -name '*.tgz' -print)
           test "${#drafts[@]}" -eq 1

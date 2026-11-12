@@ -105,6 +105,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertEqual(workflow.count("set_package_metadata clients/typescript/package.json"), 2)
         self.assertIn(
             'set_package_metadata clients/typescript/package.json\n'
+            '          set_package_metadata clients/typescript/toolkit/package.json\n'
             '          (cd clients/typescript && bun pm pack --destination "$draft_dir"',
             workflow,
         )
