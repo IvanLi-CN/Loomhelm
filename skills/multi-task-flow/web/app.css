@@ -428,19 +428,24 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
     grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto;
     align-items: start; gap: 20px;
   }
-  .workspace.has-details, .workspace.has-overlay-selection {
-    --task-columns-with-details: max(1, round(down, calc((100cqw - var(--detail-min-width)) / (var(--stable-task-card-width) + 20px)), 1));
-    grid-template-columns: calc(var(--task-columns-with-details) * (var(--stable-task-card-width) + 20px) - 20px) minmax(var(--detail-min-width), var(--detail-max-width));
-  }
+  .workspace.has-details, .workspace.has-overlay-selection { grid-template-columns: minmax(0, 1fr); }
   .workspace-main { display: contents; }
   .workspace-view { grid-column: 1 / -1; grid-row: 1; min-width: 0; }
   .workspace-tasks { grid-column: 1; grid-row: 2; min-width: 0; }
+  .workspace:not([data-view-tab="tasks"]) .details-slot { grid-column: 1; grid-row: 2; }
+  .workspace[data-view-tab="tasks"] .details-slot { grid-column: 1; grid-row: 3; }
+  .details-slot { position: static; padding-top: 16px; }
+  .details { position: static; width: auto; max-height: none; border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; box-shadow: none; padding: 16px 0 4px; display: block; }
+  .details-heading button { display: none; }
+  .details-heading { padding: 0 0 12px; display: flex; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--rule); }
+  .detail-title { margin-top: 0; }
+  #details-content { padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 20px; }
+  #details-content > .detail-field:has(.detail-agent-output), #details-content > .detail-field:has(.detail-empty-output), #details-content > .detail-field:has(.atom-list) { grid-column: 1 / -1; }
+  .details-backdrop { display: none; }
   .workspace .task-layout-grid, .workspace .group-cards {
     grid-template-columns: repeat(auto-fill, var(--stable-task-card-width)); gap: 20px;
   }
-  .details-slot { grid-column: 2; grid-row: 2; }
   .details { --details-padding-inline: 16px; --details-padding-bottom: 20px; }
-  .details-backdrop { display: none; }
   .mobile-close { display: grid; }
   .task-layout-board { display: grid; grid-auto-flow: column; grid-auto-columns: var(--stable-task-card-width); grid-template-columns: none; gap: 20px; padding-inline: 0; justify-content: start; align-items: stretch; overflow-x: auto; overflow-y: hidden; }
   .task-layout-board > .task-column { flex-basis: auto; min-width: 0; }

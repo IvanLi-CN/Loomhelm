@@ -60,7 +60,7 @@ describe("dashboard detail surface DOM", () => {
     expect(elements.workspace.classList.contains("has-overlay-selection")).toBe(true);
   });
 
-  test("uses a fixed inspector on the intermediate viewport only after selection", () => {
+  test("keeps the selected desktop inspector surface without an overlay", () => {
     expect(resolveDetailSurface({ selected: false, detailOpen: false, hoverCapable: true, detailPanelViewport: true })).toBe("none");
 
     const surface = resolveDetailSurface({ selected: true, detailOpen: true, hoverCapable: true, detailPanelViewport: true });
