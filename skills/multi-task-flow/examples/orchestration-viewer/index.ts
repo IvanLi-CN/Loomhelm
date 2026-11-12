@@ -21,6 +21,60 @@ export function createViewerValidationLedger(referenceTime = Date.now()) {
   run.schema_version = 2;
   run.contract_version = 2;
   run.source_schema_version = null;
+  const plan = run.plans[0];
+  const at = run.updated_at;
+  const contributionTasks = run.tasks.filter((task: { kind: string }) => task.kind === "contribution");
+  plan.actions = run.groups.flatMap((group: { id: string }) => [
+    { id: `${group.id}-publish-branch`, kind: "publish_branch", task_id: null, group_id: group.id, target_identity: `branch:${group.id}` },
+    { id: `${group.id}-publish-pr`, kind: "publish_pr", task_id: null, group_id: group.id, target_identity: `pr:${group.id}` },
+  ]).concat(contributionTasks.flatMap((task: { id: string; group_id: string }) => [
+    { id: `${task.id}-publish-branch`, kind: "publish_branch", task_id: task.id, group_id: null, target_identity: `branch:${task.id}` },
+    { id: `${task.id}-publish-pr`, kind: "publish_pr", task_id: task.id, group_id: null, target_identity: `pr:${task.id}` },
+  ]));
+  for (const group of run.groups) {
+    group.lifecycle.workspace_ready = "passed";
+    run.events.push({
+      id: `preview-${group.id}-workspace-ready`,
+      type: "lifecycle_recorded",
+      subject_id: group.id,
+      actor_id: run.control.owner_thread_id,
+      occurred_at: at,
+      recorded_at: at,
+      data: { target_type: "group", stage: "workspace_ready", resource_ids: [`${group.id}-worktree`, `${group.id}-branch`] },
+    });
+    run.resources.push(
+      { id: `${group.id}-worktree`, kind: "worktree", target: group.id, status: "active", evidence_ref: `preview:${group.id}:worktree` },
+      { id: `${group.id}-branch`, kind: "branch", target: group.parent_branch, status: "active", evidence_ref: `preview:${group.id}:branch` },
+    );
+    run.facts.push({
+      id: `preview-${group.id}-branch-published`,
+      kind: "branch_published",
+      subject_id: group.id,
+      status: "passed",
+      source: "sample",
+      observed_at: at,
+      sha: group.current_sha,
+      evidence_ref: `preview:${group.id}:branch-published`,
+      receipt: {
+        provider: run.repository.provider,
+        repository: `${run.repository.owner}/${run.repository.name}`,
+        resource_type: "branch",
+        resource_id: group.parent_branch,
+        branch: group.parent_branch,
+        target_branch: null,
+        base_sha: null,
+        head_sha: group.current_sha,
+        pr: null,
+        state: "exists",
+        evidence_ref: `preview:${group.id}:branch-published`,
+      },
+    });
+    for (const event of run.events) {
+      if (event.data && typeof event.data === "object" && "group_snapshot" in event.data && event.data.group_snapshot?.id === group.id) {
+        event.data.group_snapshot = structuredClone(group);
+      }
+    }
+  }
   return validateLedger(run);
 }
 

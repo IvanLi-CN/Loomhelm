@@ -24,7 +24,7 @@
 
 ### 交付 Agent 就绪
 
-regular 交付单元在激活前已经绑定独立交付 Agent conversation，并具备后续 parent branch、parent PR 和收口所需的身份。Proposal 阶段可以是未绑定状态，但未绑定不是就绪事实。
+regular 交付单元在激活前已经具备其 delivery-unit scoped work 所需的执行策略，并具备后续 parent branch、集成 PR 和收口所需的身份。Proposal 阶段可以是未绑定状态，但未绑定不是就绪事实。
 
 ### 任务 Agent
 
@@ -34,9 +34,9 @@ _Avoid_: 子任务审核人、临时接管 Agent
 
 ### 交付 Agent
 
-拥有一个 regular 交付单元的 parent branch 和 parent PR，对 parent PR、合并后的 CI、已声明的合并后交付义务和收口负责。不合并、rebase 或重新审核正常路径中的 child PR；bootstrap 由 Main Agent 直接兼任交付 Agent。
+拥有一个 regular 交付单元的 parent branch 和集成 PR，对集成 PR、合并后的 CI、已声明的合并后交付义务和收口负责。不合并、rebase 或重新审核正常路径中的 child PR；bootstrap 由 Main Agent 直接承担交付单元执行策略。
 
-_Avoid_: 交付协调者、child PR 审核人、任务接管者
+_Avoid_: 交付协调者、coordination Task、child PR 审核人、任务接管者
 
 ### 主 Agent
 
@@ -53,6 +53,26 @@ _Avoid_: 交付协调者审核
 ### 任务执行策略
 
 每个任务显式声明执行 owner、对话策略和交付方式，三者共同决定任务由谁执行、是否创建新对话以及如何交付结果；任务存在本身不等于必须创建 Task Agent 或 child PR。
+
+### AtomicNode
+
+统一原子编排图中的节点，分为可执行的 work 原子和只表达条件的 milestone 原子；AtomicNode 是任务与交付单元投影共同读取的 canonical 编排事实。
+
+### AtomicEdge
+
+连接两个 AtomicNode 的有向依赖边，表达后继节点需要满足的前置条件；AtomicEdge 与 AtomicNode 共同构成唯一的原子依赖图。
+
+### DeliveryUnit
+
+交付范围的平级领域对象，按 `delivery_unit_id` 汇总原子、任务和外部交付事实，负责整合、父 PR 和收口范围；DeliveryUnit 不拥有 Task，也不保存独立的原子副本。旧实现中的 Group 只作为兼容名称。
+
+### 里程碑
+
+没有 Agent 执行或执行 owner 的特殊 AtomicNode，由所有入边条件和所有显式验收条件的全量 AND 规则判定是否达成；planned 里程碑至少要有一个入边条件或显式验收条件。
+
+### 里程碑评估
+
+由统一评估器根据里程碑定义、原子依赖、外部事实和 evidence 生成的 `pending`、`satisfied` 或 `blocked` 投影；评估结果可缓存，但不能替代 canonical 定义和事实。
 
 ### 验证证据
 

@@ -193,6 +193,8 @@ export type View = {
   nodes: Node[];
   edges: Edge[];
   atomic_edges?: { id: string; from_atom_id: string; to_atom_id: string }[];
+  atomic_nodes?: { kind: string; id: string; title: string; state: string; scope?: { kind: string; task_id?: string; delivery_unit_id: string } }[];
+  canonical_atomic_edges?: { id: string; from_node_id: string; to_node_id: string; requires: { kind: string } }[];
   planned_intervals: { node_id: string; start: string | null; end: string | null; start_offset_minutes?: number | null; end_offset_minutes?: number | null }[];
   actual_intervals: { task_id: string; group_id: string; state: string; start: string; end: string | null }[];
   actual_milestones: { node_id: string; occurred_at: string | null }[];

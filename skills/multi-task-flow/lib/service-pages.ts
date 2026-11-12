@@ -9,7 +9,8 @@ export function viewerPage(
 const runPathPattern = /^\/runs\/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\/$/;
 const viewIdPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const viewParamValidators: Record<string, (value: string) => boolean> = {
-  tab: (value) => /^(graph|planned|actual)$/.test(value),
+  tab: (value) => /^(graph|atomic|planned|actual)$/.test(value),
+  graph: (value) => /^(aggregate|atomic)$/.test(value),
   layout: (value) => /^(board|grid)$/.test(value),
   q: (value) => value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value),
   group: (value) => viewIdPattern.test(value),

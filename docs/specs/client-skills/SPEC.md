@@ -54,11 +54,11 @@ Every task and delivery unit MUST carry a structured acceptance contract. The co
 
 ### REQ-SKILLS-011
 
-Every delivery unit MUST declare its complete closeout path before approval. The path MUST cover workspace readiness, parent branch and parent PR publication, merged-SHA CI, planned post-merge release/deployment/verification work when applicable, known follow-PR reconciliation and final closeout. A plan with implementation tasks but no applicable post-merge obligations MUST be rejected or explicitly record that those obligations are not applicable with evidence.
+Every delivery unit MUST declare its complete closeout path before approval. The path MUST cover workspace readiness, integration branch and integration PR publication, merged-SHA CI, planned post-merge release/deployment/verification work when applicable, known follow-PR reconciliation and final closeout. A plan with implementation tasks but no applicable post-merge obligations MUST be rejected or explicitly record that those obligations are not applicable with evidence.
 
 ### REQ-SKILLS-012
 
-Dependency edges MUST use milestone semantics that match the source and target lifecycle. `integrated` MUST mean a contribution PR was merged, `completed` MUST mean the task's work and evidence are complete, and `verified` MUST mean the declared verification evidence passed. Validation MUST reject a graph whose edge conditions rely on an undocumented conversion between task state and delivery-unit lifecycle.
+Multi-task Flow dependency facts MUST use the contract in `docs/specs/multi-task-flow-unified-atomic-orchestration/SPEC.md`. `AtomicNode` and `AtomicEdge` are the only canonical dependency facts; Task and DeliveryUnit are peer projections. Milestone conditions MUST use explicit structured criteria and full AND evaluation. Legacy `integrated` is a read-only derived compatibility label for child-PR integration; it is not a canonical TaskStatus or an edge condition.
 
 ### REQ-SKILLS-013
 
@@ -66,7 +66,7 @@ Proposal validation MUST report all material completeness issues together, inclu
 
 ### REQ-SKILLS-014
 
-Bootstrap delivery units MUST remain main-owned and may use the bound main conversation. Every regular delivery unit MUST bind an independent Delivery coordinator conversation before activation. The proposal MAY show the regular unit as unbound, but the approval and scheduling surfaces MUST show this as a pre-activation requirement rather than a satisfied fact.
+Bootstrap delivery units MUST remain main-owned and may use the bound main conversation. Every regular delivery unit MUST bind the execution policy required by its delivery-unit scoped work before activation. A delivery conversation or Agent runtime observation is separate from canonical atomic business state; waiting and coordination MUST be derived from dependencies and milestones rather than represented as a coordination Task.
 
 ### REQ-SKILLS-015
 
