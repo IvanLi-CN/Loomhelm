@@ -17,7 +17,7 @@ Skill release boundary 包含 `.github/workflows/`、`clients/typescript/`、`sk
 | viewer | `5` |
 | service | `1` |
 
-相关 PR 必须且只能有一个 `release:skill` 或 `release:skip` label。`release:skip` 必须在 PR body 提供 `<!-- release-skip: ... -->` 或等价的显式 skip reason，并且不能改变上述 canonical identity；`release:skill` 要求 package version 使用接受的 exact SemVer 且严格高于 base projection，compatibility line 不能回退。缺少 label、重复 label、版本占用、projection 不一致或 base/head 漂移都应由 gate 拒绝。
+相关 PR 必须且只能有一个 `release:skill`、`release:skill-initial-publication` 或 `release:skip` label。`release:skip` 必须在 PR body 提供 `<!-- release-skip: ... -->` 或等价的显式 skip reason，并且不能改变上述 canonical identity；`release:skill` 要求 package version 使用接受的 exact SemVer 且严格高于 base projection，compatibility line 不能回退；`release:skill-initial-publication` 只允许 canonical identity 与 main 相同且 exact npm version 尚未注册的首次发布。缺少 label、重复 label、版本占用、projection 不一致或 base/head 漂移都应由 gate 拒绝。
 
 ## Workflow responsibilities
 
@@ -33,13 +33,13 @@ PR gate 使用 PR 的 exact base SHA 和 head SHA；merge queue 会重新解析�
 ## Candidate and publish sequence
 
 1. `verify` checkout exact `merge_sha`，确认 PR 已 closed/merged、merge receipt 与 SHA 相同、base 为 `main` 且非 draft。
-2. `release.py gate` 重新检查唯一 release label、package projection、Skill frontmatter、`lib/contract.ts` 与 `lib/service-contract.ts` 的 contract fields。
-3. `release:skill` 路径先用 `verify-tag --allow-missing` 检查 `multi-task-flow-v<version>`，再以同一个 merge SHA 和 Bun `1.4.4` 构建一个 draft tarball，计算 digest，将 digest 写入 manifest 后重新生成最终 tarball，并用 `validate-tarball` 验证版本、merge SHA、compatibility line 和 digest。
+2. `release.py gate` 重新检查唯一 release label、package projection、Skill frontmatter、`lib/contract.ts` 与 `lib/service-contract.ts` 的 contract fields；首次发布还必须先由 workflow 确认 exact npm version 缺失。
+3. `release:skill` 和 `release:skill-initial-publication` 路径先用 `verify-tag --allow-missing` 检查 `multi-task-flow-v<version>`，再以同一个 merge SHA 和 Bun `1.4.4` 构建一个 draft tarball，计算 digest，将 digest 写入 manifest 后重新生成最终 tarball，并用 `validate-tarball` 验证版本、merge SHA、compatibility line 和 digest。
 4. 候选包必须把运行时 Skill 依赖（当前包括 `zod` 与 `sharp`）完整封装在 tarball 内；发布前必须在全新临时目录执行隔离安装后的 `orchestrate init`/`show` smoke test，禁止依赖发布包外的 workspace `node_modules`。
 5. 最终只上传这一份验证过的 tarball；promotion 阶段下载它，不重新 build，不从另一个 checkout 生成替代 bytes。
 6. publish 先用 `npm view @loomhelm/multi-task-flow@<version>` 对账 exact package；不存在时使用相同 tarball，并以声明的 `compat-vN` 作为初始 npm dist-tag 发布，不能把 package version 当作 tag（npm 会将有效 SemVer 视为非法 tag），随后下载 registry tarball 并比较 `tarballDigest`。发布 job 通过 npm Trusted Publishing 使用 GitHub OIDC，不读取长期 npm 写入 token。
 7. exact package 对账成功后，以 `dist-tag-policy` 单调提升 `compat-vN` 和 `latest`，必要时再提升 `stable`；任何更高版本占用、digest 不同或 tag 回退都会停止流程。
-8. `release:skip` 路径不生成发布包，只上传包含 PR、merge SHA、当前 package version、compatibility line 和 skip reason 的 skip receipt。
+8. `release:skill-initial-publication` 只有在 exact npm version 缺失时才允许创建 immutable tag、发布 package 并 promotion；`release:skip` 路径不生成发布包，只上传包含 PR、merge SHA、当前 package version、compatibility line 和 skip reason 的 skip receipt。
 
 npm 写入需要在 npm 包设置中绑定 GitHub owner `IvanLi-CN`、repository `Loomhelm` 和 workflow filename `skill-release-publish.yml`，并允许 `npm publish` 与 `npm dist-tag`；workflow publish job 需要 `id-token: write`，且使用 GitHub-hosted runner 与 npm CLI 11.21.0 或更高版本。owner approval、GitHub token 权限和 npm Trusted Publisher 配置必须在受控 workflow environment 中提供；本地 `bun pm pack` 或 gate 通过不代表完成 npm publication。
 

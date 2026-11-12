@@ -26,13 +26,39 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Verify exact npm version is unpublished
+        id: registry
+        env:
+          PACKAGE_NAME: '@loomhelm/multi-task-flow'
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json; print(json.load(open("clients/typescript/package.json", encoding="utf-8"))["version"])')"
+          metadata="$RUNNER_TEMP/skill-release-registry-version.json"
+          error="$RUNNER_TEMP/skill-release-registry-version.err"
+          if npm view "$PACKAGE_NAME@$version" version --json > "$metadata" 2> "$error"; then
+            echo 'registry_version_missing=false' >> "$GITHUB_OUTPUT"
+          elif grep -Eq 'E404|No match found' "$error"; then
+            echo 'registry_version_missing=true' >> "$GITHUB_OUTPUT"
+          else
+            cat "$error" >&2
+            exit 1
+          fi
       - name: Check release label and projection
-        run: >-
-          python3 tools/skill-release/release.py gate
-          --repo-root .
-          --base "${{ github.event.pull_request.base.sha }}"
-          --head "${{ github.event.pull_request.head.sha }}"
-          --event-path "$GITHUB_EVENT_PATH"
+        env:
+          REGISTRY_VERSION_MISSING: ${{ steps.registry.outputs.registry_version_missing }}
+        run: |
+          set -euo pipefail
+          gate_args=(
+            gate
+            --repo-root .
+            --base "${{ github.event.pull_request.base.sha }}"
+            --head "${{ github.event.pull_request.head.sha }}"
+            --event-path "$GITHUB_EVENT_PATH"
+          )
+          if [ "$REGISTRY_VERSION_MISSING" = true ]; then
+            gate_args+=(--initial-publication --registry-version-missing)
+          fi
+          python3 tools/skill-release/release.py "${gate_args[@]}"
 
   merge-queue:
     name: Revalidate Skill release decision on merge queue
@@ -51,6 +77,23 @@ jobs:
           ref: ${{ github.event.merge_group.head_sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Verify exact npm version is unpublished
+        id: registry
+        env:
+          PACKAGE_NAME: '@loomhelm/multi-task-flow'
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json; print(json.load(open("clients/typescript/package.json", encoding="utf-8"))["version"])')"
+          metadata="$RUNNER_TEMP/skill-release-registry-version.json"
+          error="$RUNNER_TEMP/skill-release-registry-version.err"
+          if npm view "$PACKAGE_NAME@$version" version --json > "$metadata" 2> "$error"; then
+            echo 'registry_version_missing=false' >> "$GITHUB_OUTPUT"
+          elif grep -Eq 'E404|No match found' "$error"; then
+            echo 'registry_version_missing=true' >> "$GITHUB_OUTPUT"
+          else
+            cat "$error" >&2
+            exit 1
+          fi
       - name: Resolve the queued PR
         run: |
           set -euo pipefail
@@ -69,9 +112,18 @@ jobs:
           json.dump({"pull_request": candidates[0]}, open(destination, "w", encoding="utf-8"))
           PY
       - name: Revalidate label and projection against the queue base
-        run: >-
-          python3 tools/skill-release/release.py gate
-          --repo-root .
-          --base "$MERGE_BASE_SHA"
-          --head "$MERGE_HEAD_SHA"
-          --event-path "$RUNNER_TEMP/skill-release-event.json"
+        env:
+          REGISTRY_VERSION_MISSING: ${{ steps.registry.outputs.registry_version_missing }}
+        run: |
+          set -euo pipefail
+          gate_args=(
+            gate
+            --repo-root .
+            --base "$MERGE_BASE_SHA"
+            --head "$MERGE_HEAD_SHA"
+            --event-path "$RUNNER_TEMP/skill-release-event.json"
+          )
+          if [ "$REGISTRY_VERSION_MISSING" = true ]; then
+            gate_args+=(--initial-publication --registry-version-missing)
+          fi
+          python3 tools/skill-release/release.py "${gate_args[@]}"

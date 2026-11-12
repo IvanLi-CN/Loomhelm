@@ -128,9 +128,9 @@ fallback MUST 绑定明确 release、run、owner 和只读证据，禁止执行�
 
 ### REQ-SRR-010：PR label 与发布资格
 
-技能发布 PR MUST 恰好带有一个 `release:skill` 或 `release:skip` label；缺少、重复、冲突或在构建后改变 label MUST 使发布资格失效并要求重新验证。
+技能发布 PR MUST 恰好带有一个 `release:skill`、`release:skill-initial-publication` 或 `release:skip` label；缺少、重复、冲突或在构建后改变 label MUST 使发布资格失效并要求重新验证。
 
-`release:skip` MUST 明确记录跳过原因，不得改变 canonical package version、compatibility line、merge SHA 或发布 tag；`release:skill` MUST 校验 SemVer 单调性、版本未占用、package projection、compat line 和完整包内容。
+`release:skip` MUST 明确记录跳过原因，不得改变 canonical package version、compatibility line、merge SHA 或发布 tag；`release:skill` MUST 校验 SemVer 单调性、版本未占用、package projection、compat line 和完整包内容；`release:skill-initial-publication` MUST 仅允许 canonical identity 与 protected main 相同、exact npm version 尚未注册且 owner approval 锁定同一 merge SHA、build ID 和 tarball digest 的首次 registry publication。
 
 发布资格检查 MUST 重新确认目标基线、PR 合并状态、实际 merge SHA、label、计划版本和工作区清洁状态，不得把草稿、未合并分支或历史成功结果当作当前发布事实。
 
@@ -282,9 +282,9 @@ npm exact SemVer 发布成功后，流程才可按声明顺序移动 `compat-vN`
 
 ### VER-SRR-018
 
-- Method: 对 `release:skip`、`release:skill`、版本重复/回退、package projection 和 compat line 的发布候选执行资格矩阵。
+- Method: 对 `release:skip`、`release:skill`、`release:skill-initial-publication`、版本重复/回退、package projection 和 compat line 的发布候选执行资格矩阵。
 - covers: `REQ-SRR-010`
-- Pass condition: `release:skip` 不改变 canonical identity，`release:skill` 只接受版本未占用、内容完整且身份一致的候选。
+- Pass condition: `release:skip` 不改变 canonical identity，`release:skill` 只接受版本未占用、内容完整且身份一致的候选，`release:skill-initial-publication` 只接受 exact npm version 缺失且 canonical identity 与 main 一致的候选。
 
 ### VER-SRR-019
 

@@ -22,7 +22,7 @@
 | `REQ-SRR-007` | `service-state.ts`、`service-lifecycle.ts` 和 service tests 覆盖 generation/PID fencing、agent/browser lease、TTL、stopping grace、restart 和 crash recovery。 | 真实用户服务故障演练与跨进程环境 receipt 仍待受控验证。 |
 | `REQ-SRR-008` | `service-compatibility.ts`、`service-contract.ts` 和 compatibility tests 覆盖全 run reader check、latest dual-read、old reader read-only fallback、SSE/read-only route 和错误分类。 | 候选 release 在真实长期保留数据上的证明仍需 workflow/运维环境证据。 |
 | `REQ-SRR-009` | `store-migration.ts`、`ledger-maintenance.ts` 和 migration tests 覆盖 backup、digest、revision、request identity、机械迁移、重放与历史保留边界。 | 长期 fixture 保留和真实权限/中断演练仍属于 release quality gate。 |
-| `REQ-SRR-010` | `skill-release-gate.yml`、`skill-release-publish.yml` 和 `release.py` 强制恰好一个 `release:skill`/`release:skip` label、范围检查、base/head 重检、SemVer、compatibility line 和 projection。 | 真实 PR/merge queue 的 provider check receipt 尚未在本主题中记录。 |
+| `REQ-SRR-010` | `skill-release-gate.yml`、`skill-release-publish.yml` 和 `release.py` 强制恰好一个 `release:skill`/`release:skill-initial-publication`/`release:skip` label、范围检查、base/head 重检、SemVer、compatibility line 和 projection。 | 真实 PR/merge queue 的 provider check receipt 尚未在本主题中记录。 |
 | `REQ-SRR-011` | publish workflow checkout exact protected merge SHA，验证 merged PR receipt，并把 merge/source SHA 写入 candidate manifest。 | 只有受保护 main 上的实际 workflow run 才能产生可发布 provenance。 |
 | `REQ-SRR-012` | publish workflow 以同一 merge SHA 生成 draft/final 单 tarball，注入并验证 digest，上传后再比较 registry bytes，promotion 不重建。 | 实际 npm registry 发布与未知结果恢复仍未发生。 |
 | `REQ-SRR-013` | workflow 和 `release.py` 支持 `multi-task-flow-vX.Y.Z` immutable tag、`compat-vN`/`latest`/可选 `stable` 的单调 promotion、并发隔离和对账入口。 | 真实 tag、dist-tag 和中断恢复 receipt 仍需 owner-approved workflow。 |
