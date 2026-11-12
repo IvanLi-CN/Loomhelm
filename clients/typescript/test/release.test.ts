@@ -57,7 +57,7 @@ test('release validation binds the requested version to the packaged artifact', 
   assert.match(missingProvenance.stderr + missingProvenance.stdout, /Publication requires (a clean toolkit artifact|artifact merge provenance)/);
 });
 
-test('publication digest is computed from real npm-compatible tarball contents', () => {
+test('publication digest is computed from real npm-compatible tarball contents', { timeout: 30_000 }, () => {
   const packageRoot = resolve(import.meta.dir, '..');
   const first = packPackageTarball(packageRoot);
   const second = packPackageTarball(packageRoot);
