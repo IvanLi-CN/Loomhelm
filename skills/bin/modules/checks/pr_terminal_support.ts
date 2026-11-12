@@ -39,6 +39,10 @@ export const cleanupProof =
 export const baseBlocked = /主工作区基线更新\s*[:=]\s*阻断/i;
 export const baseUpdated = /主工作区基线更新\s*[:=]\s*已更新/i;
 export const baseDecision = /主工作区基线更新\s*[:=]\s*待主人决策/i;
+export const baseAlignmentCommand =
+  /base_alignment_helper|base_alignment\.ts/i;
+export const baseAlignmentStructuredOutcome =
+  /(?:["'`]?state["'`]?\s*[:=]\s*["'`]?(?:aligned|auto_updatable|owner_decision|blocked|recoverable_conflict)\b|["'`]?merge_scope_status["'`]?\s*[:=]\s*["'`]?(?:已更新|待自动更新|待主人决策|阻断))/i;
 export const baseMenu =
   /安全对齐[\s\S]*(?:保持阻断|稍后处理|暂不处理|待主人决策)/i;
 export const safeAlign = /安全对齐/i;

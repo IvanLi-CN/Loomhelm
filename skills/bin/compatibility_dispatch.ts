@@ -16,7 +16,6 @@ import { docs } from "./compatibility_docs";
 import { hosting } from "./compatibility_hosting";
 import { runInstructionBehaviorReplay } from "./modules/checks/instruction_behavior";
 import { processMigration } from "./modules/plan/task_migration";
-import { main as baseAlignment } from "./modules/workspace/base_alignment";
 import { workspace } from "./compatibility_workspace";
 import {
   option,
@@ -119,9 +118,6 @@ export async function dispatch(name: string, argv: string[]): Promise<number> {
         : (name as Parameters<typeof workspace>[0]),
       argv,
     );
-  if (name === "base_alignment_helper") {
-    return baseAlignment(argv);
-  }
   if (name === "instruction_behavior_replay") {
     return runInstructionBehaviorReplay(argv);
   }

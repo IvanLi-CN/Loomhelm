@@ -38,6 +38,7 @@ export interface TerminalState {
   deleteBranchName: string;
   deleteExemptionLine: number;
   baseBlockLine: number;
+  baseOutcomeLine: number;
   baseMenuLine: number;
   baseDecisionLine: number;
   safeAlignLine: number;
@@ -81,6 +82,7 @@ export function createTerminalState(): TerminalState {
     deleteBranchName: "",
     deleteExemptionLine: 0,
     baseBlockLine: 0,
+    baseOutcomeLine: 0,
     baseMenuLine: 0,
     baseDecisionLine: 0,
     safeAlignLine: 0,

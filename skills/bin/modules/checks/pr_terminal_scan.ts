@@ -134,6 +134,12 @@ export function scanTerminal(state: TerminalState, path: string): void {
         state.mergeIntentLine = line;
     }
     if (
+      baseUpdated.test(joined) ||
+      baseBlocked.test(joined) ||
+      baseDecision.test(joined)
+    )
+      state.baseOutcomeLine ||= line;
+    if (
       (baseBlocked.test(joined) || baseUpdated.test(joined)) &&
       /ahead|behind|diverged|分叉|dirty|脏|未提交|未跟踪|non-?ff|无法 fast-forward/i.test(
         joined,
