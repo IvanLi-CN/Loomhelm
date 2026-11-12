@@ -66,7 +66,7 @@ Proposal validation MUST report all material completeness issues together, inclu
 
 ### REQ-SKILLS-014
 
-Bootstrap delivery units MUST remain main-owned and may use the bound main conversation. Every regular delivery unit MUST bind the execution policy required by its delivery-unit scoped work before activation. A delivery conversation or Agent runtime observation is separate from canonical atomic business state; waiting and coordination MUST be derived from dependencies and milestones rather than represented as a coordination Task.
+The first delivery unit MUST be bootstrap by default. A proposal MAY designate the first unit as regular only with an explicit exception reason and evidence recorded in the acceptance contract. Bootstrap delivery units MUST remain main-owned and may use the bound main conversation. Every regular delivery unit MUST bind the execution policy required by its delivery-unit scoped work before activation. A delivery conversation or Agent runtime observation is separate from canonical atomic business state; waiting and coordination MUST be derived from dependencies and milestones rather than represented as a coordination Task.
 
 ### REQ-SKILLS-015
 
