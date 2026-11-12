@@ -1,5 +1,5 @@
 import ELK, { type ElkNode, type ElkExtendedEdge } from 'elkjs/lib/elk.bundled.js';
-import type { GraphProjection, GraphProjectionNode } from './graph-projection';
+import type { GraphDependencyPath, GraphProjection, GraphProjectionNode } from './graph-projection';
 
 export const CARD_WIDTH = 184;
 export const CARD_HEIGHT = 76;
@@ -14,7 +14,7 @@ export function cardSize(title: string): {width:number;height:number} {
 }
 export type Direction = 'DOWN' | 'RIGHT';
 export type PlacedNode = { node: GraphProjectionNode; x: number; y: number; width: number; height: number };
-export type RoutedEdge = { id: string; source: string; target: string; path: string };
+export type RoutedEdge = { id: string; source: string; target: string; path: string; paths: GraphDependencyPath[] };
 export type GraphLayout = { nodes: PlacedNode[]; edges: RoutedEdge[]; width: number; height: number };
 const elk = new ELK();
 
@@ -74,7 +74,7 @@ export async function layoutProjection(projection: GraphProjection, direction: D
         return points.map((p, i) => `${i ? 'L' : 'M'} ${p.x + origin.x} ${p.y + origin.y}`).join(' ');
       }).join(' ');
       if (!path) throw new Error(`No route for dependency ${e.id}`);
-      routed.push({ id: e.id, source: edge.source, target: edge.target, path });
+      routed.push({ id: e.id, source: edge.source, target: edge.target, path, paths: edge.paths });
     }
     for (const child of container.children ?? []) {
       const px = x + (child.x ?? 0), py = y + (child.y ?? 0);
