@@ -268,7 +268,8 @@ jobs:
             exact_exists=true
           fi
           if [ "$exact_exists" = false ]; then
-            if npm publish "$tarball" --access public --tag "$VERSION" --userconfig "$NPM_CONFIG_USERCONFIG"; then
+            # npm rejects a SemVer range as a dist-tag; publish first under the declared compatibility line.
+            if npm publish "$tarball" --access public --tag "$COMPATIBILITY_LINE" --userconfig "$NPM_CONFIG_USERCONFIG"; then
               :
             else
               if ! npm view "$PACKAGE_NAME@$VERSION" --json > "$metadata" 2>/dev/null; then

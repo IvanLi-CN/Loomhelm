@@ -36,7 +36,7 @@ PR gate 使用 PR 的 exact base SHA 和 head SHA；merge queue 会重新解析�
 2. `release.py gate` 重新检查唯一 release label、package projection、Skill frontmatter、`lib/contract.ts` 与 `lib/service-contract.ts` 的 contract fields。
 3. `release:skill` 路径先用 `verify-tag --allow-missing` 检查 `multi-task-flow-v<version>`，再以同一个 merge SHA 和 Bun `1.4.4` 构建一个 draft tarball，计算 digest，将 digest 写入 manifest 后重新生成最终 tarball，并用 `validate-tarball` 验证版本、merge SHA、compatibility line 和 digest。
 4. 最终只上传这一份验证过的 tarball；promotion 阶段下载它，不重新 build，不从另一个 checkout 生成替代 bytes。
-5. publish 先用 `npm view @loomhelm/multi-task-flow@<version>` 对账 exact package；不存在时发布相同 tarball，随后下载 registry tarball 并比较 `tarballDigest`。
+5. publish 先用 `npm view @loomhelm/multi-task-flow@<version>` 对账 exact package；不存在时使用相同 tarball，并以声明的 `compat-vN` 作为初始 npm dist-tag 发布，不能把 package version 当作 tag（npm 会将有效 SemVer 视为非法 tag），随后下载 registry tarball 并比较 `tarballDigest`。
 6. exact package 对账成功后，以 `dist-tag-policy` 单调提升 `compat-vN` 和 `latest`，必要时再提升 `stable`；任何更高版本占用、digest 不同或 tag 回退都会停止流程。
 7. `release:skip` 路径不生成发布包，只上传包含 PR、merge SHA、当前 package version、compatibility line 和 skip reason 的 skip receipt。
 
