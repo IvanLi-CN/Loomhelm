@@ -14495,7 +14495,7 @@
       "path": "skills/multi-task-flow/scripts/demo-static.ts",
       "sourceBlob": "cbe9458f085445fc25bd16ef5067a882077d9337",
       "sourceSha256": "37a0e2d0e58ddb730620db6bf2e8e583f1f8dc6ed42a0f8ab07febda548c6b6b",
-      "installedSha256": "5d66672621bab67d319c3b6098022ac2962f9c31cb3ea9dfa4daf236e1fb1806",
+      "installedSha256": "9ae8822b8f4f0890f699f8a048ccb5b2798cd7ccfa54a58fb76c9f2ef3fd63c6",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
