@@ -949,7 +949,7 @@ export function buildView(
     selected_plan_id: plan.id,
     nodes: canonicalDisplayNodes,
     edges: canonicalDisplayEdges,
-    atomic_edges: plan.atomic_edges,
+    atomic_edges: canonicalAtomicEdges,
     atomic_nodes: canonicalAtomicNodes,
     canonical_atomic_edges: canonicalAtomicEdges,
     planned_intervals: plannedIntervals(plan, ledger.config.max_running_tasks),
