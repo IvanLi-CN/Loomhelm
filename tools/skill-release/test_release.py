@@ -102,9 +102,15 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("release:skill-initial-publication", workflow)
         self.assertIn("registry_version_missing", workflow)
         self.assertIn("https://github.com/IvanLi-CN/Loomhelm", workflow)
-        self.assertEqual(workflow.count("set_package_metadata clients/typescript/package.json"), 1)
+        self.assertEqual(workflow.count("set_package_metadata clients/typescript/package.json"), 2)
         self.assertIn(
-            '(cd clients/typescript && bun --no-install run build)\n'
+            'set_package_metadata clients/typescript/package.json\n'
+            '          (cd clients/typescript && bun pm pack --destination "$draft_dir"',
+            workflow,
+        )
+        self.assertIn(
+            'git checkout -- clients/typescript/package.json\n'
+            '          (cd clients/typescript && bun --no-install run build)\n'
             '          set_package_metadata clients/typescript/package.json\n'
             '          set_package_metadata clients/typescript/toolkit/package.json\n'
             '          (cd clients/typescript && bun pm pack --destination "$final_dir"',
