@@ -2975,6 +2975,39 @@ export function execute(
         notification_request: notificationDeliveryRequest(notice),
       };
     }
+    case "task-equivalent-integrate": {
+      const taskId = parse(id, payload.task_id);
+      ownerOfTask(ledger, request, taskId);
+      const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
+      const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
+      requireCondition(isContributionKind(target.kind), "TASK_MISMATCH", "Only contribution tasks can be equivalently integrated", 3);
+      requireCondition(["blocked", "agent_idle", "running"].includes(target.state), "INVALID_TRANSITION", "Task is not awaiting integration", 3);
+      requireCondition(target.atoms.every((atom) => atom.status === "completed"), "ATOMS_PENDING", "Complete the task atoms before integration", 4);
+      const taskPr = parse(externalRef, payload.task_pr);
+      const parentPr = parse(externalRef, payload.parent_pr);
+      checkPR(ledger, taskPr);
+      checkPR(ledger, parentPr);
+      requireCondition(target.pr && stable(taskPrRef(target)) === stable(taskPr), "PR_MISMATCH", "Equivalent integration task PR does not match the registered PR", 3);
+      requireCondition(deliveryUnitPr(owner) && stable(deliveryUnitPr(owner)) === stable(parentPr), "PR_MISMATCH", "Equivalent integration parent PR does not match the delivery unit", 3);
+      const taskHeadSha = z.string().regex(/^[a-f0-9]{40}$/).parse(payload.task_head_sha);
+      const parentMergeSha = z.string().regex(/^[a-f0-9]{40}$/).parse(payload.parent_merge_sha);
+      const commits = z.array(z.string().regex(/^[a-f0-9]{40}$/)).min(1).parse(payload.integration_commits);
+      const evidenceRef = z.string().min(1).parse(payload.evidence_ref);
+      target.state = "integrated";
+      target.finished_at = now();
+      addEvent(ledger, request, "task_integrated", taskId, {
+        task_id: taskId,
+        task_pr: taskPr,
+        task_head_sha: taskHeadSha,
+        parent_pr: parentPr,
+        parent_merge_sha: parentMergeSha,
+        integration_commits: commits,
+        evidence_ref: evidenceRef,
+        equivalent_integration: true,
+        child_pr_state: "open",
+      });
+      return { task_id: taskId, state: target.state, equivalent_integration: true };
+    }
     case "atom-update": {
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
@@ -3774,7 +3807,7 @@ export function execute(
       const groupId = parse(id, payload.group_id);
       const owner = find(ledger.groups, (item) => item.id === groupId, "Group");
       const mode = z
-        .enum(["child", "parent", "follow"])
+        .enum(["child", "parent", "parent-followup", "follow"])
         .default("child")
         .parse(payload.mode);
       const pr = parse(externalRef, payload.pr);
@@ -3857,7 +3890,7 @@ export function execute(
           "Task publication is still pending",
           4,
         );
-      } else if (mode === "parent") {
+      } else if (mode === "parent" || mode === "parent-followup") {
         requireCondition(
           ownsGroup(ledger, request.actor, owner),
           "FORBIDDEN",
@@ -3870,15 +3903,40 @@ export function execute(
           "Only an active group can merge its parent PR",
           4,
         );
-        requireCondition(
-          deliveryUnitPr(owner) &&
-            stable(deliveryUnitPr(owner)) === stable(pr) &&
-            owner.current_sha === headSha,
-          "PR_MISMATCH",
-          "Parent PR and current head must match",
-          3,
-        );
-        requireCondition(
+        if (mode === "parent") {
+          requireCondition(
+            deliveryUnitPr(owner) &&
+              stable(deliveryUnitPr(owner)) === stable(pr) &&
+              owner.current_sha === headSha,
+            "PR_MISMATCH",
+            "Parent PR and current head must match",
+            3,
+          );
+        } else {
+          const originalParent = parse(externalRef, payload.original_parent_pr);
+          requireCondition(
+            deliveryUnitPr(owner) && stable(deliveryUnitPr(owner)) === stable(originalParent),
+            "PR_MISMATCH",
+            "Follow-up merge must identify the registered parent PR",
+            3,
+          );
+          requireCondition(
+            pr.id !== originalParent.id &&
+              pr.provider === ledger.repository.provider &&
+              pr.repository === `${ledger.repository.owner}/${ledger.repository.name}`,
+            "PR_MISMATCH",
+            "Follow-up merge must identify a distinct PR in the bound repository",
+            3,
+          );
+          requireCondition(
+            typeof payload.original_parent_merge_sha === "string" &&
+              /^[a-f0-9]{40}$/.test(payload.original_parent_merge_sha),
+            "EVIDENCE_REQUIRED",
+            "Follow-up merge must retain the original parent merge SHA",
+            5,
+          );
+        }
+        if (mode === "parent") requireCondition(
           legacyLedger(ledger) ||
             (owner.lifecycle.pr_created === "passed" &&
               prReceipt(ledger, groupId, pr, expectedSha, headSha)),
@@ -4070,7 +4128,7 @@ export function execute(
             3,
           );
         const subject =
-          op.request.mode === "parent"
+          (op.request.mode === "parent" || op.request.mode === "parent-followup")
             ? owner.id
             : op.request.mode === "follow"
               ? op.request.follow_pr_id
@@ -4081,7 +4139,7 @@ export function execute(
           "Merge fact does not match the claimed PR",
           5,
         );
-        if (op.request.mode === "parent") {
+        if (op.request.mode === "parent" || op.request.mode === "parent-followup") {
           requireCondition(
             !ledger.follow_prs.some(
               (item) =>
@@ -4092,13 +4150,16 @@ export function execute(
             4,
           );
           owner.state = "merged";
-          if (ledger.contract_version !== 3) owner.parent_pr = op.request.pr;
-          else owner.pr = {
-              state: "merged",
-              pr: op.request.pr,
-              parent_branch: owner.parent_branch,
-              merge_sha: evidence.sha,
-            };
+          if (op.request.mode === "parent-followup") owner.current_sha = evidence.sha;
+          if (op.request.mode === "parent") {
+            if (ledger.contract_version !== 3) owner.parent_pr = op.request.pr;
+            else owner.pr = {
+                state: "merged",
+                pr: op.request.pr,
+                parent_branch: owner.parent_branch,
+                merge_sha: evidence.sha,
+              };
+          }
           owner.merge_sha = evidence.sha;
           if (owner.lifecycle && !legacyLedger(ledger))
             owner.lifecycle.pr_merged = "passed";
