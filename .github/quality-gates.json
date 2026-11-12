@@ -32,15 +32,11 @@
   "waivers": [
     {
       "id": "skill-release-0.2.6-skills-native-macos-queue",
-      "check": "Skills Native macOS",
-      "scope": {
-        "pull_request": 159,
-        "publication": "@loomhelm/multi-task-flow@0.2.6",
-        "merge_sha": "9ceb989d06c612c075974a44e603b964befb9e5e"
-      },
+      "check_name": "Skills Native macOS",
+      "scope": "PR #159 / @loomhelm/multi-task-flow@0.2.6 / merge SHA 9ceb989d06c612c075974a44e603b964befb9e5e",
       "status": "approved-waiver",
       "approved_by": "owner",
-      "approved_at": "2026-11-12",
+      "approved_at": "2026-11-12T12:09:42Z",
       "reason": "The GitHub-hosted macos-15 runner remained queued; this check is unrelated to npm package provenance or registry publication.",
       "substitute_evidence": [
         "Candidate Build passed for the exact protected release source.",

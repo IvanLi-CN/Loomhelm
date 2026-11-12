@@ -48,11 +48,11 @@ class NativeGitHubTests(unittest.TestCase):
         waivers = [item for item in gates['waivers'] if item['id'] == 'skill-release-0.2.6-skills-native-macos-queue']
         self.assertEqual(len(waivers), 1)
         waiver = waivers[0]
-        self.assertEqual(waiver['check'], 'Skills Native macOS')
+        self.assertEqual(waiver['check_name'], 'Skills Native macOS')
         self.assertEqual(waiver['status'], 'approved-waiver')
         self.assertEqual(waiver['approved_by'], 'owner')
-        self.assertEqual(waiver['scope']['pull_request'], 159)
-        self.assertEqual(waiver['scope']['publication'], '@loomhelm/multi-task-flow@0.2.6')
+        self.assertIn('PR #159', waiver['scope'])
+        self.assertIn('@loomhelm/multi-task-flow@0.2.6', waiver['scope'])
         self.assertGreaterEqual(len(waiver['substitute_evidence']), 3)
 
     def test_missing_signature_pr_check_or_admin_protection_fails(self):
