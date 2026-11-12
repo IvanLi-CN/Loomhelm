@@ -23,7 +23,7 @@ SKILL_DOCUMENT = Path("skills/multi-task-flow/SKILL.md")
 CONTRACT_SOURCE = Path("skills/multi-task-flow/lib/contract.ts")
 SERVICE_CONTRACT_SOURCE = Path("skills/multi-task-flow/lib/service-contract.ts")
 RELEASE_TAG_PREFIX = "multi-task-flow-v"
-RELEASE_LABELS = frozenset({"release:skill", "release:skip"})
+RELEASE_LABELS = frozenset({"release:skill", "release:skill-initial-publication", "release:skip"})
 RELEASE_PATH_PREFIXES = (
     ".github/workflows/",
     "clients/typescript/",
@@ -317,7 +317,10 @@ def _normalise_labels(labels: Iterable[str]) -> tuple[str, ...]:
     release_labels = tuple(label for label in values if label.startswith("release:"))
     if len(release_labels) != 1 or release_labels[0] not in RELEASE_LABELS:
         if not release_labels:
-            raise ReleaseError("related PR must have exactly one release:skill or release:skip label")
+            raise ReleaseError(
+                "related PR must have exactly one release:skill, "
+                "release:skill-initial-publication, or release:skip label"
+            )
         raise ReleaseError("related PR has conflicting or unknown release labels")
     if len(values) != len(set(values)):
         raise ReleaseError("PR labels contain duplicates; re-run the release gate")
@@ -375,6 +378,9 @@ def evaluate_gate(
     head: str,
     labels: Iterable[str],
     skip_reason: str | None = None,
+    initial_publication: bool = False,
+    registry_version_missing: bool = False,
+    reconcile_existing: bool = False,
 ) -> GateResult:
     paths = changed_paths(root, base, head)
     if not any(is_release_path(path) for path in paths):
@@ -401,6 +407,23 @@ def evaluate_gate(
             head_projection.compatibility_line,
             paths,
             reason,
+        )
+
+    if decision == "release:skill-initial-publication":
+        if not initial_publication or (not registry_version_missing and not reconcile_existing):
+            raise ReleaseError("initial Skill publication requires an unpublished exact registry version or explicit registry reconciliation")
+        if base_projection is None:
+            raise ReleaseError("initial Skill publication requires an existing main projection")
+        if base_projection.canonical_identity() != head_projection.canonical_identity():
+            raise ReleaseError("initial Skill publication cannot change canonical identity")
+        return GateResult(
+            True,
+            decision,
+            base_projection.package_version,
+            head_projection.package_version,
+            head_projection.compatibility_line,
+            paths,
+            "exact npm package version is unpublished",
         )
 
     if base_projection is not None and not head_projection.version > base_projection.version:
@@ -522,7 +545,7 @@ def identity_digest(identity: Mapping[str, Any], files: Iterable[Mapping[str, st
     body = dict(identity)
     body.pop("buildId", None)
     file_values = [dict(item) for item in files]
-    body["files"] = _locale_sorted(file_values, lambda item: item["path"])
+    body["files"] = sorted(file_values, key=lambda item: item["path"])
     encoded = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -726,6 +749,9 @@ def _build_parser() -> argparse.ArgumentParser:
     gate.add_argument("--labels")
     gate.add_argument("--skip-reason")
     gate.add_argument("--event-path", type=Path)
+    gate.add_argument("--initial-publication", action="store_true")
+    gate.add_argument("--registry-version-missing", action="store_true")
+    gate.add_argument("--reconcile-existing", action="store_true")
 
     digest = subparsers.add_parser("tarball-digest", help="print the canonical tarball digest")
     digest.add_argument("tarball", type=Path)
@@ -770,6 +796,9 @@ def main(argv: list[str] | None = None) -> int:
                 head=head,
                 labels=labels,
                 skip_reason=skip_reason,
+                initial_publication=args.initial_publication,
+                registry_version_missing=args.registry_version_missing,
+                reconcile_existing=args.reconcile_existing,
             )
             print(json.dumps(result.as_json(), sort_keys=True))
             return 0

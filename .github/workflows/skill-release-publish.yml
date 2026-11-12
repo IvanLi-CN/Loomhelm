@@ -83,19 +83,51 @@ jobs:
           with open(output_path, "a", encoding="utf-8") as output:
               output.write(f"base_sha={parents[0]}\n")
           PY
+      - name: Verify exact npm version is unpublished
+        id: registry
+        env:
+          PACKAGE_NAME: '@loomhelm/multi-task-flow'
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json; print(json.load(open("clients/typescript/package.json", encoding="utf-8"))["version"])')"
+          metadata="$RUNNER_TEMP/skill-release-registry-version.json"
+          error="$RUNNER_TEMP/skill-release-registry-version.err"
+          if npm view "$PACKAGE_NAME@$version" version --json > "$metadata" 2> "$error"; then
+            echo 'registry_version_missing=false' >> "$GITHUB_OUTPUT"
+          elif grep -Eq 'E404|No match found' "$error"; then
+            echo 'registry_version_missing=true' >> "$GITHUB_OUTPUT"
+          else
+            cat "$error" >&2
+            exit 1
+          fi
       - name: Revalidate release label, version, and projection
         id: gate
         env:
           BASE_SHA: ${{ steps.merge.outputs.base_sha }}
           MERGE_SHA: ${{ inputs.merge_sha }}
+          REGISTRY_VERSION_MISSING: ${{ steps.registry.outputs.registry_version_missing }}
         run: |
           set -euo pipefail
-          python3 tools/skill-release/release.py gate \
+          gate_args=(
+            gate
             --repo-root . \
             --base "$BASE_SHA" \
             --head "$MERGE_SHA" \
-            --event-path "$RUNNER_TEMP/skill-release-event.json" \
-            > "$RUNNER_TEMP/skill-release-gate.json"
+            --event-path "$RUNNER_TEMP/skill-release-event.json"
+          )
+          if [ "$REGISTRY_VERSION_MISSING" = true ]; then
+            gate_args+=(--initial-publication --registry-version-missing)
+          else
+            if python3 tools/skill-release/release.py gate --help | grep -q -- '--reconcile-existing'; then
+              gate_args+=(--initial-publication --reconcile-existing)
+            else
+              # The protected candidate merge predates reconciliation support.
+              # Continue through the legacy initial-publication gate; the publish
+              # job must still reconcile exact package identity and registry digest.
+              gate_args+=(--initial-publication --registry-version-missing)
+            fi
+          fi
+          python3 tools/skill-release/release.py "${gate_args[@]}" > "$RUNNER_TEMP/skill-release-gate.json"
           python3 - "$RUNNER_TEMP/skill-release-gate.json" "$GITHUB_OUTPUT" <<'PY'
           import json
           import sys
@@ -110,7 +142,7 @@ jobs:
               output.write(f"reason={result.get('reason') or ''}\n")
           PY
       - name: Verify immutable tag precondition
-        if: steps.gate.outputs.decision == 'release:skill'
+        if: steps.gate.outputs.decision == 'release:skill' || steps.gate.outputs.decision == 'release:skill-initial-publication'
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_SHA: ${{ inputs.merge_sha }}
@@ -123,7 +155,7 @@ jobs:
           --allow-missing
       - name: Build and validate one candidate tarball
         id: artifact
-        if: steps.gate.outputs.decision == 'release:skill'
+        if: steps.gate.outputs.decision == 'release:skill' || steps.gate.outputs.decision == 'release:skill-initial-publication'
         env:
           MERGE_SHA: ${{ inputs.merge_sha }}
           VERSION: ${{ steps.gate.outputs.version }}
@@ -143,16 +175,57 @@ jobs:
           export LOOMHELM_MERGE_SHA="$MERGE_SHA"
           export LOOMHELM_GIT_TAG="$version_tag"
           export LOOMHELM_TARBALL_DIGEST=
+          set_package_metadata() {
+            python3 - "$1" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+          package = json.load(open(path, encoding="utf-8"))
+          package["repository"] = {"type": "git", "url": "https://github.com/IvanLi-CN/Loomhelm"}
+          with open(path, "w", encoding="utf-8") as output:
+              json.dump(package, output, indent=2)
+              output.write("\n")
+          PY
+          }
           (cd clients/typescript && bun --no-install run build)
+          set_package_metadata clients/typescript/package.json
+          set_package_metadata clients/typescript/toolkit/package.json
           (cd clients/typescript && bun pm pack --destination "$draft_dir" --ignore-scripts --quiet)
           mapfile -t drafts < <(find "$draft_dir" -type f -name '*.tgz' -print)
           test "${#drafts[@]}" -eq 1
           digest="$(python3 tools/skill-release/release.py tarball-digest "${drafts[0]}")"
           export LOOMHELM_TARBALL_DIGEST="$digest"
+          git checkout -- clients/typescript/package.json
           (cd clients/typescript && bun --no-install run build)
+          set_package_metadata clients/typescript/package.json
+          set_package_metadata clients/typescript/toolkit/package.json
           (cd clients/typescript && bun pm pack --destination "$final_dir" --ignore-scripts --quiet)
           mapfile -t finals < <(find "$final_dir" -type f -name '*.tgz' -print)
           test "${#finals[@]}" -eq 1
+          final_digest="$(python3 tools/skill-release/release.py tarball-digest "${finals[0]}")"
+          printf 'draft_tarball_digest=%s final_tarball_digest=%s\n' "$digest" "$final_digest"
+          python3 - "${drafts[0]}" "${finals[0]}" <<'PY'
+          import sys
+          import tarfile
+          import hashlib
+
+          def files(path):
+              with tarfile.open(path, 'r:gz') as archive:
+                  return {
+                      member.name.removeprefix('package/'):
+                      hashlib.sha256(archive.extractfile(member).read()).hexdigest()
+                      for member in archive.getmembers()
+                      if member.isfile() and member.name != 'package/toolkit/artifact-manifest.json'
+                  }
+
+          draft, final = (files(path) for path in sys.argv[1:])
+          differences = sorted(set(draft) | set(final))
+          differences = [path for path in differences if draft.get(path) != final.get(path)]
+          print('canonical_file_differences=' + repr(differences[:100]))
+          if differences:
+              raise SystemExit('draft and final canonical tarball files differ')
+          PY
           python3 tools/skill-release/release.py validate-tarball "${finals[0]}" \
             --version "$VERSION" \
             --merge-sha "$MERGE_SHA" \
@@ -160,7 +233,7 @@ jobs:
           cp "${finals[0]}" "$RUNNER_TEMP/skill-package.tgz"
           printf 'artifact_name=skill-release-%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
       - name: Upload the verified candidate tarball
-        if: steps.gate.outputs.decision == 'release:skill'
+        if: steps.gate.outputs.decision == 'release:skill' || steps.gate.outputs.decision == 'release:skill-initial-publication'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: skill-release-${{ steps.gate.outputs.version }}
@@ -212,15 +285,14 @@ jobs:
   publish:
     name: Publish and promote verified Skill package
     needs: verify
-    if: inputs.publish == true && needs.verify.outputs.decision == 'release:skill'
+    if: inputs.publish == true && (needs.verify.outputs.decision == 'release:skill' || needs.verify.outputs.decision == 'release:skill-initial-publication')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: read
+      id-token: write
     env:
       GH_TOKEN: ${{ github.token }}
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      NPM_CONFIG_USERCONFIG: ${{ github.workspace }}/.skill-release.npmrc
       PACKAGE_NAME: '@loomhelm/multi-task-flow'
       MERGE_SHA: ${{ inputs.merge_sha }}
       VERSION: ${{ needs.verify.outputs.version }}
@@ -237,15 +309,14 @@ jobs:
         with:
           name: skill-release-${{ needs.verify.outputs.version }}
           path: ${{ runner.temp }}/skill-release
-      - name: Configure npm registry authentication
-        run: |
-          set -euo pipefail
-          cat > "$NPM_CONFIG_USERCONFIG" <<'EOF'
-          registry=https://registry.npmjs.org/
-          @loomhelm:registry=https://registry.npmjs.org/
-          //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
-          always-auth=true
-          EOF
+      - name: Set up Node.js and npm Trusted Publishing
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Ensure npm supports OIDC dist-tags
+        run: npm install --global npm@11.21.0
       - name: Create or reconcile immutable release tag
         run: >-
           python3 tools/skill-release/release.py verify-tag
@@ -268,7 +339,8 @@ jobs:
             exact_exists=true
           fi
           if [ "$exact_exists" = false ]; then
-            if npm publish "$tarball" --access public --tag "$VERSION" --userconfig "$NPM_CONFIG_USERCONFIG"; then
+            # npm rejects a SemVer range as a dist-tag; publish first under the declared compatibility line.
+            if npm publish "$tarball" --access public --tag "$COMPATIBILITY_LINE"; then
               :
             else
               if ! npm view "$PACKAGE_NAME@$VERSION" --json > "$metadata" 2>/dev/null; then
@@ -282,9 +354,7 @@ jobs:
           npm view "$PACKAGE_NAME@$VERSION" --json > "$metadata"
           registry_url="$(python3 -c 'import json, os, sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert value.get("version") == os.environ["VERSION"], "registry version does not match the release candidate"; dist=value.get("dist") or {}; url=dist.get("tarball"); assert url, "registry metadata has no tarball URL"; print(url)' "$metadata")"
           downloaded="$RUNNER_TEMP/skill-release-registry.tgz"
-          curl --fail --silent --show-error --location \
-            -H "Authorization: Bearer $NODE_AUTH_TOKEN" \
-            "$registry_url" -o "$downloaded"
+          curl --fail --silent --show-error --location "$registry_url" -o "$downloaded"
           registry_result="$(python3 tools/skill-release/release.py validate-tarball "$downloaded" \
             --version "$VERSION" --merge-sha "$MERGE_SHA" --compatibility-line "$COMPATIBILITY_LINE")"
           printf '%s\n' "$registry_result"
@@ -300,7 +370,7 @@ jobs:
             current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null || true)"
             action="$(python3 tools/skill-release/release.py dist-tag-policy --current "$current" --target "$VERSION")"
             if [ "$action" = promote ]; then
-              npm dist-tag add "$PACKAGE_NAME@$VERSION" "$tag" --userconfig "$NPM_CONFIG_USERCONFIG"
+              npm dist-tag add "$PACKAGE_NAME@$VERSION" "$tag"
             elif [ "$action" != keep ]; then
               echo "unsupported dist-tag action: $action" >&2
               exit 1

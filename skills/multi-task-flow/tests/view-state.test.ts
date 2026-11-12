@@ -28,6 +28,13 @@ describe("shareable dashboard view state", () => {
     expect(valid.detail).toBe(true);
   });
 
+  test("accepts the independent tasks tab and preserves it in shareable URLs", () => {
+    const state = parseViewState("?tab=tasks");
+    expect(state.tab).toBe("tasks");
+    expect(hasValidTabParam("?tab=tasks")).toBe(true);
+    expect(serializeViewState(state)).toBe("tab=tasks");
+  });
+
   test("restores dotted public IDs from authenticated target URLs", () => {
     const validation = { plans: new Set(["plan.v2"]), tasks: new Set(["task.v2"]) };
     const state = parseViewState("?selected=task%3Atask.v2&detail=1&plan=plan.v2", validation);

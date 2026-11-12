@@ -10,6 +10,18 @@ test("medium layout shares container-derived card tracks across detail states", 
   expect(medium).not.toContain("minmax(243px, 1fr)");
 });
 
+test("medium details stay in the static bottom layout instead of a side-by-side column", () => {
+  const medium = css.split("@media (min-width: 768px) and (max-width: 1444px) {")[1]!.split("@media (max-width: 767px)")[0]!;
+  expect(medium).toContain(".workspace.has-details, .workspace.has-overlay-selection { grid-template-columns: minmax(0, 1fr); }");
+  expect(medium).toContain(".details { position: static; width: auto;");
+  expect(medium).toContain("border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent;");
+  expect(medium).toContain(".details-heading button { display: none; }");
+  expect(medium).toContain(".details-slot { position: static; padding-top: 16px; }");
+  expect(medium).toContain(".details-heading { padding: 0 0 12px; display: flex; align-items: baseline;");
+  expect(medium).toContain("#details-content { padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));");
+  expect(medium).toContain('.workspace[data-view-tab="tasks"] .details-slot { grid-column: 1; grid-row: 3; }');
+});
+
 test("identity actions follow the project name instead of filling the title row", () => {
   expect(css).toContain(".identity-copy { flex: 0 1 auto; min-width: 0; }");
   expect(css).toContain("text-overflow: ellipsis; white-space: nowrap;");

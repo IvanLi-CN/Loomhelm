@@ -128,6 +128,7 @@ export function validatePackageIdentity(value: unknown): PackageIdentity {
 }
 
 export function identityDigest(value: Omit<PackageIdentity, 'buildId'> & { files: readonly { path: string; sha256: string }[] }): string {
-  const body = { ...value, files: [...value.files].sort((left, right) => left.path.localeCompare(right.path)) };
+  // Match the package builder with a locale-independent path order.
+  const body = { ...value, files: [...value.files].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0) };
   return createHash('sha256').update(JSON.stringify(body)).digest('hex');
 }

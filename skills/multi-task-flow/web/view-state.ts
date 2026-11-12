@@ -1,4 +1,4 @@
-export type DashboardTab = "graph" | "atomic" | "planned" | "actual";
+export type DashboardTab = "graph" | "atomic" | "planned" | "actual" | "tasks";
 export type GraphMode = "aggregate" | "atomic";
 export type TaskLayout = "board" | "grid";
 export type Selection = { kind: "task" | "group" | "milestone"; id: string };
@@ -29,7 +29,7 @@ export const DEFAULT_VIEW_STATE: ViewState = {
 };
 
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-const tabs = new Set<DashboardTab>(["graph", "atomic", "planned", "actual"]);
+const tabs = new Set<DashboardTab>(["graph", "atomic", "planned", "actual", "tasks"]);
 const graphModes = new Set<GraphMode>(["aggregate", "atomic"]);
 const taskLayouts = new Set<TaskLayout>(["board", "grid"]);
 

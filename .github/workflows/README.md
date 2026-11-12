@@ -8,16 +8,16 @@ Skill release boundary 包含 `.github/workflows/`、`clients/typescript/`、`sk
 
 | Dimension | Current projection |
 | - | - |
-| package | `@loomhelm/multi-task-flow@0.2.2` |
+| package | `@loomhelm/multi-task-flow@0.2.6` |
 | compatibility line | `compat-v1` |
-| Skill | `2.7.2` |
+| Skill | `2.7.6` |
 | ledger contract | `3` |
 | API | `1` |
 | frontend | `1` |
 | viewer | `5` |
 | service | `1` |
 
-相关 PR 必须且只能有一个 `release:skill` 或 `release:skip` label。`release:skip` 必须在 PR body 提供 `<!-- release-skip: ... -->` 或等价的显式 skip reason，并且不能改变上述 canonical identity；`release:skill` 要求 package version 使用接受的 exact SemVer 且严格高于 base projection，compatibility line 不能回退。缺少 label、重复 label、版本占用、projection 不一致或 base/head 漂移都应由 gate 拒绝。
+相关 PR 必须且只能有一个 `release:skill`、`release:skill-initial-publication` 或 `release:skip` label。`release:skip` 必须在 PR body 提供 `<!-- release-skip: ... -->` 或等价的显式 skip reason，并且不能改变上述 canonical identity；`release:skill` 要求 package version 使用接受的 exact SemVer 且严格高于 base projection，compatibility line 不能回退；`release:skill-initial-publication` 只允许 canonical identity 与 main 相同且 exact npm version 尚未注册的首次发布。缺少 label、重复 label、版本占用、projection 不一致或 base/head 漂移都应由 gate 拒绝。
 
 ## Workflow responsibilities
 
@@ -28,20 +28,22 @@ Skill release boundary 包含 `.github/workflows/`、`clients/typescript/`、`sk
 
 PR gate 使用 PR 的 exact base SHA 和 head SHA；merge queue 会重新解析唯一的 main PR 并以 queue base/head 再跑一次 gate。不要以工作区当前分支、PR title、历史 workflow 结果或本地 package version 代替 provider 传入的 SHA 和 label 证据。
 
+一次性 gate waiver 必须写入 `.github/quality-gates.json`，绑定明确的 PR、发布版本和 source/merge SHA，记录 owner approval、原始阻塞原因、替代证据和失效边界。waiver 不能把 pending、cancelled 或 skipped check 改写为普通 success，也不能替代发布 workflow 对 exact package、registry digest、immutable tag、dist-tags 和 provenance receipt 的核验；它只允许受保护发布流程在明确记录的 runner capacity 失败下继续对账。永久 gate 变化必须单独修改 `required_checks`/`informational_checks` 合同并通过完整验证。
+
 发布 workflow 的输入是 `pr_number`、`merge_sha`、`publish` 和 `stable`。`merge_sha` 必须是 protected main 的实际 merge commit；`publish=false` 只验证候选并上传验证 artifact，`publish=true` 才进入 npm 写入；`stable=true` 仅在 exact、compatibility line 和 latest 都验证成功后提升 stable。
 
 ## Candidate and publish sequence
 
 1. `verify` checkout exact `merge_sha`，确认 PR 已 closed/merged、merge receipt 与 SHA 相同、base 为 `main` 且非 draft。
-2. `release.py gate` 重新检查唯一 release label、package projection、Skill frontmatter、`lib/contract.ts` 与 `lib/service-contract.ts` 的 contract fields。
-3. `release:skill` 路径先用 `verify-tag --allow-missing` 检查 `multi-task-flow-v<version>`，再以同一个 merge SHA 和 Bun `1.4.4` 构建一个 draft tarball，计算 digest，将 digest 写入 manifest 后重新生成最终 tarball，并用 `validate-tarball` 验证版本、merge SHA、compatibility line 和 digest。
+2. `release.py gate` 重新检查唯一 release label、package projection、Skill frontmatter、`lib/contract.ts` 与 `lib/service-contract.ts` 的 contract fields；首次发布还必须先由 workflow 确认 exact npm version 缺失。
+3. `release:skill` 和 `release:skill-initial-publication` 路径先用 `verify-tag --allow-missing` 检查 `multi-task-flow-v<version>`，再以同一个 merge SHA 和 Bun `1.4.4` 构建一个 draft tarball，计算 digest，将 digest 写入 manifest 后重新生成最终 tarball，并用 `validate-tarball` 验证版本、merge SHA、compatibility line 和 digest。
 4. 候选包必须把运行时 Skill 依赖（当前包括 `zod` 与 `sharp`）完整封装在 tarball 内；发布前必须在全新临时目录执行隔离安装后的 `orchestrate init`/`show` smoke test，禁止依赖发布包外的 workspace `node_modules`。
 5. 最终只上传这一份验证过的 tarball；promotion 阶段下载它，不重新 build，不从另一个 checkout 生成替代 bytes。
-6. publish 先用 `npm view @loomhelm/multi-task-flow@<version>` 对账 exact package；不存在时发布相同 tarball，随后下载 registry tarball 并比较 `tarballDigest`。
+6. publish 先用 `npm view @loomhelm/multi-task-flow@<version>` 对账 exact package；不存在时使用相同 tarball，并以声明的 `compat-vN` 作为初始 npm dist-tag 发布，不能把 package version 当作 tag（npm 会将有效 SemVer 视为非法 tag），随后下载 registry tarball 并比较 `tarballDigest`。发布 job 通过 npm Trusted Publishing 使用 GitHub OIDC，不读取长期 npm 写入 token。
 7. exact package 对账成功后，以 `dist-tag-policy` 单调提升 `compat-vN` 和 `latest`，必要时再提升 `stable`；任何更高版本占用、digest 不同或 tag 回退都会停止流程。
-8. `release:skip` 路径不生成发布包，只上传包含 PR、merge SHA、当前 package version、compatibility line 和 skip reason 的 skip receipt。
+8. `release:skill-initial-publication` 只有在 exact npm version 缺失时才允许创建 immutable tag、发布 package 并 promotion；`release:skip` 路径不生成发布包，只上传包含 PR、merge SHA、当前 package version、compatibility line 和 skip reason 的 skip receipt。
 
-npm 写入需要 `https://registry.npmjs.org/`、`@loomhelm` scope 配置和 `NPM_TOKEN` secret；这些是 workflow 外部前置，不写入仓库或 PR。owner approval、GitHub token 权限和 registry token 必须在受控 workflow environment 中提供；本地 `bun pm pack` 或 gate 通过不代表完成 npm publication。
+npm 写入需要在 npm 包设置中绑定 GitHub owner `IvanLi-CN`、repository `Loomhelm` 和 workflow filename `skill-release-publish.yml`，并允许 `npm publish` 与 `npm dist-tag`；workflow publish job 需要 `id-token: write`，且使用 GitHub-hosted runner 与 npm CLI 11.21.0 或更高版本。owner approval、GitHub token 权限和 npm Trusted Publisher 配置必须在受控 workflow environment 中提供；本地 `bun pm pack` 或 gate 通过不代表完成 npm publication。
 
 ## Ledger and viewer compatibility
 
@@ -64,6 +66,8 @@ Gate 失败时先读取 exact job output 和 `release.py gate` JSON，修正 lab
 Immutable tag 冲突时运行 `verify-tag` 对账现有 tag 的目标 SHA；目标不是候选 `merge_sha` 时停止并升级处理，不 force-move、删除或重建 tag。package version 已存在时先用 `npm view` 和 registry tarball 校验它是否就是同一 merge SHA、compatibility line 和 digest；不一致时停止，不覆盖已发布版本。
 
 `npm publish` 返回未知结果时不得立即重试；先查询 exact package、registry metadata 和 tarball digest，只有明确不存在且候选身份仍未被占用时才允许由 owner-approved workflow 重试。dist-tag policy 返回 regression 或 registry 元数据无法解析时停止，不手工把 tag 指向旧版本。
+
+首次发布在 npm 已接受写入但 processing 延迟导致 workflow 退出时，owner-approved retry 可以使用 `--reconcile-existing` gate 路径；该路径只允许同一 initial-publication candidate 进入后续 exact package、registry tarball digest 和 provenance 对账，不能跳过 immutable tag 或 registry identity 校验。若受保护 candidate merge 中的旧版 `release.py` 尚不支持该参数，workflow 只为兼容性回退到旧 gate 参数，后续 publish job 仍必须完成同样的 exact package、immutable tag、registry identity 和 digest 对账。
 
 viewer upgrade 先执行 `status`/`doctor`、`compatibility-check` 和 health identity 检查；候选不可读时保留当前 release，若当前 reader 可读则按报告使用隔离只读 fallback。只有明确兼容的 candidate 才能 `upgrade`；rollback 也必须先对账 `rollback=true` 的 compatibility report 和 generation/PID。历史 ledger 迁移只能使用 `ledger-maintenance-check` / `ledger-maintenance-apply`，保留 source SHA-256、owner、revision、operation digest 和 backup，不自动补造历史事实。
 
