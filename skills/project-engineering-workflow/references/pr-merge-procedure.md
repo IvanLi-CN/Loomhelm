@@ -34,7 +34,7 @@ For `mode=merge`:
      --expected-base "$LOCKED_BASE" --expected-head "$LOCKED_HEAD"
    ```
 
-   Fail closed if the guard flag is unsupported. A merge-queue enqueue is not a merged terminal state; refresh live facts until the PR is actually merged or a concrete blocker is returned.
+   Fail closed if the guard flag is unsupported. A merge-queue enqueue is not a merged terminal state; refresh live facts until the PR is actually merged or a concrete blocker is returned. `code_hosting.ts pr-merge` proves the remote merge only; it does not update the Git primary worktree.
 
 4. Fetch the resulting PR state and actual merge commit SHA. If the command outcome is ambiguous, inspect live facts before retrying and never issue a blind duplicate merge. These live merged-PR facts and the actual merge SHA constitute the Merge Receipt for Step 6. Launch target CI tracking and authorized independent release preparation immediately; do not wait for the ledger's terminal post-merge receipt or subsequent merge-scope operations.
 5. For a merged UI PR, call `skills/ui-visual-evidence/scripts/pr_body_image_gate.ts` Phase B. It reads only the managed `## Visual Evidence` section, binds URLs to the merge SHA, verifies the selected platform's rendered Markdown HTML, and keeps the existing bounded retry semantics.
@@ -52,14 +52,25 @@ For `mode=merge`:
 
    A verified `404` after DELETE `200/204` records `deleted`; a verified `404` after DELETE `404/422` records `already_absent`. A missing `404` result or any other response is a blocker. Fork, non-owner, protected, or unknown head states are explicit non-deleting terminal dispositions, never permission to guess a remote or ref.
 
-7. Run `skills/project-engineering-workflow/scripts/base_alignment_helper.ts` against the primary worktree and PR base. Apply only its safe tracking-ref or fast-forward plan; dirty, ahead, diverged, and linked-worktree states return an owner decision or blocker.
+7. Run the alignment helper against the primary worktree and PR base, and apply its safe plan in the same merge scope:
+
+   ```bash
+   bun skills/project-engineering-workflow/scripts/base_alignment_helper.ts \
+     apply-auto --repo-root "$CANDIDATE_ROOT" \
+     --base-branch "$LOCKED_BASE" \
+     --base-remote-ref "$BASE_REMOTE/$LOCKED_BASE" \
+     --head-branch "$HEAD_REF" \
+     --refresh-remote --pretty
+   ```
+
+   Exit `0` is the only automatic alignment success and must report `state=aligned` after the safe tracking-ref or fast-forward action. Exit `10` is an owner decision and exit `11` is a blocker for dirty, ahead, diverged, fetch-failed, or linked-worktree states; report the structured result and do not claim merge-scope closeout without the owner's selected disposition.
 8. Record the receipt against the actual merge SHA after terminal CI and release facts are available. The caller continues both tracks and selected-flow closeout.
 
 For `mode=post-merge`, do not run `merge_preflight.ts` or `code_hosting.ts pr-merge`; this branch can never issue a second merge. Refresh the already merged PR and recorded `merge_sha`, then perform only the unfinished merge-scope/post-merge operations from the envelope:
 
 1. Run Phase B image finalization when a merged UI PR still needs it.
 2. Re-resolve `head_repository`, `head_ref`, and `is_cross_repository`. Delete and verify the exact API ref in that repository through the adapter's bound DELETE plus GET that proves HTTP `404`. DELETE `200/204` records `deleted`; DELETE `404/422` followed by `404` records `already_absent`; any other DELETE response or a non-`404` GET is a blocker. Report a fork, non-owner, protected, or unknown head as an explicit non-deleting disposition. Do not treat deletion as a merge operation.
-3. Run `base_alignment_helper.ts` and apply only its safe plan, returning the existing owner-decision/blocker states for dirty, ahead, diverged, or linked worktrees.
+3. Run the same `base_alignment_helper.ts apply-auto` command and apply only its safe plan, returning the existing owner-decision/blocker states for dirty, ahead, diverged, or linked worktrees. A resumed post-merge path must not stop after observing `MERGED`; it needs a structured base-alignment result before receipt closeout.
 4. Record or refresh the receipt against the exact `merge_sha`, then return the target/integration CI and release facts still required by the caller.
 
 ## Stop Conditions

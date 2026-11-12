@@ -114,6 +114,17 @@ export function emitTaskComplete(
   if (
     state.mergeIntentLine &&
     state.mergeSuccessLine &&
+    (!state.baseOutcomeLine || state.baseOutcomeLine < state.mergeSuccessLine)
+  )
+    add(
+      state.findings,
+      "BASE_UPDATE_RESULT_MISSING",
+      line,
+      "merge_success_line=" + state.mergeSuccessLine,
+    );
+  if (
+    state.mergeIntentLine &&
+    state.mergeSuccessLine &&
     state.baseBlockLine &&
     state.baseBlockLine > state.mergeSuccessLine &&
     !state.baseMenuLine &&

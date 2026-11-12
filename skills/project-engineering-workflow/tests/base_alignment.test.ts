@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   planAlignment,
   type AlignmentFacts,
-} from "../../modules/workspace/base_alignment";
-import { applyAuto } from "../../modules/workspace/base_alignment_actions";
+} from "../scripts/base_alignment";
+import { applyAuto } from "../scripts/base_alignment_actions";
 
 function git(root: string, ...args: string[]): string {
   return execFileSync("git", ["-C", root, ...args], {
@@ -41,6 +41,29 @@ function facts(overrides: Partial<AlignmentFacts> = {}): AlignmentFacts {
     ...overrides,
   };
 }
+
+test("base alignment implementation stays inside its owning Skill", () => {
+  const manifest = JSON.parse(
+    readFileSync(join(import.meta.dir, "../../source-manifest.json"), "utf8"),
+  ) as { files: Array<{ path: string }> };
+  const paths = manifest.files.map((file) => file.path);
+  expect(paths).toContain(
+    "skills/project-engineering-workflow/scripts/base_alignment.ts",
+  );
+  expect(paths).toContain(
+    "skills/project-engineering-workflow/scripts/base_alignment_actions.ts",
+  );
+  expect(paths).toContain(
+    "skills/project-engineering-workflow/scripts/base_alignment_helper.ts",
+  );
+  expect(paths).not.toContain("skills/bin/modules/workspace/base_alignment.ts");
+  expect(
+    readFileSync(
+      join(import.meta.dir, "../scripts/base_alignment_helper.ts"),
+      "utf8",
+    ),
+  ).not.toContain("../../bin");
+});
 
 test("base alignment blocks a linked worktree owner", () => {
   const result = planAlignment(

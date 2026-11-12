@@ -2,6 +2,8 @@ import { parseJsonArguments, type JsonRecord } from "./replay";
 import { callCommand } from "./pr_support";
 import {
   activeLaunch,
+  baseAlignmentCommand,
+  baseAlignmentStructuredOutcome,
   commandFailure,
   deleteBranch,
   deleteProof,
@@ -91,6 +93,12 @@ export function processTerminalOutput(
   const callId = typeof payload.call_id === "string" ? payload.call_id : "";
   const call = state.pending.get(callId);
   const output = joined;
+  if (
+    call &&
+    baseAlignmentCommand.test(call.command) &&
+    baseAlignmentStructuredOutcome.test(output)
+  )
+    state.baseOutcomeLine ||= line;
   if (call && mergePreflight(call.command)) {
     state.preflightSeen = true;
     state.preflightEligible = /outcome["'`]?\s*[:=]\s*["'`]?eligible\b/i.test(

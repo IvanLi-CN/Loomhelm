@@ -103,8 +103,8 @@
       "path": "skills/bin/compatibility_dispatch.ts",
       "sourceBlob": "7658daa52e5969b52f0bbd6a4190f6a806fdb825",
       "sourceSha256": "931068b47333403ca39fc4ed9a5294a923d455b3c6e7306ebb2d36a4b2abf40c",
-      "installedSha256": "931068b47333403ca39fc4ed9a5294a923d455b3c6e7306ebb2d36a4b2abf40c",
-      "adaptation": "unchanged"
+      "installedSha256": "9cdd95f6dee1161782620b8c6b651341b3723f9794d12b0df8501f2e07b9cfc2",
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "bin/compatibility_docs.ts",
@@ -255,8 +255,8 @@
       "path": "skills/bin/modules/checks/architecture_review_contracts.ts",
       "sourceBlob": "1bace4cf5e7f02ee7f01094aacfc1ade67a8ffe5",
       "sourceSha256": "e850b6aaed45fcaa9ae9bd830ebd00af187dbdf861dcc46d1f395f9a9c815969",
-      "installedSha256": "e850b6aaed45fcaa9ae9bd830ebd00af187dbdf861dcc46d1f395f9a9c815969",
-      "adaptation": "unchanged"
+      "installedSha256": "e628a49bfe39b6bdf79760adb3231a4f7c095852bfb5f714463a7b7626e3149d",
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "bin/modules/checks/architecture_tracker.ts",
@@ -527,40 +527,40 @@
       "path": "skills/bin/modules/checks/pr_terminal_events.ts",
       "sourceBlob": "026c6b9d5a7ddc08ba4b637c506a4f71e6b7ae11",
       "sourceSha256": "762cb5991e8f5f6c510df5db9f9bdc20f875acfe7ae07ff010efe1fc417f2a4b",
-      "installedSha256": "762cb5991e8f5f6c510df5db9f9bdc20f875acfe7ae07ff010efe1fc417f2a4b",
-      "adaptation": "unchanged"
+      "installedSha256": "f34a5dfb9266ebb4ed1ec3376eeed26f64dad674d4be8eac5c4f9a6d522f772c",
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "bin/modules/checks/pr_terminal_scan.ts",
       "path": "skills/bin/modules/checks/pr_terminal_scan.ts",
       "sourceBlob": "d235c8fd7e8e700af9098343885b7ada5a8916ff",
       "sourceSha256": "8e164f02a6c6c27d86ff8624f8266eeabef21d07c9ba28d969311ef6122654e8",
-      "installedSha256": "8e164f02a6c6c27d86ff8624f8266eeabef21d07c9ba28d969311ef6122654e8",
-      "adaptation": "unchanged"
+      "installedSha256": "b81405e6414f7506e13edc786c51cfccf157c37d97f2059c43ed289f1033bf94",
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "bin/modules/checks/pr_terminal_state.ts",
       "path": "skills/bin/modules/checks/pr_terminal_state.ts",
       "sourceBlob": "01853431a6a81404dc58cfbd9f9c920e77aa73ee",
       "sourceSha256": "c27a84fbe5ac03005deb64e66a684d6febb92a9457f70a4e218025c4ea69244e",
-      "installedSha256": "c27a84fbe5ac03005deb64e66a684d6febb92a9457f70a4e218025c4ea69244e",
-      "adaptation": "unchanged"
+      "installedSha256": "3bbb1cbb0223ef5a196e137d99f626b8a04ca31ceea5044621b93dda827d5afb",
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "bin/modules/checks/pr_terminal_support.ts",
       "path": "skills/bin/modules/checks/pr_terminal_support.ts",
       "sourceBlob": "73fdbfe53f28e13b37222ae0fb2923ba0f21512e",
       "sourceSha256": "af4fd300e5bb488396e8cbb503259b86921ba8c83858a4291e2b2d866f4c9e11",
-      "installedSha256": "af4fd300e5bb488396e8cbb503259b86921ba8c83858a4291e2b2d866f4c9e11",
-      "adaptation": "unchanged"
+      "installedSha256": "1a2d2216ac29628c948fb53c5699d431e6378ad2ab0362e6e62fe6217b36baf3",
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "bin/modules/checks/pr_terminal_task.ts",
       "path": "skills/bin/modules/checks/pr_terminal_task.ts",
       "sourceBlob": "f4b518d6b08012af4031f6c82880cfbfdbe72bff",
       "sourceSha256": "6da15aca302aab732dba8fd5fc6b3d2d7ecc2adc2f703a9f36f944c8ada1b455",
-      "installedSha256": "6da15aca302aab732dba8fd5fc6b3d2d7ecc2adc2f703a9f36f944c8ada1b455",
-      "adaptation": "unchanged"
+      "installedSha256": "77142baa3264aff2109391b71942cafc9f4928f575b8b74904d3e7a8ae26eab9",
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "bin/modules/checks/release.ts",
@@ -1700,7 +1700,7 @@
     },
     {
       "source": "bin/modules/workspace/base_alignment.ts",
-      "path": "skills/bin/modules/workspace/base_alignment.ts",
+      "path": "skills/project-engineering-workflow/scripts/base_alignment.ts",
       "sourceBlob": "6c6f2c193b967ab288661083d8b2325525dd6849",
       "sourceSha256": "669678cd18638fb4c76f006071b52a542312dcc175098e9cff40b7b3dde28f29",
       "installedSha256": "669678cd18638fb4c76f006071b52a542312dcc175098e9cff40b7b3dde28f29",
@@ -1708,7 +1708,7 @@
     },
     {
       "source": "bin/modules/workspace/base_alignment_actions.ts",
-      "path": "skills/bin/modules/workspace/base_alignment_actions.ts",
+      "path": "skills/project-engineering-workflow/scripts/base_alignment_actions.ts",
       "sourceBlob": "4ddfd44adb267efd95fd4b9aab6c1b6b4fb895d7",
       "sourceSha256": "69e95440a4c6e90681e53d0b5935ee4ec750f5ccf87b149935eeecaa3157abc4",
       "installedSha256": "69e95440a4c6e90681e53d0b5935ee4ec750f5ccf87b149935eeecaa3157abc4",
@@ -2532,11 +2532,11 @@
     },
     {
       "source": "bin/tests/workspace/base_alignment.test.ts",
-      "path": "skills/bin/tests/workspace/base_alignment.test.ts",
+      "path": "skills/project-engineering-workflow/tests/base_alignment.test.ts",
       "sourceBlob": "3c42c64d15aa2dee0506d80d11ae4117ef842b58",
       "sourceSha256": "e40224f4ce0553b58378d1881bc5915047200c5e01d0e3f2899a6d2490a588d2",
-      "installedSha256": "e40224f4ce0553b58378d1881bc5915047200c5e01d0e3f2899a6d2490a588d2",
-      "adaptation": "unchanged"
+      "installedSha256": "ff1ef199ed45a72ed4e725a75d9d650f6a28b86cf87f34d149b0b26ecc5d85b9",
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "bin/tests/workspace/fixed_checks.test.ts",
@@ -15199,7 +15199,7 @@
       "path": "skills/project-engineering-workflow/SKILL.md",
       "sourceBlob": "1f1210b2984d43bb5e317b2e5feb93f75ba16a95",
       "sourceSha256": "629528a003bf8553c2baad79c7cea385a434d0ff258fdbd2074e64973d3f17d4",
-      "installedSha256": "8e2a73c213f1780710c423665c2ae2f999eec1e58da0c11d781ced200d6e4968",
+      "installedSha256": "afc3b77768df6b932e17ae142346f12153cb45d9f5f480fc686b301437b3758a",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15255,7 +15255,7 @@
       "path": "skills/project-engineering-workflow/references/pr-merge-procedure.md",
       "sourceBlob": "9c80c4affc40bc59ec3fba6481fd569308a76d18",
       "sourceSha256": "a6115ae81ad9e80786a362ddc5ff77f612c6e9302277d022a1d66acb4d427dff",
-      "installedSha256": "e36a511f7782c2307ee507f241d7b5fe8bd3929716b967246510f0387aa3715a",
+      "installedSha256": "e2d457e2d9ad2f576dc8edcc8580066e3712417f6ddbc6fff71d246146e994c5",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15295,7 +15295,7 @@
       "path": "skills/project-engineering-workflow/scripts/base_alignment_helper.ts",
       "sourceBlob": "2abad4b897fed738acc3b8158762af7a2f62aea9",
       "sourceSha256": "76248afa21afc5cea54ad3aa280756bfd408953b64dbebd20ef2b279e489ca28",
-      "installedSha256": "d8f5b78a85f78ae8a499b31950fdd7c615b74a0435bb142e0a827966f9bcbf9f",
+      "installedSha256": "740c96a6711c787e217267e7d83c6c52fe46c058e326f480366cfb23cb3af078",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15311,8 +15311,16 @@
       "path": "skills/project-engineering-workflow/scripts/test_base_alignment_helper.ts",
       "sourceBlob": "fdcb4ea17abf1176268a5076f8346d2891668467",
       "sourceSha256": "c3d8d578d477aa65d07bd0812f54f62f055b9ff1c3f23c82e84853a983d5f5a3",
-      "installedSha256": "e554caf03fa1480297b06cf750ed508a75d88ed872b7e17acedc76d92ab0047b",
+      "installedSha256": "0ea1b4b0d2cf883307aa4c0efe0cd39a7efc1f83a746ad9123417d9ba5f0c1fa",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
+    },
+    {
+      "source": "skills/project-engineering-workflow/tests/pr_replay_policy.test.ts",
+      "path": "skills/project-engineering-workflow/tests/pr_replay_policy.test.ts",
+      "sourceBlob": "2ade61e1220730c29d7c81181f2f0fcfa67dbab6",
+      "sourceSha256": "fed3b81fc886ad1b769f55e22ea3fd443af0162e8a138bf2a4a348cfb60092b2",
+      "installedSha256": "fed3b81fc886ad1b769f55e22ea3fd443af0162e8a138bf2a4a348cfb60092b2",
+      "adaptation": "unchanged"
     },
     {
       "source": "skills/project-engineering-workflow/scripts/test_merge_preflight.ts",

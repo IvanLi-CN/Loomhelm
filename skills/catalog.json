@@ -536,7 +536,7 @@
     {
       "name": "project-engineering-workflow",
       "entry": "skills/project-engineering-workflow/SKILL.md",
-      "files": 16,
+      "files": 20,
       "internalSkills": [
         "docs-migrate",
         "fast-flow",
@@ -585,6 +585,8 @@
       "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
+        "skills/project-engineering-workflow/scripts/base_alignment.ts",
+        "skills/project-engineering-workflow/scripts/base_alignment_actions.ts",
         "skills/project-engineering-workflow/scripts/base_alignment_helper.ts",
         "skills/project-engineering-workflow/scripts/merge_preflight.ts",
         "skills/project-engineering-workflow/scripts/test_base_alignment_helper.ts",
