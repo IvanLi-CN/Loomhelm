@@ -285,10 +285,10 @@ check_client() {
 	export BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
 	mkdir -p "$TMPDIR" "$HOME" "$CODEX_HOME" "$BUN_INSTALL_CACHE_DIR"
 	run_command "Skills frozen dependencies" bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy
-	run_command "Dashboard frozen dependencies" bun install --cwd skills/multi-task-flow --frozen-lockfile --ignore-scripts --backend=copy
+	run_command "Dashboard frozen dependencies" bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile --ignore-scripts --backend=copy
 	run_command "Migrated source inventory" bun skills/multi-task-flow-runtime/scripts/check-client-skills.ts
 	run_command "Dashboard browser assets only" bun run skills:build
-	run_command "Playwright Chromium runtime" bun skills/multi-task-flow/node_modules/playwright/cli.js install chromium
+	run_command "Playwright Chromium runtime" bun skills/multi-task-flow-runtime/node_modules/playwright/cli.js install chromium
 	run_command "Shared viewer browser authentication regression" bun skills/multi-task-flow-runtime/scripts/verify-service-browser.ts "$repo_root/.tmp/client-tests/browser-evidence"
 	run_command "Pure-source installation regression" bun test ./skills/multi-task-flow-runtime/tests/check-skills-installation.test.ts
 	run_command "All source modules and nonempty coverage" bun skills/multi-task-flow-runtime/scripts/verify-skills-modules.ts
