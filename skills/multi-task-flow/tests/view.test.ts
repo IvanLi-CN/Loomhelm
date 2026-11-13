@@ -59,6 +59,33 @@ function withRuntimeEvidence<T extends ReturnType<typeof createPlanningDemoLedge
   return ledger;
 }
 
+function addDefinitiveAbsentParentPrFact(ledger: ReturnType<typeof createPlanningDemoLedger>, groupId: string) {
+  const group = ledger.groups.find((item) => item.id === groupId)!;
+  ledger.facts.push({
+    id: `${groupId}-parent-pr-absent`,
+    kind: "pr_published",
+    subject_id: groupId,
+    status: "failed",
+    source: ledger.repository.provider,
+    observed_at: ledger.updated_at,
+    sha: null,
+    evidence_ref: `${groupId}:parent-pr-absent`,
+    receipt: {
+      provider: ledger.repository.provider,
+      repository: `${ledger.repository.owner}/${ledger.repository.name}`,
+      resource_type: "pr",
+      resource_id: `${groupId}-parent-pr`,
+      branch: group.parent_branch,
+      target_branch: "main",
+      base_sha: null,
+      head_sha: null,
+      pr: null,
+      state: "absent",
+      evidence_ref: `${groupId}:parent-pr-absent`,
+    },
+  });
+}
+
 describe("timeline projections", () => {
   test("rejects incomplete plans before formal scheduling", () => {
     expect(() => validateSchedulablePlan(fixture([taskNode("a", null)], []))).toThrow("缺少原子任务");
@@ -190,6 +217,7 @@ describe("timeline projections", () => {
       recorded_at: ledger.updated_at,
       data: { target_type: "group", stage: "workspace_ready", evidence_ref: "bootstrap-workspace" },
     });
+    addDefinitiveAbsentParentPrFact(ledger, group.id);
     task.execution_owner = "main";
     task.conversation_policy = "main_owned";
     task.delivery_policy = "parent_pr";
@@ -238,6 +266,7 @@ describe("timeline projections", () => {
     const planned = buildView(ledger) as any;
     const plannedGroup = planned.groups.find((item: any) => item.id === group.id);
     expect(plannedGroup.dispatch_readiness).toBe("blocked");
+    expect(planned.plan_state.dispatch_readiness).toBe("blocked");
     expect(plannedGroup.dispatch_diagnostics).toContainEqual(expect.objectContaining({ code: "DELIVERY_UNIT_NOT_ACTIVE" }));
 
     group.state = "active";
@@ -245,6 +274,30 @@ describe("timeline projections", () => {
     const blockedGroup = activeWithoutWorkspace.groups.find((item: any) => item.id === group.id);
     expect(blockedGroup.dispatch_readiness).toBe("blocked");
     expect(blockedGroup.dispatch_diagnostics).toContainEqual(expect.objectContaining({ code: "DELIVERY_WORKSPACE_GATE_PENDING" }));
+  });
+
+  test("does not infer definitive parent PR absence from missing facts", () => {
+    const ledger = structuredClone(createPlanningDemoLedger(1_767_200_000_000));
+    const group = ledger.groups.find((item) => item.id === "core")!;
+    group.delivery_unit_kind = "bootstrap";
+    group.owner_kind = "main";
+    group.agent_thread_id = null;
+    group.state = "active";
+    group.lifecycle.workspace_ready = "passed";
+    group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready")!.status = "completed";
+    ledger.events.push({
+      id: "missing-parent-workspace-ready",
+      type: "lifecycle_recorded",
+      subject_id: group.id,
+      actor_id: ledger.control.owner_thread_id!,
+      occurred_at: ledger.updated_at,
+      recorded_at: ledger.updated_at,
+      data: { target_type: "group", stage: "workspace_ready", evidence_ref: "missing-parent-workspace" },
+    });
+    const view = buildView(ledger) as any;
+    const projected = view.groups.find((item: any) => item.id === group.id);
+    expect(projected.dispatch_readiness).toBe("blocked");
+    expect(projected.dispatch_diagnostics).toContainEqual(expect.objectContaining({ code: "DELIVERY_PARENT_PR_GATE_PENDING" }));
   });
 
   test("does not project a closed parent PR as ready", () => {

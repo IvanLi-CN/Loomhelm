@@ -80,7 +80,14 @@ function parentPrDefinitivelyAbsent(ledger: Ledger, group: Ledger["groups"][numb
       operation.target_id === group.id &&
       ["claimed", "unknown"].includes(operation.status),
   );
-  return !publicationPending && latest?.status !== "unknown" && !deliveryUnitPr(group) && latest?.status !== "passed";
+  return Boolean(
+    !publicationPending &&
+      latest &&
+      latest.status === "failed" &&
+      latest.receipt?.resource_type === "pr" &&
+      latest.receipt.state === "absent" &&
+      !deliveryUnitPr(group),
+  );
 }
 
 function allowsBootstrapMainOwnedStart(
@@ -937,6 +944,10 @@ export function buildView(
   const allTasksDispatchReady = tasks.every(
     (task) => task.dispatch_readiness === "ready",
   );
+  const allDeliveryUnitsDispatchReady = ledger.groups.every((item) =>
+    deliveryGateDiagnostics(ledger, item).length === 0 &&
+    (item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id),
+  );
   const planSummary = ledger.plans.map((item) => ({
     id: item.id,
     created_at: item.created_at,
@@ -981,7 +992,7 @@ export function buildView(
         activePlan.id !== executionPlan.id ||
         activePlan.lifecycle !== "approved",
       scheduling_eligible: schedulingStatus === "eligible",
-      dispatch_readiness: ledger.groups.every((item) => item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id) && allTasksDispatchReady ? "ready" : "blocked",
+      dispatch_readiness: allDeliveryUnitsDispatchReady && allTasksDispatchReady ? "ready" : "blocked",
       delivery_agent_readiness: ledger.groups.some((item) => item.delivery_unit_kind === "regular" && !item.agent_thread_id) ? "unbound" : "bound",
       proposal: {
         status: completenessIssues.length === 0 ? "complete" : "blocked",
