@@ -56,7 +56,26 @@ test("derives business status and enforces contribution starting prerequisites",
     conversation_policy: "main_owned",
     active: true,
     workspace_ready: true,
+    parent_pr_status: "definitively_absent",
   })).not.toThrow();
+  expect(() => validateContributionStart(node, { pr: { state: "closed", pr: ref, parent_branch: "main", closed_at: "2026-01-01T00:00:00Z", closed_reason: "provider_closed" } } as any, {
+    delivery_unit_kind: "bootstrap",
+    owner_kind: "main",
+    execution_owner: "main",
+    conversation_policy: "main_owned",
+    active: true,
+    workspace_ready: true,
+    parent_pr_status: "present",
+  })).toThrow();
+  expect(() => validateContributionStart(node, { pr: { state: "unpublished" } } as any, {
+    delivery_unit_kind: "bootstrap",
+    owner_kind: "main",
+    execution_owner: "main",
+    conversation_policy: "main_owned",
+    active: true,
+    workspace_ready: true,
+    parent_pr_status: "unknown",
+  })).toThrow();
   expect(() => validateContributionStart(node, { pr: { state: "unpublished" } } as any, {
     delivery_unit_kind: "bootstrap",
     owner_kind: "main",

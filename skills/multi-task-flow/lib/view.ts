@@ -49,6 +49,10 @@ function latestParentPrFact(ledger: Ledger, groupId: string) {
     .at(-1);
 }
 
+function sameExternalRef(left: { provider: string; repository: string; id: string }, right: { provider: string; repository: string; id: string }): boolean {
+  return left.provider === right.provider && left.repository === right.repository && left.id === right.id;
+}
+
 function parentPrReady(ledger: Ledger, group: Ledger["groups"][number]): boolean {
   const pr = deliveryUnitPr(group);
   const canonicalState = group.pr && "state" in group.pr ? group.pr.state : null;
@@ -63,6 +67,7 @@ function parentPrReady(ledger: Ledger, group: Ledger["groups"][number]): boolean
       latest.receipt?.resource_type === "pr" &&
       latest.receipt.resource_id === pr.id &&
       latest.receipt.pr &&
+      sameExternalRef(latest.receipt.pr, pr) &&
       latest.receipt.state === "open",
   );
 }
@@ -97,6 +102,21 @@ function allowsBootstrapMainOwnedStart(
   );
 }
 
+function allowsBootstrapGroupStart(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+): boolean {
+  const workspaceAtom = group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
+  return Boolean(
+    group.state === "active" &&
+      group.delivery_unit_kind === "bootstrap" &&
+      group.owner_kind === "main" &&
+      group.lifecycle.workspace_ready === "passed" &&
+      workspaceAtom?.status === "completed" &&
+      parentPrDefinitivelyAbsent(ledger, group),
+  );
+}
+
 function deliveryGateDiagnostics(
   ledger: Ledger,
   group: Ledger["groups"][number],
@@ -104,9 +124,12 @@ function deliveryGateDiagnostics(
 ): Record<string, string>[] {
   const workspaceAtom = group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
   const diagnostics: Record<string, string>[] = [];
+  if (group.state !== "active")
+    diagnostics.push({ code: "DELIVERY_UNIT_NOT_ACTIVE", message: "交付单元尚未进入 active 状态" });
   if (group.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     diagnostics.push({ code: "DELIVERY_WORKSPACE_GATE_PENDING", message: "交付单元尚未完成 workspace_ready 原子任务" });
-  if (!allowsBootstrapMainOwnedStart(ledger, group, task) && !parentPrReady(ledger, group))
+  const bootstrapGroupException = !task && allowsBootstrapGroupStart(ledger, group);
+  if (!allowsBootstrapMainOwnedStart(ledger, group, task) && !bootstrapGroupException && !parentPrReady(ledger, group))
     diagnostics.push({ code: "DELIVERY_PARENT_PR_GATE_PENDING", message: "父 PR 尚未创建、核验并完成交付原子任务" });
   return diagnostics;
 }
@@ -989,14 +1012,16 @@ export function buildView(
       ...item,
       derived_status: deriveBusinessStatus(canonicalAtomicNodes, { kind: "delivery_unit", delivery_unit_id: item.id }, milestoneEvaluations),
       ...(() => {
-        const gateDiagnostics = item.delivery_unit_kind === "regular" ? deliveryGateDiagnostics(ledger, item) : [];
+        const gateDiagnostics = deliveryGateDiagnostics(ledger, item);
         return { gateDiagnostics };
       })(),
       delivery_agent_readiness: item.delivery_unit_kind === "bootstrap" ? "not_applicable" : item.agent_thread_id ? "bound" : "unbound",
-      dispatch_readiness: item.delivery_unit_kind === "bootstrap" || (!!item.agent_thread_id && deliveryGateDiagnostics(ledger, item).length === 0) ? "ready" : "blocked",
+      dispatch_readiness: item.delivery_unit_kind === "bootstrap"
+        ? deliveryGateDiagnostics(ledger, item).length === 0 ? "ready" : "blocked"
+        : !!item.agent_thread_id && deliveryGateDiagnostics(ledger, item).length === 0 ? "ready" : "blocked",
       dispatch_diagnostics: [
         ...(item.delivery_unit_kind === "regular" && !item.agent_thread_id ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }] : []),
-        ...(item.delivery_unit_kind === "regular" ? deliveryGateDiagnostics(ledger, item) : []),
+        ...deliveryGateDiagnostics(ledger, item),
       ],
       ...profileProjection(ledger, "group", item),
       coordinator: coordinatorProjection(ledger, item),

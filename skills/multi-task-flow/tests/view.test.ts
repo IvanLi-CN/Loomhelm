@@ -228,6 +228,63 @@ describe("timeline projections", () => {
     }));
   });
 
+  test("keeps bootstrap delivery-unit readiness behind active workspace state", () => {
+    const ledger = structuredClone(createPlanningDemoLedger(1_767_200_000_000));
+    const group = ledger.groups.find((item) => item.id === "core")!;
+    group.delivery_unit_kind = "bootstrap";
+    group.owner_kind = "main";
+    group.agent_thread_id = null;
+    group.state = "planned";
+    const planned = buildView(ledger) as any;
+    const plannedGroup = planned.groups.find((item: any) => item.id === group.id);
+    expect(plannedGroup.dispatch_readiness).toBe("blocked");
+    expect(plannedGroup.dispatch_diagnostics).toContainEqual(expect.objectContaining({ code: "DELIVERY_UNIT_NOT_ACTIVE" }));
+
+    group.state = "active";
+    const activeWithoutWorkspace = buildView(ledger) as any;
+    const blockedGroup = activeWithoutWorkspace.groups.find((item: any) => item.id === group.id);
+    expect(blockedGroup.dispatch_readiness).toBe("blocked");
+    expect(blockedGroup.dispatch_diagnostics).toContainEqual(expect.objectContaining({ code: "DELIVERY_WORKSPACE_GATE_PENDING" }));
+  });
+
+  test("does not project a closed parent PR as ready", () => {
+    const ledger = withRuntimeEvidence(structuredClone(createPlanningDemoLedger(1_767_200_000_000)));
+    ledger.contract_version = 2;
+    ledger.source_schema_version = null;
+    const group = ledger.groups.find((item) => item.id === "dashboard")!;
+    group.parent_pr = { provider: "github", repository: "example/repo", id: "parent-pr", url: "https://github.com/example/repo/pull/1" };
+    group.lifecycle.pr_created = "passed";
+    group.atoms.push({ id: "parent-pr", title: "Create parent PR", purpose: "Publish", output: "Created", lifecycle_stage: "pr_created", status: "completed" });
+    ledger.plans[0]!.group_atoms = ledger.groups.flatMap((item) => item.atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: item.id })));
+    ledger.facts.push({
+      id: "closed-parent-pr",
+      kind: "pr_published",
+      subject_id: group.id,
+      status: "passed",
+      source: "github",
+      observed_at: at,
+      sha: null,
+      evidence_ref: "provider:closed-parent-pr",
+      receipt: {
+        provider: "github",
+        repository: "example/repo",
+        resource_type: "pr",
+        resource_id: "parent-pr",
+        branch: "main",
+        target_branch: "main",
+        base_sha: null,
+        head_sha: null,
+        pr: { provider: "github", repository: "example/repo", id: "parent-pr", url: "https://github.com/example/repo/pull/1" },
+        state: "absent",
+        evidence_ref: "provider:closed-parent-pr",
+      },
+    });
+    const view = buildView(ledger) as any;
+    const projected = view.groups.find((item: any) => item.id === group.id);
+    expect(projected.dispatch_readiness).toBe("blocked");
+    expect(projected.dispatch_diagnostics).toContainEqual(expect.objectContaining({ code: "DELIVERY_PARENT_PR_GATE_PENDING" }));
+  });
+
   test("projects an unresolved group conversation creation as unknown", () => {
     const ledger = structuredClone(createPlanningDemoLedger(1_767_200_000_000));
     ledger.contract_version = 2;

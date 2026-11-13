@@ -100,6 +100,7 @@ export type ContributionStartContext = {
   conversation_policy?: "main_owned" | "delivery_owned" | "task_agent" | "none";
   active?: boolean;
   workspace_ready?: boolean;
+  parent_pr_status?: "definitively_absent" | "unknown" | "pending" | "present";
 };
 
 export type DerivedBusinessStatus = "planned" | "ready" | "running" | "blocked" | "completed";
@@ -145,7 +146,9 @@ export function validateContributionStart(
     context.execution_owner === "main" &&
     context.conversation_policy === "main_owned" &&
     context.active === true &&
-    context.workspace_ready === true;
+    context.workspace_ready === true &&
+    context.parent_pr_status === "definitively_absent" &&
+    deliveryUnit.pr.state === "unpublished";
   if (!bootstrapException && deliveryUnit.pr.state !== "published" && deliveryUnit.pr.state !== "merged") throw new Error("Contribution work requires a published DeliveryUnit PR before starting");
   if (!bootstrapException && !deliveryUnit.parent_branch) throw new Error("Contribution work requires a DeliveryUnit parent branch before starting");
 }
