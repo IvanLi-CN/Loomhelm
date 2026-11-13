@@ -17,8 +17,8 @@ test("medium details stay in the static bottom layout instead of a side-by-side 
   expect(medium).toContain("border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent;");
   expect(medium).toContain(".details-heading button { display: none; }");
   expect(medium).toContain(".details-slot { position: static; padding-top: 16px; }");
-  expect(medium).toContain(".details-heading { padding: 0 0 12px; display: flex; align-items: baseline;");
-  expect(medium).toContain("#details-summary { min-width: 0; display: flex; align-items: baseline; gap: 12px; }");
+  expect(medium).toContain(".details-heading { padding: 0 0 12px; display: flex; align-items: center;");
+  expect(medium).toContain("#details-summary { min-width: 0; display: flex; align-items: center; gap: 12px; }");
   expect(medium).toContain(".detail-title { min-width: 0; margin: 0; padding-right: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }");
   expect(medium).toContain(".detail-state { flex: 0 0 auto; margin: 0; white-space: nowrap; }");
   expect(medium).toContain("#details-content { padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));");
@@ -26,7 +26,7 @@ test("medium details stay in the static bottom layout instead of a side-by-side 
   expect(medium).toContain("#details-content[data-detail-kind=\"task\"] { grid-template-columns: minmax(220px, .9fr) repeat(3, minmax(0, 1fr)); }");
   expect(medium).toContain("#details-content[data-detail-kind=\"group\"] { grid-template-columns: minmax(260px, 1.25fr) repeat(3, minmax(0, 1fr)); }");
   expect(medium).toContain("#details-content > .detail-field:has(.atom-list) { grid-column: span 1; }");
-  expect(medium).toContain("#details-content > .detail-field:has(.atom-list) { display: block; }");
+  expect(medium).toContain("#details-content > .detail-field:has(.atom-list) { display: block; padding-block: 7px; }");
   expect(medium).toContain("text-overflow: ellipsis; white-space: nowrap;");
   expect(medium).toContain("#details-content > .detail-group-facts { grid-column: 2 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));");
   expect(medium).toContain("#details-content > .detail-group-facts > .detail-field { min-width: 0; padding-block: 7px; display: block; }");
