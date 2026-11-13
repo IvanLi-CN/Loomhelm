@@ -171,17 +171,18 @@ export function createDetailContent(context: DetailContentContext) {
     const data = context.getData();
     if (!data) return;
     const { container, restore } = begin("task", task.id, task.title, context.labelTask(task));
+    const facts = text("div", "", "detail-group-facts");
     const currentGroup = data.groups.find((group) => group.id === task.group_id)?.title ?? task.group_id;
     const executionGroups = [...new Set(data.actual_intervals.filter((row) => row.task_id === task.id).map((row) => row.group_id))].map((id) => data.groups.find((group) => group.id === id)?.title ?? id);
-    field(container, "所属交付单元", currentGroup);
-    if (executionGroups.length > 1) field(container, "执行交付单元历史", executionGroups.join("、"));
-    field(container, "类型", taskKindLabel(task.kind));
+    field(facts, "所属交付单元", currentGroup);
+    if (executionGroups.length > 1) field(facts, "执行交付单元历史", executionGroups.join("、"));
+    field(facts, "类型", taskKindLabel(task.kind));
     if (context.profileContext) {
       const profileContext = context.profileContext();
-      field(container, "执行配置", createProfileEditor(profileContext, "task", task.id, task.execution_profile ?? null, task.effective_execution_profile ?? data.orchestration.execution_profile ?? null, data.profile_read_only ? "当前视图只读或尚未迁移" : task.profile_freeze_reason ?? (task.thread_id ? "对话已创建" : null), task.execution_profile_source === "recommendation" ? `按任务类型 ${task.kind} 推荐 · ${task.execution_profile_rule ?? "kind-v1"}` : null));
+      field(facts, "执行配置", createProfileEditor(profileContext, "task", task.id, task.execution_profile ?? null, task.effective_execution_profile ?? data.orchestration.execution_profile ?? null, data.profile_read_only ? "当前视图只读或尚未迁移" : task.profile_freeze_reason ?? (task.thread_id ? "对话已创建" : null), task.execution_profile_source === "recommendation" ? `按任务类型 ${task.kind} 推荐 · ${task.execution_profile_rule ?? "kind-v1"}` : null));
     }
-    if (task.disposition && task.disposition !== "active") field(container, "任务处置", task.disposition);
-    if (task.is_held && task.hold_reason) field(container, "计划修订暂停", task.hold_reason);
+    if (task.disposition && task.disposition !== "active") field(facts, "任务处置", task.disposition);
+    if (task.is_held && task.hold_reason) field(facts, "计划修订暂停", task.hold_reason);
     const node = data.nodes.find((item) => item.kind === "task" && item.ref_id === task.id);
     const projection = buildGraphProjection(data);
     const predecessors = dependenciesFor(projection, node?.id, "incoming", data);
@@ -194,23 +195,24 @@ export function createDetailContent(context: DetailContentContext) {
         return { name: source?.title ?? edge.from_atom_id, state: "", status: source?.status ?? "unknown", completedAt: source?.completed_at };
       });
     }, null, { kind: "task", id: task.id }));
-    field(container, "前驱", renderDependencyTooltip(predecessors, predecessors.length ? `查看 ${predecessors.length} 项依赖` : "无依赖"));
-    field(container, "后继", renderDependencyTooltip(successors, successors.length ? `查看 ${successors.length} 项依赖` : "无依赖"));
+    container.append(facts);
+    field(facts, "前驱", renderDependencyTooltip(predecessors, predecessors.length ? `查看 ${predecessors.length} 项依赖` : "无依赖"));
+    field(facts, "后继", renderDependencyTooltip(successors, successors.length ? `查看 ${successors.length} 项依赖` : "无依赖"));
     const projectedNode = projection.nodes.find((item) => item.sourceNodeId === node?.id);
     const plannedGroup = projectedNode?.plannedGroupId && projectedNode.plannedGroupId !== task.group_id ? data.groups.find((group) => group.id === projectedNode.plannedGroupId)?.title ?? projectedNode.plannedGroupId : null;
-    if (plannedGroup) field(container, "计划归属交付单元", plannedGroup);
-    if (task.blocker) field(container, "等待原因", task.blocker);
-    field(container, "开始时间", renderTimestamp(task.started_at));
-    field(container, "完成时间", renderTimestamp(task.finished_at));
-    field(container, "持续时间", durationValue(task.started_at, task.finished_at));
+    if (plannedGroup) field(facts, "计划归属交付单元", plannedGroup);
+    if (task.blocker) field(facts, "等待原因", task.blocker);
+    field(facts, "开始时间", renderTimestamp(task.started_at));
+    field(facts, "完成时间", renderTimestamp(task.finished_at));
+    field(facts, "持续时间", durationValue(task.started_at, task.finished_at));
     const output = text("div", "", "detail-agent-output");
     output.dataset.outputTaskId = task.id; output.dataset.outputFull = "true";
     paintOutput(output, task.latest_agent_output ?? initialOutput(task.thread_id), true);
-    if (task.state === "agent_idle") field(container, "运行时提示", "Agent 当前没有活跃 turn，可能需要人工恢复");
+    if (task.state === "agent_idle") field(facts, "运行时提示", "Agent 当前没有活跃 turn，可能需要人工恢复");
     if (task.state === "agent_idle") {
       const observed = task.latest_agent_output;
-      if (observed?.observed_at) field(container, "运行时观察时间", renderTimestamp(observed.observed_at));
-      if (observed?.runtime_turn_id) field(container, "观察 Turn", observed.runtime_turn_id);
+      if (observed?.observed_at) field(facts, "运行时观察时间", renderTimestamp(observed.observed_at));
+      if (observed?.runtime_turn_id) field(facts, "观察 Turn", observed.runtime_turn_id);
     }
     const conversation = text("div", "", "detail-conversation");
     const conversationActions = text("div", "", "detail-conversation-actions");
@@ -222,19 +224,19 @@ export function createDetailContent(context: DetailContentContext) {
       const presentation = archivePresentation(task);
       conversation.append(text("p", `${presentation.label}：${presentation.description}`, "detail-conversation-notice"));
     }
-    field(container, "任务对话", conversation);
-    field(container, "执行 Agent", task.execution_owner === "main" ? "Main Agent" : task.execution_owner === "delivery_agent" ? "交付 Agent" : task.execution_owner === "task_agent" ? "Task Agent" : "未声明");
-    field(container, "对话策略", task.conversation_policy ?? "未声明");
-    field(container, "交付策略", task.delivery_policy ?? "未声明");
-    field(container, "调度状态", task.dispatch_readiness === "blocked" ? `不可调度：${task.dispatch_diagnostics?.map((item) => item.message).join("；") || "未知原因"}` : task.dispatch_readiness === "ready" ? "可调度" : "未知");
+    field(facts, "任务对话", conversation);
+    field(facts, "执行 Agent", task.execution_owner === "main" ? "Main Agent" : task.execution_owner === "delivery_agent" ? "交付 Agent" : task.execution_owner === "task_agent" ? "Task Agent" : "未声明");
+    field(facts, "对话策略", task.conversation_policy ?? "未声明");
+    field(facts, "交付策略", task.delivery_policy ?? "未声明");
+    field(facts, "调度状态", task.dispatch_readiness === "blocked" ? `不可调度：${task.dispatch_diagnostics?.map((item) => item.message).join("；") || "未知原因"}` : task.dispatch_readiness === "ready" ? "可调度" : "未知");
     const pr = context.safeExternal(task.pr?.url ?? null);
-    if (pr) field(container, "子 PR", link("查看 PR", pr));
-    field(container, "任务要求", requirementsValue(task.requirements_path, "task", task.id));
+    if (pr) field(facts, "子 PR", link("查看 PR", pr));
+    field(facts, "任务要求", requirementsValue(task.requirements_path, "task", task.id));
     for (const follow of data.follow_prs.filter((item) => item.origin_task_id === task.id)) {
       const url = context.safeExternal(follow.pr.url);
-    field(container, "Follow PR", url ? link(context.labels[follow.state] ?? follow.state, url) : context.labels[follow.state] ?? follow.state);
+    field(facts, "Follow PR", url ? link(context.labels[follow.state] ?? follow.state, url) : context.labels[follow.state] ?? follow.state);
     }
-    field(container, "Agent 输出", output);
+    field(facts, "Agent 输出", output);
     restore();
   };
 
