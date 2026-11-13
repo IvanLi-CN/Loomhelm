@@ -16,14 +16,14 @@ import { createHoverController } from "./hover-controller";
 import { createDetailContent } from "./details-content";
 import { deriveConnectionStatus, type Task, type View, type ViewResponse, type Theme } from "./model";
 import { defaultTabForPhase, derivePhase, type DisplayPhase } from "./phase";
-import { DETAILS_PANEL_BREAKPOINT, detailsPanelFits, isDetailInteraction, resolveDetailSurface, selectedObjectFocusSelector } from "./interaction-policy";
+import { DETAILS_PANEL_BREAKPOINT, detailsPanelFits, resolveDetailSurface, selectedObjectFocusSelector } from "./interaction-policy";
 import { applyDetailSurface, installDetailViewport } from "./detail-surface";
 import { firstVisibleElement, focusAfterRerender } from "./focus";
 import { installViewStateNavigation } from "./navigation";
 import { createHoverPreviewBridge, type HoverPreviewBridge } from "./hover-preview";
 import { formatDuration, formatLocalTime } from "./time";
 import { renderTimestamp, refreshTimestamps } from "./timestamp";
-import { planStateSeverity, renderPlanInfoContent, renderPlanState } from "./status-row";
+import { planStateSeverity, renderPlanInfoContent } from "./status-row";
 import { taskKindLabel, STATE_LABELS } from "./labels";
 import { DEFAULT_VIEW_STATE, defaultTaskLayout, hasValidLayoutParam, canonicalViewUrl, hasValidTabParam, parseViewState, replaceViewState, sanitizeViewState, type DashboardTab, type TaskLayout, type ViewState } from "./view-state";
 const ICONS = { Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleHelp, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, TreePalm, ArchiveX, ArchiveRestore, Archive, RefreshCw, Info, Settings2, SunMoon, Sun, Moon };
@@ -222,13 +222,6 @@ function refreshCardDurations(): void {
 function updateTaskLayoutControls(): void {
   for (const [id, layout] of [["task-layout-board", "board"], ["task-layout-grid", "grid"]] as const) $<HTMLButtonElement>(id).setAttribute("aria-pressed", String(viewState.layout === layout));
   $("group-section").hidden = viewState.layout === "board";
-  const heading = $(viewState.layout === "board" ? "task-heading" : "group-heading").parentElement!;
-  const actions = document.querySelector<HTMLElement>(".section-heading-actions")!;
-  if (actions.parentElement !== heading) {
-    const focused = actions.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
-    heading.append(actions);
-    focused?.focus({ preventScroll: true });
-  }
 }
 function syncStableGridCardWidth(): void {
   const workspace = document.querySelector<HTMLElement>(".workspace");
@@ -306,6 +299,30 @@ function canUseDetailsPanel(): boolean {
   const workspace = document.querySelector<HTMLElement>(".workspace");
   return detailsPanelFits(workspace?.getBoundingClientRect().width ?? 0);
 }
+const DETAILS_MIN_HEIGHT = 120;
+const detailsHeightKey = `loomhelm:details-height:${location.pathname}`;
+function detailsHeightBounds(): { min: number; max: number } {
+  const workspace = document.querySelector<HTMLElement>(".workspace");
+  const available = Math.max(DETAILS_MIN_HEIGHT, workspace?.getBoundingClientRect().height ?? window.innerHeight);
+  return { min: DETAILS_MIN_HEIGHT, max: Math.max(DETAILS_MIN_HEIGHT, Math.min(window.innerHeight * 0.6, available - 240)) };
+}
+function setDetailsHeight(value: number, persist = true): void {
+  const bounds = detailsHeightBounds(); const height = Math.round(Math.max(bounds.min, Math.min(bounds.max, value)));
+  document.documentElement.style.setProperty("--details-height", `${height}px`);
+  const separator = document.getElementById("details-resize");
+  separator?.setAttribute("aria-valuemin", String(bounds.min)); separator?.setAttribute("aria-valuemax", String(bounds.max)); separator?.setAttribute("aria-valuenow", String(height));
+  if (persist) localStorage.setItem(detailsHeightKey, String(height));
+}
+const savedDetailsHeight = Number(localStorage.getItem(detailsHeightKey));
+setDetailsHeight(Number.isFinite(savedDetailsHeight) && savedDetailsHeight > 0 ? savedDetailsHeight : window.innerHeight * 0.4, false);
+const detailsResize = document.getElementById("details-resize");
+if (detailsResize) {
+  let startY = 0; let startHeight = 0;
+  const move = (event: PointerEvent) => { event.preventDefault(); setDetailsHeight(startHeight + startY - event.clientY); };
+  const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
+  detailsResize.addEventListener("pointerdown", event => { event.preventDefault(); startY = event.clientY; startHeight = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.4; detailsResize.setPointerCapture?.(event.pointerId); window.addEventListener("pointermove", move, { passive: false }); window.addEventListener("pointerup", end); });
+  detailsResize.addEventListener("keydown", event => { const current = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.4; if (event.key === "ArrowUp") { event.preventDefault(); setDetailsHeight(current + 24); } else if (event.key === "ArrowDown") { event.preventDefault(); setDetailsHeight(current - 24); } else if (event.key === "Home") { event.preventDefault(); setDetailsHeight(detailsHeightBounds().min); } else if (event.key === "End") { event.preventDefault(); setDetailsHeight(detailsHeightBounds().max); } });
+}
 const hoverController = createHoverController({
   element: $,
   getData: () => data,
@@ -324,7 +341,8 @@ const hoverController = createHoverController({
 const { supportsHoverDetails, showHoverPreview, hideHoverPreview, recordPointerType, showCurrentSelectionPreview, dismiss: dismissHoverPreview, pointerTypeFromEvent } = hoverController;
 function updateDetailsSurface(open: boolean, focus = false): ReturnType<typeof resolveDetailSurface> {
   const detailPanelViewport = canUseDetailsPanel();
-  const drawerViewport = window.innerWidth < DETAILS_PANEL_BREAKPOINT;
+  const mediumShort = window.innerWidth >= DETAILS_PANEL_BREAKPOINT && window.innerWidth <= 1444 && window.innerHeight <= 960;
+  const drawerViewport = window.innerWidth < DETAILS_PANEL_BREAKPOINT || mediumShort;
   const surface = resolveDetailSurface({ selected: hasSelectedObject(), detailOpen: open, hoverCapable: supportsHoverDetails(), keyboardSelection, detailPanelViewport, drawerViewport });
   applyDetailSurface({ workspace: document.querySelector<HTMLElement>(".workspace")!, background: [document.querySelector<HTMLElement>(".topbar")!, document.querySelector<HTMLElement>(".overview")!, document.querySelector<HTMLElement>(".workspace-main")!], details: $("details"), detailsBackdrop: $("details-backdrop"), hoverPreview: $("hover-preview"), closeDetails: $("close-details") }, surface, detailPanelViewport, focus);
   return surface;
@@ -561,7 +579,6 @@ function render(): void {
   const planWarning = $("plan-warning");
   const planState = data.plan_state;
   renderPlanInfo();
-  renderPlanState($("plan-state"), planState);
   const authorizationLabel = planState?.authorization_label ??
     (planState?.approval_pending ? "Not approved" : "Schedulable");
   const runtimeBlockers = planState?.runtime_readiness?.status === "blocked"
@@ -635,7 +652,9 @@ async function refresh(): Promise<void> {
     }
     if (serial !== requestSerial || result.revision < revision) return;
     const previousPhase = phase; revision = result.revision; activePlanId = result.active_plan_id; data = result.view; applyOutputs({ output_epoch: result.output_epoch ?? "static-demo", output_revision: result.output_revision ?? 0, outputs: Object.fromEntries([...data.tasks.map(t => [t.id, t.latest_agent_output ?? initialOutput(t.thread_id)]), ...data.groups.map(g => [`group:${g.id}`, g.latest_agent_output ?? initialOutput(g.agent_thread_id)])]) }, outputEpoch); const currentPhase = derivePhase(data.tasks, data.execution_phase);
-    if (!hydrated && !userChangedTab && !hasValidTabParam(window.location.search)) viewState = { ...viewState, tab: defaultTabForPhase(currentPhase) };
+    const explicitUrlState = parseViewState(window.location.search);
+    if (hasValidTabParam(window.location.search)) viewState = { ...viewState, tab: explicitUrlState.tab };
+    else if (!hydrated && !userChangedTab) viewState = { ...viewState, tab: defaultTabForPhase(currentPhase) };
     if (!hasValidLayoutParam(window.location.search)) viewState = { ...viewState, layout: defaultTaskLayout(data.groups.length) };
     const requestedTask = viewState.selected?.kind === "task" ? viewState.selected.id : missingLinkedTask;
     const missingTask = requestedTask && !data.tasks.some(task => task.id === requestedTask);
@@ -666,7 +685,7 @@ $("version-menu").addEventListener("keydown", (event) => { if (event.key !== "En
 $("task-layout-board").addEventListener("click", () => setTaskLayout("board")); $("task-layout-grid").addEventListener("click", () => setTaskLayout("grid"));
 $("plan-info-trigger").addEventListener("click", (event) => { event.stopPropagation(); if (planInfoIsOpen()) closePlanInfo(false); else openPlanInfo(); });
 $("close-plan-info").addEventListener("click", () => closePlanInfo()); $("plan-info-backdrop").addEventListener("click", () => closePlanInfo()); $("plan-info-panel").addEventListener("click", (event) => event.stopPropagation());
-document.addEventListener("click", (event) => { const target = event.target as HTMLElement; if (!target.closest("[data-menu]")) closeMenus(); if (planInfoIsOpen() && !target.closest("#plan-info-panel, #plan-info-trigger")) closePlanInfo(); if (viewState.detail && $("details").classList.contains("open") && !isDetailInteraction(target)) closeDetails(); });
+document.addEventListener("click", (event) => { const target = event.target as HTMLElement; if (!target.closest("[data-menu]")) closeMenus(); if (planInfoIsOpen() && !target.closest("#plan-info-panel, #plan-info-trigger")) closePlanInfo(); });
 document.addEventListener("pointerdown", (event) => { keyboardSelection = false; recordPointerType(event.pointerType); }, true); document.addEventListener("pointermove", (event) => recordPointerType(event.pointerType), true);
 document.addEventListener("keydown", (event) => { if ((event.key === "Enter" || event.key === " ") && (event.target as HTMLElement).closest(".task-card-select, .task-column-select, .task-row")) keyboardSelection = true; }, true);
 document.addEventListener("keydown", (event) => { const target = event.target as HTMLElement; const trigger = target.closest<HTMLButtonElement>(".menu-trigger, .theme-trigger"); const option = target.closest<HTMLButtonElement>("[role=option]"); if (event.key === "Escape" && trigger) { event.preventDefault(); event.stopPropagation(); closeMenus(); trigger.focus(); } else if (trigger && (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter" || event.key === " ")) { event.preventDefault(); const id = trigger.id.replace(/-trigger$/, "") as MenuId; openMenu(id); } else if (option && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); const options = [...option.closest<HTMLElement>("[role=listbox]")!.querySelectorAll<HTMLButtonElement>("[role=option]")]; const index = options.indexOf(option); options[(index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length]?.focus(); } else if (option && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); const menu = option.closest<HTMLElement>("[role=listbox]"); const id = menu?.id.replace(/-menu$/, "") as MenuId; chooseMenu(id, option.dataset.menuValue ?? ""); } else if (option && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeMenus(); menuTrigger(option.closest<HTMLElement>("[role=listbox]")?.id.replace(/-menu$/, "") as MenuId).focus(); } });
@@ -675,7 +694,7 @@ $("zoom-in").addEventListener("click", () => (viewState.tab === "atomic" ? atomi
 $("timeline-zoom-in").addEventListener("click", () => timelineController.adjustWindow("in")); $("timeline-zoom-out").addEventListener("click", () => timelineController.adjustWindow("out")); $("timeline-fit").addEventListener("click", () => timelineController.fit());
 installViewStateNavigation(window, { getSearch: () => window.location.search, getValidation: (search) => { const targetPlan = search ? new URLSearchParams(search).get("plan") : null; if ((targetPlan ?? activePlanId) !== (viewState.plan ?? activePlanId)) return { plans: new Set(data?.plans.map((plan) => plan.id) ?? []) }; return data ? stateValidation() : {}; }, getPhase: () => data ? phase ?? derivePhase(data.tasks) : null, restore: (next, hasExplicitTab) => { const planChanged = next.plan !== viewState.plan; const closingDetails = viewState.detail && !next.detail; userChangedTab = hasExplicitTab; if (closingDetails) { keyboardSelection = false; hideHoverPreview(); restoreClosedDetailsOnNextRender = true; } viewState = next; selectedTask = next.selected?.kind === "task" ? next.selected.id : null; selectedGroup = next.selected?.kind === "group" ? next.selected.id : null; selectedMilestone = next.selected?.kind === "milestone" ? next.selected.id : null; activePlan = next.plan ?? ""; if (next.detail) focusDetailsOnNextRender = true; if (planChanged) void refresh(); else if (data) render(); } });
 window.addEventListener("keydown", (event) => { trapDetailsFocus(event); trapPlanInfoFocus(event); if (event.key === "Escape" && planInfoIsOpen()) { event.preventDefault(); closePlanInfo(); } else if (event.key === "Escape" && viewState.detail) closeDetails(); });
-window.addEventListener("resize", () => { refreshResponsiveDetails(); syncPlanInfoSurface(); if (data && viewState.tab === "graph" && graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")) graphController.render(filteredTasks(), viewState.group ? new Set([viewState.group]) : undefined); window.requestAnimationFrame(() => timelineController.redraw()); });
+window.addEventListener("resize", () => { setDetailsHeight(Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.4, false); refreshResponsiveDetails(); syncPlanInfoSurface(); if (data && viewState.tab === "graph" && graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")) graphController.render(filteredTasks(), viewState.group ? new Set([viewState.group]) : undefined); window.requestAnimationFrame(() => timelineController.redraw()); });
 anyHoverCapability.addEventListener("change", refreshResponsiveDetails); anyFinePointerCapability.addEventListener("change", refreshResponsiveDetails);
 const stream = new EventSource("api/events"); stream.addEventListener("open", () => { connected = true; connection("live"); void refresh(); }); stream.addEventListener("revision", () => void refresh()); stream.addEventListener("stale", () => { connected = false; connection("stale"); }); stream.addEventListener("heartbeat", (event) => { try { if (JSON.parse((event as MessageEvent).data).watching && !connected) { connected = true; void refresh(); } } catch { connection("stale"); } }); stream.addEventListener("error", () => { connected = false; connection("stale"); });
 hoverBridge = createHoverPreviewBridge($("hover-preview"), dismissHoverPreview);

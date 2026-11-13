@@ -50,6 +50,7 @@
               <button id="tab-tasks" type="button" role="tab" aria-selected="false" aria-controls="tasks-view" data-tab="tasks">任务</button>
             </div>
             <label class="search input"><i data-lucide="search" aria-hidden="true"></i><span class="sr-only">搜索任务</span><input id="search" type="search" placeholder="搜索任务"></label>
+            <div id="task-view-tools" class="task-view-tools" aria-label="任务视图工具"><span id="task-count" class="section-count"></span><div id="task-layout-switch" class="layout-switch" role="group" aria-label="对象布局"><button id="task-layout-board" type="button" class="icon-button layout-option" aria-label="看板布局" aria-describedby="task-layout-board-tooltip" aria-pressed="true"><i data-lucide="columns-3"></i><span id="task-layout-board-tooltip" class="layout-tooltip" role="tooltip">看板布局：按交付单元分列展示任务</span></button><button id="task-layout-grid" type="button" class="icon-button layout-option" aria-label="网格布局" aria-describedby="task-layout-grid-tooltip" aria-pressed="false"><i data-lucide="layout-grid"></i><span id="task-layout-grid-tooltip" class="layout-tooltip" role="tooltip">网格布局：平铺展示任务</span></button></div></div>
             </div>
             <div class="filters">
             <span class="filter-caption">筛选视图</span>
@@ -70,7 +71,6 @@
             <div id="connection-notice" class="notice" role="status" hidden></div>
             <div id="phase-notice" class="notice notice-neutral" role="status" hidden><span id="phase-notice-text"></span><button type="button" id="phase-jump" class="text-button">查看实际进度</button></div>
             <div id="operation-warning" class="notice" role="status" hidden></div>
-            <div id="plan-state" class="notice plan-state" aria-label="计划与运行状态" hidden></div>
             <div id="plan-warning" class="notice notice-warning" role="status" hidden></div>
             <div id="load-error" class="notice notice-error" role="alert" hidden></div>
             <div id="graph-view" class="canvas-view" role="tabpanel" aria-labelledby="tab-graph"><div id="graph-projection-warning" class="notice notice-warning" role="status" hidden></div><div id="graph" aria-label="任务依赖图"></div><div id="atomic-graph" aria-label="原子任务依赖图" hidden></div><div id="graph-a11y" class="graph-a11y" role="list" aria-label="依赖图节点列表"></div><div id="graph-empty" class="empty" hidden>暂无任务</div></div>
@@ -79,11 +79,11 @@
           </div>
           <div id="tasks-view" class="workspace-tasks" role="tabpanel" aria-labelledby="tab-tasks" hidden>
             <section id="group-section" class="task-list-section" aria-labelledby="group-heading"><div class="section-heading"><h2 id="group-heading">交付单元</h2></div><div id="group-list" class="task-list" role="list"></div></section>
-            <section id="task-section" class="task-list-section" aria-labelledby="task-heading"><div class="section-heading"><h2 id="task-heading">任务</h2><div class="section-heading-actions"><span id="task-count" class="section-count"></span><div id="task-layout-switch" class="layout-switch" role="group" aria-label="对象布局"><button id="task-layout-board" type="button" class="icon-button layout-option" aria-label="看板布局" aria-describedby="task-layout-board-tooltip" aria-pressed="true"><i data-lucide="columns-3"></i><span id="task-layout-board-tooltip" class="layout-tooltip" role="tooltip">看板布局：按交付单元分列展示任务</span></button><button id="task-layout-grid" type="button" class="icon-button layout-option" aria-label="网格布局" aria-describedby="task-layout-grid-tooltip" aria-pressed="false"><i data-lucide="layout-grid"></i><span id="task-layout-grid-tooltip" class="layout-tooltip" role="tooltip">网格布局：平铺展示任务</span></button></div></div></div><div id="task-list" class="task-list" role="list"></div></section>
+            <section id="task-section" class="task-list-section"><div id="task-list" class="task-list" role="list"></div></section>
           </div>
         </div>
         <div id="details-backdrop" class="details-backdrop" hidden></div>
-        <div class="details-slot" hidden><aside id="details" class="details" aria-label="详情" aria-hidden="true" tabindex="-1"><div class="details-heading"><button type="button" id="close-details" class="icon-button mobile-close" data-tooltip="关闭详情" aria-label="关闭详情"><i data-lucide="x"></i></button><div id="details-summary"></div></div><div id="details-content" class="details-empty"><span class="empty-rule" aria-hidden="true"></span><strong>选择交付单元或任务</strong><span>查看依赖、运行时间和原生会话链接</span></div></aside></div>
+        <div class="details-slot" hidden><div id="details-resize" class="details-resize" role="separator" aria-orientation="horizontal" aria-label="调整详情高度" tabindex="0"></div><aside id="details" class="details" aria-label="详情" aria-hidden="true" tabindex="-1"><div class="details-heading"><button type="button" id="close-details" class="icon-button mobile-close" data-tooltip="关闭详情" aria-label="关闭详情"><i data-lucide="x"></i></button><div id="details-summary"></div></div><div id="details-content" class="details-empty"><span class="empty-rule" aria-hidden="true"></span><strong>选择交付单元或任务</strong><span>查看依赖、运行时间和原生会话链接</span></div></aside></div>
       </section>
     </main>
   </div>

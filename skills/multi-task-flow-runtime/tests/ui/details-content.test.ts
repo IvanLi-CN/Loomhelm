@@ -22,6 +22,15 @@ describe("dashboard details content", () => {
     expect(document.querySelector(".detail-duration")?.textContent).toBe("未知");
     expect(duration(details.groupPreview(group))).toBe("未知");
   });
+  test("group details include the full Agent output at the end", () => {
+    const group = { id: "core", title: "核心", state: "closed", agent_thread_id: "thread-group", parent_pr: { url: null }, latest_agent_output: { thread_id: "thread-group", agent_state: "idle", stale: false, state: "available", text: "交付单元已完成", turn_id: null, message_id: null, phase: null, message_status: null, observed_at: null } } as Group;
+    const view = { groups: [group], tasks: [], actual_intervals: [] } as unknown as View;
+    const details = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "", time: () => "", safeExternal: () => null });
+    details.showGroup(group);
+    const labels = [...document.querySelectorAll("#details-content .detail-label")].map((node) => node.textContent);
+    expect(labels.at(-1)).toBe("Agent 输出");
+    expect(document.querySelector(".detail-agent-output")?.textContent).toContain("交付单元已完成");
+  });
   test("keeps the summary outside the scroll body and preserves only the same object's reading position", () => {
     const group = { id: "same", title: "交付单元", state: "closed", parent_pr: { url: null } } as Group;
     const view = { groups: [group], tasks: [], actual_intervals: [] } as unknown as View;
