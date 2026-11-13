@@ -293,6 +293,7 @@ jobs:
       - name: Verify isolated viewer label upgrade
         timeout-minutes: 8
         run: |
+          export LOOMHELM_SERVICE_BUNDLE_BUILD=1
           bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile --ignore-scripts --backend=copy
           bun run --cwd skills/multi-task-flow-runtime build
           bun skills/multi-task-flow-runtime/scripts/build-service.ts --output "$RUNNER_TEMP/viewer-label-before" --service-version 0.0.0-ci
