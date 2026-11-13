@@ -399,6 +399,7 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .detail-empty-output::before { width: 5px; height: 5px; flex: none; border: 1px solid currentColor; border-radius: 50%; content: ""; }
 .detail-empty-output::after { content: attr(data-empty-label); }
 .detail-value a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.detail-placeholder { color: var(--muted); font-style: italic; }
 .mobile-close { display: grid; }
 .details-backdrop { display: none; }
 .hover-preview { position: fixed; z-index: 50; width: min(280px, calc(100vw - 24px)); max-height: min(420px, calc(100vh - 24px)); overflow: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-card); color: var(--text); background: var(--raised); box-shadow: var(--shadow); opacity: 0; pointer-events: auto; transform: translateY(5px) scale(.98); transform-origin: center; transition: opacity 140ms ease-out, transform 180ms cubic-bezier(.16, 1, .3, 1), visibility 0s linear 180ms; visibility: hidden; }
