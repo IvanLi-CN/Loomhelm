@@ -448,7 +448,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y skopeo
       - name: Build and observe native package partitions
         run: |
-          if [ "$RUNNER_OS" = Linux ]; then part=server; else part=go-client; fi
+          part=server
           python3 tools/release/build_part.py --record "$RUNNER_TEMP/record.json" --part "$part" --output "$RUNNER_TEMP/core-product"
           python3 tools/release/smoke.py --record "$RUNNER_TEMP/record.json" --directory "$RUNNER_TEMP/core-product"
           python3 tools/release/build_part.py --record "$RUNNER_TEMP/record.json" --part ts-client --output "$RUNNER_TEMP/ts-product"
