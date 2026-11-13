@@ -11,6 +11,7 @@ const option = (name: string) => args[args.indexOf(name) + 1];
 const output = args.includes("--output") ? resolve(option("--output")!) : null;
 const version = args.includes("--service-version") ? option("--service-version") : null;
 requireCondition(output && version && /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(version), "INVALID_ARGUMENTS", "build-service.ts --output <new-directory> --service-version <semver>");
+requireCondition(process.env.LOOMHELM_SERVICE_BUNDLE_BUILD === "1", "RELEASE_BUILD_ONLY", "Service bundles are produced by the protected release workflow; user-side builds are not supported");
 requireCondition(!existsSync(output), "OUTPUT_EXISTS", "Build output must be a new directory");
 requireCondition(Bun.version === "1.4.4", "RUNTIME_REQUIRED", "Bun 1.4.4 is required");
 const root = resolve(import.meta.dir, "../../..");
