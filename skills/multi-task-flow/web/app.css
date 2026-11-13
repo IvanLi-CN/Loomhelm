@@ -448,7 +448,9 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
   .details { position: static; width: auto; max-height: none; border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; box-shadow: none; padding: 16px 0 4px; display: block; }
   .details-heading button { display: none; }
   .details-heading { padding: 0 0 12px; display: flex; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--rule); }
-  .detail-title { margin-top: 0; }
+  #details-summary { min-width: 0; display: flex; align-items: baseline; gap: 12px; }
+  .detail-title { min-width: 0; margin: 0; padding-right: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail-state { flex: 0 0 auto; margin: 0; white-space: nowrap; }
   #details-content { padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: max-content; align-content: start; align-items: start; column-gap: 20px; }
   #details-content[data-detail-kind="task"] { grid-template-columns: minmax(220px, .9fr) repeat(3, minmax(0, 1fr)); }
   #details-content[data-detail-kind="group"] { grid-template-columns: minmax(260px, 1.25fr) repeat(3, minmax(0, 1fr)); }
