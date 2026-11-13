@@ -697,6 +697,10 @@ export function buildView(
             scope: { kind: "task" as const, task_id: node.ref_id ?? node.id, delivery_unit_id: task?.group_id ?? node.group_id ?? "unassigned" },
           };
         });
+  const legacyAtomicNodeIds = new Map<string, string>([
+    ...plan.atoms.map((atom) => [atom.id, atom.task_id] as const),
+    ...plan.group_atoms.map((atom) => [atom.id, atom.group_id] as const),
+  ]);
   const nodeData = plan.nodes.map((node) => ({
     ...node,
     planned_group_id: node.group_id,
@@ -717,7 +721,7 @@ export function buildView(
   const declaredAtomicEdges: AtomicEdge[] = plan.atomic_edges.map((edge) =>
     "from_node_id" in edge
       ? edge
-      : { id: edge.id, from_node_id: edge.from_atom_id, to_node_id: edge.to_atom_id, requires: { kind: "source_terminal_success" as const } },
+      : { id: edge.id, from_node_id: legacyAtomicNodeIds.get(edge.from_atom_id) ?? edge.from_atom_id, to_node_id: legacyAtomicNodeIds.get(edge.to_atom_id) ?? edge.to_atom_id, requires: { kind: "source_terminal_success" as const } },
   );
   const legacyAtomicEdges: AtomicEdge[] = plan.edges
     .filter((edge) => canonicalAtomicNodeIds.has(edge.from_node_id) && canonicalAtomicNodeIds.has(edge.to_node_id))
@@ -949,7 +953,7 @@ export function buildView(
     selected_plan_id: plan.id,
     nodes: canonicalDisplayNodes,
     edges: canonicalDisplayEdges,
-    atomic_edges: plan.atomic_edges,
+    atomic_edges: canonicalAtomicEdges,
     atomic_nodes: canonicalAtomicNodes,
     canonical_atomic_edges: canonicalAtomicEdges,
     planned_intervals: plannedIntervals(plan, ledger.config.max_running_tasks),

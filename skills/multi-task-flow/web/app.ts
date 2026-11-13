@@ -638,7 +638,7 @@ async function refresh(): Promise<void> {
     taskNotice.textContent = missingTask ? `任务 ${requestedTask} 不存在或已不可用。` : "";
     if (!hydrated && requestedTask && !missingTask && viewState.detail) viewState = { ...viewState, query: "", group: "", kind: "", state: "" };
     viewState = sanitizeViewState(viewState, stateValidation()); selectedTask = viewState.selected?.kind === "task" ? viewState.selected.id : null; selectedGroup = viewState.selected?.kind === "group" ? viewState.selected.id : null; selectedMilestone = viewState.selected?.kind === "milestone" ? viewState.selected.id : null; activePlan = viewState.plan ?? data.selected_plan_id;
-    if (previousPhase === "planning" && currentPhase === "execution") phaseTransition = true; phase = currentPhase; const shouldFocusRestoredDetails = !hydrated && viewState.detail; hydrated = true; if (shouldFocusRestoredDetails) focusDetailsOnNextRender = true; syncUrl(); connection(deriveConnectionStatus(connected, result.watching)); $("load-error").hidden = true; render();
+    if (previousPhase === "planning" && currentPhase === "execution") phaseTransition = true; phase = currentPhase; const shouldFocusRestoredDetails = !hydrated && viewState.detail; hydrated = true; if (shouldFocusRestoredDetails) focusDetailsOnNextRender = true; syncUrl(); connection(result.watching ? "live" : "stale"); $("load-error").hidden = true; render();
     if (shouldFocusRestoredDetails && selectedTask) {
       const card = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(selectedTask)}"]`);
       card?.scrollIntoView({ block: "center", inline: "center" });
@@ -671,7 +671,7 @@ window.addEventListener("resize", () => { refreshResponsiveDetails(); syncPlanIn
 anyHoverCapability.addEventListener("change", refreshResponsiveDetails); anyFinePointerCapability.addEventListener("change", refreshResponsiveDetails);
 const stream = new EventSource("api/events"); stream.addEventListener("open", () => { connected = true; connection("live"); void refresh(); }); stream.addEventListener("revision", () => void refresh()); stream.addEventListener("stale", () => { connected = false; connection("stale"); }); stream.addEventListener("heartbeat", (event) => { try { if (JSON.parse((event as MessageEvent).data).watching && !connected) { connected = true; void refresh(); } } catch { connection("stale"); } }); stream.addEventListener("error", () => { connected = false; connection("stale"); });
 hoverBridge = createHoverPreviewBridge($("hover-preview"), dismissHoverPreview);
-window.setInterval(refreshCardDurations, 60_000);
+window.setInterval(refreshCardDurations, 60_000); window.setInterval(() => { if (!connected) void refresh(); }, 5_000);
 connection("connecting"); void loadTheme(); void refresh();
 
 stream.addEventListener("agent-output", event => {

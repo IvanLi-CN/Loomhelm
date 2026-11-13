@@ -27,7 +27,7 @@
     },
     "web": {
       "name": "@loomhelm/web",
-      "version": "0.2.6",
+      "version": "0.2.7",
       "dependencies": {
         "@loomhelm/api-client": "workspace:*",
         "@radix-ui/react-context-menu": "2.4.1",
