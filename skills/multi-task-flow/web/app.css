@@ -477,6 +477,8 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 @media (min-width: 768px) and (max-width: 1444px) and (min-height: 961px) {
   .workspace { height: max(610px, calc(100dvh - 190px)); max-height: none; min-height: 610px; overflow: visible; grid-template-rows: minmax(240px, 1fr) var(--details-height, 40vh); }
   .workspace[data-view-tab="tasks"] { grid-template-rows: auto minmax(240px, 1fr) var(--details-height, 40vh); }
+  .workspace:not(.has-details) { grid-template-rows: minmax(240px, 1fr); }
+  .workspace[data-view-tab="tasks"]:not(.has-details) { grid-template-rows: auto minmax(240px, 1fr); }
   .workspace-view, .workspace-tasks { min-height: 0; align-self: stretch; overflow: visible; }
   .workspace-view { display: flex; flex-direction: column; }
   .workspace-view > .canvas-view, .workspace-view > .timeline-view { flex: 1 1 auto; min-height: 0; margin-bottom: 0; }
