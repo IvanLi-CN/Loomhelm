@@ -505,6 +505,29 @@ test("main-owned bootstrap contributions can start before the parent PR exists",
   task.delivery_policy = "parent_pr";
   task.atoms = [{ id: "atom-a", title: "a", status: "planned" }];
   approveV2(ledger);
+  ledger.facts.push({
+    id: "bootstrap-parent-pr-absent",
+    kind: "pr_published",
+    subject_id: "g",
+    status: "failed",
+    source: "github",
+    observed_at: at,
+    sha: null,
+    evidence_ref: "provider:bootstrap-parent-pr-absent",
+    receipt: {
+      provider: "github",
+      repository: "example/repo",
+      resource_type: "pr",
+      resource_id: "parent-pr",
+      branch: "parent",
+      target_branch: "main",
+      base_sha: null,
+      head_sha: null,
+      pr: null,
+      state: "absent",
+      evidence_ref: "provider:bootstrap-parent-pr-absent",
+    },
+  });
 
   let bootstrapWorkspaceError: any;
   try {
@@ -583,6 +606,19 @@ test("main-owned bootstrap contributions can start before the parent PR exists",
   }
   expect(migrationError?.code).toBe("TASK_MIGRATION_REQUIRED");
   expect(ledger.groups[0].parent_pr).toBeNull();
+});
+
+test("bootstrap parent PR bypass requires explicit absence evidence", () => {
+  const ledger = readyBootstrapFixture();
+  const task = ledger.tasks[0];
+  task.execution_owner = "main";
+  task.conversation_policy = "main_owned";
+  task.delivery_policy = "parent_pr";
+  expect(() => apply(ledger, "task-update", request(ledger, "bootstrap-without-absence", {
+    task_id: task.id,
+    state: "running",
+    occurred_at: at,
+  }, main))).toThrow("parent PR is created and verified");
 });
 
 test("bootstrap parent PR bypass fails closed for uncertain publication and retained paths", () => {

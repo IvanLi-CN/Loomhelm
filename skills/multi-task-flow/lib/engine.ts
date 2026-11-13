@@ -459,7 +459,14 @@ function parentPrDefinitivelyAbsent(
       item.target_id === owner.id &&
       activeOperation(item),
   );
-  return !publicationPending && latest?.status !== "unknown" && !deliveryUnitPr(owner) && latest?.status !== "passed";
+  return Boolean(
+    !publicationPending &&
+      latest &&
+      latest.status === "failed" &&
+      latest.receipt?.resource_type === "pr" &&
+      latest.receipt.state === "absent" &&
+      !deliveryUnitPr(owner),
+  );
 }
 function requireDevelopmentTarget(
   ledger: Ledger,
