@@ -17,16 +17,16 @@ bunx --bun --package @loomhelm/multi-task-flow@compat-v1 multi-task-flow flow vi
 可重复的生产安装必须固定 package version；`@compat-v1` 只用于接收同一兼容线内经过门禁的最新版本，`latest` 不构成身份或兼容性证明。运行前置条件是 `bun --version` 返回 `1.4.4`；Bun 由宿主提供，包不会替换或升级它。
 
 ```sh
-bunx --bun --package @loomhelm/multi-task-flow@0.2.8 multi-task-flow skills list
+bunx --bun --package @loomhelm/multi-task-flow@0.2.9 multi-task-flow skills list
 bunx --bun --package @loomhelm/multi-task-flow@compat-v1 multi-task-flow skills list
-bunx --bun --package @loomhelm/multi-task-flow@0.2.8 multi-task-flow flow view --input - < view-request.json
+bunx --bun --package @loomhelm/multi-task-flow@0.2.9 multi-task-flow flow view --input - < view-request.json
 ```
 
 当前源码投影的内部合同矩阵如下；`source_sha`、`merge_sha`、`build_id`、`canonicalDigestAlgorithm=path-byte-v2`、canonical digest 和 raw npm integrity 是每个候选构建的独立身份字段，不能由这张静态表推断。
 
 | 维度 | 当前值 |
 | - | - |
-| package | `@loomhelm/multi-task-flow@0.2.8` |
+| package | `@loomhelm/multi-task-flow@0.2.9` |
 | compatibility line | `compat-v1` |
 | Skill | `2.7.6` |
 | ledger contract | `3` |

@@ -54,7 +54,7 @@ test('release validation binds the requested version to the packaged artifact', 
   assert.notEqual(mismatched.status, 0);
   assert.match(mismatched.stderr + mismatched.stdout, /Publication version does not match artifact version/);
 
-  const missingProvenance = spawnSync(process.execPath, ['--no-install', cli, 'release', 'validate', '--version', '0.2.8', '--require-provenance'], { encoding: 'utf8' });
+  const missingProvenance = spawnSync(process.execPath, ['--no-install', cli, 'release', 'validate', '--version', '0.2.9', '--require-provenance'], { encoding: 'utf8' });
   assert.notEqual(missingProvenance.status, 0);
   assert.match(missingProvenance.stderr + missingProvenance.stdout, /Publication requires (a clean toolkit artifact|artifact merge provenance)/);
 });
@@ -71,7 +71,7 @@ test('publication digest is computed from real npm-compatible tarball contents',
     assert.equal(packageJson.scripts?.['publish:exact'], undefined);
     assert.equal(packageJson.scripts?.['publish:compat'], undefined);
     const cli = resolve(packageRoot, 'src/cli.ts');
-    const directPublish = spawnSync(process.execPath, ['--no-install', cli, 'release', 'publish', '--dist-tag', '0.2.8'], { encoding: 'utf8' });
+    const directPublish = spawnSync(process.execPath, ['--no-install', cli, 'release', 'publish', '--dist-tag', '0.2.9'], { encoding: 'utf8' });
     assert.notEqual(directPublish.status, 0);
     assert.match(directPublish.stderr + directPublish.stdout, /Direct npm publication is disabled/);
   } finally {
