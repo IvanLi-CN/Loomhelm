@@ -298,7 +298,7 @@ jobs:
           bun run --cwd skills/multi-task-flow-runtime build
           bun skills/multi-task-flow-runtime/scripts/build-service.ts --output "$RUNNER_TEMP/viewer-label-before" --service-version 0.0.0-ci
           bun skills/multi-task-flow-runtime/scripts/build-service.ts --output "$RUNNER_TEMP/viewer-label-after" --service-version 0.0.1-ci
-          LOOMHELM_VIEWER_LABEL_BEFORE="$RUNNER_TEMP/viewer-label-before" LOOMHELM_VIEWER_LABEL_AFTER="$RUNNER_TEMP/viewer-label-after" bun test ./skills/multi-task-flow-runtime/tests/service-contract.test.ts --test-name-pattern 'native launchd label transition'
+          LOOMHELM_VIEWER_LABEL_BEFORE="$RUNNER_TEMP/viewer-label-before" LOOMHELM_VIEWER_LABEL_AFTER="$RUNNER_TEMP/viewer-label-after" bun test ./skills/multi-task-flow-runtime/tests/service-contract.test.ts
 
   candidate-producer:
     name: Candidate Producer
