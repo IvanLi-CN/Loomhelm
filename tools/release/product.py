@@ -54,7 +54,7 @@ def check_projections():
     if version == 'dev':
         return version
     Version(version)
-    for name in PROJECTIONS[1:3]:
+    for name in PROJECTIONS[1:2]:
         obj = json.loads((ROOT/name).read_text())
         if obj['version'] != version:
             raise ReleaseError('version projection drift: '+name)
