@@ -458,7 +458,9 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
   #details-content > .detail-field:has(.atom-list) > .detail-value { margin-top: 6px; }
   #details-content > .detail-field:has(.atom-list) .status-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #details-content > .detail-group-facts { grid-column: 2 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: start; align-items: start; column-gap: 16px; }
-  #details-content > .detail-group-facts > .detail-field { min-width: 0; padding-block: 7px; }
+  #details-content > .detail-group-facts > .detail-field { min-width: 0; padding-block: 7px; display: block; }
+  #details-content > .detail-group-facts > .detail-field > .detail-label { display: block; margin-bottom: 4px; }
+  #details-content > .detail-group-facts > .detail-field > .detail-value { display: block; }
   #details-content > .detail-group-facts > .detail-field:has(.detail-agent-output), #details-content > .detail-group-facts > .detail-field:has(.detail-empty-output) { grid-column: 1 / -1; }
   .details-backdrop { display: none; }
   .workspace .task-layout-grid, .workspace .group-cards {

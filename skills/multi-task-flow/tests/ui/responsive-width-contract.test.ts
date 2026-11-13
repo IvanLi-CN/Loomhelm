@@ -26,6 +26,7 @@ test("medium details stay in the static bottom layout instead of a side-by-side 
   expect(medium).toContain("#details-content > .detail-field:has(.atom-list) { display: block; }");
   expect(medium).toContain("text-overflow: ellipsis; white-space: nowrap;");
   expect(medium).toContain("#details-content > .detail-group-facts { grid-column: 2 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));");
+  expect(medium).toContain("#details-content > .detail-group-facts > .detail-field { min-width: 0; padding-block: 7px; display: block; }");
   expect(medium).toContain('.workspace[data-view-tab="tasks"] .details-slot { grid-column: 1; grid-row: 3; }');
 });
 
