@@ -208,7 +208,7 @@ export function createTimelineController(context: TimelineContext) {
     const initialWindow = requestedWindow.start && requestedWindow.end ? { start: new Date(requestedWindow.start), end: new Date(requestedWindow.end) } : fittedWindow.start && fittedWindow.end ? { start: fittedWindow.start, end: fittedWindow.end } : null;
     if (mode === "planned") plannedWindow = initialWindow; else actualWindow = initialWindow;
     target.style.height = `${Math.max(284, nodes.length * 28 + 76)}px`;
-    const timeline = new Timeline(target, new DataSet(entries), groups, { editable: false, stack: false, groupOrder: "order", selectable: true, moveable: true, zoomable: true, horizontalScroll: true, verticalScroll: true, zoomKey: "ctrlKey", ...(mode === "planned" ? { format: { minorLabels: { minute: "T+mm分", hour: "T+HH时" }, majorLabels: { day: "理论时间" } } } : {}), ...(requestedWindow.start && requestedWindow.end ? requestedWindow : fittedWindow) });
+    const timeline = new Timeline(target, new DataSet(entries), groups, { editable: false, stack: false, groupOrder: "order", orientation: { item: "top" }, selectable: true, moveable: true, zoomable: true, horizontalScroll: true, verticalScroll: true, zoomKey: "ctrlKey", ...(mode === "planned" ? { format: { minorLabels: { minute: "T+mm分", hour: "T+HH时" }, majorLabels: { day: "理论时间" } } } : {}), ...(requestedWindow.start && requestedWindow.end ? requestedWindow : fittedWindow) });
     if (mode === "planned") plannedTimeline = timeline; else actualTimeline = timeline;
     bindWheel(target, timeline, mode);
     bindPan(target, timeline, mode, renderSerial);
