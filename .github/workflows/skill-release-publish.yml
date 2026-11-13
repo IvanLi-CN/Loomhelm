@@ -752,6 +752,15 @@ jobs:
           json.dump(value, open(path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
           open(path, 'a', encoding='utf-8').write('\n')
           PY
+      - name: Upload release identity for failure reconciliation
+        if: always() && (needs.verify.outputs.decision == 'release:skill' || needs.verify.outputs.decision == 'release:skill-initial-publication')
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-identity
+          path: ${{ runner.temp }}/release-identity.json
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Upload release receipt
         if: always() && (needs.verify.outputs.decision == 'release:skill' || needs.verify.outputs.decision == 'release:skill-initial-publication')
         continue-on-error: true
