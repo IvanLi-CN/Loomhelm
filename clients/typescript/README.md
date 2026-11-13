@@ -133,7 +133,7 @@ viewer 新包采用 v2 清单，覆盖启动 shell、TS、依赖及网页的逐�
 
 ## 平台与构建
 
-生产仅支持 Bun 1.4.4；Node 和旧 `dist/` CLI 不再受支持。使用 Bun 内置 `bun:ffi`，保留目录描述符相对操作、flock 和原子不覆盖重命名，不需要项目原生编译或 Python 辅助进程。验证平台为 macOS arm64 与 Linux x64 glibc，Windows 不受支持。专项 Skill 仍要求各自的外部工具与授权，发现源包不代表已具备其宿主能力。
+生产仅支持 Bun 1.4.4；Node 和旧 `dist/` CLI 不再受支持。使用 Bun 内置 `bun:ffi`，保留目录描述符相对操作、flock 和原子不覆盖重命名，不需要项目原生编译或 Python 辅助进程。发布与 CI 验证平台为 Linux x64 glibc；Windows 不受支持。专项 Skill 仍要求各自的外部工具与授权，发现源包不代表已具备其宿主能力。
 
 来源提交未包含独立 LICENSE 文件，不能据此推断公共再分发许可；保留源文件原有版权和许可内容及来源清单。
 

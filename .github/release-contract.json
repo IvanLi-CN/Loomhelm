@@ -7,7 +7,15 @@
   "ledger_ref": "refs/heads/release-ledger",
   "tag_prefix": "v",
   "single_active_reservation": true,
-  "artifacts": ["server-linux-amd64.tar.gz", "go-client-darwin-arm64.tar.gz", "go-client-linux-amd64.tar.gz", "ts-client-darwin-arm64.tar.gz", "ts-client-linux-amd64.tar.gz", "web.tar.gz"],
+  "artifacts": [
+    "server-linux-amd64.tar.gz",
+    "go-client-linux-amd64.tar.gz",
+    "ts-client-linux-amd64.tar.gz",
+    "web.tar.gz"
+  ],
   "notification_transport": "github-issue",
-  "compatibility": {"default": "exact-version", "allow": []}
+  "compatibility": {
+    "default": "exact-version",
+    "allow": []
+  }
 }
