@@ -15822,22 +15822,6 @@
       "installedSha256": "a5e3071c352a84ff570ace16bd2d0e5d84774794fcf22cdebe1cda0567ffd978",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation",
       "sourcePath": "skills/multi-task-flow-runtime/tests/schema-validation.test.ts"
-    },
-    {
-      "source": "skills/multi-task-flow/scripts/serve.ts",
-      "path": "skills/multi-task-flow/scripts/serve.ts",
-      "sourceBlob": "036b21f6d8e54644b764b4d00cf5e42f8688f371",
-      "sourceSha256": "770242bd6435b67fa0528fc32ad99dc6ec14dfa7cb3f5f1ddd6952ad713f4b12",
-      "installedSha256": "b92497e6866feae9cc1318dc55637041172f623dfec76c1ae30b7b3768f7fe63",
-      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
-    },
-    {
-      "source": "skills/multi-task-flow/tests/serve.test.ts",
-      "path": "skills/multi-task-flow/tests/serve.test.ts",
-      "sourceBlob": "54a89fd945572f36378e765867e1154f6d0df4bd",
-      "sourceSha256": "577b40af06b6e7f573606ae89809eaa8cf0e5b42350e8c82846d361c273a12fd",
-      "installedSha256": "d4257daac34121a3b6892ebcdfd606e745cbfb100f9416f9a1a9a5294814a602",
-      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     }
   ],
   "additions": [
