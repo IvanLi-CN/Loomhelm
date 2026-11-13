@@ -195,6 +195,8 @@ function taskPrRef(task: Ledger["tasks"][number]): ExternalRef | null {
 function requireContributionDispatchGate(
   ledger: Ledger,
   owner: Ledger["groups"][number],
+  requireParentPr = true,
+  retryAction: "dispatch-claim" | "task-update" = "dispatch-claim",
 ): void {
   if (legacyLedger(ledger)) return;
   const workspaceAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
@@ -202,23 +204,30 @@ function requireContributionDispatchGate(
   const missing: string[] = [];
   if (owner.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     missing.push("workspace_ready");
-  if (owner.lifecycle.pr_created !== "passed" || !deliveryUnitPr(owner) || prAtom?.status !== "completed")
+  const parentPrRequired = requireParentPr || !parentPrDefinitivelyAbsent(ledger, owner);
+  if (parentPrRequired && !parentPrReady(ledger, owner, prAtom))
     missing.push("parent_pr");
   if (missing.length)
     throw new ContractError(
       "DELIVERY_GATE_PENDING",
-      "Contribution task cannot start before the delivery-unit parent PR is created and verified",
+      missing.includes("parent_pr")
+        ? "Contribution task cannot start before the delivery-unit parent PR is created and verified"
+        : "Contribution task cannot start before the delivery-unit workspace is ready",
       4,
       {
         target_type: "group",
         target_id: owner.id,
         missing,
         recovery: [
-          "lifecycle-record workspace_ready",
-          "group-atom-update workspace_ready completed",
-          "publish-pr-claim + publish-pr-resolve for the parent PR",
-          "group-atom-update pr_created completed",
-          "retry dispatch-claim",
+          ...(missing.includes("workspace_ready") ? [
+            "lifecycle-record workspace_ready",
+            "group-atom-update workspace_ready completed",
+          ] : []),
+          ...(missing.includes("parent_pr") ? [
+            "publish-pr-claim + publish-pr-resolve for the parent PR",
+            "group-atom-update pr_created completed",
+            `retry ${retryAction}`,
+          ] : [`retry ${retryAction}`]),
         ],
       },
     );
@@ -409,6 +418,7 @@ function prReceipt(
   prValue: z.infer<typeof externalRef>,
   baseSha?: string,
   headSha?: string,
+  receiptState?: z.infer<typeof providerReceipt>["state"],
 ): boolean {
   const latest = latestPublication(ledger, targetId, "pr_published");
   return (
@@ -419,7 +429,43 @@ function prReceipt(
     latest.receipt.resource_id === prValue.id &&
     stable(latest.receipt.pr) === stable(prValue) &&
     (baseSha === undefined || latest.receipt.base_sha === baseSha) &&
-    (headSha === undefined || latest.receipt.head_sha === headSha)
+    (headSha === undefined || latest.receipt.head_sha === headSha) &&
+    (receiptState === undefined || latest.receipt.state === receiptState)
+  );
+}
+function parentPrReady(
+  ledger: Ledger,
+  owner: Ledger["groups"][number],
+  prAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "pr_created"),
+): boolean {
+  const pr = deliveryUnitPr(owner);
+  const canonicalState = owner.pr && "state" in owner.pr ? owner.pr.state : null;
+  return (
+    owner.lifecycle.pr_created === "passed" &&
+    prAtom?.status === "completed" &&
+    !!pr &&
+    (canonicalState === null || canonicalState === "published") &&
+    prReceipt(ledger, owner.id, pr, undefined, undefined, "open")
+  );
+}
+function parentPrDefinitivelyAbsent(
+  ledger: Ledger,
+  owner: Ledger["groups"][number],
+): boolean {
+  const latest = latestPublication(ledger, owner.id, "pr_published");
+  const publicationPending = ledger.operations.some(
+    (item) =>
+      item.kind === "publish_pr" &&
+      item.target_id === owner.id &&
+      activeOperation(item),
+  );
+  return Boolean(
+    !publicationPending &&
+      latest &&
+      latest.status === "failed" &&
+      latest.receipt?.resource_type === "pr" &&
+      latest.receipt.state === "absent" &&
+      !deliveryUnitPr(owner),
   );
 }
 function requireDevelopmentTarget(
@@ -2837,7 +2883,22 @@ export function execute(
       const occupiedSlot = target.state === "agent_idle";
       if (state === "running" && isContributionKind(target.kind)) {
         const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
-        requireContributionDispatchGate(ledger, owner);
+        const bootstrapMainOwnedStart =
+          mainOwned &&
+          owner.delivery_unit_kind === "bootstrap" &&
+          owner.owner_kind === "main";
+        requireCondition(
+          owner.state === "active",
+          "GROUP_NOT_READY",
+          "Task group is not active",
+          4,
+        );
+        requireContributionDispatchGate(
+          ledger,
+          owner,
+          !bootstrapMainOwnedStart,
+          "task-update",
+        );
       }
       if (state === "running" && previousState !== "starting" && !occupiedSlot) {
         requireCondition(
@@ -2935,7 +2996,7 @@ export function execute(
       }
       const eventType =
         state === "running"
-          ? previousState === "starting"
+          ? previousState === "starting" || previousState === "planned"
             ? "task_started"
             : "task_resumed"
           : state === "waiting"

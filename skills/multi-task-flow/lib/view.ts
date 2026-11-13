@@ -37,14 +37,106 @@ export type PlannedInterval = {
 
 const RELATIVE_EPOCH = Date.parse("2000-01-01T00:00:00.000Z");
 
-function deliveryGateDiagnostics(group: Ledger["groups"][number]): Record<string, string>[] {
-  const workspaceAtom = group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
+function deliveryUnitPr(group: Ledger["groups"][number]) {
+  if (group.pr && "state" in group.pr) return "pr" in group.pr ? group.pr.pr : null;
+  return group.parent_pr;
+}
+
+function latestParentPrFact(ledger: Ledger, groupId: string) {
+  return ledger.facts
+    .filter((fact) => fact.kind === "pr_published" && fact.subject_id === groupId)
+    .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
+    .at(-1);
+}
+
+function sameExternalRef(left: { provider: string; repository: string; id: string }, right: { provider: string; repository: string; id: string }): boolean {
+  return left.provider === right.provider && left.repository === right.repository && left.id === right.id;
+}
+
+function parentPrReady(ledger: Ledger, group: Ledger["groups"][number]): boolean {
+  const pr = deliveryUnitPr(group);
+  const canonicalState = group.pr && "state" in group.pr ? group.pr.state : null;
   const prAtom = group.atoms.find((atom) => atom.lifecycle_stage === "pr_created");
+  const latest = latestParentPrFact(ledger, group.id);
+  return Boolean(
+    group.lifecycle.pr_created === "passed" &&
+      prAtom?.status === "completed" &&
+      pr &&
+      (canonicalState === null || canonicalState === "published") &&
+      latest?.status === "passed" &&
+      latest.receipt?.resource_type === "pr" &&
+      latest.receipt.resource_id === pr.id &&
+      latest.receipt.pr &&
+      sameExternalRef(latest.receipt.pr, pr) &&
+      latest.receipt.state === "open",
+  );
+}
+
+function parentPrDefinitivelyAbsent(ledger: Ledger, group: Ledger["groups"][number]): boolean {
+  const latest = latestParentPrFact(ledger, group.id);
+  const publicationPending = ledger.operations.some(
+    (operation) =>
+      operation.kind === "publish_pr" &&
+      operation.target_id === group.id &&
+      ["claimed", "unknown"].includes(operation.status),
+  );
+  return Boolean(
+    !publicationPending &&
+      latest &&
+      latest.status === "failed" &&
+      latest.receipt?.resource_type === "pr" &&
+      latest.receipt.state === "absent" &&
+      !deliveryUnitPr(group),
+  );
+}
+
+function allowsBootstrapMainOwnedStart(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+  task?: Ledger["tasks"][number],
+): boolean {
+  const workspaceAtom = group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
+  return Boolean(
+    task &&
+      group.state === "active" &&
+      group.delivery_unit_kind === "bootstrap" &&
+      group.owner_kind === "main" &&
+      task.execution_owner === "main" &&
+      task.conversation_policy === "main_owned" &&
+      group.lifecycle.workspace_ready === "passed" &&
+      workspaceAtom?.status === "completed" &&
+      parentPrDefinitivelyAbsent(ledger, group),
+  );
+}
+
+function allowsBootstrapGroupStart(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+): boolean {
+  const workspaceAtom = group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
+  return Boolean(
+    group.state === "active" &&
+      group.delivery_unit_kind === "bootstrap" &&
+      group.owner_kind === "main" &&
+      group.lifecycle.workspace_ready === "passed" &&
+      workspaceAtom?.status === "completed" &&
+      parentPrDefinitivelyAbsent(ledger, group),
+  );
+}
+
+function deliveryGateDiagnostics(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+  task?: Ledger["tasks"][number],
+): Record<string, string>[] {
+  const workspaceAtom = group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
   const diagnostics: Record<string, string>[] = [];
+  if (group.state !== "active")
+    diagnostics.push({ code: "DELIVERY_UNIT_NOT_ACTIVE", message: "交付单元尚未进入 active 状态" });
   if (group.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     diagnostics.push({ code: "DELIVERY_WORKSPACE_GATE_PENDING", message: "交付单元尚未完成 workspace_ready 原子任务" });
-  const deliveryPr = group.pr && "state" in group.pr ? ("pr" in group.pr ? group.pr.pr : null) : group.parent_pr;
-  if (group.lifecycle.pr_created !== "passed" || !deliveryPr || prAtom?.status !== "completed")
+  const bootstrapGroupException = !task && allowsBootstrapGroupStart(ledger, group);
+  if (!allowsBootstrapMainOwnedStart(ledger, group, task) && !bootstrapGroupException && !parentPrReady(ledger, group))
     diagnostics.push({ code: "DELIVERY_PARENT_PR_GATE_PENDING", message: "父 PR 尚未创建、核验并完成交付原子任务" });
   return diagnostics;
 }
@@ -807,7 +899,7 @@ export function buildView(
       return {
         ...task,
         ...(() => {
-          const gateDiagnostics = owner && isContributionKind(task.kind) ? deliveryGateDiagnostics(owner) : [];
+          const gateDiagnostics = owner && isContributionKind(task.kind) ? deliveryGateDiagnostics(ledger, owner, task) : [];
           return { gateDiagnostics };
         })(),
         dispatch_diagnostics: [
@@ -815,14 +907,14 @@ export function buildView(
           ...(owner && owner.delivery_unit_kind === "regular" && !owner.agent_thread_id
             ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }]
             : []),
-          ...((owner && isContributionKind(task.kind)) ? deliveryGateDiagnostics(owner) : []),
+          ...((owner && isContributionKind(task.kind)) ? deliveryGateDiagnostics(ledger, owner, task) : []),
         ],
         dispatch_readiness:
           task.execution_owner === null && task.conversation_policy === null && task.delivery_policy === null
             ? "unknown"
             : taskExecutionPolicyIssues(task).length > 0
               ? "blocked"
-              : owner && isContributionKind(task.kind) && deliveryGateDiagnostics(owner).length > 0
+              : owner && isContributionKind(task.kind) && deliveryGateDiagnostics(ledger, owner, task).length > 0
                 ? "blocked"
               : owner && (owner.delivery_unit_kind === "bootstrap" || !!owner.agent_thread_id)
               ? "ready"
@@ -851,6 +943,10 @@ export function buildView(
     });
   const allTasksDispatchReady = tasks.every(
     (task) => task.dispatch_readiness === "ready",
+  );
+  const allDeliveryUnitsDispatchReady = ledger.groups.every((item) =>
+    deliveryGateDiagnostics(ledger, item).length === 0 &&
+    (item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id),
   );
   const planSummary = ledger.plans.map((item) => ({
     id: item.id,
@@ -896,7 +992,7 @@ export function buildView(
         activePlan.id !== executionPlan.id ||
         activePlan.lifecycle !== "approved",
       scheduling_eligible: schedulingStatus === "eligible",
-      dispatch_readiness: ledger.groups.every((item) => item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id) && allTasksDispatchReady ? "ready" : "blocked",
+      dispatch_readiness: allDeliveryUnitsDispatchReady && allTasksDispatchReady ? "ready" : "blocked",
       delivery_agent_readiness: ledger.groups.some((item) => item.delivery_unit_kind === "regular" && !item.agent_thread_id) ? "unbound" : "bound",
       proposal: {
         status: completenessIssues.length === 0 ? "complete" : "blocked",
@@ -927,14 +1023,16 @@ export function buildView(
       ...item,
       derived_status: deriveBusinessStatus(canonicalAtomicNodes, { kind: "delivery_unit", delivery_unit_id: item.id }, milestoneEvaluations),
       ...(() => {
-        const gateDiagnostics = item.delivery_unit_kind === "regular" ? deliveryGateDiagnostics(item) : [];
+        const gateDiagnostics = deliveryGateDiagnostics(ledger, item);
         return { gateDiagnostics };
       })(),
       delivery_agent_readiness: item.delivery_unit_kind === "bootstrap" ? "not_applicable" : item.agent_thread_id ? "bound" : "unbound",
-      dispatch_readiness: item.delivery_unit_kind === "bootstrap" || (!!item.agent_thread_id && deliveryGateDiagnostics(item).length === 0) ? "ready" : "blocked",
+      dispatch_readiness: item.delivery_unit_kind === "bootstrap"
+        ? deliveryGateDiagnostics(ledger, item).length === 0 ? "ready" : "blocked"
+        : !!item.agent_thread_id && deliveryGateDiagnostics(ledger, item).length === 0 ? "ready" : "blocked",
       dispatch_diagnostics: [
         ...(item.delivery_unit_kind === "regular" && !item.agent_thread_id ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }] : []),
-        ...(item.delivery_unit_kind === "regular" ? deliveryGateDiagnostics(item) : []),
+        ...deliveryGateDiagnostics(ledger, item),
       ],
       ...profileProjection(ledger, "group", item),
       coordinator: coordinatorProjection(ledger, item),

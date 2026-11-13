@@ -93,6 +93,15 @@ export type AtomicNode = z.infer<typeof atomicNode>;
 export type AtomicEdge = z.infer<typeof atomicEdge>;
 export type TaskPrBinding = z.infer<typeof taskPrBinding>;
 export type DeliveryUnitExternalFacts = z.infer<typeof deliveryUnitExternalFacts>;
+export type ContributionStartContext = {
+  delivery_unit_kind?: "bootstrap" | "regular";
+  owner_kind?: "main" | "group";
+  execution_owner?: "main" | "delivery_agent" | "task_agent";
+  conversation_policy?: "main_owned" | "delivery_owned" | "task_agent" | "none";
+  active?: boolean;
+  workspace_ready?: boolean;
+  parent_pr_status?: "definitively_absent" | "unknown" | "pending" | "present";
+};
 
 export type DerivedBusinessStatus = "planned" | "ready" | "running" | "blocked" | "completed";
 
@@ -125,10 +134,23 @@ export function deriveBusinessStatus(
   return "planned";
 }
 
-export function validateContributionStart(node: AtomicNode, deliveryUnit: { pr: DeliveryUnitExternalFacts; parent_branch?: string | null }): void {
+export function validateContributionStart(
+  node: AtomicNode,
+  deliveryUnit: { pr: DeliveryUnitExternalFacts; parent_branch?: string | null },
+  context: ContributionStartContext = {},
+): void {
   if (node.kind !== "work" || node.activity_type !== "contribution" || node.state !== "starting") return;
-  if (deliveryUnit.pr.state !== "published" && deliveryUnit.pr.state !== "merged") throw new Error("Contribution work requires a published DeliveryUnit PR before starting");
-  if (!deliveryUnit.parent_branch) throw new Error("Contribution work requires a DeliveryUnit parent branch before starting");
+  const bootstrapException =
+    context.delivery_unit_kind === "bootstrap" &&
+    context.owner_kind === "main" &&
+    context.execution_owner === "main" &&
+    context.conversation_policy === "main_owned" &&
+    context.active === true &&
+    context.workspace_ready === true &&
+    context.parent_pr_status === "definitively_absent" &&
+    deliveryUnit.pr.state === "unpublished";
+  if (!bootstrapException && deliveryUnit.pr.state !== "published" && deliveryUnit.pr.state !== "merged") throw new Error("Contribution work requires a published DeliveryUnit PR before starting");
+  if (!bootstrapException && !deliveryUnit.parent_branch) throw new Error("Contribution work requires a DeliveryUnit parent branch before starting");
 }
 
 export type MilestoneEvaluation =
