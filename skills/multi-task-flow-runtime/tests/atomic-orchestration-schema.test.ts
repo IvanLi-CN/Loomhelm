@@ -25,6 +25,11 @@ test("represents closed PRs without treating them as success", () => {
   expect(parsed.state).toBe("closed");
 });
 
+test("represents a singleton task by the delivery-unit PR binding", () => {
+  const parsed = taskPrBinding.parse({ state: "shared_delivery_unit", delivery_unit_id: "du-1" });
+  expect(parsed).toEqual({ state: "shared_delivery_unit", delivery_unit_id: "du-1" });
+});
+
 test("rejects cyclic atomic graphs and empty planned milestones", () => {
   const nodes = [
     { kind: "milestone", id: "m-1", title: "M1", state: "planned", scope: { kind: "delivery_unit", delivery_unit_id: "du-1" }, acceptance: [{ kind: "node_satisfied", node_id: "w-1" }] },
@@ -49,6 +54,41 @@ test("derives business status and enforces contribution starting prerequisites",
   const node = atomicNode.parse({ kind: "work", id: "work-1", title: "Implement", purpose: "Implement", output: "code", acceptance: [], activity_type: "contribution", state: "starting", scope: { kind: "task", task_id: "task-1", delivery_unit_id: "du-1" }, runtime: { started_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", evidence_refs: [] } });
   expect(() => validateContributionStart(node, { pr: { state: "unpublished" } } as any)).toThrow();
   expect(() => validateContributionStart(node, { pr: { state: "published", pr: ref, parent_branch: "main" }, parent_branch: "main" } as any)).not.toThrow();
+  expect(() => validateContributionStart(node, { pr: { state: "unpublished" } } as any, {
+    delivery_unit_kind: "bootstrap",
+    owner_kind: "main",
+    execution_owner: "main",
+    conversation_policy: "main_owned",
+    active: true,
+    workspace_ready: true,
+    parent_pr_status: "definitively_absent",
+  })).not.toThrow();
+  expect(() => validateContributionStart(node, { pr: { state: "closed", pr: ref, parent_branch: "main", closed_at: "2026-01-01T00:00:00Z", closed_reason: "provider_closed" } } as any, {
+    delivery_unit_kind: "bootstrap",
+    owner_kind: "main",
+    execution_owner: "main",
+    conversation_policy: "main_owned",
+    active: true,
+    workspace_ready: true,
+    parent_pr_status: "present",
+  })).toThrow();
+  expect(() => validateContributionStart(node, { pr: { state: "unpublished" } } as any, {
+    delivery_unit_kind: "bootstrap",
+    owner_kind: "main",
+    execution_owner: "main",
+    conversation_policy: "main_owned",
+    active: true,
+    workspace_ready: true,
+    parent_pr_status: "unknown",
+  })).toThrow();
+  expect(() => validateContributionStart(node, { pr: { state: "unpublished" } } as any, {
+    delivery_unit_kind: "bootstrap",
+    owner_kind: "main",
+    execution_owner: "task_agent",
+    conversation_policy: "task_agent",
+    active: true,
+    workspace_ready: true,
+  })).toThrow();
   expect(deriveBusinessStatus([node], { kind: "task", task_id: "task-1" })).toBe("running");
 });
 

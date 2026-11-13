@@ -14591,15 +14591,6 @@
       "sourcePath": "skills/multi-task-flow-runtime/scripts/orchestrate.ts"
     },
     {
-      "source": "skills/multi-task-flow/scripts/preview-source.ts",
-      "path": "skills/multi-task-flow/scripts/preview-source.ts",
-      "sourceBlob": "b981ff666ba822f9fc4621c9feb74fa731a5a3fb",
-      "sourceSha256": "ccff74579eb134f44efcb4322883c5c3a0a25d1d1aa0552b0d4835d6e000441c",
-      "installedSha256": "ee6c9e545ef6548d0f4c58cfe07d631f7bdbab5f69f3e7aacce7096eb04521f3",
-      "adaptation": "loomhelm-runtime-path-or-contract-adaptation",
-      "sourcePath": "skills/multi-task-flow-runtime/scripts/preview-source.ts"
-    },
-    {
       "source": "skills/multi-task-flow/scripts/service.ts",
       "path": "skills/multi-task-flow/scripts/service.ts",
       "sourceBlob": "714e13bb70a1f95459958d3f8f1c02b33340237f",
@@ -15831,6 +15822,22 @@
       "installedSha256": "a5e3071c352a84ff570ace16bd2d0e5d84774794fcf22cdebe1cda0567ffd978",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation",
       "sourcePath": "skills/multi-task-flow-runtime/tests/schema-validation.test.ts"
+    },
+    {
+      "source": "skills/multi-task-flow/scripts/serve.ts",
+      "path": "skills/multi-task-flow/scripts/serve.ts",
+      "sourceBlob": "036b21f6d8e54644b764b4d00cf5e42f8688f371",
+      "sourceSha256": "770242bd6435b67fa0528fc32ad99dc6ec14dfa7cb3f5f1ddd6952ad713f4b12",
+      "installedSha256": "b92497e6866feae9cc1318dc55637041172f623dfec76c1ae30b7b3768f7fe63",
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
+    },
+    {
+      "source": "skills/multi-task-flow/tests/serve.test.ts",
+      "path": "skills/multi-task-flow/tests/serve.test.ts",
+      "sourceBlob": "54a89fd945572f36378e765867e1154f6d0df4bd",
+      "sourceSha256": "577b40af06b6e7f573606ae89809eaa8cf0e5b42350e8c82846d361c273a12fd",
+      "installedSha256": "d4257daac34121a3b6892ebcdfd606e745cbfb100f9416f9a1a9a5294814a602",
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     }
   ],
   "additions": [
@@ -16583,6 +16590,10 @@
       "path": "skills/multi-task-flow/web/atomic-graph-view.tsx",
       "sourcePath": "skills/multi-task-flow-runtime/web/atomic-graph-view.tsx",
       "installedSha256": "6c157adb3cd47c6812b9e06dc7d7ed21486a8ccf7a334a934c9e4aef62745a50"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/delivery-topology.test.ts",
+      "installedSha256": "60c3c895ee7f52250c199791904ff9f65be8758db77ea8dec5cc430e3344a312"
     }
   ],
   "exclusions": [

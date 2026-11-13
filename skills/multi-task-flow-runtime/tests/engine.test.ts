@@ -7,6 +7,7 @@ import {
   type Plan,
   type Task,
 } from "../lib/schema";
+import { deriveExecutionPhase } from "../lib/revisions";
 
 test("task execution policy rejects contradictory ownership and preserves legacy absence", () => {
   expect(taskExecutionPolicyIssues({ execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "parent_pr" })).toEqual([]);
@@ -367,6 +368,34 @@ function approveV2(ledger: ReturnType<typeof v2Fixture>) {
   }));
 }
 
+function readyBootstrapFixture() {
+  const ledger = v2Fixture();
+  ledger.groups[0].delivery_unit_kind = "bootstrap";
+  ledger.groups[0].owner_kind = "main";
+  ledger.groups[0].agent_thread_id = null;
+  ledger.groups[0].atoms = [{
+    id: "workspace",
+    title: "Prepare parent",
+    purpose: "Prepare",
+    output: "Ready",
+    lifecycle_stage: "workspace_ready",
+    status: "completed",
+  }];
+  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
+  ledger.groups[0].lifecycle.workspace_ready = "passed";
+  ledger.events.push({
+    id: "bootstrap-workspace-recorded",
+    type: "lifecycle_recorded",
+    subject_id: "g",
+    actor_id: "main-thread",
+    occurred_at: at,
+    recorded_at: at,
+    data: { target_type: "group", stage: "workspace_ready", evidence_ref: "workspace" },
+  });
+  approveV2(ledger);
+  return ledger;
+}
+
 test("contribution dispatch is blocked until the parent PR gate is complete", () => {
   const ledger = v2Fixture();
   approveV2(ledger);
@@ -396,6 +425,316 @@ test("contribution dispatch is blocked until the parent PR gate is complete", ()
     state: "running",
     occurred_at: at,
   }, { role: "task", thread_id: "task-a-thread" }))).toThrow("parent PR is created and verified");
+  try {
+    apply(ledger, "task-update", request(ledger, "blocked-task-start-details", {
+      task_id: "a",
+      state: "running",
+      occurred_at: at,
+    }, { role: "task", thread_id: "task-a-thread" }));
+  } catch (error) {
+    expect((error as any).details.recovery).toContain("retry task-update");
+  }
+});
+
+test("dispatch-claim recovery names its caller when only workspace readiness is missing", () => {
+  const ledger = v2Fixture();
+  approveV2(ledger);
+  ledger.groups[0].atoms = [
+    { id: "workspace", title: "Prepare parent", purpose: "Prepare", output: "Ready", lifecycle_stage: "workspace_ready", status: "planned" },
+    { id: "parent-pr", title: "Create parent PR", purpose: "Publish", output: "Created", lifecycle_stage: "pr_created", status: "completed" },
+  ];
+  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
+  ledger.groups[0].lifecycle.pr_created = "passed";
+  const parentPr = providerPrReceipt("parent-pr", "parent", base, base);
+  ledger.groups[0].parent_pr = parentPr.pr;
+  ledger.facts.push({
+    id: "parent-branch-fact",
+    kind: "branch_published",
+    subject_id: "g",
+    status: "passed",
+    source: "github",
+    observed_at: at,
+    sha: base,
+    evidence_ref: "provider:parent",
+    receipt: providerBranchReceipt("parent", base),
+  });
+  ledger.facts.push({
+    id: "parent-pr-fact",
+    kind: "pr_published",
+    subject_id: "g",
+    status: "passed",
+    source: "github",
+    observed_at: at,
+    sha: base,
+    evidence_ref: "provider:parent-pr",
+    receipt: parentPr,
+  });
+
+  let dispatchError: any;
+  try {
+    apply(ledger, "dispatch-claim", request(ledger, "workspace-only-dispatch", {
+      task_id: "a",
+      operation_id: "workspace-only-dispatch-op",
+    }));
+  } catch (error) {
+    dispatchError = error;
+    expect((error as any).details.missing).toEqual(["workspace_ready"]);
+    expect((error as any).details.recovery).toContain("retry dispatch-claim");
+    expect((error as any).details.recovery).not.toContain("retry task-update");
+  }
+  expect(dispatchError).toBeDefined();
+});
+
+test("main-owned bootstrap contributions can start before the parent PR exists", () => {
+  const ledger = v2Fixture();
+  ledger.groups[0].delivery_unit_kind = "bootstrap";
+  ledger.groups[0].owner_kind = "main";
+  ledger.groups[0].agent_thread_id = null;
+  ledger.groups[0].atoms = [{
+    id: "workspace",
+    title: "Prepare parent",
+    purpose: "Prepare",
+    output: "Ready",
+    lifecycle_stage: "workspace_ready",
+    status: "planned",
+  }];
+  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
+  const task = ledger.tasks[0];
+  task.execution_owner = "main";
+  task.conversation_policy = "main_owned";
+  task.delivery_policy = "parent_pr";
+  task.atoms = [{ id: "atom-a", title: "a", status: "planned" }];
+  approveV2(ledger);
+  ledger.facts.push({
+    id: "bootstrap-parent-pr-absent",
+    kind: "pr_published",
+    subject_id: "g",
+    status: "failed",
+    source: "github",
+    observed_at: at,
+    sha: null,
+    evidence_ref: "provider:bootstrap-parent-pr-absent",
+    receipt: {
+      provider: "github",
+      repository: "example/repo",
+      resource_type: "pr",
+      resource_id: "parent-pr",
+      branch: "parent",
+      target_branch: "main",
+      base_sha: null,
+      head_sha: null,
+      pr: null,
+      state: "absent",
+      evidence_ref: "provider:bootstrap-parent-pr-absent",
+    },
+  });
+
+  let bootstrapWorkspaceError: any;
+  try {
+    apply(ledger, "task-update", request(ledger, "bootstrap-main-before-workspace", {
+      task_id: task.id,
+      state: "running",
+      occurred_at: at,
+    }, main));
+  } catch (error) {
+    bootstrapWorkspaceError = error;
+    expect((error as any).message).toContain("delivery-unit workspace is ready");
+    expect((error as any).details.missing).toEqual(["workspace_ready"]);
+    expect((error as any).details.recovery).toContain("retry task-update");
+  }
+  expect(bootstrapWorkspaceError).toBeDefined();
+
+  ledger.groups[0].lifecycle.workspace_ready = "passed";
+  ledger.groups[0].atoms[0].status = "completed";
+  ledger.events.push({
+    id: "bootstrap-workspace-recorded",
+    type: "lifecycle_recorded",
+    subject_id: "g",
+    actor_id: "main-thread",
+    occurred_at: at,
+    recorded_at: at,
+    data: { target_type: "group", stage: "workspace_ready", evidence_ref: "workspace" },
+  });
+
+  ledger.groups[0].state = "planned";
+  expect(() => apply(ledger, "task-update", request(ledger, "bootstrap-planned-group", {
+    task_id: task.id,
+    state: "running",
+    occurred_at: at,
+  }, main))).toThrow("Task group is not active");
+  ledger.groups[0].state = "active";
+
+  apply(ledger, "task-update", request(ledger, "bootstrap-main-start", {
+    task_id: task.id,
+    state: "running",
+    occurred_at: at,
+  }, main));
+
+  expect(ledger.tasks[0].state).toBe("running");
+  expect(ledger.tasks[0].started_at).toBe(at);
+  expect(ledger.events.at(-1)?.type).toBe("task_started");
+  expect(deriveExecutionPhase(ledger)).toBe("implementation");
+  const proposed = structuredClone(ledger.plans[0]);
+  proposed.id = "bootstrap-revision";
+  proposed.supersedes_id = ledger.execution_plan_id;
+  proposed.approval_id = null;
+  proposed.lifecycle = "proposed";
+  proposed.revision = null;
+  proposed.actions = proposed.actions.map((action: any) => ({
+    ...action,
+    target: action.group_id ? { type: "group", id: action.group_id } : { type: "task", id: action.task_id },
+  }));
+  const revisedTasks = structuredClone(ledger.tasks);
+  revisedTasks[0].owned_surfaces = ["src/changed-after-start"];
+  let migrationError: any;
+  try {
+    apply(ledger, "plan-propose", request(ledger, "bootstrap-boundary-change", {
+      plan: proposed,
+      groups: structuredClone(ledger.groups),
+      tasks: revisedTasks,
+      revision: {
+        reason: {
+          category: "owner_direction",
+          summary: "Update the implementation boundary after direct bootstrap start.",
+          evidence_refs: ["evidence://bootstrap-start"],
+          impact: "The started task requires explicit migration if its owned surface changes.",
+        },
+      },
+    }, main));
+  } catch (error) {
+    migrationError = error;
+  }
+  expect(migrationError?.code).toBe("TASK_MIGRATION_REQUIRED");
+  expect(ledger.groups[0].parent_pr).toBeNull();
+});
+
+test("bootstrap parent PR bypass requires explicit absence evidence", () => {
+  const ledger = readyBootstrapFixture();
+  const task = ledger.tasks[0];
+  task.execution_owner = "main";
+  task.conversation_policy = "main_owned";
+  task.delivery_policy = "parent_pr";
+  expect(() => apply(ledger, "task-update", request(ledger, "bootstrap-without-absence", {
+    task_id: task.id,
+    state: "running",
+    occurred_at: at,
+  }, main))).toThrow("parent PR is created and verified");
+});
+
+test("bootstrap parent PR bypass fails closed for uncertain publication and retained paths", () => {
+  for (const uncertainty of ["operation", "fact"] as const) {
+    const ledger = readyBootstrapFixture();
+    const task = ledger.tasks[0];
+    task.execution_owner = "main";
+    task.conversation_policy = "main_owned";
+    task.delivery_policy = "parent_pr";
+    if (uncertainty === "operation") {
+      ledger.operations.push({
+        id: "pending-parent-pr",
+        kind: "publish_pr",
+        actor_id: "main-thread",
+        target_id: "g",
+        status: "unknown",
+        request: { target_type: "group" },
+        expected_sha: null,
+        receipt_fact_id: null,
+        created_at: at,
+        updated_at: at,
+      });
+    } else {
+      ledger.facts.push({
+        id: "unknown-parent-pr",
+        kind: "pr_published",
+        subject_id: "g",
+        status: "unknown",
+        source: "github",
+        observed_at: at,
+        sha: null,
+        evidence_ref: "provider:unknown-parent-pr",
+        receipt: null,
+      });
+    }
+    expect(() => apply(ledger, "task-update", request(ledger, `bootstrap-uncertain-${uncertainty}`, {
+      task_id: task.id,
+      state: "running",
+      occurred_at: at,
+    }, main))).toThrow("parent PR is created and verified");
+    expect(ledger.tasks[0].state).toBe("planned");
+  }
+});
+
+test("regular and Task Agent bootstrap paths retain the parent PR gate after workspace readiness", () => {
+  const regular = readyBootstrapFixture();
+  regular.groups[0].delivery_unit_kind = "regular";
+  regular.groups[0].owner_kind = "group";
+  regular.groups[0].agent_thread_id = "group-thread";
+  regular.tasks[0].execution_owner = "main";
+  regular.tasks[0].conversation_policy = "main_owned";
+  regular.tasks[0].delivery_policy = "parent_pr";
+  expect(() => apply(regular, "task-update", request(regular, "regular-main-without-parent", {
+    task_id: "a",
+    state: "running",
+    occurred_at: at,
+  }, main))).toThrow("parent PR is created and verified");
+  expect(regular.tasks[0].state).toBe("planned");
+
+  const taskAgent = readyBootstrapFixture();
+  taskAgent.tasks[0].execution_owner = "task_agent";
+  taskAgent.tasks[0].conversation_policy = "task_agent";
+  taskAgent.tasks[0].delivery_policy = "child_pr";
+  taskAgent.tasks[0].thread_id = "task-a-thread";
+  taskAgent.tasks[0].state = "starting";
+  expect(() => apply(taskAgent, "task-update", request(taskAgent, "bootstrap-task-agent-without-parent", {
+    task_id: "a",
+    state: "running",
+    occurred_at: at,
+  }, { role: "task", thread_id: "task-a-thread" }))).toThrow("parent PR is created and verified");
+  expect(taskAgent.tasks[0].state).toBe("starting");
+});
+
+test("bootstrap dispatch-claim remains blocked for Task Agent work without a parent PR", () => {
+  const ledger = readyBootstrapFixture();
+  ledger.tasks[0].execution_owner = "task_agent";
+  ledger.tasks[0].conversation_policy = "task_agent";
+  ledger.tasks[0].delivery_policy = "child_pr";
+  expect(() => apply(ledger, "dispatch-claim", request(ledger, "bootstrap-dispatch-without-parent", {
+    task_id: "a",
+    operation_id: "bootstrap-dispatch-without-parent-op",
+  }))).toThrow("parent PR is created and verified");
+  expect(ledger.operations).toHaveLength(0);
+});
+
+test("closed parent PRs do not satisfy the retained contribution gate", () => {
+  const ledger = readyBootstrapFixture();
+  ledger.groups[0].delivery_unit_kind = "regular";
+  ledger.groups[0].owner_kind = "group";
+  ledger.groups[0].agent_thread_id = "group-thread";
+  ledger.groups[0].parent_pr = providerPrReceipt("closed-parent", "parent", base, base).pr;
+  ledger.groups[0].lifecycle.pr_created = "passed";
+  ledger.groups[0].atoms.push({ id: "parent-pr", title: "Create parent PR", purpose: "Publish", output: "Created", lifecycle_stage: "pr_created", status: "completed" });
+  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
+  ledger.facts.push({
+    id: "closed-parent-pr",
+    kind: "pr_published",
+    subject_id: "g",
+    status: "passed",
+    source: "github",
+    observed_at: at,
+    sha: base,
+    evidence_ref: "provider:closed-parent-pr",
+    receipt: { ...providerPrReceipt("closed-parent", "parent", base, base), state: "absent" },
+  });
+  ledger.tasks[0].execution_owner = "task_agent";
+  ledger.tasks[0].conversation_policy = "task_agent";
+  ledger.tasks[0].delivery_policy = "child_pr";
+  ledger.tasks[0].thread_id = "task-a-thread";
+  ledger.tasks[0].state = "starting";
+  expect(() => apply(ledger, "task-update", request(ledger, "closed-parent-blocked", {
+    task_id: "a",
+    state: "running",
+    occurred_at: at,
+  }, { role: "task", thread_id: "task-a-thread" }))).toThrow("parent PR is created and verified");
+  expect(ledger.tasks[0].state).toBe("starting");
 });
 function providerBranchReceipt(branch: string, sha: string) {
   return {

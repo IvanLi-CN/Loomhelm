@@ -8,7 +8,7 @@ Skill release boundary 包含 `.github/workflows/`、`clients/typescript/`、`sk
 
 | Dimension | Current projection |
 | - | - |
-| package | `@loomhelm/multi-task-flow@0.2.7` |
+| package | `@loomhelm/multi-task-flow@0.2.8` |
 | compatibility line | `compat-v1` |
 | Skill | `2.7.6` |
 | ledger contract | `3` |

@@ -66,7 +66,7 @@ Proposal validation MUST report all material completeness issues together, inclu
 
 ### REQ-SKILLS-014
 
-The first delivery unit MUST be bootstrap by default. A proposal MAY designate the first unit as regular only with an explicit exception reason and evidence recorded in the acceptance contract. Bootstrap delivery units MUST remain main-owned and may use the bound main conversation. Every regular delivery unit MUST bind the execution policy required by its delivery-unit scoped work before activation. A delivery conversation or Agent runtime observation is separate from canonical atomic business state; waiting and coordination MUST be derived from dependencies and milestones rather than represented as a coordination Task.
+The first delivery unit MUST be bootstrap by default. A proposal MAY designate the first unit as regular only with an explicit exception reason and evidence recorded in the acceptance contract. Bootstrap delivery units MUST remain main-owned and may use the bound main conversation. An active bootstrap unit with completed workspace readiness MAY start its main-owned contribution tasks before its integration PR exists; regular units and Task Agent paths MUST retain the integration-PR gate. Every regular delivery unit MUST bind the execution policy required by its delivery-unit scoped work before activation. A delivery conversation or Agent runtime observation is separate from canonical atomic business state; waiting and coordination MUST be derived from dependencies and milestones rather than represented as a coordination Task.
 
 ### REQ-SKILLS-015
 
@@ -160,6 +160,8 @@ Viewer compatibility maintenance MUST keep historical format, fallback, migratio
 
 - [Bun 直接运行客户端与 Skills](../../adr/0021-bun-source-runtime.md)
 - [Multi-task Flow proposal quality gates and execution boundary](../../adr/0026-multi-task-flow-proposal-quality-gates.md)
+- [Multi-task Flow task execution and delivery boundaries](../../adr/0027-multi-task-flow-task-execution-and-delivery-boundaries.md)
+- [First delivery unit is bootstrap by default](../../adr/0031-first-delivery-unit-bootstrap-by-default.md)
 
 ## References
 
