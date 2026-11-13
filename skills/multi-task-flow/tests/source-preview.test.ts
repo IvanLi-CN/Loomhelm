@@ -6,6 +6,7 @@ import { ServiceAuth } from "../lib/service-auth";
 import { ServiceState } from "../lib/service-state";
 import { servicePaths } from "../lib/service-paths";
 import { runDaemon } from "../lib/service-lifecycle";
+import { serviceCommand } from "../scripts/service";
 import { serviceFixture, fixtureRelease, fixtureLegacyRelease, fixtureRun } from "./service-fixture";
 
 test.each([
@@ -44,6 +45,34 @@ test.each([
     const url = new URL(ready.url);
     expect(url.hostname).toBe("127.0.0.1");
     expect((await fetch(url.origin + "/api/v1/runs")).status).toBe(401);
+    if (_name === "default") {
+      const state = new ServiceState(
+        servicePaths({
+          MULTI_TASK_FLOW_PROFILE: "development",
+          MULTI_TASK_FLOW_ROOT: ready.root,
+        }),
+      );
+      const login = (await serviceCommand("login", { run_id: ready.run_id }, state)) as {
+        login_url: string;
+      };
+      const loginResponse = await fetch(login.login_url, { redirect: "manual" });
+      expect(loginResponse.status).toBe(302);
+      const cookie = loginResponse.headers.get("set-cookie")?.split(";", 1)[0];
+      expect(cookie).toBeTruthy();
+      const runUrl = new URL(
+        loginResponse.headers.get("location") ?? "",
+        url.origin,
+      );
+      const page = await fetch(runUrl, { headers: { cookie: cookie! } });
+      expect(page.status).toBe(200);
+      expect(await page.text()).toContain("/service-client.js");
+      const view = await fetch(
+        new URL(`/runs/${ready.run_id}/api/view`, url.origin),
+        { headers: { cookie: cookie! } },
+      );
+      expect(view.status).toBe(200);
+      expect((await view.json()).view.orchestration.id).toBe(ready.run_id);
+    }
   } finally {
     clearTimeout(timer);
     child.kill("SIGTERM");
