@@ -32,6 +32,7 @@ function clearDetails(): HTMLElement {
   const container = document.getElementById("details-content")!;
   document.getElementById("details-summary")?.replaceChildren();
   delete container.dataset.selection;
+  delete container.dataset.detailKind;
   container.replaceChildren();
   container.scrollTop = 0;
   container.className = "details-empty";
@@ -159,6 +160,7 @@ export function createDetailContent(context: DetailContentContext) {
     const selection = `${kind}:${id}`;
     const top = container.dataset.selection === selection ? container.scrollTop : 0;
     container.dataset.selection = selection;
+    container.dataset.detailKind = kind;
     container.replaceChildren();
     container.className = "";
     const summary = document.getElementById("details-summary")!;

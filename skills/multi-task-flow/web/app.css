@@ -452,6 +452,7 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
   #details-content { padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: max-content; align-content: start; align-items: start; column-gap: 20px; }
   #details-content > .detail-field:has(.detail-agent-output), #details-content > .detail-field:has(.detail-empty-output) { grid-column: 1 / -1; }
   #details-content > .detail-field:has(.atom-list) { grid-column: span 2; }
+  #details-content[data-detail-kind="group"] > .detail-field:has(.atom-list) { grid-column: span 1; }
   .details-backdrop { display: none; }
   .workspace .task-layout-grid, .workspace .group-cards {
     grid-template-columns: repeat(auto-fill, var(--stable-task-card-width)); gap: 20px;
