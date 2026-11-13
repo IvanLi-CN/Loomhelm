@@ -11,7 +11,7 @@ type AtomicCardData = { title: string; kind: string; state: string; scope: strin
 
 const AtomicCard = memo(function AtomicCard({ data }: NodeProps) {
   const value = data as unknown as AtomicCardData;
-  return <div className="dependency-card atomic-dependency-card" data-context-kind={value.taskId ? "task" : undefined} data-context-id={value.taskId ?? value.nodeId}>
+  return <div className="dependency-card atomic-dependency-card" data-context-kind={value.taskId ? "task" : undefined} data-context-id={value.taskId ?? value.nodeId} data-state={value.state} style={{ "--node-color": value.color } as React.CSSProperties}>
     <div className="dependency-card-meta"><span>{value.kind}</span><span>{value.state}</span></div>
     <div className="dependency-card-title">{value.title}</div>
     <div className="atomic-dependency-scope">{value.scope}</div>
