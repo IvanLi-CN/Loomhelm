@@ -156,6 +156,8 @@ fallback MUST 绑定明确 release、run、owner 和只读证据，禁止执行�
 
 发布失败或网络响应不明确时 MUST 进入 identity-first registry state machine：404、processing、已知 409、超时和 identity mismatch 必须分别记录并按 exact package metadata、raw integrity、canonical digest、merge SHA、tag 和 build ID 对账；不得盲目重复上传、重建 tarball、删除版本或移动 tag。
 
+现有 `0.2.7` schema v2 artifact MUST 只做 legacy read-only reconciliation：exact-visible 后只验证 package/version、compatibility line、legacy identity、下载 bytes 的 raw integrity 和 registry `dist.integrity`，写入 `legacy-reconciled` receipt，并跳过 npm upload、immutable tag 创建/复用和全部 dist-tag promotion；exact 不可见或 registry 状态不确定 MUST fail closed。
+
 - covers: `VER-SRR-021`, `VER-SRR-022`
 
 ### REQ-SRR-013：不可变 tag 与 dist-tag
@@ -169,6 +171,8 @@ npm exact SemVer 发布成功后，流程才可按声明顺序移动 `compat-vN`
 读取不到尚不存在的 dist-tag MUST 视为没有当前版本并进入单调 promotion；除明确的缺失 tag 外，registry 读取错误 MUST fail closed，promotion 后仍 MUST exact read-back。
 
 registry exact identity 只有在 exact-visible 且 tarball/raw integrity 对账成功后才算 `published`；compatibility line、`latest` 和显式 stable 必须按此顺序逐个 promotion 并逐个 read-back，全部目标 read-back 成功才算 `completed`。release receipt MUST 保存各阶段状态、registry observation 和 dist-tag read-back；`published` 不得伪装成 `completed`。
+
+客户端 `release` CLI MUST 只提供 identity/validate 等本地只读检查；直接 `release publish`、`publish:exact` 和 `publish:compat` 入口 MUST 不存在或 fail closed，npm 写入只能由受保护的 owner-approved workflow 执行。
 
 - covers: `VER-SRR-023`, `VER-SRR-024`
 

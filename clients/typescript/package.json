@@ -27,9 +27,7 @@
     "build": "bun ../../skills/multi-task-flow/scripts/package-client-skills.ts --require-dependencies",
     "check": "bun x --no-install tsc -p tsconfig.json --noEmit",
     "test": "bun run build && bun test test/*.test.ts",
-    "pack:check": "bun run build && bun pm pack --dry-run",
-    "publish:exact": "bun --no-install src/cli.ts release publish --dist-tag \"$npm_package_version\"",
-    "publish:compat": "bun --no-install src/cli.ts release publish --dist-tag \"${npm_config_compat_tag:?set npm_config_compat_tag=compat-vN}\""
+    "pack:check": "bun run build && bun pm pack --dry-run"
   },
   "devDependencies": {
     "typescript": "5.9.3",

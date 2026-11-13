@@ -445,6 +445,7 @@ jobs:
       - name: Ensure npm supports OIDC dist-tags
         run: npm install --global npm@11.21.0
       - name: Publish exact package and reconcile registry identity
+        id: publish_registry
         run: |
           set -euo pipefail
           tarball="$RUNNER_TEMP/skill-release/skill-package.tgz"
@@ -545,17 +546,34 @@ jobs:
               echo exact-visible
               return 0
             fi
+            if ! grep -Eiq 'E404|404|no match found|not found' "$exact_error"; then
+              echo registry-error
+              return 0
+            fi
             if npm view "$PACKAGE_NAME" versions --json > "$package_versions" 2> "$package_error"; then
               if [ "$phase" = preflight ]; then echo exact-404; else echo processing; fi
               return 0
             fi
-            if grep -Eiq 'E404|404|no match found|not found' "$exact_error" "$package_error"; then
+            if grep -Eiq 'E404|404|no match found|not found' "$package_error"; then
               echo absent
               return 0
             fi
             echo registry-error
           }
           initial_state="$(observe_exact preflight)"
+          if [ "$VERSION" = '0.2.7' ] && [ "$initial_state" != exact-visible ]; then
+            case "$initial_state" in
+              registry-error)
+                update_receipt registry-error false false registry-error
+                echo 'registry preflight failed for legacy 0.2.7; no npm write was attempted' >&2
+                ;;
+              *)
+                update_receipt legacy-version-absent false false legacy-version-absent
+                echo '0.2.7 is legacy read-only reconciliation; it must never be uploaded again' >&2
+                ;;
+            esac
+            exit 1
+          fi
           case "$initial_state" in
             exact-visible)
               ;;
@@ -590,11 +608,6 @@ jobs:
               exit 1
               ;;
           esac
-          if [ "$VERSION" = '0.2.7' ] && [ "$initial_state" != exact-visible ]; then
-            update_receipt legacy-version-absent false false legacy-version-absent
-            echo '0.2.7 is legacy read-only reconciliation; it must never be uploaded again' >&2
-            exit 1
-          fi
           reconcile_state=
           for delay in 0 2 4 8 16 32; do
             if [ "$delay" -gt 0 ]; then sleep "$delay"; fi
@@ -625,7 +638,87 @@ jobs:
           downloaded="$RUNNER_TEMP/skill-release-registry.tgz"
           curl --fail --silent --show-error --location "$registry_url" -o "$downloaded"
           registry_validation="$RUNNER_TEMP/skill-release-registry-validation.json"
-          python3 tools/skill-release/release.py validate-tarball "$downloaded" --version "$VERSION" --merge-sha "$MERGE_SHA" --compatibility-line "$COMPATIBILITY_LINE" > "$registry_validation"
+          registry_validation_error="$RUNNER_TEMP/skill-release-registry-validation.err"
+          registry_validation_args=(--version "$VERSION" --compatibility-line "$COMPATIBILITY_LINE")
+          if [ "$VERSION" != '0.2.7' ]; then
+            registry_validation_args+=(--merge-sha "$MERGE_SHA")
+          fi
+          set +e
+          python3 tools/skill-release/release.py validate-tarball "$downloaded" "${registry_validation_args[@]}" > "$registry_validation" 2> "$registry_validation_error"
+          registry_validation_status=$?
+          set -e
+          registry_raw_integrity="$(python3 tools/skill-release/release.py tarball-integrity "$downloaded")"
+          if [ "$registry_validation_status" -ne 0 ]; then
+            python3 - "$receipt" "$exact_metadata" "$registry_raw_integrity" <<'PY'
+          import json
+          import sys
+
+          receipt_path, metadata_path, raw_integrity = sys.argv[1:]
+          metadata = json.load(open(metadata_path, encoding='utf-8'))
+          receipt = json.load(open(receipt_path, encoding='utf-8'))
+          receipt['state'] = 'identity-mismatch'
+          receipt['published'] = False
+          receipt['completed'] = False
+          receipt['registryObservation'] = {
+              'state': 'identity-mismatch',
+              'packageName': metadata.get('name'),
+              'version': metadata.get('version'),
+              'distIntegrity': (metadata.get('dist') or {}).get('integrity'),
+              'rawIntegrity': raw_integrity,
+              'reason': 'registry tarball failed artifact identity validation',
+          }
+          json.dump(receipt, open(receipt_path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
+          open(receipt_path, 'a', encoding='utf-8').write('\n')
+          PY
+            cat "$registry_validation_error" >&2
+            exit 1
+          fi
+          if [ "$VERSION" = '0.2.7' ]; then
+            python3 - "$registry_validation" "$exact_metadata" "$receipt" <<'PY'
+          import json
+          import sys
+
+          registry_path, metadata_path, receipt_path = sys.argv[1:]
+          registry = json.load(open(registry_path, encoding='utf-8'))
+          metadata = json.load(open(metadata_path, encoding='utf-8'))
+          receipt = json.load(open(receipt_path, encoding='utf-8'))
+          observation = {
+              'state': 'legacy-exact-visible',
+              'legacy': True,
+              'packageName': registry['packageName'],
+              'version': metadata.get('version'),
+              'compatibilityLine': registry['compatibilityLine'],
+              'mergeSha': registry['mergeSha'],
+              'buildId': registry['buildId'],
+              'tag': registry['gitTag'],
+              'distIntegrity': (metadata.get('dist') or {}).get('integrity'),
+              'rawIntegrity': registry['rawIntegrity'],
+              'canonicalDigest': registry['tarballDigest'],
+              'canonicalDigestAlgorithm': registry['canonicalDigestAlgorithm'],
+              'canonicalDigestVerified': registry['canonicalDigestVerified'],
+              'publishOutcome': 'read-only-reconciliation',
+          }
+          if observation['distIntegrity'] != observation['rawIntegrity']:
+              observation['state'] = 'identity-mismatch'
+              observation['mismatch'] = 'registry metadata integrity differs from downloaded tarball'
+              receipt['state'] = 'identity-mismatch'
+              receipt['published'] = False
+              receipt['completed'] = False
+              receipt['registryObservation'] = observation
+              json.dump(receipt, open(receipt_path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
+              open(receipt_path, 'a', encoding='utf-8').write('\n')
+              raise SystemExit(observation['mismatch'])
+          receipt['state'] = 'legacy-reconciled'
+          receipt['published'] = False
+          receipt['completed'] = False
+          receipt['publishOutcome'] = 'read-only-reconciliation'
+          receipt['registryObservation'] = observation
+          json.dump(receipt, open(receipt_path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
+          open(receipt_path, 'a', encoding='utf-8').write('\n')
+          PY
+            printf 'registry_state=legacy-exact-visible\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           python3 - "$validation" "$registry_validation" "$exact_metadata" "$receipt" <<'PY'
           import json
           import sys
@@ -685,8 +778,10 @@ jobs:
           json.dump(receipt, open(receipt_path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
           open(receipt_path, 'a', encoding='utf-8').write('\n')
           PY
+          printf 'registry_state=exact-visible\n' >> "$GITHUB_OUTPUT"
           printf 'registry_state=exact-visible\n'
       - name: Create or reconcile immutable release tag after exact identity
+        if: success() && steps.publish_registry.outputs.registry_state != 'legacy-exact-visible'
         run: >-
           python3 tools/skill-release/release.py verify-tag
           --repository "$GITHUB_REPOSITORY"
@@ -694,6 +789,7 @@ jobs:
           --sha "$MERGE_SHA"
           --create
       - name: Promote compatibility and latest dist-tags monotonically
+        if: success() && steps.publish_registry.outputs.registry_state != 'legacy-exact-visible'
         run: |
           set -euo pipefail
           receipt="$RUNNER_TEMP/skill-release-receipt.json"

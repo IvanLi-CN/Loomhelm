@@ -24,9 +24,9 @@
 | `REQ-SRR-009` | `store-migration.ts`、`ledger-maintenance.ts` 和 migration tests 覆盖 backup、digest、revision、request identity、机械迁移、重放与历史保留边界。 | 长期 fixture 保留和真实权限/中断演练仍属于 release quality gate。 |
 | `REQ-SRR-010` | `skill-release-gate.yml`、`skill-release-publish.yml` 和 `release.py` 强制恰好一个 `release:skill`/`release:skill-initial-publication`/`release:skip` label、范围检查、base/head 重检、SemVer、compatibility line 和 projection。 | 真实 PR/merge queue 的 provider check receipt 尚未在本主题中记录。 |
 | `REQ-SRR-011` | publish workflow checkout exact protected merge SHA，验证 merged PR receipt，并把 merge/source SHA 写入 candidate manifest。 | 只有受保护 main 上的实际 workflow run 才能产生可发布 provenance。 |
-| `REQ-SRR-012` | publish workflow 只上传同一 candidate tarball，先保存候选 receipt，再记录 canonical digest、raw integrity 和 candidate identity；processing、known 409、timeout 或 unknown publish outcome 不重复上传或重建。 | 实际 npm registry 发布与未知结果恢复仍未发生。 |
-| `REQ-SRR-013` | workflow 和 `release.py` 支持 `multi-task-flow-vX.Y.Z` immutable tag、exact-visible 后的 `compat-vN`/`latest`/可选 `stable` 单调 promotion、缺失 dist-tag 作为空当前值、逐个 read-back、receipt 的 `published/completed` 状态和 resume 入口。 | 真实 tag、dist-tag 和中断恢复 receipt 仍需 owner-approved workflow。 |
-| `REQ-SRR-014` | SPEC/IMPLEMENTATION/HISTORY、ADR 0029/0030、客户端 README、现有 Skill viewer 说明和 workflow README 覆盖 consumer install、`path-byte-v2`、legacy reconciliation、registry recovery、verify 阶段独立 release identity artifact、failure sidecar、`published/completed` 语义和发布操作。 | npm publication、用户服务升级和 owner/provider 凭据仍是明确的外部前置，不在文档提交中伪造完成。 |
+| `REQ-SRR-012` | publish workflow 只上传同一 candidate tarball，先保存候选 receipt，再记录 canonical digest、raw integrity 和 candidate identity；processing、known 409、timeout 或 unknown publish outcome 不重复上传或重建；registry tarball 验证失败写入 `identity-mismatch` receipt。 | 实际 npm registry 发布与未知结果恢复仍未发生。 |
+| `REQ-SRR-013` | workflow 和 `release.py` 支持 `multi-task-flow-vX.Y.Z` immutable tag、exact-visible 后的 `compat-vN`/`latest`/可选 `stable` 单调 promotion、缺失 dist-tag 作为空当前值、逐个 read-back、receipt 的 `published/completed` 状态和 resume 入口；现有 `0.2.7` 只读对账成功后跳过 tag/dist-tag 写入。 | 真实 tag、dist-tag 和中断恢复 receipt 仍需 owner-approved workflow。 |
+| `REQ-SRR-014` | SPEC/IMPLEMENTATION/HISTORY、ADR 0029/0030、客户端 README、现有 Skill viewer 说明和 workflow README 覆盖 consumer install、`path-byte-v2`、legacy reconciliation、registry recovery、verify 阶段独立 release identity artifact、failure sidecar、`published/completed` 语义和发布操作；客户端直发入口被移除并 fail closed。 | npm publication、用户服务升级和 owner/provider 凭据仍是明确的外部前置，不在文档提交中伪造完成。 |
 
 ## Verification Commands
 

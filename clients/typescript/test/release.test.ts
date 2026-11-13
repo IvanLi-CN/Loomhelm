@@ -68,8 +68,12 @@ test('publication digest is computed from real npm-compatible tarball contents',
     assert.match(firstDigest, /^[a-f0-9]{64}$/);
     assert.equal(canonicalTarballDigest(second), firstDigest);
     const packageJson = JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf8')) as { scripts?: { 'publish:exact'?: string; 'publish:compat'?: string } };
-    assert.doesNotMatch(packageJson.scripts?.['publish:exact'] ?? '', /bun pm publish/);
-    assert.doesNotMatch(packageJson.scripts?.['publish:compat'] ?? '', /bun pm publish/);
+    assert.equal(packageJson.scripts?.['publish:exact'], undefined);
+    assert.equal(packageJson.scripts?.['publish:compat'], undefined);
+    const cli = resolve(packageRoot, 'src/cli.ts');
+    const directPublish = spawnSync(process.execPath, ['--no-install', cli, 'release', 'publish', '--dist-tag', '0.2.7'], { encoding: 'utf8' });
+    assert.notEqual(directPublish.status, 0);
+    assert.match(directPublish.stderr + directPublish.stdout, /Direct npm publication is disabled/);
   } finally {
     removeTarballDirectory(first);
     removeTarballDirectory(second);

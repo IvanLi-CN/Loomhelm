@@ -41,6 +41,8 @@ npm 发布需要 npm Trusted Publisher 绑定 `IvanLi-CN/Loomhelm` 与 `skill-re
 
 发布 workflow 使用同一 candidate tarball 执行 exact registry reconcile；404、processing、已知 409、timeout 和 identity mismatch 都必须记录 receipt，不能重传或重建。exact registry identity 对账成功才是 `published`，compatibility line、`latest` 和显式 `stable` 逐个 read-back 成功才是 `completed`；现有 `0.2.7` schema v2 artifact 只做 raw integrity/legacy identity 对账，禁止重传。
 
+客户端只提供 `release identity` 和 `release validate` 等本地只读检查；`release publish`、`publish:exact` 和 `publish:compat` 不提供直接 npm 写入路径，发布只能由受保护的 Skill Runtime Release workflow 完成。
+
 ```sh
 bun install --frozen-lockfile
 bun install --cwd skills/multi-task-flow --frozen-lockfile
