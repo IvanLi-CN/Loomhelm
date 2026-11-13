@@ -25,6 +25,11 @@ test("represents closed PRs without treating them as success", () => {
   expect(parsed.state).toBe("closed");
 });
 
+test("represents a singleton task by the delivery-unit PR binding", () => {
+  const parsed = taskPrBinding.parse({ state: "shared_delivery_unit", delivery_unit_id: "du-1" });
+  expect(parsed).toEqual({ state: "shared_delivery_unit", delivery_unit_id: "du-1" });
+});
+
 test("rejects cyclic atomic graphs and empty planned milestones", () => {
   const nodes = [
     { kind: "milestone", id: "m-1", title: "M1", state: "planned", scope: { kind: "delivery_unit", delivery_unit_id: "du-1" }, acceptance: [{ kind: "node_satisfied", node_id: "w-1" }] },

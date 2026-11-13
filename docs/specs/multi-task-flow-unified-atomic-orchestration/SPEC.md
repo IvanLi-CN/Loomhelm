@@ -85,6 +85,12 @@ Task 与 DeliveryUnit 是平级对象；delivery_unit_id 只是共同的分类�
 
 ## 4. 协调模型与交付单元流程
 
+交付单元数量是主 Agent（main Agent）在规划阶段基于需求结果和 contribution Task 归纳出的计划结果，不是主人预先填写的数量，也不是由 PR 数量、Agent 数量或文件边界反推。主 Agent 必须先判断每个 contribution Task 服务的需求结果，再把共同完成同一个可验收需求结果的任务归入同一个 `delivery_unit_id`；能够独立交付和独立验收的需求结果才使用不同的 `delivery_unit_id`。该判断保留在 Agent 上下文和已批准计划中，不新增 `DeliveryUnitProposal` 等中间账本对象。
+
+归纳完成后，每个 contribution 或 documentation work 原子必须使用唯一的 `TaskScope`，其中的 `task_id` 标识任务，`delivery_unit_id` 标识其交付范围。`DeliveryUnitDefinition` 不保存 `task_ids` 副本；DeliveryUnitProjection 从原子 scope、里程碑和外部事实派生成员。计划校验必须拒绝缺少归属、重复归属以及执行策略与归纳结果不一致的计划，不能把“一项任务一个交付单元”作为隐式默认。
+
+同一 `delivery_unit_id` 下 contribution Task 的数量决定执行拓扑：数量为一时，任务复用交付单元对话、工作区、分支和 PR；数量大于一时，每个任务保持独立对话、工作区、分支和 child PR，由交付单元负责集成。verification、release 和 deployment Task 不参与该数量判断。计划批准后若需求边界发生变化，必须通过计划修订重新归纳，不能在运行中静默创建或删除 child PR。
+
 当前项目中的 `Task.kind = "coordination"` 和 `Group.coordination_execution` 是历史实现概念。新模型不再定义 coordination TaskKind，也不定义 `activity_type = "coordination"`；协调是由依赖边、里程碑条件、外部事实和运行时观察共同表达的编排行为。
 
 文档、需求、设计和 ADR 等文档产物使用 documentation 原子类型；属于实现交付一部分的文档使用 contribution 原子。documentation 原子归入 contribution Task，不新增 documentation TaskKind。集成验收使用 verification 原子，发布使用 release 原子，部署使用 deployment 原子，代码实现使用 contribution 原子。

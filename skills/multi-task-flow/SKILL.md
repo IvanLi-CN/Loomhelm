@@ -42,6 +42,18 @@ version: 2.7.6
 
 ## 计划与调度
 
+### 交付单元归纳
+
+交付单元的数量和边界由主 Agent（main Agent）在规划上下文中根据需求结果和 contribution Task 的作用共同归纳；主人批准的是主 Agent 生成的完整计划，不需要预先指定交付单元数量。PR 数量、Agent 数量、文件边界、模块边界和可并行性都是归纳后的执行结果或约束，不能单独作为拆分原因。
+
+主 Agent 必须先为每个 contribution Task 说明它服务的需求结果，再把共同完成同一个可验收需求结果的任务归入同一个 `delivery_unit_id`。如果任务分别产生独立的需求结果、可以分别交付并分别验收，才拆成不同的 `delivery_unit_id`。不能因为“一个任务看起来像一个能力”或“一个任务需要一个 PR”就创建一个新的交付单元。
+
+归纳结果只落在已批准计划的原子 scope 中：每个 contribution 或 documentation work 原子使用唯一的 `TaskScope { kind: "task", task_id, delivery_unit_id }`；`DeliveryUnitDefinition` 不复制 `task_ids`，成员由原子 scope 派生。主 Agent 的中间推理不作为新的 Proposal 类型或独立账本对象持久化。
+
+归纳完成后才选择执行拓扑：同一 `delivery_unit_id` 恰好有一个 contribution Task 时，使用共享交付拓扑；有多个 contribution Task 时，使用多任务集成拓扑。共享拓扑复用交付单元对话、工作区、分支和 PR；多任务集成为每个任务创建独立对话、工作区、分支和 child PR。verification、release 和 deployment Task 不增加 contribution Task 数量。
+
+计划校验必须保证每个 contribution Task 有且只有一个交付单元归属，并保证执行策略与归纳结果一致。缺少归属、出现多个归属或任务策略与拓扑冲突时，计划必须被拒绝；不能退回“一项任务一个交付单元”的隐式默认。计划批准后不得静默重新归纳，必须通过计划修订处理。
+
 先建模原子任务及其前驱；每个原子任务都是不可再拆的调度单位。新任务定义只能使用四种类型：`contribution`、`release`、`deployment` 或 `verification`。 `development`、`other` 和 `coordination` 仅是历史账本值，不能由 `init` 或计划修订引入。等待、阻塞、集成和交付单元管理通过交付单元协调状态和里程碑表达。把连续原子任务分组为子任务，然后同时校验两张图和显式交接事实。交付单元恰好只有一个 contribution Task 时选择共享交付拓扑；verification、release 和 deployment Task 不计入该数量。计划交付单元 PR，仅在多贡献单元中计划 child PR，并同时计划单元级 post-merge release、deployment、 verification 任务及带来源和置信度的预计时间。默认最多三个任务并行运行；等待和阻塞任务释放运行名额。主人一次批准实现计划；该批准覆盖计划已表示的所有操作，包括计划中的仓库写入。只有交付单元合并以及 release/deploy 操作在最终目标和证据边界暂停等待受保护批准。不能从分组顺序或文件重叠推断依赖。
 
 使用 Bun CLI，并通过 stdin 传入一个 JSON 对象： `bun --no-install run <skill>/scripts/orchestrate.ts <command> --input -`。其 schema 位于 `lib/schema.ts`，完整命令和 envelope 合同位于数据设计文档。`init` 是经主人批准的变更命令，用于把仓库和主对话绑定到新运行；它只接受未绑定的 `planned` group 和 canonical task definition，并写入初始账本，不创建 group 或 task 对话。`migrate` 是唯一允许将 schema v1 或 schema v2/contract 1 写入 schema v2/contract 2 的路径：它要求绑定主 actor、准确 run ID、request ID 和 expected revision，保留完整备份，使用 request record 递增账本 revision，并且只有 canonical input 完全相同时才幂等。只读审查、诊断和计划必须使用源代码检查或 `show`/`view`，不得调用 `init` 或原生对话创建工具。`show` 读取一致快照。每次变更都要提供唯一 `request_id`、当前 `expected_revision`、绑定 actor 和命令 payload。发生冲突时读取账本并重新判断；只有同一操作的相同 request ID 才能重放。不得手工编辑账本 JSON。Agent 编写的 Markdown 需求文件属于运行目录下 `requirements/` 中的普通文件。

@@ -8,6 +8,8 @@
 
 Skill 自带 Bun + TypeScript 固定脚本，所有账本操作通过脚本完成。Agent 不直接编辑 JSON；要求 Markdown 可由 Agent 普通编辑，不强制生成或硬校验。脚本接口须支持机器可读的成功、等待、冲突与错误结果，并附可读原因。
 
+交付单元的数量由主 Agent 在计划上下文中根据需求结果和 contribution Task 归纳，账本只保存批准后的原子 scope 归属。每个 contribution 或 documentation work 原子必须携带唯一 `task_id` 和 `delivery_unit_id`；DeliveryUnit 定义不复制任务清单，也不新增 Proposal 类型。计划批准后，同一 `delivery_unit_id` 下一个 contribution Task 使用共享交付拓扑，多个 contribution Task 使用独立任务对话和 child PR 的多任务集成拓扑；验证、发布和部署任务不计入该数量。
+
 ## 目录与身份
 
 ```text

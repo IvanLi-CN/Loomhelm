@@ -77,6 +77,7 @@ export const atomicEdge = z
 
 export const taskPrBinding = z.discriminatedUnion("state", [
   z.object({ state: z.literal("unbound") }).strict(),
+  z.object({ state: z.literal("shared_delivery_unit"), delivery_unit_id: id }).strict(),
   z.object({ state: z.literal("open"), pr: atomicExternalRef, branch: text, base_branch: text }).strict(),
   z.object({ state: z.literal("merged"), pr: atomicExternalRef, branch: text, merge_sha: text }).strict(),
   z.object({ state: z.literal("closed"), pr: atomicExternalRef, branch: text, closed_at: timestamp, closed_reason: z.enum(["abandoned", "superseded", "provider_closed", "replaced"]) }).strict(),

@@ -141,6 +141,21 @@ function deliveryGateDiagnostics(
   return diagnostics;
 }
 
+function taskPrProjection(
+  task: Ledger["tasks"][number],
+  owner: Ledger["groups"][number] | undefined,
+): { url: string | null } | null {
+  if (!task.pr || typeof task.pr !== "object" || !("state" in task.pr))
+    return task.pr && "url" in task.pr ? { url: task.pr.url ?? null } : null;
+  if (task.pr.state === "shared_delivery_unit") {
+    const deliveryPr = owner?.pr;
+    if (deliveryPr && typeof deliveryPr === "object" && "state" in deliveryPr && "pr" in deliveryPr)
+      return { url: deliveryPr.pr.url ?? null };
+    return owner?.parent_pr ? { url: owner.parent_pr.url ?? null } : null;
+  }
+  return "pr" in task.pr ? { url: task.pr.pr.url ?? null } : null;
+}
+
 function formalExecutionWarnings(ledger: Ledger): Record<string, unknown>[] {
   return ledger.groups.flatMap((group) => {
     if (group.state !== "active" || group.coordination_execution.state !== "running")
@@ -898,6 +913,7 @@ export function buildView(
       const derivedStatus = deriveBusinessStatus(canonicalAtomicNodes, { kind: "task", task_id: task.id }, milestoneEvaluations);
       return {
         ...task,
+        pr: taskPrProjection(task, owner),
         ...(() => {
           const gateDiagnostics = owner && isContributionKind(task.kind) ? deliveryGateDiagnostics(ledger, owner, task) : [];
           return { gateDiagnostics };

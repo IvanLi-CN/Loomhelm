@@ -32,6 +32,8 @@ import {
   validateLedger,
   validateSchedulablePlan,
   validatePlan,
+  deliveryTopologyForGroup,
+  validateDeliveryTopologies,
   defaultGroupAtoms,
   executionProfile,
   recommendedExecutionProfile,
@@ -192,6 +194,15 @@ function taskPrRef(task: Ledger["tasks"][number]): ExternalRef | null {
   if (task.pr && "state" in task.pr) return "pr" in task.pr ? task.pr.pr : null;
   return task.pr;
 }
+function isSharedDeliveryTask(
+  ledger: Ledger,
+  task: Ledger["tasks"][number],
+): boolean {
+  return (
+    isContributionKind(task.kind) &&
+    deliveryTopologyForGroup(ledger.tasks, task.group_id) === "shared_delivery"
+  );
+}
 function requireContributionDispatchGate(
   ledger: Ledger,
   owner: Ledger["groups"][number],
@@ -240,6 +251,8 @@ function ensureSchedulable(ledger: Ledger, candidate: Plan): void {
   const contributionTasks = ledger.tasks.filter(
     (item) => item.disposition === "active" && isContributionKind(item.kind),
   );
+  if (ledger.contract_version >= 3)
+    validateDeliveryTopologies(contributionTasks, true);
   const groupIds = new Set(contributionTasks.map((item) => item.group_id));
   const missing: string[] = [];
   for (const groupId of groupIds) {
@@ -254,9 +267,19 @@ function ensureSchedulable(ledger: Ledger, candidate: Plan): void {
     }
   }
   for (const task of contributionTasks) {
+    const topology = deliveryTopologyForGroup(contributionTasks, task.group_id);
     const hasTaskPublication = candidate.actions.some(
       (action) => action.task_id === task.id,
     );
+    if (topology === "shared_delivery") {
+      requireCondition(
+        !hasTaskPublication,
+        "PLAN_NOT_DISPATCHABLE",
+        `Shared delivery task ${task.id} must not declare a task-level PR action`,
+        3,
+      );
+      continue;
+    }
     if (!hasTaskPublication) continue;
     for (const kind of ["publish_branch", "publish_pr"] as const) {
       const planned = candidate.actions.some(
@@ -1596,6 +1619,15 @@ export function execute(
         "Group",
       );
       requireCondition(
+        !isSharedDeliveryTask(ledger, target),
+        "SHARED_DELIVERY_UNIT_DISPATCH",
+        "A single-contribution delivery unit is dispatched through its delivery-unit conversation; do not create a task conversation",
+        3,
+        {
+          recovery: ["dispatch-group-claim", "dispatch-resolve", "task-update"],
+        },
+      );
+      requireCondition(
         groupOwnerThread(ledger, owner),
         "GROUP_NOT_READY",
         "Task group is not bound",
@@ -2401,6 +2433,15 @@ export function execute(
       const targetId = parse(id, payload.target_id);
       requireOwner(ledger, request, targetType, targetId);
       requireDevelopmentTarget(ledger, targetType, targetId);
+      if (targetType === "task") {
+        const taskTarget = find(ledger.tasks, (item) => item.id === targetId, "Task");
+        requireCondition(
+          !isSharedDeliveryTask(ledger, taskTarget),
+          "SHARED_DELIVERY_UNIT_PR",
+          "A shared delivery task reuses the delivery-unit PR and cannot publish a task PR",
+          3,
+        );
+      }
       requireLifecycle(ledger, targetType, targetId, "workspace_ready");
       const target = lifecycleTarget(ledger, targetType, targetId) as any;
       const branch = string(payload.branch);
@@ -2816,7 +2857,10 @@ export function execute(
     case "task-runtime-observe": {
       onlyMain(request.actor);
       const target = find(ledger.tasks, item => item.id === parse(id, payload.task_id), "Task");
-      requireCondition(target.thread_id === payload.thread_id, "RESOURCE_MISMATCH", "Runtime observation thread does not match task", 4);
+      const observedThread = isSharedDeliveryTask(ledger, target)
+        ? ledger.groups.find((item) => item.id === target.group_id)?.agent_thread_id
+        : target.thread_id;
+      requireCondition(observedThread === payload.thread_id, "RESOURCE_MISMATCH", "Runtime observation thread does not match task", 4);
       const runtime = z.enum(["active", "idle", "unknown"]).parse(payload.runtime);
       const observedAt = z.iso.datetime().parse(payload.observed_at);
       if (runtime === "idle") requireCondition(typeof payload.turn_id === "string" && payload.turn_id.length > 0, "EVIDENCE_REQUIRED", "Idle observation requires a confirmed terminal turn identity", 4);
@@ -2829,7 +2873,7 @@ export function execute(
         target.state = target.agent_resume_state ?? "running";
         delete target.agent_resume_state;
       }
-      if (previous !== target.state) addEvent(ledger, request, "task_runtime_observed", target.id, { task_id: target.id, thread_id: target.thread_id, turn_id: payload.turn_id ?? null, observed_at: observedAt, runtime, state: target.state, previous_state: previous });
+      if (previous !== target.state) addEvent(ledger, request, "task_runtime_observed", target.id, { task_id: target.id, thread_id: observedThread, turn_id: payload.turn_id ?? null, observed_at: observedAt, runtime, state: target.state, previous_state: previous });
       return { state: target.state };
     }
     case "task-update": {
@@ -2840,11 +2884,16 @@ export function execute(
         target.conversation_policy === "main_owned" &&
         request.actor.role === "main" &&
         request.actor.thread_id === ledger.control.owner_thread_id;
+      const sharedOwned =
+        isSharedDeliveryTask(ledger, target) &&
+        request.actor.role === "group" &&
+        ledger.groups.find((item) => item.id === target.group_id)?.agent_thread_id ===
+          request.actor.thread_id;
       const state = z
         .enum(["running", "waiting", "blocked", "completed", "closed"])
         .parse(payload.state);
       const allowed: Record<string, string[]> = {
-        planned: mainOwned ? ["running", "waiting", "blocked"] : [],
+        planned: mainOwned || sharedOwned ? ["running", "waiting", "blocked"] : [],
         starting: ["running", "waiting", "blocked"],
         running: ["waiting", "blocked"],
         agent_idle: ["running", "waiting", "blocked"],
@@ -2926,9 +2975,9 @@ export function execute(
       }
       if (state === "running" && previousState === "planned")
         requireCondition(
-          mainOwned && ready(ledger, target.id),
+          (mainOwned || sharedOwned) && ready(ledger, target.id),
           "MAIN_TASK_REQUIRED",
-          "Only the bound main conversation can start a main-owned task directly",
+          "Only the task owner can start a planned task directly",
           3,
         );
       if (state === "completed")
@@ -2956,7 +3005,10 @@ export function execute(
         );
         if (isContributionKind(target.kind))
           requireCondition(
-            legacyLedger(ledger) || target.lifecycle.pr_merged === "passed",
+            legacyLedger(ledger) ||
+              target.lifecycle.pr_merged === "passed" ||
+              (isSharedDeliveryTask(ledger, target) &&
+                ledger.groups.find((item) => item.id === target.group_id)?.lifecycle.pr_merged === "passed"),
             "PR_NOT_MERGED",
             "Contribution task PR must merge before closeout",
             4,
@@ -3044,6 +3096,7 @@ export function execute(
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
       const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
       requireCondition(isContributionKind(target.kind), "TASK_MISMATCH", "Only contribution tasks can be equivalently integrated", 3);
+      requireCondition(!isSharedDeliveryTask(ledger, target), "SHARED_DELIVERY_UNIT_PR", "Shared delivery tasks do not have a child PR to integrate", 3);
       requireCondition(["blocked", "agent_idle", "running"].includes(target.state), "INVALID_TRANSITION", "Task is not awaiting integration", 3);
       requireCondition(target.atoms.every((atom) => atom.status === "completed"), "ATOMS_PENDING", "Complete the task atoms before integration", 4);
       const taskPr = parse(externalRef, payload.task_pr);
@@ -3079,8 +3132,13 @@ export function execute(
         target.conversation_policy === "main_owned" &&
         request.actor.role === "main" &&
         request.actor.thread_id === ledger.control.owner_thread_id;
+      const sharedOwned =
+        isSharedDeliveryTask(ledger, target) &&
+        request.actor.role === "group" &&
+        ledger.groups.find((item) => item.id === target.group_id)?.agent_thread_id ===
+          request.actor.thread_id;
       requireCondition(
-        (request.actor.role === "task" || mainOwned) && taskExecutionState(target) === "running",
+        (request.actor.role === "task" || mainOwned || sharedOwned) && taskExecutionState(target) === "running",
         "FORBIDDEN",
         "The running task owner updates its atoms",
         3,

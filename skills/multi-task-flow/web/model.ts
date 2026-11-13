@@ -115,7 +115,7 @@ export type Task = {
   execution_profile_rule?: string | null;
   execution_owner?: "main" | "delivery_agent" | "task_agent" | null;
   conversation_policy?: "main_owned" | "delivery_owned" | "task_agent" | "none" | null;
-  delivery_policy?: "parent_pr" | "child_pr" | "evidence" | "none" | null;
+  delivery_policy?: "parent_pr" | "child_pr" | "shared_delivery_unit" | "evidence" | "none" | null;
   dispatch_readiness?: "ready" | "blocked" | "unknown";
   dispatch_diagnostics?: { code: string; message: string }[];
 };

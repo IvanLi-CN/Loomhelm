@@ -28,6 +28,7 @@
   "skills/multi-task-flow/tests/pr-details.test.ts",
   "skills/multi-task-flow/tests/service-lifecycle.test.ts",
   "skills/multi-task-flow/tests/single-delivery-unit.test.ts",
+  "skills/multi-task-flow/tests/delivery-topology.test.ts",
   "skills/multi-task-flow/tests/ui/graph-controller.test.tsx",
   "skills/multi-task-flow/tests/ui/pr-status.test.ts",
   "skills/multi-task-flow/tests/ui/resource-popover.test.ts",
