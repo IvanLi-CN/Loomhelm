@@ -2,7 +2,7 @@
 
 The formal root is `~/.local/share/multi-task-flow/`: `config/`, `data/runs/`, `releases/`, `state/`, `logs/`. `CODEX_HOME` and the invoking worktree do not select a formal instance. `MULTI_TASK_FLOW_PROFILE=test|development` requires an absolute `MULTI_TASK_FLOW_ROOT`, distinct from the formal root. Isolated profiles derive separate launchd labels, port scopes and registry roots. `TASK_ORCHESTRATION_DATA_ROOT` is an explicit ledger-only fixture override; never use it to create a second formal authority.
 
-All commands use `service.ts <command> --input -`, consuming one JSON object. Normal usage:
+All commands use `multi-task-flow service <command> --input -`, consuming one JSON object. Normal usage:
 
 - `ensure`, `renew`, `release`: `{"run_id":"example","thread_id":"main-thread","api_version":1}`.
 - `status`, `doctor`: `{}`. Inspect configured identity and runtime before remediation.

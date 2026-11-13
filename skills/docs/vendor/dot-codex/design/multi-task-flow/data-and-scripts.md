@@ -179,7 +179,7 @@ type Ledger = {
 
 ### 调用格式
 
-入口为 `bun run <skill>/scripts/orchestrate.ts <command> --input -`，标准输入为一个 JSON 对象；禁止通过命令行传递凭据。输出只有一个 JSON 对象到 stdout，诊断写 stderr。读命令不修改账本；写命令必须先有本编排操作权限，且共同遵循以下信封：
+入口为 `multi-task-flow flow <command> --input -`，标准输入为一个 JSON 对象；禁止通过命令行传递凭据。输出只有一个 JSON 对象到 stdout，诊断写 stderr。读命令不修改账本；写命令必须先有本编排操作权限，且共同遵循以下信封：
 
 ```json
 {
@@ -311,7 +311,7 @@ flowchart TD
 
 服务通过脚本取得一致的账本视图，向浏览器提供初始快照及变更推送；断线重连时发送当前完整版本。页面不得写入账本或运行事实；服务仅额外提供 tokenized 的 `GET/POST /api/preferences`，且只允许写入 schema-1 的全局主题偏好。其余视图、事件和文档接口保持只读。服务仅监听本机，并限制允许的资源和来源；要求文档只按账本中明确引用的路径提供，不能提供任意文件读取。数据中不存放凭据或敏感令牌。
 
-服务启动前按现有全局端口租约流程申请并注册端口；`serve.ts` 负责登记自身 PID、心跳和退出释放自己的服务租约，不接管其他进程或端口。向主人提供可持续访问的 URL 前，Agent 必须确认当前任务由 Codex host 提供且仍被保留的 native background session 和有效租约。Skill 不创建或推断该宿主会话；没有受支持的宿主后台路径时只能保留 live preview。
+服务启动前按现有全局端口租约流程申请并注册端口；the installed user service 负责登记自身 PID、心跳和退出释放自己的服务租约，不接管其他进程或端口。向主人提供可持续访问的 URL 前，Agent 必须确认当前任务由 Codex host 提供且仍被保留的 native background session 和有效租约。Skill 不创建或推断该宿主会话；没有受支持的宿主后台路径时只能保留 live preview。
 
 需要主动通知的事件先提交账本事实和通知意图，再由 CLI 调用 Codex Agent API；确认状态也写入账本。一般阻塞只需记账并留在相应任务或交付单元对话；确实影响调度时才使用 `notification.mode: "deliver"` 通知指定收件会话。断线、发送失败或确认缺失时，待处理通知保留并可通过 `notification-reconcile` 恢复查询；`unknown` 在平台对账前不得直接重试，恢复器不得伪造发送或 ack。
 
@@ -334,7 +334,7 @@ flowchart TD
 
 桌面与独立 app-server daemon 可能是不同实例。`CodexDesktopFollower` 只使用当前用户拥有的桌面 IPC socket，按已绑定 thread 发现现有 owner，以跟随通道获取公开 assistant 快照和文本补丁。只支持已核实的 stream version 11；按平台 islands/entries/item 顺序选择消息。保留索引占位但丢弃工具、用户与推理正文；验证 owner 和本地 host，重复旧版本丢弃，revision 缺口重新订阅取得快照。取消绑定及连接结束释放跟随关系；它不暴露任何执行或配置控制请求。
 
-- 会话链接：当前候选已证明真实 ID、原生 `codex://threads/<thread_id>` 锚点合同，并记录了 Codex 原生导航结果，证据见 `skills/multi-task-flow/examples/orchestration-viewer/link-verification.json`。该记录不声称证明宿主浏览器点击桥接；后续候选只有在链接合同或绑定身份变化时才需要新的观察；不得编造链接或自动重复创建。
+- 会话链接：当前候选已证明真实 ID、原生 `codex://threads/<thread_id>` 锚点合同，并记录了 Codex 原生导航结果，证据见 `skills/multi-task-flow-runtime/examples/orchestration-viewer/link-verification.json`。该记录不声称证明宿主浏览器点击桥接；后续候选只有在链接合同或绑定身份变化时才需要新的观察；不得编造链接或自动重复创建。
 
 ## 执行配置与创建接口
 

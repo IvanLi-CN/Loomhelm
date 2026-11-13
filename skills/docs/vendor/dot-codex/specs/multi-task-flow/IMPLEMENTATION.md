@@ -43,7 +43,7 @@
 
 - REQ-ORCH-015：bootstrap 的 owner 通过 run 主线程解析；schema 完整账本校验、运行时生命周期/合并/收口、计划身份保护及 dashboard readiness 使用相同边界。legacy 字段默认 regular/group，不自动转换历史运行；当前未提供 group 原地迁移命令。
 
-- 合成界面证据通过 `bun skills/multi-task-flow/scripts/demo-static.ts --bootstrap` 生成，仅修改展示 fixture，不转换真实账本。[交付单元类型展示](./assets/bootstrap-ownership.png) 对照首个 bootstrap 与后续 regular 卡片。
+- 合成界面证据通过 `bun skills/multi-task-flow-runtime/scripts/demo-static.ts --bootstrap` 生成，仅修改展示 fixture，不转换真实账本。[交付单元类型展示](./assets/bootstrap-ownership.png) 对照首个 bootstrap 与后续 regular 卡片。
 
 - 交付单元卡片的耗时只显示数值，移除“交付单元用时”和“进行中”前缀；定时刷新沿用同一显示规则。
 
@@ -67,7 +67,7 @@
 - Ledger publication verifies the published directory identity, binds parent-directory fsync to the directory opened for rename, retains a published run when parent-directory durability is uncertain, cleans only the verified staging or published inode, and uses an existing ledger lock without recreating a missing lock file. Ledger reads and writes also bind the run, lock directory, and lock-file identities across the operation.
 - Local tests cover graph scheduling, concurrent persistence, interruption recovery, operation coordination and dashboard endpoints. The legacy flow remains separate.
 - The committed example models two groups, a dynamic cut and group-owned post-merge tasks. Group and task details expose their requirements documents and real Codex conversation links; project and PR records are display-only fixture data.
-- The dashboard can serve a live ledger through its token-protected loopback service. `scripts/serve.ts` atomically claims the inspected empty-PID lease under the registry lock, rejects an existing owner or already-listening duplicate, binds the listener while that claim is held, records its own PID and optional host-provided session ID only after the listener is confirmed, retains the cleanup handle from the bind callback, immediately and periodically heartbeats the service lease with the recorded port and expected PID, and releases only that service lease on shutdown or failed startup persistence. The registry keeps `pid` as the value to record and `expected-pid` as the ownership guard, so an empty PID can be bound during first claim while a replaced lease remains protected. The static example is a disconnected snapshot; native conversation navigation evidence is recorded separately in `skills/multi-task-flow/examples/orchestration-viewer/link-verification.json`.
+- The installed user service owns the loopback gateway, leases, PID/generation fencing and worker lifecycle; the former foreground viewer launcher is not part of the runtime.
 - The Agent/host remains responsible for creating and retaining a real Codex native background session. The Skill does not infer one from a PID, visible terminal or foreground exec; without a supported host route, the service is valid only for same-turn live verification.
 - 账本合同新增 `contract_version`、`execution_plan_id`、计划生命周期/修订元数据、任务处置和迁移身份，同时保持存储 `schema_version` 不变。当前写入器使用 `schema_version=2`/`contract_version=2`；schema 1 或 contract 1 只读快照必须通过显式 `migrate` 才能写入，旧快照只在缺少新字段时于读取阶段做确定性归一化。
 - `Group.atoms`、`Group.coordination_execution` 与 `group-atom-update`/`group-execution-update` 独立于 `Task.atoms` 实现；计划投影按选定计划的稳定 ID 和归属关联执行事实。卡片、详情和预览只投影交付单元自己的原子进度，等待贡献任务使用非旋转沙漏动画，依赖详情复用可访问 tooltip。
@@ -83,7 +83,7 @@
 - 桌面实时接管必须由当前候选真实 CLI 创建、退出、原生消息回执和主人确认共同证明，不能用源码测试或历史冒烟替代。
 
 - The dashboard emits the canonical native `codex://threads/<thread_id>` links without forcing a new browser window, matching the working local dashboard pattern. The current candidate records one native-navigation observation for each fixture ID; the evidence is reused for this candidate and is not re-run by ordinary checks. This does not claim to prove host-specific browser click bridging, which is outside the Skill gate.
-- Responsive width acceptance is exercised through the real-browser runner in `skills/multi-task-flow/tests/browser/card-width-regression.mjs`, covering board/grid layouts, detail toggles, cross-layout outer widths, fixed inspector limits and maximal task-column allocation at five medium viewport widths. Local DOM/source tests cover detail interaction and URL serialization; the owner-confirmed mock-demo evidence is recorded in the Spec.
+- Responsive width acceptance is exercised through the real-browser runner in `skills/multi-task-flow-runtime/tests/browser/card-width-regression.mjs`, covering board/grid layouts, detail toggles, cross-layout outer widths, fixed inspector limits and maximal task-column allocation at five medium viewport widths. Local DOM/source tests cover detail interaction and URL serialization; the owner-confirmed mock-demo evidence is recorded in the Spec.
 
 ## References
 

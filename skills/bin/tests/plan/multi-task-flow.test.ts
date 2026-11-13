@@ -26,9 +26,9 @@ describe("dev-plan and multi-task-flow separation", () => {
 
   test("runtime schema and initializer contain no dev-plan handoff contract", async () => {
     for (const path of [
-      "skills/multi-task-flow/lib/schema.ts",
-      "skills/multi-task-flow/scripts/orchestrate.ts",
-      "skills/multi-task-flow/lib/engine.ts",
+      "skills/multi-task-flow-runtime/lib/schema.ts",
+      "skills/multi-task-flow-runtime/scripts/orchestrate.ts",
+      "skills/multi-task-flow-runtime/lib/engine.ts",
     ]) {
       const source = await readFile(resolve(ROOT, path), "utf8");
       expect(source).not.toContain("dev_plan_handoff");

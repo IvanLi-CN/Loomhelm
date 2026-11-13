@@ -24,7 +24,7 @@
   },
   "types": "src/index.ts",
   "scripts": {
-    "build": "bun ../../skills/multi-task-flow/scripts/package-client-skills.ts --require-dependencies",
+    "build": "bun --cwd ../../skills/multi-task-flow-runtime build && bun ../../skills/multi-task-flow-runtime/scripts/package-client-skills.ts --require-dependencies",
     "check": "bun x --no-install tsc -p tsconfig.json --noEmit",
     "test": "bun run build && bun test test/*.test.ts",
     "pack:check": "bun run build && bun pm pack --dry-run"

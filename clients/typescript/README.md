@@ -45,7 +45,7 @@ npm 发布需要 npm Trusted Publisher 绑定 `IvanLi-CN/Loomhelm` 与 `skill-re
 
 ```sh
 bun install --frozen-lockfile
-bun install --cwd skills/multi-task-flow --frozen-lockfile
+bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile
 bun --no-install run skills:build
 cd clients/typescript
 bun install --frozen-lockfile
@@ -54,7 +54,7 @@ bun --no-install run test
 bun --no-install src/cli.ts --config config.example.json status
 ```
 
-发布包构建前需要准备 Skill build inputs 与消费者依赖：`bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy`、`bun install --cwd skills/multi-task-flow --frozen-lockfile` 和 `bun install --cwd clients/typescript --frozen-lockfile --ignore-scripts --backend=copy`。随后在 `clients/typescript/` 执行 `bun --no-install run build`，构建会拒绝摘要不一致、缺失 consumer dependency、符号链接资源和非法 package identity。
+发布包构建前需要准备 Skill build inputs 与消费者依赖：`bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy`、`bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile` 和 `bun install --cwd clients/typescript --frozen-lockfile --ignore-scripts --backend=copy`。随后在 `clients/typescript/` 执行 `bun --no-install run build`，构建会拒绝摘要不一致、缺失 consumer dependency、符号链接资源和非法 package identity。
 
 配置路径显式传入；相对 `stateDir` 相对于配置文件所在目录解析。未传配置时使用 `~/.loomhelm`。配置拒绝未知字段、未知版本及尚未实现的 Connected mode。源码从 `client/` 移入本目录后，示例配置使用 `../../client/.loomhelm`，继续读取仓库中原来的 `client/.loomhelm/`，该目录仍被根 Git 忽略规则排除。此兼容目录只保存状态，不放置客户端源码。
 
@@ -108,9 +108,9 @@ bun --no-install src/cli.ts --config config.example.json codex retry DISPATCH_ID
 
 完整源包位于包内 `toolkit/skills/`，共享支持位于 `toolkit/skills/bin/`，预构建 viewer 资产位于对应的 Multi-task Flow dist 目录。`skills/source-manifest.json` 记录固定源提交、源摘要、安装摘要和迁移差异；`skills/catalog.json` 记录入口、脚本及依赖强度；`artifact-manifest.json` 记录 schema v3 package identity、`path-byte-v2` canonical digest 和逐文件摘要。资源打包将 TS 源码、完整资源和浏览器资产复制到 `toolkit/`，不复制 production `node_modules`，不转译、不搜索全局 dot-codex 执行代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根；`skills run` 原样执行 `.ts` 脚本。包的 bin、exports 和类型入口均指向 `src/`。
 
-所有随包执行代码、合同资源和构建支持都位于 `skills/`：共享脚本在 `skills/bin/`，上游合同在 `skills/docs/vendor/dot-codex/`，维护与构建入口在 `skills/multi-task-flow/scripts/`。vendor 仅检出 `skills/` 即可保留完整源资源，不需要修改用户的 sparse checkout 或安装配置。安装目录内执行 `bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy` 与 `bun install --cwd skills/multi-task-flow --frozen-lockfile` 准备声明的依赖，再执行 `bun --no-install run --cwd skills build` 仅构建浏览器 JS/CSS；本机 TS 无需编译。外部 Git、Codex 宿主工具及条件性 Skills 仍按既有合同检测，不复制到源包中。
+所有随包执行代码、合同资源和构建支持都位于 `skills/`：共享脚本在 `skills/bin/`，上游合同在 `skills/docs/vendor/dot-codex/`，维护与构建入口在 `skills/multi-task-flow-runtime/scripts/`。vendor 仅检出 `skills/` 即可保留完整源资源，不需要修改用户的 sparse checkout 或安装配置。安装目录内执行 `bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy` 与 `bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile` 准备声明的依赖，再执行 `bun --no-install run --cwd skills/multi-task-flow-runtime build` 仅构建浏览器 JS/CSS；本机 TS 无需编译。外部 Git、Codex 宿主工具及条件性 Skills 仍按既有合同检测，不复制到源包中。
 
-`bun --no-install skills/multi-task-flow/scripts/check-skills-installation.ts --root <installation-root> --probe` 分别报告源码完整性、Bun 运行时及实际入口探测；宿主能力单独验收。该检查不会修改任何用户级安装或运行账本。
+`bun --no-install skills/multi-task-flow-runtime/scripts/check-skills-installation.ts --root <installation-root> --probe` 分别报告源码完整性、Bun 运行时及实际入口探测；宿主能力单独验收。该检查不会修改任何用户级安装或运行账本。
 
 ```sh
 bun --no-install src/cli.ts skills list
@@ -145,15 +145,15 @@ viewer 新包采用 v2 清单，覆盖启动 shell、TS、依赖及网页的逐�
 
 ## Viewer service 运维
 
-viewer service 由单一 loopback gateway 管理，实际 worker 通过 owner-only Unix socket 受控；直接 ledger CLI 不经过 viewer HTTP，也不能借 viewer 路由绕过 ledger owner、revision 或 command identity。以下命令均从已安装 Skill 根目录执行，输入必须是一个 JSON 对象并通过 stdin 传入：`bun --no-install run <skill>/scripts/service.ts <command> --input -`。
+viewer service 由单一 loopback gateway 管理，实际 worker 通过 owner-only Unix socket 受控；直接 ledger CLI 不经过 viewer HTTP，也不能借 viewer 路由绕过 ledger owner、revision 或 command identity。以下命令均通过已发布 npm 包的 `service` 子命令执行，输入必须是一个 JSON 对象并通过 stdin 传入：`multi-task-flow service <command> --input -`。
 
 ```sh
-bun --no-install run <skill>/scripts/service.ts status --input - < status.json
-bun --no-install run <skill>/scripts/service.ts doctor --input - < empty.json
-bun --no-install run <skill>/scripts/service.ts ensure --input - < ensure.json
-bun --no-install run <skill>/scripts/service.ts compatibility-check --input - < candidate.json
-bun --no-install run <skill>/scripts/service.ts upgrade --input - < candidate.json
-bun --no-install run <skill>/scripts/service.ts rollback --input - < rollback.json
+multi-task-flow service status --input - < status.json
+multi-task-flow service doctor --input - < empty.json
+multi-task-flow service ensure --input - < ensure.json
+multi-task-flow service compatibility-check --input - < candidate.json
+multi-task-flow service upgrade --input - < candidate.json
+multi-task-flow service rollback --input - < rollback.json
 ```
 
 `ensure` 的 actor 至少包含 `{ "run_id": "<run-id>", "thread_id": "<thread-id>", "api_version": 1 }`；它会核对安装 manifest、generation、PID、port 和 health identity，并在旧实例停止后重新建立租约。`status` 或 `doctor` 先确认安装、运行阶段和当前 build；启动失败时保留 runtime 状态并检查配置 user service 的 launchd 记录，不删除 data 或 release 目录。

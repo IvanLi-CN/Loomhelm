@@ -2,7 +2,7 @@
 
 ## 1. 根对象
 
-账本根对象类型为 `Ledger`，对应 `skills/multi-task-flow/lib/schema.ts` 中的 `ledgerSchema`。一个运行只有一个根对象；所有计划、任务、操作、事实和事件都从该对象的数组字段进入账本。
+账本根对象类型为 `Ledger`，对应 `skills/multi-task-flow-runtime/lib/schema.ts` 中的 `ledgerSchema`。一个运行只有一个根对象；所有计划、任务、操作、事实和事件都从该对象的数组字段进入账本。
 
 ```text
 Ledger
@@ -243,7 +243,7 @@ Ledger
 
 ## 9. 权威来源
 
-- 运行时 schema：`skills/multi-task-flow/lib/schema.ts`
-- 语义字段元数据：`skills/multi-task-flow/lib/contract.ts`
-- 持久化实现：`skills/multi-task-flow/lib/store.ts`
+- 运行时 schema：`skills/multi-task-flow-runtime/lib/schema.ts`
+- 语义字段元数据：`skills/multi-task-flow-runtime/lib/contract.ts`
+- 持久化实现：`skills/multi-task-flow-runtime/lib/store.ts`
 - 结构约束：[`SCHEMA-CONSTRAINTS.md`](./SCHEMA-CONSTRAINTS.md)

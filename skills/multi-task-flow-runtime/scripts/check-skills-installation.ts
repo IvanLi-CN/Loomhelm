@@ -12,6 +12,11 @@ export function checkSkillsInstallation(root, { probe = false } = {}) {
   const inventory = resolve(root, 'skills/source-manifest.json');
   if (!existsSync(inventory)) return { ok: false, code: 'SKILLS_INVENTORY_MISSING', root, missing: ['skills/source-manifest.json'] };
   const manifest = JSON.parse(readFileSync(inventory, 'utf8'));
+  const localPath = resource => {
+    const target = resolve(root, resource.path);
+    if (existsSync(target)) return resource.path;
+    return resource.sourcePath ?? resource.path;
+  };
   const contained = path => {
     const file = resolve(root, path);
     if (!existsSync(file)) return false;
@@ -19,14 +24,15 @@ export function checkSkillsInstallation(root, { probe = false } = {}) {
     return stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && realpathSync(file) === file && realpathSync(file).startsWith(realpathSync(resolve(root, 'skills')) + '/');
   };
   const missing = [...manifest.files, ...(manifest.additions ?? [])]
-    .map(file => file.path).filter(path => !path.startsWith('skills/') || path.split('/').includes('..') || !contained(path));
-  const modified = [...manifest.files, ...(manifest.additions ?? [])].filter(file => !missing.includes(file.path) && createHash("sha256").update(readFileSync(resolve(root,file.path))).digest("hex") !== file.installedSha256).map(file => file.path);
+    .map(file => localPath(file)).filter(path => !path.startsWith('skills/') || path.split('/').includes('..') || !contained(path));
+  const modified = [...manifest.files, ...(manifest.additions ?? [])].filter(file => { const path = localPath(file); return !missing.includes(path) && createHash("sha256").update(readFileSync(resolve(root,path))).digest("hex") !== file.installedSha256; }).map(file => file.path);
   const escapedImports = [];
   for (const file of [...manifest.files, ...(manifest.additions ?? [])]) {
-    if (!/\.(ts|mjs)$/.test(file.path) || !file.path.startsWith('skills/') || file.path.split('/').includes('..') || !contained(file.path)) continue;
-    const text = readFileSync(resolve(root, file.path), 'utf8');
+    const path = localPath(file);
+    if (!/\.(ts|mjs)$/.test(path) || !path.startsWith('skills/') || path.split('/').includes('..') || !contained(path)) continue;
+    const text = readFileSync(resolve(root, path), 'utf8');
     for (const match of text.matchAll(/(?:from\s*|import\s*\(?\s*)["'](\.[^"']+)["']/g)) {
-      const target = resolve(root, dirname(file.path), match[1]);
+      const target = resolve(root, dirname(path), match[1]);
       if (!target.startsWith(resolve(root, 'skills') + '/')) escapedImports.push({ file: file.path, import: match[1] });
     }
   }
@@ -46,7 +52,7 @@ export function checkSkillsInstallation(root, { probe = false } = {}) {
   const dependencies = { status:!sourceComplete ? 'not_checked' : dependencyMissing.length ? 'missing' : 'prepared', missing:dependencyMissing };
   const entrypoints = { status: dependencyMissing.length ? 'blocked' : 'not_checked', results: [] };
   if (probe && sourceComplete && runtime.available && dependencyMissing.length === 0) {
-    for (const [script, args] of [['skills/bin/plan-cli.sh',['--help']], ['skills/dot-codex-development/scripts/context.ts',['--help']], ['skills/multi-task-flow/scripts/orchestrate.ts',['view','--input','-']]]) {
+    for (const [script, args] of [['skills/bin/plan-cli.sh',['--help']], ['skills/dot-codex-development/scripts/context.ts',['--help']], ['skills/multi-task-flow-runtime/scripts/orchestrate.ts',['view','--input','-']]]) {
       const result = spawnSync(script.endsWith('.sh') ? '/bin/bash' : process.execPath, [...(script.endsWith('.sh') ? ['-p'] : ['--no-install']), resolve(root,script), ...args], { cwd:root, env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH:'0' }, input:'{}', encoding:'utf8', timeout:30000 });
       const expected = script.endsWith('orchestrate.ts') ? 2 : 0;
       entrypoints.results.push({script, code:result.status, ok:!result.error && result.status === expected, error: result.error ? String(result.error) : result.status === expected ? undefined : result.stderr});
@@ -69,11 +75,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const probe = process.argv.includes('--probe');
   const args = process.argv.slice(2).filter(arg => arg !== '--probe');
   if (args.length !== 0 && (args.length !== 2 || args[0] !== '--root')) {
-    console.error('Usage: bun skills/multi-task-flow/scripts/check-skills-installation.ts [--root PATH] [--probe]');
+    console.error('Usage: bun skills/multi-task-flow-runtime/scripts/check-skills-installation.ts [--root PATH] [--probe]');
     process.exitCode = 2;
   } else {
     try {
-      const report = checkSkillsInstallation(args[1] ?? resolve(import.meta.dirname, '../..'), {probe});
+      const report = checkSkillsInstallation(args[1] ?? resolve(import.meta.dirname, '../../..'), {probe});
       console.log(JSON.stringify(report));
       process.exitCode = report.ok ? 0 : 1;
     } catch (error) {

@@ -144,7 +144,6 @@ None
 ### Testing
 
 - `bun test skills/global-port-manager/scripts/test_port_registry.ts`
-- `bun test skills/multi-task-flow/tests/serve.test.ts`
 - `git diff --check`
 
 ### Quality checks
