@@ -450,6 +450,8 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
   .details-heading { padding: 0 0 12px; display: flex; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--rule); }
   .detail-title { margin-top: 0; }
   #details-content { padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: max-content; align-content: start; align-items: start; column-gap: 20px; }
+  #details-content[data-detail-kind="task"] { grid-template-columns: minmax(220px, .9fr) repeat(3, minmax(0, 1fr)); }
+  #details-content[data-detail-kind="group"] { grid-template-columns: minmax(260px, 1.25fr) repeat(3, minmax(0, 1fr)); }
   #details-content > .detail-field:has(.detail-agent-output), #details-content > .detail-field:has(.detail-empty-output) { grid-column: 1 / -1; }
   #details-content > .detail-field:has(.atom-list) { grid-column: span 1; }
   #details-content > .detail-group-facts { grid-column: 2 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; align-items: start; column-gap: 20px; }

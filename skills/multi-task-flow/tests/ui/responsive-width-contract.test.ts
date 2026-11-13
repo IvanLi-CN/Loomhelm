@@ -20,6 +20,8 @@ test("medium details stay in the static bottom layout instead of a side-by-side 
   expect(medium).toContain(".details-heading { padding: 0 0 12px; display: flex; align-items: baseline;");
   expect(medium).toContain("#details-content { padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));");
   expect(medium).toContain("grid-auto-rows: max-content; align-content: start; align-items: start;");
+  expect(medium).toContain("#details-content[data-detail-kind=\"task\"] { grid-template-columns: minmax(220px, .9fr) repeat(3, minmax(0, 1fr)); }");
+  expect(medium).toContain("#details-content[data-detail-kind=\"group\"] { grid-template-columns: minmax(260px, 1.25fr) repeat(3, minmax(0, 1fr)); }");
   expect(medium).toContain("#details-content > .detail-field:has(.atom-list) { grid-column: span 1; }");
   expect(medium).toContain("#details-content > .detail-group-facts { grid-column: 2 / -1; display: grid;");
   expect(medium).toContain('.workspace[data-view-tab="tasks"] .details-slot { grid-column: 1; grid-row: 3; }');
