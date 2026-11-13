@@ -1,7 +1,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cp, mkdtemp, readFile, rm, realpath, mkdir, symlink, writeFile, readdir } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, realpath, mkdir, symlink, writeFile, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { identityDigest, SkillsRuntime } from '../src/index.ts';
@@ -84,13 +84,18 @@ test('canonical ledger initializes and reads unchanged schema2/contract3 state a
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test('published toolkit keeps runtime dependencies inside the artifact', async () => {
+test('published toolkit declares runtime dependencies for consumer installation', async () => {
   const artifact = await runtime.artifact();
-  const zod = artifact.dependencies.find((dependency) => dependency.name === 'zod');
-  assert.ok(zod);
-  const zodEntry = await readFile(join(runtime.root, zod.path, zod.entry), 'utf8');
-  assert.doesNotMatch(zodEntry, /\.\.\/\.\.\/\.\.\/\.\.\/node_modules/);
-  assert.equal(await readFile(join(runtime.root, zod.path, 'package.json'), 'utf8').then(JSON.parse).then((value) => value.name), 'zod');
+  assert.equal(artifact.schemaVersion, 3);
+  assert.equal(artifact.dependenciesBundled, false);
+  assert.deepEqual(artifact.dependencies.map((dependency) => dependency.name), ['playwright', 'sharp', 'zod']);
+  for (const dependency of artifact.dependencies) {
+    assert.equal(dependency.mode, 'consumer-install');
+    assert.equal(dependency.path, undefined);
+    assert.equal(dependency.entry, undefined);
+    assert.equal(await readFile(join(runtime.root, '..', 'node_modules', dependency.name, 'package.json')).then(JSON.parse).then((value) => value.name), dependency.name);
+  }
+  await assert.rejects(stat(join(runtime.root, 'node_modules')));
 });
 
 test('missing runtime dependencies fail without registry access or cache writes', async () => {
@@ -103,7 +108,7 @@ test('missing runtime dependencies fail without registry access or cache writes'
     await mkdir(join(root,'skills/bin'),{recursive:true});
     await mkdir(join(root,'cache'));
     await mkdir(join(root,'home'));
-    await writeFile(join(root,'package.json'),JSON.stringify({name:'loomhelm-no-install-test',type:'module'}));
+    await writeFile(join(root,'package.json'),JSON.stringify({name:'loomhelm-no-install-test',type:'module',dependencies:Object.fromEntries((await runtime.artifact()).dependencies.map(dependency=>[dependency.name,dependency.version]))}));
     const npmrc='registry=http://127.0.0.1:'+registry.port+'/\n';
     await writeFile(join(root,'.npmrc'),npmrc);
     const scriptContents=`import ${JSON.stringify(dependency)}; console.log('unexpected execution');`;

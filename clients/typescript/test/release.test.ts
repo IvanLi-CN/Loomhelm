@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { canonicalTarballDigest, packPackageTarball, removeTarballDirectory } from '../src/release-tarball.ts';
-import { compatibilityDistTag, identityDigest, isCompatibilityDistTag, isExactSemVer, parseCompatibilityDistTag, parseExactSemVer, validatePackageIdentity, validatePublication } from '../src/release.ts';
+import { CANONICAL_TARBALL_DIGEST_ALGORITHM, compatibilityDistTag, identityDigest, isCompatibilityDistTag, isExactSemVer, parseCompatibilityDistTag, parseExactSemVer, validatePackageIdentity, validatePublication } from '../src/release.ts';
 
 test('accepts exact SemVer and rejects ranges, build metadata, and leading zeroes', () => {
   assert.equal(isExactSemVer('1.2.3'), true);
@@ -44,6 +44,8 @@ test('validates independent package identity dimensions', () => {
   assert.equal(identityDigest({ ...identityWithoutBuildId, files: [{ path: 'a', sha256: 'c'.repeat(64) }] }).length, 64);
   assert.throws(() => validatePackageIdentity({ ...identity, compatibilityLine: 'compat-v0' }), /compatibility/);
   assert.throws(() => validatePackageIdentity({ ...identity, mergeSha: 'not-a-sha' }), /mergeSha/);
+  assert.equal(validatePackageIdentity({ ...identity, canonicalDigestAlgorithm: CANONICAL_TARBALL_DIGEST_ALGORITHM }).canonicalDigestAlgorithm, CANONICAL_TARBALL_DIGEST_ALGORITHM);
+  assert.throws(() => validatePackageIdentity({ ...identity, canonicalDigestAlgorithm: 'unknown' }), /canonicalDigestAlgorithm/);
 });
 
 test('release validation binds the requested version to the packaged artifact', () => {
@@ -66,8 +68,12 @@ test('publication digest is computed from real npm-compatible tarball contents',
     assert.match(firstDigest, /^[a-f0-9]{64}$/);
     assert.equal(canonicalTarballDigest(second), firstDigest);
     const packageJson = JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf8')) as { scripts?: { 'publish:exact'?: string; 'publish:compat'?: string } };
-    assert.doesNotMatch(packageJson.scripts?.['publish:exact'] ?? '', /bun pm publish/);
-    assert.doesNotMatch(packageJson.scripts?.['publish:compat'] ?? '', /bun pm publish/);
+    assert.equal(packageJson.scripts?.['publish:exact'], undefined);
+    assert.equal(packageJson.scripts?.['publish:compat'], undefined);
+    const cli = resolve(packageRoot, 'src/cli.ts');
+    const directPublish = spawnSync(process.execPath, ['--no-install', cli, 'release', 'publish', '--dist-tag', '0.2.7'], { encoding: 'utf8' });
+    assert.notEqual(directPublish.status, 0);
+    assert.match(directPublish.stderr + directPublish.stdout, /Direct npm publication is disabled/);
   } finally {
     removeTarballDirectory(first);
     removeTarballDirectory(second);

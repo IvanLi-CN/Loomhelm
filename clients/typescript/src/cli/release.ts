@@ -1,9 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { buildInfoFromArtifact, requirePublishableArtifact } from '../runtime-identity.ts';
-import { commitForGitTag, canonicalTarballDigest, gitSourceSha, gitWorkingTreeStatus, packPackageTarball, removeTarballDirectory } from '../release-tarball.ts';
+import { commitForGitTag } from '../release-tarball.ts';
 import { SkillsRuntime } from '../toolkit.ts';
 import { parseCompatibilityDistTag, validatePublication } from '../release.ts';
 
@@ -38,54 +37,19 @@ function parsePublicationArgs(args: string[]): { version?: string; distTag?: str
   };
 }
 
-async function runPublishCommand(args: string[]): Promise<void> {
-  const options = parsePublicationArgs(args);
-  const packageMetadata = JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf8')) as { version?: string };
-  const version = options.version ?? packageMetadata.version;
-  if (!version) throw new Error('Missing package version');
-  const publication = validatePublication(version, options.distTag);
-  const repoRoot = repositoryRoot();
-  if (gitWorkingTreeStatus(repoRoot).trim()) throw new Error('Publication requires a clean Git checkout');
-  const sourceSha = gitSourceSha(repoRoot);
-  assertGitTagProvenance(sourceSha, version, repoRoot);
-  const gitTag = `multi-task-flow-v${version}`;
-  const buildScript = resolve(repoRoot, 'skills/multi-task-flow/scripts/package-client-skills.ts');
-  const buildEnvironment = (tarballDigest = '') => ({ ...process.env, LOOMHELM_REQUIRE_MERGE_SHA: '1', LOOMHELM_MERGE_SHA: sourceSha, LOOMHELM_GIT_TAG: gitTag, LOOMHELM_TARBALL_DIGEST: tarballDigest });
-  const build = (tarballDigest = '') => execFileSync(process.execPath, ['--no-install', buildScript, '--require-dependencies'], { cwd: packageRoot, env: buildEnvironment(tarballDigest), stdio: 'inherit' });
-  const tarballs: string[] = [];
-  try {
-    build();
-    const draft = packPackageTarball(packageRoot);
-    tarballs.push(draft);
-    const digest = canonicalTarballDigest(draft);
-    build(digest);
-    const finalTarball = packPackageTarball(packageRoot);
-    tarballs.push(finalTarball);
-    if (canonicalTarballDigest(finalTarball) !== digest) throw new Error('Tarball digest changed after embedding provenance');
-    const artifact = await new SkillsRuntime().validate();
-    const identity = requirePublishableArtifact(artifact);
-    if (identity.packageVersion !== version || identity.tarballDigest !== digest) throw new Error('Packaged provenance does not match the publication request');
-    if (options.compatibilityLine !== undefined && options.compatibilityLine !== identity.compatibilityLine) throw new Error('Declared compatibility line does not match artifact identity');
-    execFileSync(process.execPath, ['publish', '--tag', publication.distTag, finalTarball], { cwd: packageRoot, env: buildEnvironment(digest), stdio: 'inherit' });
-    console.log(JSON.stringify({ ...publication, packageName: identity.packageName, sourceSha, mergeSha: identity.mergeSha, buildId: identity.buildId, tarballDigest: digest, gitTag }));
-  } finally {
-    for (const tarball of tarballs) removeTarballDirectory(tarball);
-  }
-}
-
 export async function runReleaseCommand(args: string[]): Promise<void> {
   if (args[0] === 'help' || !args.length) {
-    console.log('release identity | validate --version VERSION [--dist-tag VERSION|compat-vN] [--compatibility-line compat-vN] [--require-provenance] | publish [--version VERSION] --dist-tag VERSION|compat-vN [--compatibility-line compat-vN]');
+    console.log('release identity | validate --version VERSION [--dist-tag VERSION|compat-vN] [--compatibility-line compat-vN] [--require-provenance]');
     return;
   }
-  if (args[0] === 'publish') { await runPublishCommand(args.slice(1)); return; }
+  if (args[0] === 'publish') throw new Error('Direct npm publication is disabled; use the protected Skill Runtime Release workflow');
   const artifact = await new SkillsRuntime().validate();
   const buildInfo = buildInfoFromArtifact(artifact);
   if (args[0] === 'identity' && args.length === 1) {
     console.log(JSON.stringify(buildInfo));
     return;
   }
-  if (args[0] !== 'validate') throw new Error('Usage: release identity | validate --version VERSION [--dist-tag VERSION|compat-vN] [--compatibility-line compat-vN] [--require-provenance] | publish [--version VERSION] --dist-tag VERSION|compat-vN [--compatibility-line compat-vN]');
+  if (args[0] !== 'validate') throw new Error('Usage: release identity | validate --version VERSION [--dist-tag VERSION|compat-vN] [--compatibility-line compat-vN] [--require-provenance]');
   const publicationArgs = parsePublicationArgs(args.slice(1).filter(option => option !== '--require-provenance'));
   let version = publicationArgs.version;
   let distTag = publicationArgs.distTag;

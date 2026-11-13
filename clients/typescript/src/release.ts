@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 
 export const PACKAGE_NAME = '@loomhelm/multi-task-flow';
 export const COMPATIBILITY_TAG_PREFIX = 'compat-v';
+export const CANONICAL_TARBALL_DIGEST_ALGORITHM = 'path-byte-v2';
+export const LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM = 'legacy-locale-en-us-v1';
+export type CanonicalDigestAlgorithm = typeof CANONICAL_TARBALL_DIGEST_ALGORITHM | typeof LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM;
 const EXACT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 const COMPATIBILITY_TAG = /^compat-v([1-9]\d*)$/;
 const SHA1 = /^[a-f0-9]{40}$/;
@@ -35,6 +38,7 @@ export interface PackageIdentity {
   buildId: string;
   tarballDigest: string | null;
   gitTag: string | null;
+  canonicalDigestAlgorithm?: CanonicalDigestAlgorithm;
 }
 
 export function parseExactSemVer(value: string): ExactSemVer {
@@ -124,7 +128,9 @@ export function validatePackageIdentity(value: unknown): PackageIdentity {
   if (tarballDigest !== null && !SHA256.test(tarballDigest)) throw new Error('Invalid package identity field: tarballDigest');
   const gitTag = nullableString(raw.gitTag, 'gitTag');
   if (gitTag !== null && gitTag !== `multi-task-flow-v${packageVersion}`) throw new Error('Package identity Git tag does not match package version');
-  return { packageName, packageVersion, compatibilityLine, skillVersion, sourceSha, mergeSha, dirty: raw.dirty, contracts: normalizedContracts, buildId, tarballDigest, gitTag };
+  const canonicalDigestAlgorithm = raw.canonicalDigestAlgorithm;
+  if (canonicalDigestAlgorithm !== undefined && canonicalDigestAlgorithm !== CANONICAL_TARBALL_DIGEST_ALGORITHM && canonicalDigestAlgorithm !== LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM) throw new Error('Invalid package identity field: canonicalDigestAlgorithm');
+  return { packageName, packageVersion, compatibilityLine, skillVersion, sourceSha, mergeSha, dirty: raw.dirty, contracts: normalizedContracts, buildId, tarballDigest, gitTag, ...(canonicalDigestAlgorithm === undefined ? {} : { canonicalDigestAlgorithm }) };
 }
 
 export function identityDigest(value: Omit<PackageIdentity, 'buildId'> & { files: readonly { path: string; sha256: string }[] }): string {
