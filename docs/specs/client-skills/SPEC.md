@@ -160,6 +160,8 @@ Viewer compatibility maintenance MUST keep historical format, fallback, migratio
 
 - [Bun 直接运行客户端与 Skills](../../adr/0021-bun-source-runtime.md)
 - [Multi-task Flow proposal quality gates and execution boundary](../../adr/0026-multi-task-flow-proposal-quality-gates.md)
+- [Multi-task Flow task execution and delivery boundaries](../../adr/0027-multi-task-flow-task-execution-and-delivery-boundaries.md)
+- [First delivery unit is bootstrap by default](../../adr/0031-first-delivery-unit-bootstrap-by-default.md)
 
 ## References
 

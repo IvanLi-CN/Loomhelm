@@ -397,6 +397,56 @@ test("contribution dispatch is blocked until the parent PR gate is complete", ()
     occurred_at: at,
   }, { role: "task", thread_id: "task-a-thread" }))).toThrow("parent PR is created and verified");
 });
+
+test("main-owned bootstrap contributions can start before the parent PR exists", () => {
+  const ledger = v2Fixture();
+  ledger.groups[0].delivery_unit_kind = "bootstrap";
+  ledger.groups[0].owner_kind = "main";
+  ledger.groups[0].agent_thread_id = null;
+  ledger.groups[0].atoms = [{
+    id: "workspace",
+    title: "Prepare parent",
+    purpose: "Prepare",
+    output: "Ready",
+    lifecycle_stage: "workspace_ready",
+    status: "planned",
+  }];
+  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
+  const task = ledger.tasks[0];
+  task.execution_owner = "main";
+  task.conversation_policy = "main_owned";
+  task.delivery_policy = "none";
+  task.atoms = [{ id: "atom-a", title: "a", status: "planned" }];
+  approveV2(ledger);
+
+  expect(() => apply(ledger, "task-update", request(ledger, "bootstrap-main-before-workspace", {
+    task_id: task.id,
+    state: "running",
+    occurred_at: at,
+  }, main))).toThrow("delivery-unit workspace is ready");
+
+  ledger.groups[0].lifecycle.workspace_ready = "passed";
+  ledger.groups[0].atoms[0].status = "completed";
+  ledger.events.push({
+    id: "bootstrap-workspace-recorded",
+    type: "lifecycle_recorded",
+    subject_id: "g",
+    actor_id: "main-thread",
+    occurred_at: at,
+    recorded_at: at,
+    data: { target_type: "group", stage: "workspace_ready", evidence_ref: "workspace" },
+  });
+
+  apply(ledger, "task-update", request(ledger, "bootstrap-main-start", {
+    task_id: task.id,
+    state: "running",
+    occurred_at: at,
+  }, main));
+
+  expect(ledger.tasks[0].state).toBe("running");
+  expect(ledger.tasks[0].started_at).toBe(at);
+  expect(ledger.groups[0].parent_pr).toBeNull();
+});
 function providerBranchReceipt(branch: string, sha: string) {
   return {
     provider: "github",

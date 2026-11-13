@@ -195,6 +195,7 @@ function taskPrRef(task: Ledger["tasks"][number]): ExternalRef | null {
 function requireContributionDispatchGate(
   ledger: Ledger,
   owner: Ledger["groups"][number],
+  requireParentPr = true,
 ): void {
   if (legacyLedger(ledger)) return;
   const workspaceAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
@@ -202,23 +203,29 @@ function requireContributionDispatchGate(
   const missing: string[] = [];
   if (owner.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     missing.push("workspace_ready");
-  if (owner.lifecycle.pr_created !== "passed" || !deliveryUnitPr(owner) || prAtom?.status !== "completed")
+  if (requireParentPr && (owner.lifecycle.pr_created !== "passed" || !deliveryUnitPr(owner) || prAtom?.status !== "completed"))
     missing.push("parent_pr");
   if (missing.length)
     throw new ContractError(
       "DELIVERY_GATE_PENDING",
-      "Contribution task cannot start before the delivery-unit parent PR is created and verified",
+      missing.includes("parent_pr")
+        ? "Contribution task cannot start before the delivery-unit parent PR is created and verified"
+        : "Contribution task cannot start before the delivery-unit workspace is ready",
       4,
       {
         target_type: "group",
         target_id: owner.id,
         missing,
         recovery: [
-          "lifecycle-record workspace_ready",
-          "group-atom-update workspace_ready completed",
-          "publish-pr-claim + publish-pr-resolve for the parent PR",
-          "group-atom-update pr_created completed",
-          "retry dispatch-claim",
+          ...(missing.includes("workspace_ready") ? [
+            "lifecycle-record workspace_ready",
+            "group-atom-update workspace_ready completed",
+          ] : []),
+          ...(missing.includes("parent_pr") ? [
+            "publish-pr-claim + publish-pr-resolve for the parent PR",
+            "group-atom-update pr_created completed",
+            "retry dispatch-claim",
+          ] : ["retry task-update"]),
         ],
       },
     );
@@ -2837,7 +2844,11 @@ export function execute(
       const occupiedSlot = target.state === "agent_idle";
       if (state === "running" && isContributionKind(target.kind)) {
         const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
-        requireContributionDispatchGate(ledger, owner);
+        const bootstrapMainOwnedStart =
+          mainOwned &&
+          owner.delivery_unit_kind === "bootstrap" &&
+          owner.owner_kind === "main";
+        requireContributionDispatchGate(ledger, owner, !bootstrapMainOwnedStart);
       }
       if (state === "running" && previousState !== "starting" && !occupiedSlot) {
         requireCondition(
