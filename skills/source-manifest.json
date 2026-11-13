@@ -2303,7 +2303,7 @@
       "path": "skills/bin/tests/core/package_scripts.test.ts",
       "sourceBlob": "35b45249b06db801eba4a161b3ce2ffb2ad8eb5c",
       "sourceSha256": "17290b0e932e35540ce0dfebe15c97916c9b5300184f8dc182736090d94b6fe2",
-      "installedSha256": "4132a4c0dbf0aaca3333d922a5045e4535c44bdaa305c6d5e708bd846e23b924",
+      "installedSha256": "09cfbc66c5519dabfa7a8b23ba52e98333e022b1ffe4ac9f87920ea0bfee0df2",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
