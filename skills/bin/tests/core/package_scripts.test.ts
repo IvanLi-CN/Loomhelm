@@ -8,6 +8,6 @@ test("migrated regression surfaces are exposed without installing a user viewer"
   }
   expect(scripts["skills:test"]).toContain("bun test ./bin/tests");
   expect(scripts["skills:test"]).not.toContain("dashboard:install");
-  expect(scripts["skills:build"]).toBe("bun run --cwd multi-task-flow build");
+  expect(scripts["skills:build"]).toBe("bun run --cwd multi-task-flow-runtime build");
   expect(JSON.stringify(scripts)).not.toContain("build-skills-native");
 });

@@ -22,8 +22,8 @@ CANONICAL_TARBALL_DIGEST_ALGORITHM = "path-byte-v2"
 LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM = "legacy-locale-en-us-v1"
 PACKAGE_JSON = Path("clients/typescript/package.json")
 SKILL_DOCUMENT = Path("skills/multi-task-flow/SKILL.md")
-CONTRACT_SOURCE = Path("skills/multi-task-flow/lib/contract.ts")
-SERVICE_CONTRACT_SOURCE = Path("skills/multi-task-flow/lib/service-contract.ts")
+CONTRACT_SOURCE = Path("skills/multi-task-flow-runtime/lib/contract.ts")
+SERVICE_CONTRACT_SOURCE = Path("skills/multi-task-flow-runtime/lib/service-contract.ts")
 RELEASE_TAG_PREFIX = "multi-task-flow-v"
 RELEASE_LABELS = frozenset({"release:skill", "release:skill-initial-publication", "release:skip"})
 RELEASE_PATH_PREFIXES = (
@@ -199,12 +199,28 @@ def _git_show(root: Path, revision: str, path: Path) -> bytes:
 
 
 def _read_source(root: Path, revision: str | None, path: Path) -> bytes:
+    # The release contract moved runtime sources out of the installable Skill tree.
+    # Keep the historical path readable for a base projection taken before that move.
+    candidates = [path]
+    legacy_paths = {
+        CONTRACT_SOURCE: Path("skills/multi-task-flow/lib/contract.ts"),
+        SERVICE_CONTRACT_SOURCE: Path("skills/multi-task-flow/lib/service-contract.ts"),
+    }
+    if path in legacy_paths:
+        candidates.append(legacy_paths[path])
     if revision is not None:
-        return _git_show(root, revision, path)
-    try:
-        return (root / path).read_bytes()
-    except OSError as error:
-        raise ReleaseError(f"cannot read source file: {path}") from error
+        for candidate in candidates:
+            try:
+                return _git_show(root, revision, candidate)
+            except ReleaseError:
+                continue
+        raise ReleaseError(f"cannot read {path} at revision {revision}")
+    for candidate in candidates:
+        try:
+            return (root / candidate).read_bytes()
+        except OSError:
+            continue
+    raise ReleaseError(f"cannot read source file: {path}")
 
 
 def _constant(text: str, name: str, *, quoted: bool = False) -> str:

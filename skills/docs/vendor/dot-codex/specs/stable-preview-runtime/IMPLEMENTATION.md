@@ -37,8 +37,6 @@
 - `skills/global-port-manager/SKILL.md`
 - `skills/storybook-stories/SKILL.md`
 - `docs/solutions/workflow-issues/stable-preview-handoff-runtime.md`
-- `skills/multi-task-flow/scripts/serve.ts`
-- `skills/multi-task-flow/tests/serve.test.ts`
 - `bin/modules/workspace/port_registry.ts`
 - `bin/modules/workspace/port_registry_cli.ts`
 - `bin/tests/workspace/workspace.test.ts`

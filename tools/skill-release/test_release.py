@@ -35,12 +35,12 @@ ROOT_FILES = {
         },
     },
     "skills/multi-task-flow/SKILL.md": "---\nname: multi-task-flow\nversion: 2.7.2\n---\n",
-    "skills/multi-task-flow/lib/contract.ts": (
+    "skills/multi-task-flow-runtime/lib/contract.ts": (
         'export const CONTRACT_VERSION = 2 as const;\n'
         'export const SKILL_VERSION = "2.7.2" as const;\n'
         'export const VIEWER_CONTRACT = 5 as const;\n'
     ),
-    "skills/multi-task-flow/lib/service-contract.ts": (
+    "skills/multi-task-flow-runtime/lib/service-contract.ts": (
         "export const API_VERSION = 1;\nexport const FRONTEND_CONTRACT = 1;\n"
     ),
 }

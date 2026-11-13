@@ -60,8 +60,8 @@ const outputs = new Map<string, { path: string; sha256: string }>();
 function record(path: string, contents: Uint8Array): void {
   outputs.set(path, { path, sha256: createHash('sha256').update(contents).digest('hex') });
 }
-function copy(path: string, expected: string | undefined, dependency = false): void {
-  const source = resolve(root, path);
+function copy(path: string, expected: string | undefined, dependency = false, sourcePath = path): void {
+  const source = resolve(root, sourcePath);
   if (!path.startsWith('skills/') || !source.startsWith(resolve(root, 'skills') + '/')) throw new Error('Unsafe toolkit resource path');
   const stat = lstatSync(source);
   if (!stat.isFile() || stat.isSymbolicLink() || (!dependency && stat.nlink !== 1) || realpathSync(source) !== source) throw new Error('Unsafe toolkit resource: ' + path);
@@ -104,10 +104,10 @@ function copyPackageManifest(): void {
   const packageManifest = { ...manifest, files, additions, packageOmissions };
   writeGenerated('skills/source-manifest.json', Buffer.from(JSON.stringify(packageManifest, null, 2) + '\n'));
 }
-for (const file of [...manifest.files, ...(manifest.additions ?? [])]) if (!packageOmissionPaths.has(file.path)) copy(file.path, file.installedSha256);
+for (const file of [...manifest.files, ...(manifest.additions ?? [])]) if (!packageOmissionPaths.has(file.path)) copy(file.path, file.installedSha256, false, file.sourcePath ?? file.path);
 copyPackageManifest();
 copy('skills/catalog.json');
-for (const name of ['index.html','app.js','app.css']) copy(`skills/multi-task-flow/dist/${name}`);
+for (const name of ['index.html','app.js','app.css']) copy(`skills/multi-task-flow/dist/${name}`, undefined, false, `skills/multi-task-flow-runtime/dist/${name}`);
 if (requireDependencies) validateInstalledDependencies();
 copyRootFile('AGENTS.md');
 const packageIdentityBase = {

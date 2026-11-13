@@ -124,7 +124,7 @@
 
 ## 服务接口与更新
 
-本机服务由 `bun run <skill>/scripts/serve.ts --run <id> --scope-id <scope> --service <service> --port <leased-port> [--agent-session <host-provided-id>]` 启动，先申请当前编排服务的端口租约，只绑定 `127.0.0.1`。脚本登记自身 PID、心跳并在停止时仅释放自己的服务租约；Agent/host 负责创建和保留真正的原生后台会话，Skill 不得从进程或可见终端猜测会话。项目定制的资源放在该 run 的 `view/`，使用 `--custom-view` 加载。对外展示的 URL 必须同时对应活动租约和仍存活的宿主 native background session；没有受支持的宿主后台路径时只能用于当前回合验证。
+本机服务由 `multi-task-flow service ensure --input -` 启动，先申请当前编排服务的端口租约，只绑定 `127.0.0.1`。脚本登记自身 PID、心跳并在停止时仅释放自己的服务租约；Agent/host 负责创建和保留真正的原生后台会话，Skill 不得从进程或可见终端猜测会话。项目定制的资源放在该 run 的 `view/`，使用 `--custom-view` 加载。对外展示的 URL 必须同时对应活动租约和仍存活的宿主 native background session；没有受支持的宿主后台路径时只能用于当前回合验证。
 
 服务启动时生成至少 128 位随机访问令牌，URL 前缀为 `/s/<token>/`；令牌不写进账本、日志或项目文件。只有携带有效前缀的请求可读取页面和数据；严格检查 Host 为当前绑定的 `127.0.0.1:<port>`，拒绝非本机连接和跨源请求。响应设置 `Cache-Control: no-store`、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`，所有显示的任务文本按文本处理，禁止注入 HTML。令牌和本机服务并不提供跨用户的强身份隔离。
 

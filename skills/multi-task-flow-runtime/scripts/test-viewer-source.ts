@@ -10,7 +10,7 @@ const temporary = realpathSync(mkdtempSync(join(tmpdir(), 'viewer-source-test-')
 const output = join(temporary, 'package');
 const env = { ...process.env, MULTI_TASK_FLOW_PROFILE:'test', MULTI_TASK_FLOW_ROOT:join(temporary,'state') };
 try {
-  const build=spawnSync(process.execPath,[join(root,'skills/multi-task-flow/scripts/build-service.ts'),'--output',output,'--service-version','0.0.0-test'],{cwd:temporary,env,encoding:'utf8',timeout:120000});
+  const build=spawnSync(process.execPath,[join(root,'skills/multi-task-flow-runtime/scripts/build-service.ts'),'--output',output,'--service-version','0.0.0-test'],{cwd:temporary,env,encoding:'utf8',timeout:120000});
   assert.equal(build.status,0,build.stderr);
   const manifest=JSON.parse(readFileSync(join(output,'manifest.json'),'utf8'));
   assert.equal(manifest.schema_version,2);

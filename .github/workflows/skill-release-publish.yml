@@ -169,9 +169,9 @@ jobs:
         run: |
           set -euo pipefail
           bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy
-          bun install --cwd skills/multi-task-flow --frozen-lockfile
+          bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile
           bun install --cwd clients/typescript --frozen-lockfile
-          bun run --cwd skills/multi-task-flow build
+          bun run --cwd skills/multi-task-flow-runtime build
           version_tag="multi-task-flow-v$VERSION"
           draft_dir="$RUNNER_TEMP/skill-release-draft"
           final_dir="$RUNNER_TEMP/skill-release-final"

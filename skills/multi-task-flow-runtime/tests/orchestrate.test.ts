@@ -627,7 +627,7 @@ describe("orchestrate init", () => {
   });
 
   test("documents init as an explicit mutation boundary", () => {
-    const skill = readFileSync(join(import.meta.dir, "../SKILL.md"), "utf8");
+    const skill = readFileSync(join(import.meta.dir, "../../multi-task-flow/SKILL.md"), "utf8");
     const design = readFileSync(
       join(
         import.meta.dir,
