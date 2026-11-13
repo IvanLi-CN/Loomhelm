@@ -20,9 +20,9 @@ version: 2.7.6
 
 主人明确要求使用本 Skill 进行任务编排时，默认意图是创建或继续正式运行并交付其仪表板。不得静默降级为只提供提案 Markdown 文档。只有在主人明确要求审查、诊断或仅制定计划时，才使用 `proposal`。四个生命周期阶段是 `proposal`、`initialized run`、`scheduled run` 和 `completed run`。
 
-第一次交付只有在以下条件全部满足时才算完成：权威账本存在于 `~/.local/share/multi-task-flow/data/runs/<run-id>/`，运行已绑定当前主对话，依赖图已存在，并且通过仪表板浏览器路径打开显示当前 revision。Markdown、Mermaid 和候选 `init-input.json` 都只是辅助输入，不能替代账本或仪表板。
+第一次交付只有在以下条件全部满足时才算完成：权威账本存在于 `~/.local/share/multi-task-flow/data/runs/<run-id>/`，运行已绑定当前主对话，依赖图已存在，并且通过仪表板浏览器路径打开显示当前 revision。Markdown、Mermaid 和 candidate `init-input.json`（候选输入）都只是辅助输入，不能替代账本或仪表板。
 
-主人批准计划实现后，计划内部的编排和仓库协作操作均获授权，包括任务派发、创建对话、工作区、Git push、分支发布、child PR 创建或更新、child PR 合并、通知、检查和 cut 操作。交付单元 parent PR 合并到集成分支需要单独的 `protected-approve`；发布和部署操作各自需要独立的受保护批准。计划修订、范围扩大、目标漂移和新环境都需要重新批准。按 `init`、`service ensure`、`service login` 及下文的宿主浏览器路径顺序执行。保持页面打开；SSE 和 heartbeat 更新会暴露后续 revision，通常无需重新导航，只有连接或会话恢复时才重新导航。
+主人批准计划实现后，计划内部的编排和仓库协作操作均获授权，包括任务派发、创建对话、工作区、Git push、分支发布、child PR 创建或更新、child PR 合并、通知、检查和 cut 操作。交付单元 parent PR 合并到集成分支需要单独的 `protected-approve`；发布和部署操作各自需要独立的受保护批准。计划修订、范围扩大、目标漂移和新环境都需要重新批准。按 `init`、`service ensure`、`service login` 及下文的宿主浏览器路径顺序执行。保持页面打开；SSE and heartbeat（SSE 和 heartbeat）更新会暴露后续 revision，通常无需重新导航，只有连接或会话恢复时才重新导航。
 
 如果初始化、viewer ensure/login 或浏览器交付失败，必须报告失败阶段、准确结果和阻塞原因。不得把提案描述为已初始化或已完成的运行。继续已经绑定当前主对话的未完成运行；所有权不确定时，在变更前暂停。把 run ID、revision、owner thread ID 和仪表板入口记录到对话中。
 
@@ -30,7 +30,7 @@ version: 2.7.6
 
 交付或检查仪表板前，先检查当前宿主暴露的浏览器能力。在 ChatGPT Desktop 或 Codex Desktop 中运行时，默认使用宿主提供的内置浏览器。这条仪表板专用路径优先于通用 `$ego-browser` 路径，但不改变其他浏览器任务的路由。读取宿主暴露的工具文档，并使用其支持的浏览器选择或打开接口；不能仅凭产品名称、浏览器 ID 或工具名称推断能力存在。
 
-在该浏览器中打开一次性的 `service login` URL，然后从渲染页面核对目标 run ID 和当前账本 revision。保持已认证页面打开以接收更新。成功的打开工具响应本身不代表仪表板交付完成。把 login URL 当作凭据保护。
+在该 built-in browser（内置浏览器）中打开一次性的 `service login` URL，然后从渲染页面核对目标 run ID 和当前账本 revision。保持已认证页面打开以接收更新。成功的打开工具响应本身不代表仪表板交付完成。把 login URL 当作凭据保护。
 
 如果宿主没有可用的内置浏览器，记录缺失能力并按允许的 `$ego-browser` 路径执行。打开或登录失败时必须先诊断，不能静默切换浏览器或复用已消费、已过期的登录 ticket。授权重试必须取得新 ticket。任何 Chrome 或 Computer Use 升级仍须遵守 `$gui-escalation-gate`，真实程序截图仍需要明确的目标程序和范围批准。如果没有允许的浏览器能够渲染仪表板，报告浏览器交付阻塞和稳定运行 URL，不得声称交付成功。
 
