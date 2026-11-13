@@ -585,7 +585,15 @@ function render(): void {
   if (restoreClosedDetailsOnNextRender) { restoreClosedDetailsOnNextRender = false; restoreClosedDetails(); }
   if (phaseTransition) { $("phase-notice").hidden = false; $("phase-notice-text").textContent = "已有真实任务开始执行，阶段已切换；当前视图和筛选保持不变。"; } else $("phase-notice").hidden = true;
 }
-function setTabAria(tab: DashboardTab): void { for (const button of document.querySelectorAll<HTMLButtonElement>("[data-tab]")) button.setAttribute("aria-selected", String(button.dataset.tab === tab)); for (const name of ["graph", "planned", "actual", "tasks"]) $(`${name}-view`).hidden = name !== tab; $("workspace").dataset.viewTab = tab; }
+function setTabAria(tab: DashboardTab): void {
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-tab]")) button.setAttribute("aria-selected", String(button.dataset.tab === tab));
+  const graphView = $("graph-view");
+  const graphVisible = ["graph", "atomic"].includes(tab);
+  graphView.hidden = !graphVisible;
+  graphView.setAttribute("aria-labelledby", tab === "atomic" ? "tab-atomic" : "tab-graph");
+  for (const name of ["planned", "actual", "tasks"]) $(`${name}-view`).hidden = name !== tab;
+  $("workspace").dataset.viewTab = tab;
+}
 
 function renderAtomicGraph(): void {
   if (!data) return;
