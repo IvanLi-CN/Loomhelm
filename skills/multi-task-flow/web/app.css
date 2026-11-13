@@ -454,6 +454,9 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
   #details-content[data-detail-kind="group"] { grid-template-columns: minmax(260px, 1.25fr) repeat(3, minmax(0, 1fr)); }
   #details-content > .detail-field:has(.detail-agent-output), #details-content > .detail-field:has(.detail-empty-output) { grid-column: 1 / -1; }
   #details-content > .detail-field:has(.atom-list) { grid-column: span 1; }
+  #details-content > .detail-field:has(.atom-list) { display: block; }
+  #details-content > .detail-field:has(.atom-list) > .detail-value { margin-top: 6px; }
+  #details-content > .detail-field:has(.atom-list) .status-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #details-content > .detail-group-facts { grid-column: 2 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: start; align-items: start; column-gap: 16px; }
   #details-content > .detail-group-facts > .detail-field { min-width: 0; padding-block: 7px; }
   #details-content > .detail-group-facts > .detail-field:has(.detail-agent-output), #details-content > .detail-group-facts > .detail-field:has(.detail-empty-output) { grid-column: 1 / -1; }
