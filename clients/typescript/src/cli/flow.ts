@@ -1,5 +1,17 @@
 import { loadConfig } from '../config.ts';
+import type { ClientConfig } from '../config.ts';
+import type { ProcessOptions } from '../runtime/process.ts';
 import { SkillsRuntime } from '../toolkit.ts';
+
+export function flowProcessOptions(config: Pick<ClientConfig, 'processTimeoutMs' | 'maxOutputBytes'>, input: Uint8Array, socket?: string): ProcessOptions {
+  return {
+    input,
+    cwd: process.cwd(),
+    timeoutMs: config.processTimeoutMs,
+    maxOutputBytes: config.maxOutputBytes,
+    env: { ...process.env, ...(socket ? { LOOMHELM_CODEX_APP_SERVER_SOCKET: socket } : {}) },
+  };
+}
 
 export async function runFlowCommand(args: string[], configPath?: string): Promise<void> {
   if (args[0] === 'help' || !args.length) {
@@ -22,10 +34,7 @@ export async function runFlowCommand(args: string[], configPath?: string): Promi
     chunks.push(data);
   }
   const selected = socket ?? config.codexAppServerSocket;
-  const result = await new SkillsRuntime().run('skills/multi-task-flow/scripts/orchestrate.ts', args, {
-    input: Buffer.concat(chunks), timeoutMs: config.processTimeoutMs, maxOutputBytes: config.maxOutputBytes,
-    env: { ...process.env, ...(selected ? { LOOMHELM_CODEX_APP_SERVER_SOCKET: selected } : {}) },
-  });
+  const result = await new SkillsRuntime().run('skills/multi-task-flow/scripts/orchestrate.ts', args, flowProcessOptions(config, Buffer.concat(chunks), selected));
   process.stdout.write(result.stdout); process.stderr.write(result.stderr);
   process.exitCode = result.code ?? 1;
 }

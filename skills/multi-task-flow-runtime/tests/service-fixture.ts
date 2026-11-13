@@ -27,11 +27,19 @@ export function fixtureRelease(root: string, name = "bundle", options: { readOnl
   writeFileSync(join(source, "manifest.json"), JSON.stringify(result));
   return { source, manifest: result };
 }
-export function fixtureRun(root: string, id = "demo-run") {
+export function fixtureRun(root: string, id = "demo-run", contract: 2 | 3 = 2) {
   const run = createDemoLedger(); run.orchestration_id = id;
   run.schema_version = 2;
   run.source_schema_version = null;
-  run.contract_version = 2;
+  run.contract_version = contract;
+  if (contract === 3) {
+    run.version = versionEnvelope;
+    const sharedTask = run.tasks.find((task) => task.kind === "contribution");
+    if (!sharedTask) throw new Error("Contract-3 fixture needs a contribution task");
+    sharedTask.execution_owner = "delivery_agent";
+    sharedTask.conversation_policy = "delivery_owned";
+    sharedTask.delivery_policy = "shared_delivery_unit";
+  }
   const store = new LedgerStore(root, id); store.create(run);
   return { run, store };
 }
