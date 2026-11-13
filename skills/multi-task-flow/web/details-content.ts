@@ -276,6 +276,11 @@ export function createDetailContent(context: DetailContentContext) {
     const pr = context.safeExternal(group.parent_pr?.url ?? null);
     field(facts, "父 PR", pr ? link("查看 PR", pr) : "尚未创建");
     field(facts, "交付单元要求", requirementsValue(group.requirements_path, "group", group.id));
+    const output = text("div", "", "detail-agent-output");
+    output.dataset.outputGroupId = group.id;
+    output.dataset.outputFull = "true";
+    paintOutput(output, group.latest_agent_output ?? initialOutput(group.agent_thread_id), true);
+    field(facts, "Agent 输出", output);
     restore();
   };
 
