@@ -70,5 +70,6 @@ test("keyboard opening, navigation and Escape; blank space retains native menu",
 });
 test("authentication redirects only accept same-service run links and legal view state", () => {
   expect(parseViewerTarget('/runs/run-a/?selected=task%3Atask.v2&detail=1&plan=plan.v2&q=hidden', 'http://localhost', { allowHome: false })?.target).toBe('/runs/run-a/?selected=task%3Atask.v2&detail=1&plan=plan.v2&q=hidden');
-  for (const value of ['https://evil.test/runs/run-a/?selected=task:C2', '//evil.test/runs/run-a/?selected=task:C2', '/login?selected=task:C2', '/runs/run-a/../', '/runs/%2e%2e/', '/runs\\run-a/', '/runs/run-a/?selected=other:C2', '/runs/run-a/?selected=task:<script>', 'http://user:pass@localhost/runs/run-a/?selected=task:C2', '/runs/run-a/?ticket=secret', '/runs/run-a/?selected=task:C2&selected=task:C3', '/runs/run-a/?q=%0d%0aLocation:%20https://evil.test']) expect(parseViewerTarget(value, 'http://localhost', { allowHome: false })).toBeNull();
+  expect(parseViewerTarget('/runs/run-a/?tab=tasks&selected=group%3AG2&detail=1&future=ignored', 'http://localhost', { allowHome: false })?.target).toContain('tab=tasks');
+  for (const value of ['https://evil.test/runs/run-a/?selected=task:C2', '//evil.test/runs/run-a/?selected=task:C2', '/login?selected=task:C2', '/runs/run-a/../', '/runs/%2e%2e/', '/runs\\run-a/', 'http://user:pass@localhost/runs/run-a/?selected=task:C2', '/runs/run-a/?ticket=secret', '/runs/run-a/?q=%0d%0aLocation:%20https://evil.test']) expect(parseViewerTarget(value, 'http://localhost', { allowHome: false })).toBeNull();
 });

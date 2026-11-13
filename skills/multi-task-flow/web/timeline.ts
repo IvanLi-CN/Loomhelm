@@ -132,34 +132,37 @@ export function createTimelineController(context: TimelineContext) {
     const center = target.querySelector<HTMLElement>(".vis-panel.vis-center");
     if (!center || panBound.has(center)) return;
     panBound.add(center);
-    let pan: { pointerId: number; originX: number; originY: number; start: number; end: number; width: number; active: boolean } | null = null;
+    let pan: { pointerId: number; originX: number; originY: number; originScrollTop: number; start: number; end: number; width: number; axis: "x" | "y" | null; active: boolean } | null = null;
     const isCurrent = (): boolean => (mode === "planned" ? plannedTimeline : actualTimeline) === timeline && (mode === "planned" ? plannedRenderSerial : actualRenderSerial) === renderSerial;
     const finish = (event: PointerEvent): void => {
       if (!pan || event.pointerId !== pan.pointerId) return;
       if (pan.active && center.hasPointerCapture(event.pointerId)) center.releasePointerCapture(event.pointerId);
       center.classList.remove("is-panning");
-      if (pan.active && isCurrent()) syncTimelineRange(mode, timeline);
+      if (pan.active && pan.axis === "x" && isCurrent()) syncTimelineRange(mode, timeline);
       pan = null;
     };
     center.addEventListener("pointerdown", (event) => {
       if (!event.isPrimary || event.button !== 0 || (event.target instanceof HTMLElement && event.target.closest(".vis-item"))) return;
       const range = timeline.getWindow();
       if (!range.start || !range.end || center.clientWidth <= 0) return;
-      pan = { pointerId: event.pointerId, originX: event.clientX, originY: event.clientY, start: range.start.getTime(), end: range.end.getTime(), width: center.clientWidth, active: false };
+      pan = { pointerId: event.pointerId, originX: event.clientX, originY: event.clientY, originScrollTop: center.scrollTop, start: range.start.getTime(), end: range.end.getTime(), width: center.clientWidth, axis: null, active: false };
     }, true);
     center.addEventListener("pointermove", (event) => {
       if (!pan || event.pointerId !== pan.pointerId || !isCurrent()) return;
       const deltaX = event.clientX - pan.originX;
       const deltaY = event.clientY - pan.originY;
       if (!pan.active) {
-        if (Math.abs(deltaY) > Math.abs(deltaX)) { pan = null; return; }
-        if (Math.abs(deltaX) < 4) return;
+        if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < 4) return;
+        pan.axis = Math.abs(deltaY) > Math.abs(deltaX) ? "y" : "x";
         pan.active = true;
         center.setPointerCapture(event.pointerId);
         center.classList.add("is-panning");
       }
-      const shift = -deltaX * ((pan.end - pan.start) / pan.width);
-      applyWindow(mode, timeline, new Date(pan.start + shift), new Date(pan.end + shift), false);
+      if (pan.axis === "y") center.scrollTop = Math.max(0, pan.originScrollTop - deltaY);
+      else {
+        const shift = -deltaX * ((pan.end - pan.start) / pan.width);
+        applyWindow(mode, timeline, new Date(pan.start + shift), new Date(pan.end + shift), false);
+      }
       event.preventDefault();
       event.stopPropagation();
     }, true);
@@ -205,7 +208,7 @@ export function createTimelineController(context: TimelineContext) {
     const initialWindow = requestedWindow.start && requestedWindow.end ? { start: new Date(requestedWindow.start), end: new Date(requestedWindow.end) } : fittedWindow.start && fittedWindow.end ? { start: fittedWindow.start, end: fittedWindow.end } : null;
     if (mode === "planned") plannedWindow = initialWindow; else actualWindow = initialWindow;
     target.style.height = `${Math.max(284, nodes.length * 28 + 76)}px`;
-    const timeline = new Timeline(target, new DataSet(entries), groups, { editable: false, stack: false, groupOrder: "order", selectable: true, moveable: true, zoomable: true, horizontalScroll: false, zoomKey: "ctrlKey", ...(mode === "planned" ? { format: { minorLabels: { minute: "T+mm分", hour: "T+HH时" }, majorLabels: { day: "理论时间" } } } : {}), ...(requestedWindow.start && requestedWindow.end ? requestedWindow : fittedWindow) });
+    const timeline = new Timeline(target, new DataSet(entries), groups, { editable: false, stack: false, groupOrder: "order", selectable: true, moveable: true, zoomable: true, horizontalScroll: true, verticalScroll: true, zoomKey: "ctrlKey", ...(mode === "planned" ? { format: { minorLabels: { minute: "T+mm分", hour: "T+HH时" }, majorLabels: { day: "理论时间" } } } : {}), ...(requestedWindow.start && requestedWindow.end ? requestedWindow : fittedWindow) });
     if (mode === "planned") plannedTimeline = timeline; else actualTimeline = timeline;
     bindWheel(target, timeline, mode);
     bindPan(target, timeline, mode, renderSerial);

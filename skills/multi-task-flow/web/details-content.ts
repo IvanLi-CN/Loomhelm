@@ -204,7 +204,6 @@ export function createDetailContent(context: DetailContentContext) {
     const output = text("div", "", "detail-agent-output");
     output.dataset.outputTaskId = task.id; output.dataset.outputFull = "true";
     paintOutput(output, task.latest_agent_output ?? initialOutput(task.thread_id), true);
-    field(container, "最新 Agent 输出", output);
     if (task.state === "agent_idle") field(container, "运行时提示", "Agent 当前没有活跃 turn，可能需要人工恢复");
     if (task.state === "agent_idle") {
       const observed = task.latest_agent_output;
@@ -231,8 +230,9 @@ export function createDetailContent(context: DetailContentContext) {
     field(container, "任务要求", requirementsValue(task.requirements_path, "task", task.id));
     for (const follow of data.follow_prs.filter((item) => item.origin_task_id === task.id)) {
       const url = context.safeExternal(follow.pr.url);
-      field(container, "Follow PR", url ? link(context.labels[follow.state] ?? follow.state, url) : context.labels[follow.state] ?? follow.state);
+    field(container, "Follow PR", url ? link(context.labels[follow.state] ?? follow.state, url) : context.labels[follow.state] ?? follow.state);
     }
+    field(container, "Agent 输出", output);
     restore();
   };
 

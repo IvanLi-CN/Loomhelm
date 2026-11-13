@@ -22,6 +22,15 @@ test("medium details stay in the static bottom layout instead of a side-by-side 
   expect(medium).toContain('.workspace[data-view-tab="tasks"] .details-slot { grid-column: 1; grid-row: 3; }');
 });
 
+test("tall medium details provide an independently scrollable content body", () => {
+  const tall = css.split("@media (min-width: 768px) and (max-width: 1444px) and (min-height: 961px) {")[1]!.split("@media (min-width: 768px) and (max-width: 1444px) and (max-height: 960px)")[0]!;
+  expect(tall).toContain("display: flex; flex-direction: column;");
+  expect(tall).toContain("#details-content { flex: 1 1 auto; min-height: 0; overflow: auto; }");
+  expect(tall).toContain(".workspace-view > .timeline-view { min-height: 0; display: flex; flex-direction: column; }");
+  expect(tall).toContain("height: auto !important; min-height: 0;");
+  expect(tall).toContain("overflow-anchor: none;");
+});
+
 test("identity actions follow the project name instead of filling the title row", () => {
   expect(css).toContain(".identity-copy { flex: 0 1 auto; min-width: 0; }");
   expect(css).toContain("text-overflow: ellipsis; white-space: nowrap;");
