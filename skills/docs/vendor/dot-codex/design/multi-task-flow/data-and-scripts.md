@@ -147,7 +147,7 @@ type Ledger = {
 | `ExternalRef` | `provider`, `repository`, `id`, `url: string \| null`；`url` 仅存实际取得并校验的链接，证据中的 SHA 使用 Git 平台支持的完整对象 ID |
 | `FollowPR` | `id`, `origin_task_id`, `origin_group_id`, `pr: ExternalRef`, `target_branch`, `state: 'open' \| 'merged' \| 'blocked'`, `merge_fact_id: string \| null`, `affected_task_ids: string[]`；归属原交付单元，目标按原父 PR 是否已合并选择 |
 | `ProviderReceipt` | `provider`, `repository`, `resource_type: 'branch' \| 'pr'`, `resource_id`, `branch`, `target_branch`, `base_sha`, `head_sha: string \| null`, `pr`, `state: 'exists' \| 'open' \| 'merged' \| 'absent' \| 'unknown'`, `evidence_ref`；publication resolve 必须保存远端查询得到的完整 receipt，失败/不确定查询分别使用 `absent`/`unknown` |
-| `Fact` | `id`, `kind: 'task_quality' \| 'pr_merged' \| 'branch_published' \| 'pr_published' \| 'ci_passed' \| 'published' \| 'deployed' \| 'verified'`, `subject_id`, `status: 'passed' \| 'failed' \| 'unknown'`, `source`, `observed_at`, `sha: string \| null`, `evidence_ref: string \| null`, optional task-owned quality proof, `receipt: ProviderReceipt \| null`；不同阶段和目标独立记录；贡献任务的 `pr_merged` 必须绑定该任务自己的 child merge receipt，不比较后续父交付单元 SHA；发布或部署产物 SHA 可以因构建产生新对象，但必须由对应 `Operation.receipt_fact_id` 和 `expected_sha` 证明来源 lineage |
+| `Fact` | `id`, `kind: 'task_quality' \| 'pr_merged' \| 'branch_published' \| 'pr_published' \| 'ci_passed' \| 'published' \| 'deployed' \| 'verified'`, `subject_id`, `status: 'passed' \| 'failed' \| 'unknown'`, `source`, `observed_at`, `sha: string \| null`, `evidence_ref: string \| null`, optional task-owned quality proof, `receipt: ProviderReceipt \| null`；不同阶段和目标独立记录；多任务拓扑的贡献任务 `pr_merged` 绑定自己的 child merge receipt，单贡献拓扑的共享任务复用所属交付单元 PR 的 merge receipt；发布或部署产物 SHA 可以因构建产生新对象，但必须由对应 `Operation.receipt_fact_id` 和 `expected_sha` 证明来源 lineage |
 
 #### 操作与服务
 
@@ -220,7 +220,7 @@ type Ledger = {
 | `group-execution-update` | 字段：`group_id`, `state`, `reason`, `waiting_for_task_ids`；效果：明确记录交付协调实际执行、等待、恢复和阻塞；等待贡献任务必须引用同组有效任务 |
 | `group-update` / `group-base` | 字段：前者 `group`，后者 `group_id`, `provider_observation`；效果：更新交付单元信息或记录首次/同 SHA 的核实分支基线；已建立 SHA 的推进必须使用 `group-base-reconcile` |
 | `group-base-reconcile` | 字段：`group_id`, `provider_observation`（`operation: "update-branch"`, `previous_sha`, `sha`, `branch`, `parent_pr`, `source`, `evidence_ref`）；效果：在无未决 merge/cut operation 时，使用精确 provider 证据原子记录同一父分支的外部 update-branch SHA 推进；不表示 PR 合并 |
-| `task-pr` / `task-base` / `task-quality-record` | 字段：`task_id` 和 PR、基线或任务 Agent 自证；效果：v2 下只允许绑定已有 PR publication receipt；任务 Agent 自己记录当前 head/base、验收引用和 checks，不需要交付协调 Agent 审核 child PR |
+| `task-pr` / `task-base` / `task-quality-record` | 字段：`task_id` 和 PR、基线或任务 Agent 自证；效果：v2 下只允许绑定已有 PR publication receipt；多任务拓扑绑定 child PR，单贡献拓扑复用交付单元 PR；任务 Agent 自己记录当前 head/base、验收引用和 checks，不需要交付协调 Agent 审核 child PR |
 
 #### 合并、通知与收口
 
@@ -242,7 +242,7 @@ type Ledger = {
 
 ### 状态与就绪判定
 
-任务派发检查明确前驱和空闲名额；绑定会话后进入 `starting`，实际开始时进入 `running`。`running → waiting/blocked` 时释放运行名额，恢复前重新检查依赖和容量。交付单元与贡献任务按 `workspace_ready → pr_created → pr_merged → closed` 记录生命周期；workspace-ready 绑定 active worktree/branch Resource，pr-created 只由 `publish_pr` 成功 receipt 推导，pr-merged 只由 `merge-resolve` 成功 receipt 推导，closed 只由现有 closeout 条件推导。贡献任务以核实的子 PR 合入进入 `integrated`，非贡献任务以明确证据进入 `completed`。已集成的后继可以开始；`closed` 还需检查已知 follow PR。失败不自动推导 `completed` 或 `closed`。
+任务派发检查明确前驱和空闲名额；绑定会话后进入 `starting`，实际开始时进入 `running`。`running → waiting/blocked` 时释放运行名额，恢复前重新检查依赖和容量。交付单元与贡献任务按 `workspace_ready → pr_created → pr_merged → closed` 记录生命周期；workspace-ready 绑定 active worktree/branch Resource，pr-created 只由 `publish_pr` 成功 receipt 推导，pr-merged 只由 `merge-resolve` 成功 receipt 推导，closed 只由现有 closeout 条件推导。多任务拓扑的贡献任务以核实的 child PR 合入进入 `integrated`；单贡献拓扑的共享任务复用交付单元 PR 的发布、检查和合并事实。非贡献任务以明确证据进入 `completed`。已集成的后继可以开始；`closed` 还需检查已知 follow PR。失败不自动推导 `completed` 或 `closed`。
 
 同一编排的 `merge-claim` 对同一目标父分支与 `cut-claim` 互斥；切割期间新合入返回等待，已有合入处于未知状态时不能切割。切割 SHA 是归属交接点；后续 follow PR 使原父分支前进时，追加事实、更新 `current_sha` 并刷新合并证据，不更改已切出的归属。新交付单元任务可以继续推进，目标分支和合入须按上一批合入主干后的规则更新。
 

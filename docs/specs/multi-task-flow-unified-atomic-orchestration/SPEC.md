@@ -91,11 +91,11 @@ Task 与 DeliveryUnit 是平级对象；delivery_unit_id 只是共同的分类�
 
 交付单元的标准生命周期按以下顺序编排，具体顺序由 AtomicEdge 表达：
 
-1. 准备工作区、交付单元集成分支和交付单元集成 PR 基线：记录外部操作及其 evidence，不创建 coordination 原子。
-2. 创建并发布交付单元集成 PR：使用 delivery_unit scope 的 milestone，显式要求 provider receipt。
-3. 并行执行该 delivery_unit_id 下的 contribution Task 原子；每个 contribution Task 可以绑定自己的 child PR。普通 contribution 任务进入 starting 前，交付单元必须已经提供 `pr` 和 `parent_branch`，但活跃且 workspace readiness 已完成的 main-owned bootstrap unit 可以让其 main-owned contribution task 在集成 PR 创建前启动；regular unit 和 Task Agent 路径仍必须满足父 PR 门禁。启动输入不要求提交 hash；交付单元等待状态由依赖投影得到，不创建“等待任务”。
-4. 集成子 PR 并完成集成验收：使用 delivery_unit scope 的 verification work 原子，要求当前交付单元集成分支 SHA 的集成和检查证据。
-5. 合并交付单元集成 PR：使用 delivery_unit scope 的 milestone，显式要求前置原子完成和合并事实。
+1. 解析交付拓扑并准备工作区、交付单元分支和 PR 基线：记录外部操作及其 evidence，不创建 coordination 原子。只有一个 contribution Task 时选择共享交付拓扑；存在多个 contribution Task 时选择多任务集成拓扑。
+2. 创建并发布交付单元 PR：使用 delivery_unit scope 的 milestone，显式要求 provider receipt。共享交付拓扑下，该 PR 同时是唯一 contribution Task 的交付 PR。
+3. 执行该 `delivery_unit_id` 下的 contribution Task 原子。共享交付拓扑使用同一个交付单元对话、工作区、分支和 PR；多任务集成拓扑才为各 contribution Task 创建独立 child PR。普通 contribution 任务进入 starting 前，交付单元必须已经提供 `pr` 和 `parent_branch`，但活跃且 workspace readiness 已完成的 main-owned bootstrap unit 可以让其 main-owned contribution task 在集成 PR 创建前启动；regular unit 和 Task Agent 路径仍必须满足父 PR 门禁。启动输入不要求提交 hash；交付单元等待状态由依赖投影得到，不创建“等待任务”。
+4. 共享交付拓扑直接完成交付单元级验收；多任务集成拓扑先集成 child PR，再使用 delivery_unit scope 的 verification work 原子核对当前交付单元分支 SHA 和检查证据。
+5. 合并交付单元 PR：使用 delivery_unit scope 的 milestone，显式要求前置原子完成和合并事实。
 6. 按计划执行 release、deployment 和线上 verification 原子；根据责任边界使用 Task scope 或 delivery_unit scope。
 7. 收口和资源清理：使用 delivery_unit scope 的 milestone，显式要求必要节点、外部资源和通知条件满足。
 
@@ -263,6 +263,10 @@ type TaskDefinition = {
 type TaskPrBinding =
   | { state: "unbound" }
   | {
+      state: "shared_delivery_unit";
+      delivery_unit_id: string;
+    }
+  | {
       state: "open";
       pr: ExternalRef;
       branch: string;
@@ -283,7 +287,7 @@ type TaskPrBinding =
     };
 ```
 
-TaskDefinition 不保存 TaskKind、成员列表、delivery_unit_id 或独立编排状态。`pr` 是贡献任务自己的 child PR 绑定；它与 DeliveryUnit 的集成 PR 是两个不同的外部资源。
+TaskDefinition 不保存 TaskKind、成员列表、delivery_unit_id 或独立编排状态。贡献任务的 `pr` 可以是独立 child PR，也可以是 `shared_delivery_unit` 绑定；后者只引用所属 DeliveryUnit，不复制 PR、分支或 SHA。
 
 #### 派生读取：TaskProjection
 
@@ -333,7 +337,9 @@ type TaskRuntimeObservation =
 
 TaskRuntimeObservation 只描述 Agent 或对话运行观察，不覆盖 TaskProjection 的业务状态，也不属于 TaskDefinition 的 canonical 编排字段。
 
-贡献 Task 必须有 `pr` 字段，但该字段使用 `TaskPrBinding` 联合而不是可空的裸引用。design、planned、starting 和 running 阶段允许 `unbound`；blocked 阶段允许 `unbound` 或 `closed`，因为阻塞可能发生在 PR 创建之前，也可能由 PR 被关闭引起；从 running 之后进入的任何非 blocked canonical 阶段（当前为 completed）都必须是 `open` 或 `merged`，不能把 `closed` PR 当作正常完成。旧的 integrated、closed 等业务标签不属于这组 canonical 阶段。贡献 Task 的 child PR 与 DeliveryUnit 的 `pr` 是两个不同的外部资源：前者是该 Task 的交付，后者是该 DeliveryUnit 的集成 PR。
+贡献 Task 必须有 `pr` 字段，但该字段使用 `TaskPrBinding` 联合而不是可空的裸引用。design、planned、starting 和 running 阶段允许 `unbound`；共享交付拓扑使用 `shared_delivery_unit`；多任务集成拓扑使用 `open`、`merged` 或 `closed`。共享绑定解析到同一 DeliveryUnit 的 `DeliveryUnitExternalFacts.pr`，不创建第二个 PR、分支或合并操作。旧的 integrated、closed 等业务标签不属于这组 canonical 阶段。
+
+共享交付拓扑只在同一 DeliveryUnit 恰好存在一个 contribution Task 时合法；documentation 原子归入 contribution Task 后也计入该数量。verification、release 和 deployment Task 不增加 contribution Task 数量，可以继续使用 DeliveryUnitScope 或独立的 evidence 交付。共享绑定的 Task 与 DeliveryUnit 必须使用同一个 conversation、worktree、branch 和 PR，Task 的 PR 发布、检查和合并事实从该 DeliveryUnit 的 provider receipt 派生。新增第二个需要独立代码交付的 contribution Task 时，必须通过显式计划修订切换到多任务集成拓扑，不能在运行中静默创建 child PR。
 
 贡献 Task 切换到 starting 时，校验器必须解析其 `delivery_unit_id` 对应的 DeliveryUnitExternalFacts，并要求它处于 `published`，同时具有 `pr` 和 `parent_branch`；唯一例外是活跃且已完成 workspace readiness 的 main-owned bootstrap unit，其 main-owned contribution task 可以在集成 PR 创建前启动。regular unit 和 Task Agent 路径始终保留集成 PR 门禁。普通 starting 命令只需要这些交付单元集成 PR 和交付单元集成分支信息，不把提交 hash 当作启动条件；后续 provider receipt 可以补充 head SHA 或 merge SHA，但这些事实不改变 starting 的输入合同。
 
@@ -424,6 +430,7 @@ DeliveryUnitRuntimeObservation 只描述交付协调会话或 Agent 的运行观
 
 ```ts
 type TaskExecutionPolicy =
+  | { kind: "delivery_unit_shared"; conversation: "delivery_unit"; delivery: "shared_delivery_unit_pr" }
   | { kind: "main_owned"; conversation: "current"; delivery: "delivery_unit_pr" | "evidence" }
   | { kind: "task_agent"; conversation: "new"; delivery: "child_pr" | "evidence" }
   | { kind: "evidence_only"; conversation: "none"; delivery: "evidence" };
@@ -514,10 +521,10 @@ TaskStatus 按 `design → blocked → completed → running → starting → re
 - ready：至少一个成员 work 原子满足依赖并可执行，且没有 starting/running 节点。
 - starting：至少一个成员 work 原子处于 starting 且没有 running 节点；对于 contribution Task，普通路径只有在所属 DeliveryUnit 已有 `pr` 和 `parent_branch` 后才能进入该状态，活跃且 workspace readiness 已完成的 main-owned bootstrap unit 的 main-owned contribution task 除外。
 - running：至少一个成员 work 原子处于 running。
-- blocked：成员节点存在明确阻塞、拓扑错误、证据错误，或贡献任务的 child PR 已进入 `closed` 且尚未建立替代 PR。
+- blocked：成员节点存在明确阻塞、拓扑错误、证据错误，或多任务拓扑中的贡献任务 child PR 已进入 `closed` 且尚未建立替代 PR。
 - completed：所有成员 work 原子完成，且该 Task 所需里程碑全部 satisfied。
 
-`integrated` 是旧账本中的业务标签，表示贡献 Task 自己的 child PR 已经合并到 DeliveryUnit 的集成分支；它不表示存在 follow-up PR，也不表示 Task 的全部工作已经完成。follow-up PR 是独立的外部资源，可以在 child PR 集成后继续存在，并由自己的发布/合并事实或里程碑决定是否阻塞 DeliveryUnit 的后续步骤。新模型不把 `integrated` 作为 canonical TaskStatus，而是用 `pr_merged` 外部事实或对应 milestone 的 satisfied 结果表达；网页如需保留旧术语，只能显示为派生标签。
+`integrated` 是旧账本中的业务标签，表示多任务拓扑中贡献 Task 自己的 child PR 已经合并到 DeliveryUnit 的集成分支；共享交付拓扑不需要该中间标签，因为唯一 PR 同时就是 DeliveryUnit 和 contribution Task 的交付。它不表示存在 follow-up PR，也不表示 Task 的全部工作已经完成。follow-up PR 是独立的外部资源，可以在 child PR 集成后继续存在，并由自己的发布/合并事实或里程碑决定是否阻塞 DeliveryUnit 的后续步骤。新模型不把 `integrated` 作为 canonical TaskStatus，而是用 `pr_merged` 外部事实或对应 milestone 的 satisfied 结果表达；网页如需保留旧术语，只能显示为派生标签。
 
 这三个词的边界必须固定：`integrated` 表示“child PR 已进入 DeliveryUnit 集成分支”，是过程标签；`completed` 表示“该 Task 的全部 work 原子完成，且所需 milestone 全部 satisfied”，是成功的 canonical TaskStatus；`closed` 在旧 Task 账本中表示记录被关闭或收口，可能发生在 `integrated` 或 `completed` 之后，也可能用于 abandoned、superseded 等不成功的终止，因此不能当作成功状态。新模型不把旧 Task 的 `closed` 写入 TaskStatus；成功收口使用 DeliveryUnit 的 closeout milestone，管理性关闭使用独立的 disposition/closure 事实。Task 的 `closed` 与 `TaskPrBinding.state = "closed"` 也不是一回事，后者只表示 provider 关闭了 PR。
 
