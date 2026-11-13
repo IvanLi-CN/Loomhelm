@@ -4,7 +4,7 @@
 
 ## Current Status
 
-- Implementation: 独立 package projection、Bun CLI、gateway/worker 服务边界、兼容检查、机械维护迁移和 release gate/publish workflow 已在源码中实现并有针对性测试覆盖。
+- Implementation: 独立 package projection、Bun CLI、gateway/worker 服务边界、兼容检查、机械维护迁移、schema v3 consumer-install projection、path-byte digest、registry reconcile receipt 和 release failure sidecar 已在源码中实现并有针对性测试覆盖。
 - Lifecycle: active
 - Publication status: 本仓库没有独立 npm publication、受保护 main merge、immutable tag 或用户服务升级的实际 receipt；源码实现和本地候选验证不能替代这些外部事实。
 - Catalog note: 本主题由 `client-skills`、ADR 0021、0026 和 0028 的既有合同拆出独立包、viewer 服务和可恢复发布边界，当前 owner-facing 入口还包括 `clients/typescript/README.md`、`skills/multi-task-flow/SKILL.md` 和 `.github/workflows/README.md`。
@@ -13,9 +13,9 @@
 
 | Requirement | Current coverage | Gap or boundary |
 | - | - | - |
-| `REQ-SRR-001` | `clients/typescript/package.json`、`package-client-skills.ts` 和 package tests 提供 `@loomhelm/multi-task-flow`、`multi-task-flow` bin、完整 toolkit 资源和依赖打包路径。 | 真实 registry publication 与干净外部安装仍需受保护 release workflow 的 artifact/registry receipt。 |
-| `REQ-SRR-002` | 仓库和 package 固定 Bun 1.4.4；build、manifest 和 CLI 会拒绝运行时或资源身份不匹配。 | 跨平台干净临时目录矩阵仍属于 CI/发布环境，不能由本地 source check 单独证明。 |
-| `REQ-SRR-003` | `build-info.ts`、`runtime-identity.ts`、`service-release.ts` 和 `release.py` 交叉校验 package、Skill、ledger、viewer、source/merge、tag 和 tarball identity。 | registry/provider 的实际发布 receipt 仍未在本仓库产生。 |
+| `REQ-SRR-001` | `clients/typescript/package.json`、`package-client-skills.ts` 和 package tests 提供 `@loomhelm/multi-task-flow`、`multi-task-flow` bin、完整 toolkit 资源，以及 `playwright`、`sharp`、`zod` 的 consumer-install projection；构建器拒绝把 production `node_modules` 复制到 toolkit。 | 真实 registry publication 与干净外部安装仍需受保护 release workflow 的 artifact/registry receipt。 |
+| `REQ-SRR-002` | 仓库和 package 固定 Bun 1.4.4；build、manifest、CLI 和 native product smoke 会拒绝运行时或资源身份不匹配，smoke 同时保留 schema 2 bundled legacy 检查和 schema 3 consumer-install/no-toolkit-node_modules 检查，runtime 只检查消费者 package root 的精确 dependencies，缺失时不联网安装。 | 跨平台干净临时目录矩阵仍属于 CI/发布环境，不能由本地 source check 单独证明。 |
+| `REQ-SRR-003` | `build-info.ts`、`runtime-identity.ts`、`service-release.ts` 和 `release.py` 交叉校验 package、Skill、ledger、viewer、source/merge、tag、schema v3、`path-byte-v2`、canonical digest 和 raw integrity；schema v2 保留 legacy read-only verifier。 | registry/provider 的实际发布 receipt 仍未在本仓库产生。 |
 | `REQ-SRR-004` | package metadata 明确 SemVer 与 `compat-vN`，`release.py gate` 校验 projection、严格版本推进和 compatibility line 不回退。 | 兼容线历史清理和 breaking line 的实际发布仍需 owner-approved release decision。 |
 | `REQ-SRR-005` | `clients/typescript/src/cli/flow.ts` 提供 direct `flow COMMAND --input - [--socket PATH]`；ledger store/engine 覆盖锁、owner、revision、幂等和未知结果。 | 外部隔离安装与无 checkout 的 registry package 验收仍需真实 tarball/registry 流程。 |
 | `REQ-SRR-006` | `service.ts`、`service-http.ts`、`viewer-gateway.ts`、`viewer-worker.ts` 和 socket modules 实现单一 loopback gateway、owner-only worker、HTTP/SSE/resource 路由及多 run 资源边界。 | 用户主机的实际 launchd 安装和跨平台部署仍是外部运维前置。 |
@@ -24,16 +24,17 @@
 | `REQ-SRR-009` | `store-migration.ts`、`ledger-maintenance.ts` 和 migration tests 覆盖 backup、digest、revision、request identity、机械迁移、重放与历史保留边界。 | 长期 fixture 保留和真实权限/中断演练仍属于 release quality gate。 |
 | `REQ-SRR-010` | `skill-release-gate.yml`、`skill-release-publish.yml` 和 `release.py` 强制恰好一个 `release:skill`/`release:skill-initial-publication`/`release:skip` label、范围检查、base/head 重检、SemVer、compatibility line 和 projection。 | 真实 PR/merge queue 的 provider check receipt 尚未在本主题中记录。 |
 | `REQ-SRR-011` | publish workflow checkout exact protected merge SHA，验证 merged PR receipt，并把 merge/source SHA 写入 candidate manifest。 | 只有受保护 main 上的实际 workflow run 才能产生可发布 provenance。 |
-| `REQ-SRR-012` | publish workflow 以同一 merge SHA 生成 draft/final 单 tarball，注入并验证 digest，上传后再比较 registry bytes，promotion 不重建。 | 实际 npm registry 发布与未知结果恢复仍未发生。 |
-| `REQ-SRR-013` | workflow 和 `release.py` 支持 `multi-task-flow-vX.Y.Z` immutable tag、`compat-vN`/`latest`/可选 `stable` 的单调 promotion、并发隔离和对账入口。 | 真实 tag、dist-tag 和中断恢复 receipt 仍需 owner-approved workflow。 |
-| `REQ-SRR-014` | SPEC/IMPLEMENTATION/HISTORY、ADR 0029、客户端 README、现有 Skill viewer 说明和 workflow README 现已覆盖 CLI、版本矩阵、viewer/TTL、迁移、回滚、失败恢复和发布操作。 | npm publication、用户服务升级和 owner/provider 凭据仍是明确的外部前置，不在文档提交中伪造完成。 |
+| `REQ-SRR-012` | publish workflow 只上传同一 candidate tarball，先保存候选 receipt，再记录 canonical digest、raw integrity 和 candidate identity；processing、known 409、timeout 或 unknown publish outcome 不重复上传或重建；registry tarball 验证失败写入 `identity-mismatch` receipt。 | 实际 npm registry 发布与未知结果恢复仍未发生。 |
+| `REQ-SRR-013` | workflow 和 `release.py` 支持 `multi-task-flow-vX.Y.Z` immutable tag、exact-visible 后的 `compat-vN`/`latest`/可选 `stable` 单调 promotion、缺失 dist-tag 作为空当前值、逐个 read-back、receipt 的 `published/completed` 状态和 resume 入口；现有 `0.2.7` 只读对账成功后跳过 tag/dist-tag 写入。 | 真实 tag、dist-tag 和中断恢复 receipt 仍需 owner-approved workflow。 |
+| `REQ-SRR-014` | SPEC/IMPLEMENTATION/HISTORY、ADR 0029/0030、客户端 README、现有 Skill viewer 说明和 workflow README 覆盖 consumer install、`path-byte-v2`、legacy reconciliation、registry recovery、verify 阶段独立 release identity artifact、failure sidecar、`published/completed` 语义和发布操作；客户端直发入口被移除并 fail closed。 | npm publication、用户服务升级和 owner/provider 凭据仍是明确的外部前置，不在文档提交中伪造完成。 |
 
 ## Verification Commands
 
 - `bun --no-install skills/bin/spec_contract_check.ts --path docs/specs/skill-runtime-release/SPEC.md`
 - `python3 tools/markdown.py check`
 - `bun test ./skills/bin/tests/docs`
-- `python3 -m unittest tools/skill-release/test_release.py`
+- `(cd tools/skill-release && python3 -m unittest test_release.py)`
+- `(cd tools/release && python3 -m unittest test_notification.py)`
 - `bun --no-install run --cwd clients/typescript check`
 - `bun --no-install run --cwd clients/typescript test`
 - 上述命令验证源码和本地包行为；干净外部安装、registry publication、受保护 merge、长期 service 故障演练和真实 provider receipt 仍需在对应 CI/workflow 环境中完成，不能由本地检查替代。

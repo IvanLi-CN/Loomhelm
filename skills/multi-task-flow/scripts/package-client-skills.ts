@@ -1,8 +1,8 @@
 #!/usr/bin/env -S bun --no-install
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, resolve, sep } from 'node:path';
 const root = resolve(import.meta.dirname, '../../..');
 const target = resolve(root, 'clients/typescript/toolkit');
 const manifest = JSON.parse(readFileSync(resolve(root, 'skills/source-manifest.json'), 'utf8'));
@@ -42,36 +42,15 @@ const gitTag = process.env.LOOMHELM_GIT_TAG?.trim() || null;
 if (gitTag !== null && gitTag !== `multi-task-flow-v${buildVersion}`) throw new Error('LOOMHELM_GIT_TAG does not match package version');
 const tarballDigest = process.env.LOOMHELM_TARBALL_DIGEST?.trim() || null;
 if (tarballDigest !== null && !sha256.test(tarballDigest)) throw new Error('LOOMHELM_TARBALL_DIGEST must be a SHA-256 digest');
-type DependencyDeclaration = { name: string; version: string; resourceRoot: string };
-type PreparedDependency = { name: string; version: string; path: string; entry: string };
-const dependencyDeclarations = new Map<string, DependencyDeclaration>();
-function declareDependencies(metadata: { dependencies?: Record<string, string> }, resourceRoot: string): void {
-  for (const [name, version] of Object.entries(metadata.dependencies ?? {})) {
-    const existing = dependencyDeclarations.get(name);
-    if (existing) {
-      if (existing.version !== version) throw new Error(`Conflicting dependency declaration: ${name}`);
-      continue;
-    }
-    dependencyDeclarations.set(name, { name, version, resourceRoot });
-  }
-}
-const skillsPackageMetadata = JSON.parse(readFileSync(resolve(root, 'skills/package.json'), 'utf8')) as { dependencies?: Record<string, string> };
-const flowPackageMetadata = JSON.parse(readFileSync(resolve(root, 'skills/multi-task-flow/package.json'), 'utf8')) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-declareDependencies(skillsPackageMetadata, 'skills/node_modules');
-// The viewer's React/ELK dependencies are build-time inputs for the static
-// assets. The portable CLI only needs the runtime Skill dependencies above;
-// shipping the entire frontend dependency tree makes the tarball hundreds of
-// megabytes and slows every `bunx` startup. Keep the package's normal npm
-// dependency declarations for consumers that need the frontend, while bundling
-// only the dependencies executed by Skill scripts.
-if (flowPackageMetadata.dependencies?.zod) {
-  dependencyDeclarations.set('zod', {
-    name: 'zod',
-    version: flowPackageMetadata.dependencies.zod,
-    resourceRoot: 'skills/multi-task-flow/node_modules',
-  });
-}
-const requiredDependencies = [...dependencyDeclarations.values()].sort((left, right) => left.name.localeCompare(right.name));
+type ConsumerDependency = { name: string; version: string; mode: 'consumer-install' };
+const runtimeDependencyNames = ['playwright', 'sharp', 'zod'] as const;
+const declaredDependencies = packageMetadata.dependencies as Record<string, string> | undefined;
+if (!declaredDependencies || JSON.stringify(Object.keys(declaredDependencies).sort()) !== JSON.stringify([...runtimeDependencyNames])) throw new Error('Package production dependencies must be exactly playwright, sharp, and zod');
+const requiredDependencies: ConsumerDependency[] = runtimeDependencyNames.map(name => {
+  const version = declaredDependencies[name];
+  if (typeof version !== 'string' || !version) throw new Error(`Missing runtime dependency declaration: ${name}`);
+  return { name, version, mode: 'consumer-install' };
+});
 // Only this exact disposable resource output is replaced. TS is never emitted.
 if (existsSync(target)) {
   if (lstatSync(target).isSymbolicLink() || realpathSync(target) !== target) throw new Error('Unsafe toolkit output directory');
@@ -109,22 +88,15 @@ function writeGenerated(path: string, contents: Uint8Array): void {
   writeFileSync(output, contents);
   record(path, contents);
 }
-function dependencyMetadata(sourceRoot: string, name: string, expectedVersion: string): { name: string; version: string; entry: string } {
-  const dependencyBase = resolve(root, sourceRoot);
-  const packageRoot = resolve(dependencyBase, name);
-  if (!packageRoot.startsWith(`${dependencyBase}${sep}`)) throw new Error(`Unsafe prepared dependency path: ${name}`);
-  const packageJsonPath = resolve(packageRoot, 'package.json');
-  if (!existsSync(packageJsonPath)) throw new Error(`Prepared dependency missing: ${name}`);
-  const metadata = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { name?: string; version?: string; module?: string; main?: string };
-  if (metadata.name !== name || metadata.version !== expectedVersion) throw new Error(`Prepared dependency version mismatch: ${name}`);
-  const declaredEntry = metadata.module ?? metadata.main ?? 'index.js';
-  const candidates = [declaredEntry, `${declaredEntry}.js`, `${declaredEntry}.mjs`, `${declaredEntry}.cjs`, `${declaredEntry}/index.js`];
-  const entry = candidates.find(candidate => {
-    const sourceEntry = resolve(packageRoot, candidate);
-    return sourceEntry.startsWith(`${packageRoot}${sep}`) && existsSync(sourceEntry) && lstatSync(sourceEntry).isFile() && realpathSync(sourceEntry) === sourceEntry;
-  });
-  if (!entry) throw new Error(`Unsafe prepared dependency entry: ${name}`);
-  return { name, version: expectedVersion, entry: entry.replace(/^\.\//, '') };
+function validateInstalledDependencies(): void {
+  const packageRoot = resolve(root, 'clients/typescript');
+  for (const dependency of requiredDependencies) {
+    const dependencyRoot = resolve(packageRoot, 'node_modules', dependency.name);
+    const dependencyManifest = resolve(dependencyRoot, 'package.json');
+    if (!existsSync(dependencyManifest) || lstatSync(dependencyRoot).isSymbolicLink() || realpathSync(dependencyRoot) !== dependencyRoot) throw new Error(`Consumer dependency is not installed: ${dependency.name}`);
+    const metadata = JSON.parse(readFileSync(dependencyManifest, 'utf8')) as { name?: string; version?: string };
+    if (metadata.name !== dependency.name || metadata.version !== dependency.version) throw new Error(`Consumer dependency version mismatch: ${dependency.name}`);
+  }
 }
 function copyPackageManifest(): void {
   const files = manifest.files.filter(file => !packageOmissionPaths.has(file.path));
@@ -136,109 +108,7 @@ for (const file of [...manifest.files, ...(manifest.additions ?? [])]) if (!pack
 copyPackageManifest();
 copy('skills/catalog.json');
 for (const name of ['index.html','app.js','app.css']) copy(`skills/multi-task-flow/dist/${name}`);
-const copyDependencies = (path: string, dependencyNames?: string[]): boolean => {
-  const sourceRoot = resolve(root, path);
-  if (!existsSync(sourceRoot)) {
-    if (requireDependencies) throw new Error(`Prepared dependency directory missing: ${path}`);
-    return false;
-  }
-  const rootStat = lstatSync(sourceRoot);
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || realpathSync(sourceRoot) !== sourceRoot) throw new Error('Unsafe dependency directory: ' + path);
-  const resolvedRoot = realpathSync(sourceRoot);
-  let preparedFiles = 0;
-  const copyBinLauncher = (child: string, source: string): void => {
-    const resolvedSource = realpathSync(source);
-    const relSource = relative(sourceRoot, resolvedSource);
-    if (relative(resolvedRoot, resolvedSource).startsWith(`..${sep}`) || relative(resolvedRoot, resolvedSource) === '..' || relSource.startsWith(`..${sep}`) || relSource === '..' || !lstatSync(resolvedSource).isFile()) throw new Error('Unsafe dependency launcher: ' + `${path}/${child}`);
-    const outputPath = resolve(target, path, child);
-    const targetPath = resolve(target, path, relSource);
-    const targetRel = relative(dirname(outputPath), targetPath).split(sep).join('/');
-    const launcher = `#!/usr/bin/env bun\nawait import(new URL(${JSON.stringify(targetRel)}, import.meta.url).href);\n`;
-    mkdirSync(dirname(outputPath), { recursive: true });
-    writeFileSync(outputPath, launcher, { mode: 0o755 });
-    record(`${path}/${child}`, Buffer.from(launcher));
-  };
-  const recordPreparedFile = (destination: string, source: string): void => {
-    const resolvedSource = realpathSync(source);
-    const relativeSource = relative(resolvedRoot, resolvedSource);
-    const stat = lstatSync(source);
-    if (relativeSource.startsWith(`..${sep}`) || relativeSource === '..' || !stat.isFile() || stat.isSymbolicLink() || resolvedSource !== source) throw new Error('Unsafe prepared dependency: ' + destination);
-    const output = resolve(target, destination);
-    mkdirSync(dirname(output), { recursive: true });
-    const contents = readFileSync(resolvedSource);
-    cpSync(resolvedSource, output);
-    record(destination, contents);
-    preparedFiles += 1;
-  };
-  const walk = (relativePath: string): void => {
-    for (const entry of readdirSync(resolve(sourceRoot, relativePath), { withFileTypes: true })) {
-      if (entry.name === '.cache') continue;
-      const child = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-      const source = resolve(sourceRoot, child);
-      if (entry.isSymbolicLink()) {
-        if (relativePath !== '.bin' && !relativePath.startsWith(`.bin${sep}`)) throw new Error('Unsafe dependency symlink: ' + `${path}/${child}`);
-        if (productPartitionBuild) recordPreparedFile(`${path}/${child}`, realpathSync(source));
-        else copyBinLauncher(child, source);
-      } else if (entry.isDirectory()) walk(child);
-      else if (productPartitionBuild) recordPreparedFile(`${path}/${child}`, source);
-      else copy(`${path}/${child}`, undefined, true);
-    }
-  };
-  if (!dependencyNames) {
-    walk('');
-    return preparedFiles > 0;
-  }
-  const roots = new Map<string, string>();
-  const queue = dependencyNames.map(name => ({ name, relativePath: name }));
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    if (roots.has(current.relativePath)) continue;
-    const packageJson = resolve(sourceRoot, current.relativePath, 'package.json');
-    if (!existsSync(packageJson)) throw new Error(`Prepared dependency missing: ${current.name}`);
-    roots.set(current.relativePath, current.name);
-    const metadata = JSON.parse(readFileSync(packageJson, 'utf8')) as { dependencies?: Record<string, string>; optionalDependencies?: Record<string, string> };
-    for (const dependencyName of Object.keys(metadata.dependencies ?? {})) {
-      const nested = `${current.relativePath}/node_modules/${dependencyName}`;
-      const root = existsSync(resolve(sourceRoot, nested, 'package.json')) ? nested : dependencyName;
-      if (!roots.has(root)) queue.push({ name: dependencyName, relativePath: root });
-    }
-    for (const dependencyName of Object.keys(metadata.optionalDependencies ?? {})) {
-      const nested = `${current.relativePath}/node_modules/${dependencyName}`;
-      const root = existsSync(resolve(sourceRoot, nested, 'package.json')) ? nested : dependencyName;
-      if (existsSync(resolve(sourceRoot, root, 'package.json')) && !roots.has(root)) queue.push({ name: dependencyName, relativePath: root });
-    }
-  }
-  for (const relativePath of roots.keys()) walk(relativePath);
-  return preparedFiles > 0;
-};
-let preparedDependencies: PreparedDependency[];
-if (productPartitionBuild) {
-  for (const resourceRoot of new Set(requiredDependencies.map(dependency => dependency.resourceRoot))) {
-    copyDependencies(resourceRoot, requiredDependencies.filter(dependency => dependency.resourceRoot === resourceRoot).map(dependency => dependency.name));
-  }
-  preparedDependencies = requiredDependencies.map(dependency => {
-    const metadata = dependencyMetadata(dependency.resourceRoot, dependency.name, dependency.version);
-    const path = `${dependency.resourceRoot}/${dependency.name}`;
-    if (!outputs.has(`${path}/package.json`)) throw new Error(`Prepared dependency was not copied: ${dependency.name}`);
-    return { name: dependency.name, version: dependency.version, path, entry: metadata.entry };
-  });
-} else {
-  // The published package must be runnable from an isolated `bunx` install.
-  // Bun's workspace install may materialize dependency entries as shims that
-  // point outside the package; copying the prepared dependency trees keeps
-  // every runtime import inside the tarball and makes the artifact portable.
-  for (const resourceRoot of new Set(requiredDependencies.map(dependency => dependency.resourceRoot))) {
-    copyDependencies(resourceRoot, requiredDependencies.filter(dependency => dependency.resourceRoot === resourceRoot).map(dependency => dependency.name));
-  }
-  preparedDependencies = requiredDependencies.map(dependency => {
-    const metadata = dependencyMetadata(dependency.resourceRoot, dependency.name, dependency.version);
-    const path = `${dependency.resourceRoot}/${dependency.name}`;
-    if (!outputs.has(`${path}/package.json`)) throw new Error(`Prepared dependency was not copied: ${dependency.name}`);
-    return { name: dependency.name, version: dependency.version, path, entry: metadata.entry };
-  });
-}
-const dependenciesBundled = preparedDependencies.length === requiredDependencies.length && requiredDependencies.length > 0;
-if (requireDependencies && !dependenciesBundled) throw new Error('Prepared dependency closure is incomplete');
+if (requireDependencies) validateInstalledDependencies();
 copyRootFile('AGENTS.md');
 const packageIdentityBase = {
   packageName: packageMetadata.name,
@@ -251,6 +121,7 @@ const packageIdentityBase = {
   contracts: { ledgerContract: packageContracts.ledger, apiVersion: packageContracts.api, frontendContract: packageContracts.frontend, viewerContract: packageContracts.viewer, serviceVersion: packageContracts.service },
   tarballDigest,
   gitTag,
+  canonicalDigestAlgorithm: 'path-byte-v2',
 };
 const generatedPackage = JSON.stringify({ private: true, type: 'module', packageName: packageMetadata.name, packageVersion: buildVersion, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion }, null, 2) + '\n';
 writeFileSync(resolve(target, 'package.json'), generatedPackage);
@@ -258,6 +129,6 @@ writeFileSync(resolve(target, 'package.json'), generatedPackage);
 const finalInventory = [...outputs.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
 const buildId = createHash('sha256').update(JSON.stringify({ ...packageIdentityBase, files: finalInventory })).digest('hex');
 const identity = { ...packageIdentityBase, buildId };
-const artifact = { schemaVersion: 2, packageName: packageMetadata.name, packageVersion: buildVersion, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion, sourceCommit: manifest.commit, sourceSha, mergeSha: packageIdentityBase.mergeSha, candidateSha: sourceSha, dirty, runtime: 'bun@1.4.4', identity, buildId, tarballDigest, gitTag, dependenciesBundled, dependencies: preparedDependencies, omittedResources: packageOmissions, files: finalInventory };
+const artifact = { schemaVersion: 3, packageName: packageMetadata.name, packageVersion: buildVersion, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion, sourceCommit: manifest.commit, sourceSha, mergeSha: packageIdentityBase.mergeSha, candidateSha: sourceSha, dirty, runtime: 'bun@1.4.4', identity, buildId, tarballDigest, gitTag, canonicalDigestAlgorithm: 'path-byte-v2', dependenciesBundled: false, dependencies: requiredDependencies, omittedResources: packageOmissions, files: finalInventory };
 writeFileSync(resolve(target, 'artifact-manifest.json'), JSON.stringify(artifact, null, 2) + '\n');
-console.log(JSON.stringify({ artifact: target, package: packageMetadata.name, version: buildVersion, compatibilityLine: packageConfig.compatibilityLine, runtime: 'bun@1.4.4', resources: finalInventory.length, dependenciesBundled, source: sourceSha, merge: packageIdentityBase.mergeSha, buildId, dirty }));
+console.log(JSON.stringify({ artifact: target, package: packageMetadata.name, version: buildVersion, compatibilityLine: packageConfig.compatibilityLine, runtime: 'bun@1.4.4', resources: finalInventory.length, dependenciesBundled: false, dependencies: requiredDependencies, source: sourceSha, merge: packageIdentityBase.mergeSha, buildId, dirty }));

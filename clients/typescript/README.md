@@ -1,8 +1,8 @@
 # `@loomhelm/multi-task-flow`
 
-独立的 Multi-task Flow Skill runtime 与本地账本 CLI，与 Go 客户端并存。包的正式入口是 `multi-task-flow`，兼容别名 `loomhelm` 仍保留；生产运行时只支持 Bun 1.4.4，包直接执行 TypeScript 源码并携带完整 Skill、合同、viewer 资源和依赖闭包。
+独立的 Multi-task Flow Skill runtime 与本地账本 CLI，与 Go 客户端并存。包的正式入口是 `multi-task-flow`，兼容别名 `loomhelm` 仍保留；生产运行时只支持 Bun 1.4.4，包直接执行 TypeScript 源码并携带完整 Skill、合同和 viewer 资源，production dependencies 由消费者安装。
 
-安装包不依赖父仓库 checkout、`~/.agents` 或全局 Skill 源包。`sharp`、`zod` 以及 viewer 运行依赖由 npm 包声明和解析；Bun 是包外部前置条件，不由包自动安装或升级。
+安装包不依赖父仓库 checkout、`~/.agents` 或全局 Skill 源包。`playwright`、`sharp`、`zod` 由 npm 根 package 声明并在消费者 `bun install` 时解析；React、ELK、vis 等只用于 workspace viewer build，Bun 是包外部前置条件，不由包自动安装或升级。
 
 ```sh
 bunx --bun --package @loomhelm/multi-task-flow@compat-v1 multi-task-flow skills list
@@ -22,7 +22,7 @@ bunx --bun --package @loomhelm/multi-task-flow@compat-v1 multi-task-flow skills 
 bunx --bun --package @loomhelm/multi-task-flow@0.2.7 multi-task-flow flow view --input - < view-request.json
 ```
 
-当前源码投影的内部合同矩阵如下；`source_sha`、`merge_sha`、`build_id` 和 `tarball_digest` 是每个候选构建的独立身份字段，不能由这张静态表推断。
+当前源码投影的内部合同矩阵如下；`source_sha`、`merge_sha`、`build_id`、`canonicalDigestAlgorithm=path-byte-v2`、canonical digest 和 raw npm integrity 是每个候选构建的独立身份字段，不能由这张静态表推断。
 
 | 维度 | 当前值 |
 | - | - |
@@ -39,6 +39,10 @@ bunx --bun --package @loomhelm/multi-task-flow@0.2.7 multi-task-flow flow view -
 
 npm 发布需要 npm Trusted Publisher 绑定 `IvanLi-CN/Loomhelm` 与 `skill-release-publish.yml`，以及 owner-approved release workflow；不使用长期 npm 写入 token。缺少 Trusted Publisher 或 workflow receipt 时只执行本地 build、pack 和 tarball 校验，不把本地候选称为已发布包。
 
+发布 workflow 使用同一 candidate tarball 执行 exact registry reconcile；404、processing、已知 409、timeout 和 identity mismatch 都必须记录 receipt，不能重传或重建。exact registry identity 对账成功才是 `published`，compatibility line、`latest` 和显式 `stable` 逐个 read-back 成功才是 `completed`；现有 `0.2.7` schema v2 artifact 只做 raw integrity/legacy identity 对账，禁止重传。
+
+客户端只提供 `release identity` 和 `release validate` 等本地只读检查；`release publish`、`publish:exact` 和 `publish:compat` 不提供直接 npm 写入路径，发布只能由受保护的 Skill Runtime Release workflow 完成。
+
 ```sh
 bun install --frozen-lockfile
 bun install --cwd skills/multi-task-flow --frozen-lockfile
@@ -50,7 +54,7 @@ bun --no-install run test
 bun --no-install src/cli.ts --config config.example.json status
 ```
 
-发布包构建前需要准备两个 Skill 依赖目录：`bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy` 与 `bun install --cwd skills/multi-task-flow --frozen-lockfile`。随后在 `clients/typescript/` 执行 `bun --no-install run build`，构建会拒绝摘要不一致、缺失依赖、符号链接资源和非法 package identity。
+发布包构建前需要准备 Skill build inputs 与消费者依赖：`bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy`、`bun install --cwd skills/multi-task-flow --frozen-lockfile` 和 `bun install --cwd clients/typescript --frozen-lockfile --ignore-scripts --backend=copy`。随后在 `clients/typescript/` 执行 `bun --no-install run build`，构建会拒绝摘要不一致、缺失 consumer dependency、符号链接资源和非法 package identity。
 
 配置路径显式传入；相对 `stateDir` 相对于配置文件所在目录解析。未传配置时使用 `~/.loomhelm`。配置拒绝未知字段、未知版本及尚未实现的 Connected mode。源码从 `client/` 移入本目录后，示例配置使用 `../../client/.loomhelm`，继续读取仓库中原来的 `client/.loomhelm/`，该目录仍被根 Git 忽略规则排除。此兼容目录只保存状态，不放置客户端源码。
 
@@ -102,7 +106,7 @@ bun --no-install src/cli.ts --config config.example.json codex retry DISPATCH_ID
 
 ## Skills 与正式任务流
 
-完整源包位于包内 `toolkit/skills/`，共享支持位于 `toolkit/skills/bin/`，预构建 viewer 资产位于对应的 Multi-task Flow dist 目录。`skills/source-manifest.json` 记录固定源提交、源摘要、安装摘要和迁移差异；`skills/catalog.json` 记录入口、脚本及依赖强度；`artifact-manifest.json` 记录包身份与逐文件摘要。资源打包将 TS 源码、完整资源、浏览器资产和生产依赖复制到 `toolkit/`，不转译、不搜索全局 dot-codex 执行代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根；`skills run` 原样执行 `.ts` 脚本。包的 bin、exports 和类型入口均指向 `src/`。
+完整源包位于包内 `toolkit/skills/`，共享支持位于 `toolkit/skills/bin/`，预构建 viewer 资产位于对应的 Multi-task Flow dist 目录。`skills/source-manifest.json` 记录固定源提交、源摘要、安装摘要和迁移差异；`skills/catalog.json` 记录入口、脚本及依赖强度；`artifact-manifest.json` 记录 schema v3 package identity、`path-byte-v2` canonical digest 和逐文件摘要。资源打包将 TS 源码、完整资源和浏览器资产复制到 `toolkit/`，不复制 production `node_modules`，不转译、不搜索全局 dot-codex 执行代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根；`skills run` 原样执行 `.ts` 脚本。包的 bin、exports 和类型入口均指向 `src/`。
 
 所有随包执行代码、合同资源和构建支持都位于 `skills/`：共享脚本在 `skills/bin/`，上游合同在 `skills/docs/vendor/dot-codex/`，维护与构建入口在 `skills/multi-task-flow/scripts/`。vendor 仅检出 `skills/` 即可保留完整源资源，不需要修改用户的 sparse checkout 或安装配置。安装目录内执行 `bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy` 与 `bun install --cwd skills/multi-task-flow --frozen-lockfile` 准备声明的依赖，再执行 `bun --no-install run --cwd skills build` 仅构建浏览器 JS/CSS；本机 TS 无需编译。外部 Git、Codex 宿主工具及条件性 Skills 仍按既有合同检测，不复制到源包中。
 

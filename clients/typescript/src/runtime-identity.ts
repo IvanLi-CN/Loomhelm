@@ -1,4 +1,4 @@
-import { identityDigest, validatePackageIdentity, type PackageIdentity } from './release.ts';
+import { identityDigest, validatePackageIdentity, type CanonicalDigestAlgorithm, type PackageIdentity } from './release.ts';
 import type { ToolkitArtifactFile, ToolkitArtifactManifest } from './toolkit.ts';
 
 export interface RuntimeBuildInfo {
@@ -10,6 +10,7 @@ export interface RuntimeBuildInfo {
   skill_version: string;
   build_id: string;
   tarball_digest: string | null;
+  canonical_digest_algorithm: CanonicalDigestAlgorithm | null;
   contracts: {
     ledger: number;
     api: number;
@@ -22,7 +23,7 @@ export interface RuntimeBuildInfo {
 
 function validatedIdentity(artifact: ToolkitArtifactManifest): PackageIdentity {
   const identity = validatePackageIdentity(artifact.identity);
-  if (identity.packageName !== artifact.packageName || identity.packageVersion !== artifact.packageVersion || identity.compatibilityLine !== artifact.compatibilityLine || identity.skillVersion !== artifact.skillVersion || identity.sourceSha !== artifact.sourceSha || identity.mergeSha !== artifact.mergeSha || identity.dirty !== artifact.dirty || identity.buildId !== artifact.buildId || identity.tarballDigest !== artifact.tarballDigest || identity.gitTag !== artifact.gitTag) throw new Error('Toolkit artifact identity mismatch');
+  if (identity.packageName !== artifact.packageName || identity.packageVersion !== artifact.packageVersion || identity.compatibilityLine !== artifact.compatibilityLine || identity.skillVersion !== artifact.skillVersion || identity.sourceSha !== artifact.sourceSha || identity.mergeSha !== artifact.mergeSha || identity.dirty !== artifact.dirty || identity.buildId !== artifact.buildId || identity.tarballDigest !== artifact.tarballDigest || identity.gitTag !== artifact.gitTag || identity.canonicalDigestAlgorithm !== artifact.canonicalDigestAlgorithm) throw new Error('Toolkit artifact identity mismatch');
   const { buildId, ...withoutBuildId } = identity;
   const files = artifact.files as readonly ToolkitArtifactFile[];
   if (identityDigest({ ...withoutBuildId, files }) !== buildId) throw new Error('Toolkit artifact build ID mismatch');
@@ -40,6 +41,7 @@ export function buildInfoFromArtifact(artifact: ToolkitArtifactManifest): Runtim
     skill_version: identity.skillVersion,
     build_id: identity.buildId,
     tarball_digest: identity.tarballDigest,
+    canonical_digest_algorithm: identity.canonicalDigestAlgorithm ?? null,
     contracts: {
       ledger: identity.contracts.ledgerContract,
       api: identity.contracts.apiVersion,
