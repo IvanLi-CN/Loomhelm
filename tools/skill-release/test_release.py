@@ -141,6 +141,8 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("legacy-exact-visible", workflow)
         self.assertIn("registry_validation_args=(--version", workflow)
         self.assertIn("steps.publish_registry.outputs.registry_state", workflow)
+        self.assertIn("registry exact metadata was not usable", workflow)
+        self.assertIn("registry tarball download failed", workflow)
         self.assertLess(workflow.index("0.2.7 is legacy read-only reconciliation"), workflow.index('npm publish "$tarball"'))
         self.assertIn("if ! grep -Eiq 'E404|404|no match found|not found' \"$exact_error\"", workflow)
         self.assertEqual(workflow.count('npm publish "$tarball"'), 1)

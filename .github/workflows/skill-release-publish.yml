@@ -633,10 +633,17 @@ jobs:
             echo "registry did not expose the exact version after bounded reconciliation; resume from this receipt" >&2
             exit 1
           fi
-          npm view "$PACKAGE_NAME@$VERSION" --json > "$exact_metadata"
-          registry_url="$(python3 -c 'import json, os, sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert value.get("version") == os.environ["VERSION"], "registry version does not match the release candidate"; dist=value.get("dist") or {}; url=dist.get("tarball"); assert url, "registry metadata has no tarball URL"; print(url)' "$exact_metadata")"
+          if ! registry_url="$(python3 -c 'import json, os, sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert value.get("version") == os.environ["VERSION"], "registry version does not match the release candidate"; dist=value.get("dist") or {}; url=dist.get("tarball"); assert url, "registry metadata has no tarball URL"; print(url)' "$exact_metadata")"; then
+            update_receipt registry-error false false registry-error
+            echo 'registry exact metadata was not usable; no tarball download or tag promotion was attempted' >&2
+            exit 1
+          fi
           downloaded="$RUNNER_TEMP/skill-release-registry.tgz"
-          curl --fail --silent --show-error --location "$registry_url" -o "$downloaded"
+          if ! curl --fail --silent --show-error --location "$registry_url" -o "$downloaded"; then
+            update_receipt registry-error false false registry-error
+            echo 'registry tarball download failed; no tag promotion was attempted' >&2
+            exit 1
+          fi
           registry_validation="$RUNNER_TEMP/skill-release-registry-validation.json"
           registry_validation_error="$RUNNER_TEMP/skill-release-registry-validation.err"
           registry_validation_args=(--version "$VERSION" --compatibility-line "$COMPATIBILITY_LINE")

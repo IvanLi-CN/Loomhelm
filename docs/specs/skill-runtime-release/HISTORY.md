@@ -36,6 +36,8 @@ native product smoke 也已接受当前 schema 3 artifact，同时继续校验 s
 
 发布边界进一步收紧为受保护 workflow 独占：客户端 package 不再提供 `publish:exact`/`publish:compat` 脚本，CLI 的 `release publish` 也 fail closed；exact 查询的非 404 错误、registry tarball identity validation failure 和 legacy integrity mismatch 都会先写 receipt 再停止。
 
+registry exact metadata 不可用或 tarball 下载失败时也会先写 `registry-error` receipt，并停止后续 tag/dist-tag 写入；reconcile 阶段复用已确认的 exact metadata，避免为同一候选引入额外 registry 查询。
+
 这次文档同步只记录已经存在的源码合同和可执行 workflow，不创建 npm 凭据、不安装或升级用户 service，也不把本地 build、PR gate 或候选 tarball 视为 registry publication。后续真实发布仍须由 owner-approved workflow 产生完整 identity 和 provider receipt。
 
 ## Related Documents
