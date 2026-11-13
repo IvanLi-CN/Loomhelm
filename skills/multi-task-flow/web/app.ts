@@ -300,7 +300,7 @@ function canUseDetailsPanel(): boolean {
   return detailsPanelFits(workspace?.getBoundingClientRect().width ?? 0);
 }
 const DETAILS_MIN_HEIGHT = 120;
-const detailsHeightKey = `loomhelm:details-height:${location.pathname}`;
+const detailsHeightKey = `loomhelm:details-height:v2:${location.pathname}`;
 function detailsHeightBounds(): { min: number; max: number } {
   const workspace = document.querySelector<HTMLElement>(".workspace");
   const available = Math.max(DETAILS_MIN_HEIGHT, workspace?.getBoundingClientRect().height ?? window.innerHeight);
@@ -314,14 +314,14 @@ function setDetailsHeight(value: number, persist = true): void {
   if (persist) localStorage.setItem(detailsHeightKey, String(height));
 }
 const savedDetailsHeight = Number(localStorage.getItem(detailsHeightKey));
-setDetailsHeight(Number.isFinite(savedDetailsHeight) && savedDetailsHeight > 0 ? savedDetailsHeight : window.innerHeight * 0.4, false);
+setDetailsHeight(Number.isFinite(savedDetailsHeight) && savedDetailsHeight > 0 ? savedDetailsHeight : window.innerHeight * 0.32, false);
 const detailsResize = document.getElementById("details-resize");
 if (detailsResize) {
   let startY = 0; let startHeight = 0;
   const move = (event: PointerEvent) => { event.preventDefault(); setDetailsHeight(startHeight + startY - event.clientY); };
   const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
-  detailsResize.addEventListener("pointerdown", event => { event.preventDefault(); startY = event.clientY; startHeight = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.4; detailsResize.setPointerCapture?.(event.pointerId); window.addEventListener("pointermove", move, { passive: false }); window.addEventListener("pointerup", end); });
-  detailsResize.addEventListener("keydown", event => { const current = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.4; if (event.key === "ArrowUp") { event.preventDefault(); setDetailsHeight(current + 24); } else if (event.key === "ArrowDown") { event.preventDefault(); setDetailsHeight(current - 24); } else if (event.key === "Home") { event.preventDefault(); setDetailsHeight(detailsHeightBounds().min); } else if (event.key === "End") { event.preventDefault(); setDetailsHeight(detailsHeightBounds().max); } });
+  detailsResize.addEventListener("pointerdown", event => { event.preventDefault(); startY = event.clientY; startHeight = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.32; detailsResize.setPointerCapture?.(event.pointerId); window.addEventListener("pointermove", move, { passive: false }); window.addEventListener("pointerup", end); });
+  detailsResize.addEventListener("keydown", event => { const current = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.32; if (event.key === "ArrowUp") { event.preventDefault(); setDetailsHeight(current + 24); } else if (event.key === "ArrowDown") { event.preventDefault(); setDetailsHeight(current - 24); } else if (event.key === "Home") { event.preventDefault(); setDetailsHeight(detailsHeightBounds().min); } else if (event.key === "End") { event.preventDefault(); setDetailsHeight(detailsHeightBounds().max); } });
 }
 const hoverController = createHoverController({
   element: $,
@@ -694,7 +694,7 @@ $("zoom-in").addEventListener("click", () => (viewState.tab === "atomic" ? atomi
 $("timeline-zoom-in").addEventListener("click", () => timelineController.adjustWindow("in")); $("timeline-zoom-out").addEventListener("click", () => timelineController.adjustWindow("out")); $("timeline-fit").addEventListener("click", () => timelineController.fit());
 installViewStateNavigation(window, { getSearch: () => window.location.search, getValidation: (search) => { const targetPlan = search ? new URLSearchParams(search).get("plan") : null; if ((targetPlan ?? activePlanId) !== (viewState.plan ?? activePlanId)) return { plans: new Set(data?.plans.map((plan) => plan.id) ?? []) }; return data ? stateValidation() : {}; }, getPhase: () => data ? phase ?? derivePhase(data.tasks) : null, restore: (next, hasExplicitTab) => { const planChanged = next.plan !== viewState.plan; const closingDetails = viewState.detail && !next.detail; userChangedTab = hasExplicitTab; if (closingDetails) { keyboardSelection = false; hideHoverPreview(); restoreClosedDetailsOnNextRender = true; } viewState = next; selectedTask = next.selected?.kind === "task" ? next.selected.id : null; selectedGroup = next.selected?.kind === "group" ? next.selected.id : null; selectedMilestone = next.selected?.kind === "milestone" ? next.selected.id : null; activePlan = next.plan ?? ""; if (next.detail) focusDetailsOnNextRender = true; if (planChanged) void refresh(); else if (data) render(); } });
 window.addEventListener("keydown", (event) => { trapDetailsFocus(event); trapPlanInfoFocus(event); if (event.key === "Escape" && planInfoIsOpen()) { event.preventDefault(); closePlanInfo(); } else if (event.key === "Escape" && viewState.detail) closeDetails(); });
-window.addEventListener("resize", () => { setDetailsHeight(Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.4, false); refreshResponsiveDetails(); syncPlanInfoSurface(); if (data && viewState.tab === "graph" && graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")) graphController.render(filteredTasks(), viewState.group ? new Set([viewState.group]) : undefined); window.requestAnimationFrame(() => timelineController.redraw()); });
+window.addEventListener("resize", () => { setDetailsHeight(Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.32, false); refreshResponsiveDetails(); syncPlanInfoSurface(); if (data && viewState.tab === "graph" && graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")) graphController.render(filteredTasks(), viewState.group ? new Set([viewState.group]) : undefined); window.requestAnimationFrame(() => timelineController.redraw()); });
 anyHoverCapability.addEventListener("change", refreshResponsiveDetails); anyFinePointerCapability.addEventListener("change", refreshResponsiveDetails);
 const stream = new EventSource("api/events"); stream.addEventListener("open", () => { connected = true; connection("live"); void refresh(); }); stream.addEventListener("revision", () => void refresh()); stream.addEventListener("stale", () => { connected = false; connection("stale"); }); stream.addEventListener("heartbeat", (event) => { try { if (JSON.parse((event as MessageEvent).data).watching && !connected) { connected = true; void refresh(); } } catch { connection("stale"); } }); stream.addEventListener("error", () => { connected = false; connection("stale"); });
 hoverBridge = createHoverPreviewBridge($("hover-preview"), dismissHoverPreview);
