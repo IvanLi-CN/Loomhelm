@@ -81,6 +81,30 @@ def runtime_smoke(tags, record):
         subprocess.run(['docker','network','rm',owner],check=False,stdout=subprocess.DEVNULL)
 
 
+def validate_ts_manifest(root, manifest, record):
+    schema_version=manifest.get('schemaVersion')
+    if manifest.get('candidateSha')!=record['merge_sha'] or manifest.get('dirty') or schema_version not in (2,3) or manifest.get('runtime')!='bun@1.4.4':
+        raise ReleaseError('TS resource provenance differs from clean Candidate')
+    if schema_version==2:
+        if manifest.get('dependenciesBundled') is not True:
+            raise ReleaseError('legacy TS artifact must declare bundled dependencies')
+        return
+    if manifest.get('canonicalDigestAlgorithm')!='path-byte-v2' or manifest.get('dependenciesBundled') is not False:
+        raise ReleaseError('current TS artifact has an invalid consumer dependency contract')
+    dependencies=manifest.get('dependencies')
+    if not isinstance(dependencies,list) or not dependencies or any(
+        not isinstance(dependency,dict)
+        or dependency.get('mode')!='consumer-install'
+        or 'path' in dependency
+        or 'entry' in dependency
+        for dependency in dependencies
+    ):
+        raise ReleaseError('current TS artifact has an invalid consumer dependency projection')
+    toolkit=root/'toolkit'
+    if any('node_modules' in path.parts for path in toolkit.rglob('*')):
+        raise ReleaseError('current TS artifact contains toolkit node_modules')
+
+
 def smoke(directory,record):
     for path in directory.glob('*.tar.gz'):
         with tempfile.TemporaryDirectory(prefix='loomhelm-package-smoke-') as tmp:
@@ -97,8 +121,7 @@ def smoke(directory,record):
                 if subprocess.check_output(['bun','--version'],text=True).strip()!='1.4.4':
                     raise ReleaseError('TS package requires the pinned Bun runtime')
                 manifest=json.loads((root/'toolkit/artifact-manifest.json').read_text())
-                if manifest['candidateSha']!=record['merge_sha'] or manifest['dirty'] or manifest['schemaVersion']!=2 or manifest['runtime']!='bun@1.4.4':
-                    raise ReleaseError('TS resource provenance differs from clean Candidate')
+                validate_ts_manifest(root,manifest,record)
                 for resource in manifest['files']:
                     relative=Path(resource['path'])
                     if relative.is_absolute() or '..' in relative.parts:

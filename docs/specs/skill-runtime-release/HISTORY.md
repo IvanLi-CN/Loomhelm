@@ -32,6 +32,8 @@ ADR 0030 将 registry 对账和消费者依赖边界收敛为当前实现：新 
 
 后续实现收口补充了候选构建阶段的初始 receipt、缺失 dist-tag 的空值 promotion 规则，以及在 verify 阶段上传独立 release identity artifact 的失败对账入口；这些变化只强化已有 identity-first 合同，不代表发生了外部 publication、tag promotion 或 merge。
 
+native product smoke 也已接受当前 schema 3 artifact，同时继续校验 schema 2 legacy bundled projection，并在当前格式下拒绝 toolkit 内的 production `node_modules`；这只修复了既有 Candidate CI 验证器与新 artifact 合同之间的实现漂移。
+
 这次文档同步只记录已经存在的源码合同和可执行 workflow，不创建 npm 凭据、不安装或升级用户 service，也不把本地 build、PR gate 或候选 tarball 视为 registry publication。后续真实发布仍须由 owner-approved workflow 产生完整 identity 和 provider receipt。
 
 ## Related Documents

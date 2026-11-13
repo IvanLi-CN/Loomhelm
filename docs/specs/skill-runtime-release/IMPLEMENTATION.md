@@ -14,7 +14,7 @@
 | Requirement | Current coverage | Gap or boundary |
 | - | - | - |
 | `REQ-SRR-001` | `clients/typescript/package.json`、`package-client-skills.ts` 和 package tests 提供 `@loomhelm/multi-task-flow`、`multi-task-flow` bin、完整 toolkit 资源，以及 `playwright`、`sharp`、`zod` 的 consumer-install projection；构建器拒绝把 production `node_modules` 复制到 toolkit。 | 真实 registry publication 与干净外部安装仍需受保护 release workflow 的 artifact/registry receipt。 |
-| `REQ-SRR-002` | 仓库和 package 固定 Bun 1.4.4；build、manifest 和 CLI 会拒绝运行时或资源身份不匹配，runtime 只检查消费者 package root 的精确 dependencies，缺失时不联网安装。 | 跨平台干净临时目录矩阵仍属于 CI/发布环境，不能由本地 source check 单独证明。 |
+| `REQ-SRR-002` | 仓库和 package 固定 Bun 1.4.4；build、manifest、CLI 和 native product smoke 会拒绝运行时或资源身份不匹配，smoke 同时保留 schema 2 bundled legacy 检查和 schema 3 consumer-install/no-toolkit-node_modules 检查，runtime 只检查消费者 package root 的精确 dependencies，缺失时不联网安装。 | 跨平台干净临时目录矩阵仍属于 CI/发布环境，不能由本地 source check 单独证明。 |
 | `REQ-SRR-003` | `build-info.ts`、`runtime-identity.ts`、`service-release.ts` 和 `release.py` 交叉校验 package、Skill、ledger、viewer、source/merge、tag、schema v3、`path-byte-v2`、canonical digest 和 raw integrity；schema v2 保留 legacy read-only verifier。 | registry/provider 的实际发布 receipt 仍未在本仓库产生。 |
 | `REQ-SRR-004` | package metadata 明确 SemVer 与 `compat-vN`，`release.py gate` 校验 projection、严格版本推进和 compatibility line 不回退。 | 兼容线历史清理和 breaking line 的实际发布仍需 owner-approved release decision。 |
 | `REQ-SRR-005` | `clients/typescript/src/cli/flow.ts` 提供 direct `flow COMMAND --input - [--socket PATH]`；ledger store/engine 覆盖锁、owner、revision、幂等和未知结果。 | 外部隔离安装与无 checkout 的 registry package 验收仍需真实 tarball/registry 流程。 |
