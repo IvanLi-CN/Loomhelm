@@ -169,6 +169,45 @@ describe("timeline projections", () => {
     });
   });
 
+  test("aligns bootstrap main-owned task readiness with the execution exception", () => {
+    const ledger = structuredClone(createPlanningDemoLedger(1_767_200_000_000));
+    ledger.contract_version = 2;
+    ledger.source_schema_version = null;
+    const group = ledger.groups.find((item) => item.id === "core")!;
+    const task = ledger.tasks.find((item) => item.group_id === group.id && item.kind === "contribution")!;
+    group.delivery_unit_kind = "bootstrap";
+    group.owner_kind = "main";
+    group.agent_thread_id = null;
+    group.state = "active";
+    group.lifecycle.workspace_ready = "passed";
+    group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready")!.status = "completed";
+    ledger.events.push({
+      id: "bootstrap-workspace-ready",
+      type: "lifecycle_recorded",
+      subject_id: group.id,
+      actor_id: ledger.control.owner_thread_id!,
+      occurred_at: ledger.updated_at,
+      recorded_at: ledger.updated_at,
+      data: { target_type: "group", stage: "workspace_ready", evidence_ref: "bootstrap-workspace" },
+    });
+    task.execution_owner = "main";
+    task.conversation_policy = "main_owned";
+    task.delivery_policy = "parent_pr";
+    const view = buildView(ledger) as any;
+    const projected = view.tasks.find((item: any) => item.id === task.id);
+
+    expect(projected.dispatch_readiness).toBe("ready");
+    expect(projected.dispatch_diagnostics).not.toContainEqual(expect.objectContaining({ code: "DELIVERY_PARENT_PR_GATE_PENDING" }));
+
+    task.execution_owner = "task_agent";
+    task.conversation_policy = "task_agent";
+    task.delivery_policy = "child_pr";
+    const blockedView = buildView(ledger) as any;
+    const blocked = blockedView.tasks.find((item: any) => item.id === task.id);
+    expect(blocked.dispatch_readiness).toBe("blocked");
+    expect(blocked.dispatch_diagnostics).toContainEqual(expect.objectContaining({ code: "DELIVERY_PARENT_PR_GATE_PENDING" }));
+  });
+
   test("does not project a closed delivery unit as schedulable", () => {
     const ledger = withRuntimeEvidence(structuredClone(createPlanningDemoLedger(1_767_200_000_000)));
     ledger.contract_version = 2;

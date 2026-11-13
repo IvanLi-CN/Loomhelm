@@ -204,7 +204,8 @@ function requireContributionDispatchGate(
   const missing: string[] = [];
   if (owner.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     missing.push("workspace_ready");
-  if (requireParentPr && (owner.lifecycle.pr_created !== "passed" || !deliveryUnitPr(owner) || prAtom?.status !== "completed"))
+  const parentPrRequired = requireParentPr || !parentPrDefinitivelyAbsent(ledger, owner);
+  if (parentPrRequired && !parentPrReady(ledger, owner, prAtom))
     missing.push("parent_pr");
   if (missing.length)
     throw new ContractError(
@@ -417,6 +418,7 @@ function prReceipt(
   prValue: z.infer<typeof externalRef>,
   baseSha?: string,
   headSha?: string,
+  receiptState?: z.infer<typeof providerReceipt>["state"],
 ): boolean {
   const latest = latestPublication(ledger, targetId, "pr_published");
   return (
@@ -427,8 +429,37 @@ function prReceipt(
     latest.receipt.resource_id === prValue.id &&
     stable(latest.receipt.pr) === stable(prValue) &&
     (baseSha === undefined || latest.receipt.base_sha === baseSha) &&
-    (headSha === undefined || latest.receipt.head_sha === headSha)
+    (headSha === undefined || latest.receipt.head_sha === headSha) &&
+    (receiptState === undefined || latest.receipt.state === receiptState)
   );
+}
+function parentPrReady(
+  ledger: Ledger,
+  owner: Ledger["groups"][number],
+  prAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "pr_created"),
+): boolean {
+  const pr = deliveryUnitPr(owner);
+  const canonicalState = owner.pr && "state" in owner.pr ? owner.pr.state : null;
+  return (
+    owner.lifecycle.pr_created === "passed" &&
+    prAtom?.status === "completed" &&
+    !!pr &&
+    (canonicalState === null || canonicalState === "published") &&
+    prReceipt(ledger, owner.id, pr, undefined, undefined, "open")
+  );
+}
+function parentPrDefinitivelyAbsent(
+  ledger: Ledger,
+  owner: Ledger["groups"][number],
+): boolean {
+  const latest = latestPublication(ledger, owner.id, "pr_published");
+  const publicationPending = ledger.operations.some(
+    (item) =>
+      item.kind === "publish_pr" &&
+      item.target_id === owner.id &&
+      activeOperation(item),
+  );
+  return !publicationPending && latest?.status !== "unknown" && !deliveryUnitPr(owner) && latest?.status !== "passed";
 }
 function requireDevelopmentTarget(
   ledger: Ledger,
@@ -2958,7 +2989,7 @@ export function execute(
       }
       const eventType =
         state === "running"
-          ? previousState === "starting"
+          ? previousState === "starting" || previousState === "planned"
             ? "task_started"
             : "task_resumed"
           : state === "waiting"

@@ -12,7 +12,7 @@
 
 ## PR and starting gates
 
-贡献 Task 使用 `TaskPrBinding` 表达 unbound/open/merged/closed。贡献 work 原子或贡献 Task 进入 `starting` 前，所属 DeliveryUnit 必须有 `pr` 和 `parent_branch`；启动输入不要求提交 hash。DeliveryUnit 集成 PR 的 canonical 字段是 `pr`，旧 `parent_pr` 仅作为只读兼容输入。
+贡献 Task 使用 `TaskPrBinding` 表达 unbound/open/merged/closed。普通贡献 work 原子或贡献 Task 进入 `starting` 前，所属 DeliveryUnit 必须有已核验的 `pr` 和 `parent_branch`；活跃且 workspace readiness 已完成的 main-owned bootstrap unit 可以让其 main-owned contribution task 在父 PR 创建前启动，但父 PR 发布进行中、结果未知或已存在关闭绑定时仍必须阻塞。启动输入不要求提交 hash。DeliveryUnit 集成 PR 的 canonical 字段是 `pr`，旧 `parent_pr` 仅作为只读兼容输入。
 
 ## Migration
 
