@@ -237,6 +237,28 @@ describe("dashboard details content", () => {
 
   });
 
+  test("always shows task and delivery-unit requirement document status", () => {
+    const group = { id: "core", title: "核心", state: "running", agent_thread_id: null, parent_pr: { url: null }, requirements_path: null } as Group;
+    const task = { id: "task", title: "任务", group_id: "core", kind: "contribution", state: "running", is_ready: false, blocker: null, thread_id: null, pr: { url: null }, requirements_path: null, started_at: null, finished_at: null } as unknown as View["tasks"][number];
+    const view = { groups: [group], tasks: [task], actual_intervals: [], nodes: [], edges: [], follow_prs: [] } as unknown as View;
+    const details = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "执行中", time: () => "未知", safeExternal: () => null });
+
+    details.showTask(task);
+    expect([...document.querySelectorAll(".detail-label")].some((node) => node.textContent === "任务要求")).toBe(true);
+    expect(document.getElementById("details-content")?.textContent).toContain("未配置任务文档");
+
+    details.showGroup(group);
+    expect([...document.querySelectorAll(".detail-label")].some((node) => node.textContent === "交付单元要求")).toBe(true);
+    expect(document.getElementById("details-content")?.textContent).toContain("未配置交付单元文档");
+
+    task.requirements_path = "requirements/task.md";
+    group.requirements_path = "requirements/group.md";
+    details.showTask(task);
+    expect(document.querySelector(".detail-value a")?.getAttribute("href")).toBe("api/document/task-task");
+    details.showGroup(group);
+    expect(document.querySelector(".detail-value a")?.getAttribute("href")).toBe("api/document/group-core");
+  });
+
   test("renders path provenance and hidden plan boundaries without flattening conditions", () => {
     const view = {
       orchestration: { id: "run", repository: { owner: "example", name: "repo", host: "github.com" }, revision: 1, updated_at: "2026-01-01T00:00:00.000Z", display_timezone: "UTC", max_running_tasks: 1, conversation_links_verified: true },

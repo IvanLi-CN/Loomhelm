@@ -23,6 +23,7 @@ import {
 import { ServiceState } from "../lib/service-state";
 import { servicePaths } from "../lib/service-paths";
 import { ServiceAuth } from "../lib/service-auth";
+import { versionEnvelope } from "../lib/contract";
 import { runDaemon } from "../lib/service-lifecycle";
 import { compatibility, type ReleaseManifest } from "../lib/service-contract";
 import { buildId, digest } from "../lib/service-release";
@@ -112,9 +113,11 @@ files.viewer = digest(readFileSync(import.meta.path));
 const body = {
   schema_version: 1 as const,
   source_sha: source.stdout.toString().trim(),
+  ledger_contract: 3,
   service_version: "source-preview",
   platform:
     `${process.platform}-${process.arch}` as ReleaseManifest["platform"],
+  ...versionEnvelope,
   ...compatibility,
   files,
 };

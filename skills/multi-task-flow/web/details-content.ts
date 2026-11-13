@@ -50,6 +50,11 @@ function field(container: HTMLElement, name: string, value: HTMLElement | string
   container.append(row);
 }
 
+function requirementsValue(path: string | null, kind: "task" | "group", id: string): HTMLElement {
+  if (path) return link("查看 Markdown", `api/document/${kind}-${encodeURIComponent(id)}`);
+  return text("span", kind === "task" ? "未配置任务文档" : "未配置交付单元文档", "detail-placeholder");
+}
+
 function emptyOutput(): HTMLElement {
   const value = text("span", "", "detail-empty-output");
   value.dataset.emptyLabel = "尚无 Agent 输出";
@@ -223,7 +228,7 @@ export function createDetailContent(context: DetailContentContext) {
     field(container, "调度状态", task.dispatch_readiness === "blocked" ? `不可调度：${task.dispatch_diagnostics?.map((item) => item.message).join("；") || "未知原因"}` : task.dispatch_readiness === "ready" ? "可调度" : "未知");
     const pr = context.safeExternal(task.pr?.url ?? null);
     if (pr) field(container, "子 PR", link("查看 PR", pr));
-    if (task.requirements_path) field(container, "任务要求", link("查看 Markdown", `api/document/task-${encodeURIComponent(task.id)}`));
+    field(container, "任务要求", requirementsValue(task.requirements_path, "task", task.id));
     for (const follow of data.follow_prs.filter((item) => item.origin_task_id === task.id)) {
       const url = context.safeExternal(follow.pr.url);
       field(container, "Follow PR", url ? link(context.labels[follow.state] ?? follow.state, url) : context.labels[follow.state] ?? follow.state);
@@ -266,7 +271,7 @@ export function createDetailContent(context: DetailContentContext) {
     field(container, "调度状态", group.dispatch_readiness === "blocked" ? `不可调度：${group.dispatch_diagnostics?.map((item) => item.message).join("；") || "未知原因"}` : group.dispatch_readiness === "ready" ? "可调度" : "未知");
     const pr = context.safeExternal(group.parent_pr?.url ?? null);
     field(container, "父 PR", pr ? link("查看 PR", pr) : "尚未创建");
-    if (group.requirements_path) field(container, "交付单元要求", link("查看 Markdown", `api/document/group-${encodeURIComponent(group.id)}`));
+    field(container, "交付单元要求", requirementsValue(group.requirements_path, "group", group.id));
     restore();
   };
 
