@@ -17,7 +17,7 @@ export function copySkillSources(root, output, { dependencies = false } = {}) {
   };
   for (const file of [...manifest.files, ...(manifest.additions ?? [])]) copy(file.path, file.installedSha256, file.sourcePath ?? file.path);
   for (const path of ['skills/source-manifest.json', 'skills/catalog.json']) copy(path);
-  for (const name of ['index.html','app.js','app.css']) copy('skills/multi-task-flow-runtime/dist/' + name);
+  for (const name of ['index.html','app.js','app.css']) copy('skills/multi-task-flow/dist/' + name, undefined, 'skills/multi-task-flow-runtime/dist/' + name);
   if (dependencies) {
     const walk = path => {
       for (const entry of readdirSync(join(root, path), { withFileTypes: true })) {

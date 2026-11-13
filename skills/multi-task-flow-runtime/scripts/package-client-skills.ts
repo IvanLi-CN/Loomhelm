@@ -107,7 +107,7 @@ function copyPackageManifest(): void {
 for (const file of [...manifest.files, ...(manifest.additions ?? [])]) if (!packageOmissionPaths.has(file.path)) copy(file.path, file.installedSha256, false, file.sourcePath ?? file.path);
 copyPackageManifest();
 copy('skills/catalog.json');
-for (const name of ['index.html','app.js','app.css']) copy(`skills/multi-task-flow-runtime/dist/${name}`);
+for (const name of ['index.html','app.js','app.css']) copy(`skills/multi-task-flow/dist/${name}`, undefined, false, `skills/multi-task-flow-runtime/dist/${name}`);
 if (requireDependencies) validateInstalledDependencies();
 copyRootFile('AGENTS.md');
 const packageIdentityBase = {
