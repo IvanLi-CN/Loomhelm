@@ -48,7 +48,15 @@ Skill 自带 Bun + TypeScript 固定脚本，所有账本操作通过脚本完�
 
 ## 账本格式与脚本命令
 
-采用 UTF-8 JSON 对象，新的 ledger 使用 `schema_version: 2`；不认识的版本或必需语义拒绝写入。schema v1 默认只能通过规范化读取为内存中的 v2 视图；需要持久升级时，主 Agent（main Agent） 必须显式调用 `orchestrate.ts migrate --input -`，指定准确 `run_id`、owner-only actor、唯一 `request_id` 和当前 `expected_revision`。迁移在维护锁和 run 锁内校验完整 v1 ledger，先保存 `ledger.migration-v1-<request_id>.json` 完整旧快照，再原子替换为 `schema_version: 2`、`contract_version: 1`；迁移新增 request record，因此 `revision` 单调增加 1，记录的 `committed_revision` 与返回 revision 相同。相同 request ID 和 canonical input 只返回已提交结果；不同内容、版本冲突、损坏或不安全路径拒绝写入。缺失的生命周期事实保持 `unknown`，不得伪造 publication 或 merge 通过，也不得由普通更新回写旧文件。所有持久身份为非空 ASCII 稳定 ID，使用字母、数字、`-`、`_`；文件名不得直接使用未经校验的 ID 或用户路径。时间是带 `Z` 的 UTC RFC 3339 字符串；实际发生时间和记账时间分开，未知为 `null`，禁止用当前时间替代未知事实。未知 SHA、链接和会话 ID 一律为 `null`，不生成占位值。
+编码与版本。采用 UTF-8 JSON 对象，新的 ledger 使用 `schema_version: 2`；不认识的版本或必需语义拒绝写入。
+
+兼容读取与迁移。schema v1 默认只能通过规范化读取为内存中的 v2 视图；需要持久升级时，主 Agent（main Agent）必须显式调用 `orchestrate.ts migrate --input -`，指定准确 `run_id`、owner-only actor、唯一 `request_id` 和当前 `expected_revision`。
+
+迁移边界。迁移在维护锁和 run 锁内校验完整 v1 ledger，先保存 `ledger.migration-v1-<request_id>.json` 完整旧快照，再原子替换为 `schema_version: 2`、`contract_version: 1`；迁移新增 request record，因此 `revision` 单调增加 1，记录的 `committed_revision` 与返回 revision 相同。
+
+幂等与安全。相同 request ID 和 canonical input 只返回已提交结果；不同内容、版本冲突、损坏或不安全路径拒绝写入。所有持久身份为非空 ASCII 稳定 ID，使用字母、数字、`-`、`_`；文件名不得直接使用未经校验的 ID 或用户路径。
+
+未知值与时间。缺失的生命周期事实保持 `unknown`，不得伪造 publication 或 merge 通过，也不得由普通更新回写旧文件。时间是带 `Z` 的 UTC RFC 3339 字符串；实际发生时间和记账时间分开，未知为 `null`，禁止用当前时间替代未知事实。未知 SHA、链接和会话 ID 一律为 `null`，不生成占位值。
 
 账本顶层字段固定为：
 
@@ -108,6 +116,8 @@ type Ledger = {
 
 各集合以对象 ID 关联，不复制第二份权威任务清单。字段必须存在；未知使用 `null`，不使用空字符串冒充已知值。类型中的具体字段如下：
 
+#### 计划与图
+
 | 对象 | 字段与约束 |
 | - | - |
 | `PlanRevision` | `id`, `supersedes_id: string \| null`, `approval_id: string \| null`, `created_at`, `start_at: string \| null`, `atoms: AtomicPlan[]`, `atomic_edges: AtomicEdge[]`, `nodes: PlanNode[]`, `edges: Dependency[]`, `cut_rules: CutRule[]`, `actions: PlannedAction[]`；active multi-task initialization requires the envelope to bind the raw-plan digest, `flow_type`, exact task IDs, owned surfaces and batch/task acceptance scopes |
@@ -117,6 +127,11 @@ type Ledger = {
 | `Dependency` | `id`, `from_node_id`, `to_node_id`, `requires: 'integrated' \| 'completed' \| 'merged' \| 'ci_passed' \| 'published' \| 'deployed' \| 'verified'`；只有受支持的证据满足对应条件，不把不同里程碑混为一谈 |
 | `CutRule` | `id`, `group_id`, `priority: number`, `required_task_ids: string[]`, `status: 'pending' \| 'claimed' \| 'applied' \| 'cancelled'`；相同交付单元按优先级处理，已应用规则不可重复执行 |
 | `PlannedAction` | `id`, `kind: 'publish_branch' \| 'publish_pr' \| 'release' \| 'deploy'`, `task_id: string \| null`, `group_id: string \| null`, `target_identity`；主人确认时逐项授权，执行目标须完全匹配 |
+
+#### 交付与任务
+
+| 对象 | 字段与约束 |
+| - | - |
 | `Lifecycle` | `workspace_ready`, `pr_created`, `pr_merged`, `closed`，值为 `unknown`、`pending`、`passed` 或 `blocked`；交付单元与贡献任务共用，阶段只能由对应 receipt/closeout 推导 |
 | `Group` | `id`, `title`, `agent_thread_id: string \| null`, `state: 'planned' \| 'active' \| 'merged' \| 'closed' \| 'blocked'`, `parent_branch: string \| null`, `parent_pr: ExternalRef \| null`, `cut_sha: string \| null`, `current_sha: string \| null`, `merge_sha: string \| null`, `requirements_path: string \| null`, `lifecycle: Lifecycle`, `atoms: GroupAtom[]`, `coordination_execution: CoordinationExecution` |
 | `Task` | `id`, `title`, `kind: 'contribution' \| 'release' \| 'deployment' \| 'verification' \| 'coordination'`, `group_id`, `thread_id: string \| null`, `state: 'planned' \| 'ready' \| 'starting' \| 'running' \| 'waiting' \| 'blocked' \| 'integrated' \| 'completed' \| 'closed'`, `atoms: Atom[]`, `owned_surfaces: string[]`, `branch: string \| null`, `base_sha: string \| null`, `pr: ExternalRef \| null`, `requirements_path: string \| null`, `started_at: string \| null`, `finished_at: string \| null`, `blocker: string \| null`, `assignment_history: Assignment[]`, `lifecycle: Lifecycle` |
@@ -124,17 +139,41 @@ type Ledger = {
 | `GroupAtom` | `id`, `group_id`, `title`, `purpose`, `output`, `lifecycle_stage: 'workspace_ready' \| 'pr_created' \| 'pr_merged' \| 'closed' \| null`, `status: 'planned' \| 'running' \| 'completed' \| 'blocked'`；按交付单元顺序串行，生命周期绑定步骤必须由对应证据驱动 |
 | `CoordinationExecution` | `state: 'unknown' \| 'idle' \| 'running' \| 'waiting' \| 'blocked'`, `reason: string \| null`, `waiting_for_task_ids: string[]`；等待必须显式引用同一交付单元的贡献任务 |
 | `Assignment` | `group_id`, `effective_at`, `reason`, `cut_operation_id: string \| null`；只追加，保持切割前后的归属历史 |
+
+#### 外部对象与事实
+
+| 对象 | 字段与约束 |
+| - | - |
 | `ExternalRef` | `provider`, `repository`, `id`, `url: string \| null`；`url` 仅存实际取得并校验的链接，证据中的 SHA 使用 Git 平台支持的完整对象 ID |
 | `FollowPR` | `id`, `origin_task_id`, `origin_group_id`, `pr: ExternalRef`, `target_branch`, `state: 'open' \| 'merged' \| 'blocked'`, `merge_fact_id: string \| null`, `affected_task_ids: string[]`；归属原交付单元，目标按原父 PR 是否已合并选择 |
 | `ProviderReceipt` | `provider`, `repository`, `resource_type: 'branch' \| 'pr'`, `resource_id`, `branch`, `target_branch`, `base_sha`, `head_sha: string \| null`, `pr`, `state: 'exists' \| 'open' \| 'merged' \| 'absent' \| 'unknown'`, `evidence_ref`；publication resolve 必须保存远端查询得到的完整 receipt，失败/不确定查询分别使用 `absent`/`unknown` |
 | `Fact` | `id`, `kind: 'task_quality' \| 'pr_merged' \| 'branch_published' \| 'pr_published' \| 'ci_passed' \| 'published' \| 'deployed' \| 'verified'`, `subject_id`, `status: 'passed' \| 'failed' \| 'unknown'`, `source`, `observed_at`, `sha: string \| null`, `evidence_ref: string \| null`, optional task-owned quality proof, `receipt: ProviderReceipt \| null`；不同阶段和目标独立记录；贡献任务的 `pr_merged` 必须绑定该任务自己的 child merge receipt，不比较后续父交付单元 SHA；发布或部署产物 SHA 可以因构建产生新对象，但必须由对应 `Operation.receipt_fact_id` 和 `expected_sha` 证明来源 lineage |
+
+#### 操作与服务
+
+| 对象 | 字段与约束 |
+| - | - |
 | `Operation` | `id`, `kind: 'dispatch' \| 'merge' \| 'cut' \| 'publish_branch' \| 'publish_pr' \| 'release' \| 'deploy'`, `actor_id`, `target_id`, `status: 'claimed' \| 'succeeded' \| 'failed' \| 'unknown'`, `request: object`, `expected_sha: string \| null`, `receipt_fact_id: string \| null`, `created_at`, `updated_at`；`request` 保留目标身份、原始调用身份及精确预期，不能存凭据 |
 | `Event` | `id`, `type`, `subject_id`, `actor_id`, `occurred_at: string \| null`, `recorded_at`, `data: object`；事件只追加，同一 ID 不同内容视为冲突 |
 | `RequestRecord` | `request_id`, `command`, `canonical_input`, `result`, `committed_revision`；仅保留已提交的非敏感请求和结果，供进程中断后的幂等恢复 |
 | `Notification` | `id`, `event_id`, `recipient_thread_id`, `ledger_status: 'committed'`, `status: 'pending' \| 'sent' \| 'failed' \| 'unknown' \| 'acknowledged'`, `delivery_status: 'pending' \| 'sent' \| 'failed' \| 'unknown'`, `ack_status: 'unacknowledged' \| 'acknowledged'`, `attempts: number`, `last_attempt_id: string \| null`, `last_reconciliation_id: string \| null`, `last_error: string \| null`, `updated_at`；账本提交、平台投递和收件确认彼此独立，发送不等于处理确认 |
 | `Resource` | `id`, `kind: 'conversation' \| 'worktree' \| 'branch' \| 'port' \| 'service'`, `target: string \| null`, `status: 'unknown' \| 'active' \| 'pending' \| 'closed' \| 'not_applicable'`, `evidence_ref: string \| null` |
 
-`Event.type` 的完整枚举由 `lib/schema.ts` 定义。任务时间事件的 `data` 包含 `task_id`、`group_id`、`state`、`reason: string | null`；交付单元事件包含 `group_id`、`state`；`group_atom_updated` 记录 `group_id`、`atom_id`、`state` 和生命周期证据，`group_execution_updated` 记录协调执行状态、原因和等待任务；操作事件包含 `operation_id`、`outcome: string | null`、`fact_id: string | null`；`group_base_reconciled` 必须包含 `operation: "update-branch"`、`branch`、`previous_sha`、`sha`、已登记的 `parent_pr`、provider `source` 和 `evidence_ref`，并证明 `previous_sha` 等于账本原 `current_sha`；`cut_claimed` 必须绑定 `operation_id`、`group_id`、`rule_id` 和 `expected_sha`；`cut_applied` 另含 `cut_sha`、已核实的 `cut_evidence`、`old_group_id`、`old_group_current_sha`、完整的 `old_group_snapshot`、`new_group_id`、`new_group_state`、`new_group_agent_thread_id`、`new_group_parent_branch`、`new_group_parent_pr`、`new_group_cut_sha`、`new_group_current_sha`、`new_group_merge_sha`、`new_group_requirements_path`、完整的 `new_group_snapshot`、`included_task_ids`、`reassigned_task_ids` 和切割前的 `task_snapshots`，用于证明唯一 operation 的切割边界、任务状态和下一交付单元的干净创建状态。`fact_observed` 引用 `fact_id`，`follow_pr_recorded` 引用 `follow_pr_id`，通知事件引用 `notification_id`。这些事实与对象变更须在同一账本更新中提交。
+#### 事件数据字段
+
+| 事件范围 | data 字段与约束 |
+| - | - |
+| 任务时间事件 | `task_id`, `group_id`, `state`, `reason: string \| null` |
+| 交付单元事件 | `group_id`, `state` |
+| `group_atom_updated` | `group_id`, `atom_id`, `state` 和生命周期证据 |
+| `group_execution_updated` | `group_id`, 协调执行状态、原因和等待任务 |
+| 操作事件 | `operation_id`, `outcome: string \| null`, `fact_id: string \| null` |
+| `group_base_reconciled` | `operation: "update-branch"`, `branch`, `previous_sha`, `sha`, 已登记的 `parent_pr`、provider `source` 和 `evidence_ref`；`previous_sha` 必须等于账本原 `current_sha` |
+| `cut_claimed` | `operation_id`, `group_id`, `rule_id`, `expected_sha` |
+| `cut_applied` | `cut_sha`, 已核实的 `cut_evidence`, `old_group_id`, `old_group_current_sha`, 完整的 `old_group_snapshot`, `new_group_id`, `new_group_state`, `new_group_agent_thread_id`, `new_group_parent_branch`, `new_group_parent_pr`, `new_group_cut_sha`, `new_group_current_sha`, `new_group_merge_sha`, `new_group_requirements_path`, 完整的 `new_group_snapshot`, `included_task_ids`, `reassigned_task_ids`, `task_snapshots`；用于证明唯一 operation 的切割边界、任务状态和下一交付单元的干净创建状态 |
+| 事实、follow PR 和通知事件 | `fact_observed` 引用 `fact_id`，`follow_pr_recorded` 引用 `follow_pr_id`，通知事件引用 `notification_id` |
+
+上述事实与对象变更须在同一账本更新中提交。
 
 `kind` 和 `type` 由固定脚本限定，页面不可增写。任务的运行中和等待时间区间由有序 `Event` 推导；报告事件必须提供可靠来源，未知结束时间不产生伪造的闭区间。`integrated` 只表示贡献 PR 合入，`completed` 表示该项实际工作完成，`closed` 仅在适用的 follow PR、检查及归档条件满足时记录；资源清理仍分别记账。
 
@@ -162,27 +201,42 @@ type Ledger = {
 
 ### 固定命令
 
-| 命令 | `payload` 的关键字段 | 成功效果 |
-| - | - | - |
-| `init` | `repository`, `config`, `initial_plan`, `groups`, `tasks`，主会话来自 `actor` | 仅接受未绑定且 `planned` 的 group/task（atom 也必须为 `planned`），并要求分支、PR、SHA、时间、阻塞、requirements path 和 assignment history 等运行时身份字段为空；拒绝 dev-plan handoff、digest 或外部计划字段，失败返回 `INVALID_INITIAL_STATE` 或 `INVALID_INPUT` 且不产生 run 目录、锁或 ledger；成功只创建唯一 run 和初始 revision，不创建任务会话 |
-| `binding-resolve` | `owner_decision`, `previous_owner_observation` | 根据主人明确决定和前任会话的停止事实转移控制权；未知 fork 不能自行接管 |
-| `link-verification` | `verified`, `evidence` | 主 Agent（main Agent） 可记录当前候选的一次性会话跳转实测结果及证据引用；证据覆盖且页面合同未变时复用，不重复测试。真实会话 ID 或 canonical anchor 合同缺失时阻塞；缺少可选原生观察本身不阻塞 |
-| `show` | `section`，可为 `summary`、`plan`、`tasks`、`operations`、`notifications`、`full` | 返回一致快照及 revision；无需 `request_id` 或预期 revision |
-| `plan-propose` / `plan-approve` | 前者 `plan`；后者 `plan_id`, `approval_id`, `authorized_actions` | 新增计划版本 / 记录对应主人确认；不自动更改未授权范围 |
-| `dispatch-claim` / `dispatch-group-claim` / `dispatch-bind-request` / `dispatch-resolve` | `task_id` 或 `group_id`, `operation_id`；resolve 另带原生结果或失败证据 | 原子检查依赖和容量、登记原生请求身份并绑定真实 thread ID；未知时保留占用 |
-| `lifecycle-record` / `milestone-record` | 目标类型、目标 ID、阶段或 milestone、资源/证据 | 记录交付单元和贡献任务的 `workspace_ready`，或追加不具备门禁权限的自由 milestone |
-| `publish-branch-claim` / `publish-branch-resolve` | `target_type`, `target_id`, `branch`, `expected_head_sha`, `action_id`, `operation_id`；resolve 加精确 Provider receipt | 独立占用并记录远端分支存在性；必须先有 workspace-ready |
-| `publish-pr-claim` / `publish-pr-resolve` | `target_type`, `target_id`, `branch`, `pr`, `target_branch`, `expected_base_sha`, `expected_head_sha`, `action_id`, `operation_id`；resolve 加精确 Provider receipt | 独立占用并记录远端 PR identity/base/head；必须先有成功 branch receipt |
-| `task-update` | `task_id`, `state`, `occurred_at`, `detail`, `evidence`, 可选 `notification: { mode: 'auto' \| 'deliver' \| 'none', recipient: 'owner' \| { thread_id } }` 或兼容字段 `notify_main: true` | 按状态前提记事件和状态；`auto` 保留 completed/closed 的原默认规则，`deliver` 创建主动通知意图，`none` 不创建，普通阻塞不默认通知主 Agent（main Agent） |
-| `atom-update` | `task_id`, `atom_id`, `state` | 由任务会话按数组顺序更新原子任务状态 |
-| `group-atom-update` | `group_id`, `atom_id`, `state` | 由绑定交付协调者（Delivery coordinator） 或主 Agent（main Agent） 按顺序更新交付单元原子状态；生命周期绑定步骤必须有对应通过证据 |
-| `group-execution-update` | `group_id`, `state`, `reason`, `waiting_for_task_ids` | 明确记录交付协调实际执行、等待、恢复和阻塞；等待贡献任务必须引用同组有效任务 |
-| `group-update` / `group-base` | 前者 `group`，后者 `group_id`, `provider_observation` | 更新交付单元信息或记录首次/同 SHA 的核实分支基线；已建立 SHA 的推进必须使用 `group-base-reconcile` |
-| `group-base-reconcile` | `group_id`, `provider_observation`（`operation: "update-branch"`, `previous_sha`, `sha`, `branch`, `parent_pr`, `source`, `evidence_ref`） | 在无未决 merge/cut operation 时，使用精确 provider 证据原子记录同一父分支的外部 update-branch SHA 推进；不表示 PR 合并 |
+#### 初始化、计划与任务
 
-| `task-pr` / `task-base` / `task-quality-record` | `task_id` 和 PR、基线或任务 Agent 自证 | v2 下只允许绑定已有 PR publication receipt；任务 Agent 自己记录当前 head/base、验收引用和 checks，不需要交付协调 Agent 审核 child PR |
+| 命令 | 字段与效果 |
+| - | - |
+| `init` | 字段：`repository`, `config`, `initial_plan`, `groups`, `tasks`，主会话来自 `actor`；效果：仅接受未绑定且 `planned` 的 group/task（atom 也必须为 `planned`），并要求分支、PR、SHA、时间、阻塞、requirements path 和 assignment history 等运行时身份字段为空；拒绝 dev-plan handoff、digest 或外部计划字段，失败返回 `INVALID_INITIAL_STATE` 或 `INVALID_INPUT` 且不产生 run 目录、锁或 ledger；成功只创建唯一 run 和初始 revision，不创建任务会话 |
+| `binding-resolve` | 字段：`owner_decision`, `previous_owner_observation`；效果：根据主人明确决定和前任会话的停止事实转移控制权；未知 fork 不能自行接管 |
+| `link-verification` | 字段：`verified`, `evidence`；效果：主 Agent（main Agent） 可记录当前候选的一次性会话跳转实测结果及证据引用；证据覆盖且页面合同未变时复用，不重复测试。真实会话 ID 或 canonical anchor 合同缺失时阻塞；缺少可选原生观察本身不阻塞 |
+| `show` | 字段：`section`，可为 `summary`、`plan`、`tasks`、`operations`、`notifications`、`full`；效果：返回一致快照及 revision；无需 `request_id` 或预期 revision |
+| `plan-propose` / `plan-approve` | 字段：前者 `plan`；后者 `plan_id`, `approval_id`, `authorized_actions`；效果：新增计划版本 / 记录对应主人确认；不自动更改未授权范围 |
+| `dispatch-claim` / `dispatch-group-claim` / `dispatch-bind-request` / `dispatch-resolve` | 字段：`task_id` 或 `group_id`, `operation_id`；resolve 另带原生结果或失败证据；效果：原子检查依赖和容量、登记原生请求身份并绑定真实 thread ID；未知时保留占用 |
+| `lifecycle-record` / `milestone-record` | 字段：目标类型、目标 ID、阶段或 milestone、资源/证据；效果：记录交付单元和贡献任务的 `workspace_ready`，或追加不具备门禁权限的自由 milestone |
+| `publish-branch-claim` / `publish-branch-resolve` | 字段：`target_type`, `target_id`, `branch`, `expected_head_sha`, `action_id`, `operation_id`；resolve 加精确 Provider receipt；效果：独立占用并记录远端分支存在性；必须先有 workspace-ready |
+| `publish-pr-claim` / `publish-pr-resolve` | 字段：`target_type`, `target_id`, `branch`, `pr`, `target_branch`, `expected_base_sha`, `expected_head_sha`, `action_id`, `operation_id`；resolve 加精确 Provider receipt；效果：独立占用并记录远端 PR identity/base/head；必须先有成功 branch receipt |
+| `task-update` | 字段：`task_id`, `state`, `occurred_at`, `detail`, `evidence`, 可选 `notification: { mode: 'auto' \| 'deliver' \| 'none', recipient: 'owner' \| { thread_id } }` 或兼容字段 `notify_main: true`；效果：按状态前提记事件和状态；`auto` 保留 completed/closed 的原默认规则，`deliver` 创建主动通知意图，`none` 不创建，普通阻塞不默认通知主 Agent（main Agent） |
+| `atom-update` | 字段：`task_id`, `atom_id`, `state`；效果：由任务会话按数组顺序更新原子任务状态 |
+| `group-atom-update` | 字段：`group_id`, `atom_id`, `state`；效果：由绑定交付协调者（Delivery coordinator） 或主 Agent（main Agent） 按顺序更新交付单元原子状态；生命周期绑定步骤必须有对应通过证据 |
+| `group-execution-update` | 字段：`group_id`, `state`, `reason`, `waiting_for_task_ids`；效果：明确记录交付协调实际执行、等待、恢复和阻塞；等待贡献任务必须引用同组有效任务 |
+| `group-update` / `group-base` | 字段：前者 `group`，后者 `group_id`, `provider_observation`；效果：更新交付单元信息或记录首次/同 SHA 的核实分支基线；已建立 SHA 的推进必须使用 `group-base-reconcile` |
+| `group-base-reconcile` | 字段：`group_id`, `provider_observation`（`operation: "update-branch"`, `previous_sha`, `sha`, `branch`, `parent_pr`, `source`, `evidence_ref`）；效果：在无未决 merge/cut operation 时，使用精确 provider 证据原子记录同一父分支的外部 update-branch SHA 推进；不表示 PR 合并 |
+| `task-pr` / `task-base` / `task-quality-record` | 字段：`task_id` 和 PR、基线或任务 Agent 自证；效果：v2 下只允许绑定已有 PR publication receipt；任务 Agent 自己记录当前 head/base、验收引用和 checks，不需要交付协调 Agent 审核 child PR |
 
-| `merge-claim` / `merge-resolve` | `operation_id`, `pr`, `target_branch`, `expected_head_sha`, `expected_base_sha`；resolve 加 `outcome`, `provider_evidence`，可选 `notification` 或 `notify_main` | 登记合并占用 / 记录可验证结果；未经核实的结果为 `unknown`；`auto` 只在成功时按原规则创建通知意图 | | `cut-claim` / `cut-apply` | `operation_id`, `group_id`, `rule_id`；apply 加 `cut_sha`, `included_task_ids`, `next_group`, `provider_evidence` | 阻止新合入、等待已有操作 / 原子固定归属、创建下一交付单元及任务归属历史 | | `action-claim` / `action-resolve` | `operation_id`, `kind`, `target`, `expected_identity`；resolve 加 `outcome`, `provider_evidence` | 为已授权发布或部署登记持久占用并记录结果，未知时先核实，不盲目重试 | | `follow-pr-update` | `follow_pr_id`, `origin_task_id`, `origin_group_id`, `pr`, `target_branch`, `affected_task_ids` | 登记 follow PR；后续合并结果通过 `merge-resolve` 记账并保留原交付单元归属 | | `fact-record` | `fact` | 记录核实的非合并、非子 PR 验收事实 | | `notification-deliver` | `notification_id`, `delivery_attempt_id`, `outcome: 'sent' \| 'failed' \| 'unknown'`, `provider_receipt`，失败可带 `error` | 由 CLI 在 Codex Agent API 返回后写回真实结果；`ledger_status` 已提交后，失败不得回滚通知意图；同一 attempt 不得重复记账 | | `notification-send` | 普通请求信封，`payload.notification_id` | `notification-prepare` 的兼容名称：持久领取一条新尝试，返回原生发送参数；主对话发送后显式写回平台回执。只允许 `pending` 或明确 `failed`，`unknown` 必须先对账 | | `notification-reconcile` | 查询形式带 `run_id`, `actor`, 可选 `status`；写入形式另带 `request_id`, `expected_revision`, `notification_id`, `reconciliation_id`, `outcome`, `provider_receipt` | 查询形式列出待处理通知；写入形式只允许核对 `unknown`，不得发送消息，必须由发送方或 `main` 提交平台查询证据 | | `notification-ack` | `notification_id`, `handling_evidence` | 只有 `recipient_thread_id` 对应会话可以确认；`sent` 不自动变成 `acknowledged` | | `view` | 可选 `plan_id` | 生成只读视图，不改变调度状态 | | `group-close` / `run-complete` / `resource-update` | `group_id`、完成证据或 `resource`；`group-close` 可选 `notification` 或 `notify_main` | 核查交付单元和编排的完成条件，分别记录各资源收口；`group-close` 默认按原规则创建通知意图 |
+#### 合并、通知与收口
+
+| 命令 | 字段与效果 |
+| - | - |
+| `merge-claim` / `merge-resolve` | 字段：`operation_id`, `pr`, `target_branch`, `expected_head_sha`, `expected_base_sha`；resolve 加 `outcome`, `provider_evidence`，可选 `notification` 或 `notify_main`；效果：登记合并占用 / 记录可验证结果；未经核实的结果为 `unknown`；`auto` 只在成功时按原规则创建通知意图 |
+| `cut-claim` / `cut-apply` | 字段：`operation_id`, `group_id`, `rule_id`；apply 加 `cut_sha`, `included_task_ids`, `next_group`, `provider_evidence`；效果：阻止新合入、等待已有操作 / 原子固定归属、创建下一交付单元及任务归属历史 |
+| `action-claim` / `action-resolve` | 字段：`operation_id`, `kind`, `target`, `expected_identity`；resolve 加 `outcome`, `provider_evidence`；效果：为已授权发布或部署登记持久占用并记录结果，未知时先核实，不盲目重试 |
+| `follow-pr-update` | 字段：`follow_pr_id`, `origin_task_id`, `origin_group_id`, `pr`, `target_branch`, `affected_task_ids`；效果：登记 follow PR；后续合并结果通过 `merge-resolve` 记账并保留原交付单元归属 |
+| `fact-record` | 字段：`fact`；效果：记录核实的非合并、非子 PR 验收事实 |
+| `notification-deliver` | 字段：`notification_id`, `delivery_attempt_id`, `outcome: 'sent' \| 'failed' \| 'unknown'`, `provider_receipt`，失败可带 `error`；效果：由 CLI 在 Codex Agent API 返回后写回真实结果；`ledger_status` 已提交后，失败不得回滚通知意图；同一 attempt 不得重复记账 |
+| `notification-send` | 字段：普通请求信封，`payload.notification_id`；效果：`notification-prepare` 的兼容名称：持久领取一条新尝试，返回原生发送参数；主对话发送后显式写回平台回执。只允许 `pending` 或明确 `failed`，`unknown` 必须先对账 |
+| `notification-reconcile` | 字段：查询形式带 `run_id`, `actor`, 可选 `status`；写入形式另带 `request_id`, `expected_revision`, `notification_id`, `reconciliation_id`, `outcome`, `provider_receipt`；效果：查询形式列出待处理通知；写入形式只允许核对 `unknown`，不得发送消息，必须由发送方或 `main` 提交平台查询证据 |
+| `notification-ack` | 字段：`notification_id`, `handling_evidence`；效果：只有 `recipient_thread_id` 对应会话可以确认；`sent` 不自动变成 `acknowledged` |
+| `view` | 字段：可选 `plan_id`；效果：生成只读视图，不改变调度状态 |
+| `group-close` / `run-complete` / `resource-update` | 字段：`group_id`、完成证据或 `resource`；`group-close` 可选 `notification` 或 `notify_main`；效果：核查交付单元和编排的完成条件，分别记录各资源收口；`group-close` 默认按原规则创建通知意图 |
 
 复合通知通过持久领取、原生发送、回执对账完成。记账命令提交 pending 意图后领取唯一 attempt 并设 unknown，返回 should_send、tool_request 和回执 identity；只有新领取者可调用桌面内置 send_message_to_thread。随后 notification-reconcile 必须带相同 delivery_attempt_id 和真实 provider/evidence_ref/message_id，区分 sent、failed、unknown。重放 should_send=false，不重复调用平台；未知结果先对账。历史 CLI 发送的在途文件锁继续保护，原生领取不跨工具调用持有文件锁。通知发送接受不代表已读或实际开工。
 
