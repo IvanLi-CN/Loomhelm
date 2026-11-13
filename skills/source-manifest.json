@@ -15822,6 +15822,11 @@
       "installedSha256": "a5e3071c352a84ff570ace16bd2d0e5d84774794fcf22cdebe1cda0567ffd978",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation",
       "sourcePath": "skills/multi-task-flow-runtime/tests/schema-validation.test.ts"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/delivery-topology.test.ts",
+      "sourcePath": "skills/multi-task-flow-runtime/tests/delivery-topology.test.ts",
+      "installedSha256": "60c3c895ee7f52250c199791904ff9f65be8758db77ea8dec5cc430e3344a312"
     }
   ],
   "additions": [
