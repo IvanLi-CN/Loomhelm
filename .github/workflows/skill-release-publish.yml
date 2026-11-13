@@ -849,7 +849,15 @@ jobs:
               cat "$tag_error" >&2
               exit 1
             fi
-            test "$current" = "\"$VERSION\""
+            CURRENT="$current" VERSION="$VERSION" TAG="$tag" python3 - <<'PY'
+          import json
+          import os
+
+          current = json.loads(os.environ['CURRENT'])
+          target = os.environ['VERSION']
+          if current != target:
+              raise SystemExit(f'dist-tag {os.environ["TAG"]!r} resolved to {current!r}, expected {target!r}')
+          PY
             update_tag_receipt "$tag" "$VERSION" "promotion-$tag"
           }
           promote "$COMPATIBILITY_LINE"
