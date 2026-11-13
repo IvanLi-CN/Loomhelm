@@ -14542,7 +14542,7 @@
       "path": "skills/multi-task-flow/references/shared-viewer.md",
       "sourceBlob": "18c9a36650878f6efba59b1de02374924059c9be",
       "sourceSha256": "6eb1d49ba26914c0b6ee349d2a64636db6d75345771ba73e5be5c3cd8d68ba16",
-      "installedSha256": "227388fe4def251f4329432c6732e35dec56f90a7f29dca3cea2f48d07a5acec",
+      "installedSha256": "e28a1b16d4dc52a3f95b053fc2fec183d045ebd0a8b4d05009058881cd1b8bb0",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14550,7 +14550,7 @@
       "path": "skills/multi-task-flow/scripts/build-service.ts",
       "sourceBlob": "ca672ad72649091d21a78504664d60e6060c88d5",
       "sourceSha256": "6161f53430c5bd6f5665a2f77129c87cfe937d5c244f3df0eab8533bbecf17c4",
-      "installedSha256": "cb28fa0878d83dc410f2903c885269e1df78616cbf265afdcaa54d69c46b61cd",
+      "installedSha256": "920c06b448decfdda0e64e27b996d76b1887504cf1560b9d55c6d88fb9109b39",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation",
       "sourcePath": "skills/multi-task-flow-runtime/scripts/build-service.ts"
     },
@@ -16074,7 +16074,7 @@
     {
       "path": "skills/multi-task-flow/scripts/test-viewer-source.ts",
       "sourcePath": "skills/multi-task-flow-runtime/scripts/test-viewer-source.ts",
-      "installedSha256": "4bcd3bb3fbe4d1590c4f98b6a79358a4030e6513196acf3373c6e9db7b770a1f"
+      "installedSha256": "9e1137778c6498ba0d3a89475bf5e46a2c486c6a6ad49744c7b029dd0ccda8a6"
     },
     {
       "path": "skills/multi-task-flow/scripts/viewer-gateway.ts",

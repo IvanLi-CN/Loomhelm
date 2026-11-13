@@ -172,6 +172,10 @@ jobs:
           bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile
           bun install --cwd clients/typescript --frozen-lockfile
           bun run --cwd skills/multi-task-flow-runtime build
+          export LOOMHELM_SERVICE_BUNDLE_BUILD=1
+          bun skills/multi-task-flow-runtime/scripts/build-service.ts \
+            --output "$RUNNER_TEMP/multi-task-flow-service-bundle" \
+            --service-version "$VERSION"
           version_tag="multi-task-flow-v$VERSION"
           draft_dir="$RUNNER_TEMP/skill-release-draft"
           final_dir="$RUNNER_TEMP/skill-release-final"
@@ -352,6 +356,7 @@ jobs:
           name: skill-release-${{ steps.gate.outputs.version }}
           path: |
             ${{ runner.temp }}/skill-package.tgz
+            ${{ runner.temp }}/multi-task-flow-service-bundle
             ${{ runner.temp }}/release-identity.json
             ${{ runner.temp }}/release-receipt.json
           if-no-files-found: error

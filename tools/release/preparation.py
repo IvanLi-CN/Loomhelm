@@ -4,13 +4,13 @@ import re
 from ledger import git, transition
 from policy import ReleaseError, Version
 
-PROJECTIONS = ('VERSION','clients/typescript/package.json','web/package.json','bun.lock')
+PROJECTIONS = ('VERSION','web/package.json','bun.lock')
 
 
 def projected_files(files, version):
     Version(version)
     result = {'VERSION':(version+'\n').encode()}
-    for path in PROJECTIONS[1:3]:
+    for path in PROJECTIONS[1:2]:
         value = json.loads(files[path])
         value['version'] = version
         result[path] = (json.dumps(value,indent=2)+'\n').encode()

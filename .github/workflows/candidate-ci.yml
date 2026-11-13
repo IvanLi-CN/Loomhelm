@@ -8,6 +8,12 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
+    inputs:
+      run_macos_product_package:
+        description: Run the optional macOS Product Package check
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -258,6 +264,42 @@ jobs:
       - name: Verify source-only client and Skills
         run: scripts/checks client
 
+  skills-native-macos:
+    name: Skills Native macOS
+    needs: quality-gates
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
+        with:
+          bun-version: 1.4.4
+      - name: Verify Bun FFI without project native compilation
+        run: |
+          export TMPDIR="$PWD/.tmp/ffi/tmp" HOME="$PWD/.tmp/ffi/home" BUN_INSTALL_CACHE_DIR="$PWD/.tmp/ffi/cache" BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
+          mkdir -p "$TMPDIR" "$HOME" "$BUN_INSTALL_CACHE_DIR"
+          bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy
+          bun skills/multi-task-flow-runtime/scripts/test-skills-native.ts
+          bun test ./skills/bin/native-tests/core ./skills/bin/native-tests/visual
+
+      - name: Verify multi-task-flow contracts on macOS
+        run: |
+          bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile --ignore-scripts --backend=copy
+          bun run --cwd skills/multi-task-flow-runtime test
+
+      - name: Verify isolated viewer label upgrade
+        timeout-minutes: 8
+        run: |
+          export LOOMHELM_SERVICE_BUNDLE_BUILD=1
+          bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile --ignore-scripts --backend=copy
+          bun run --cwd skills/multi-task-flow-runtime build
+          bun skills/multi-task-flow-runtime/scripts/build-service.ts --output "$RUNNER_TEMP/viewer-label-before" --service-version 0.0.0-ci
+          bun skills/multi-task-flow-runtime/scripts/build-service.ts --output "$RUNNER_TEMP/viewer-label-after" --service-version 0.0.1-ci
+          LOOMHELM_VIEWER_LABEL_BEFORE="$RUNNER_TEMP/viewer-label-before" LOOMHELM_VIEWER_LABEL_AFTER="$RUNNER_TEMP/viewer-label-after" bun test ./skills/multi-task-flow-runtime/tests/service-contract.test.ts
+
   candidate-producer:
     name: Candidate Producer
     needs: quality-gates
@@ -405,10 +447,36 @@ jobs:
       - name: Prepare offline image importer
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y skopeo
-      - name: Build and observe Linux product partitions
+      - name: Build and observe native package partitions
         run: |
-          for part in server go-client ts-client; do
-            output="$RUNNER_TEMP/$part-product"
-            python3 tools/release/build_part.py --record "$RUNNER_TEMP/record.json" --part "$part" --output "$output"
-            python3 tools/release/smoke.py --record "$RUNNER_TEMP/record.json" --directory "$output"
-          done
+          part=server
+          python3 tools/release/build_part.py --record "$RUNNER_TEMP/record.json" --part "$part" --output "$RUNNER_TEMP/core-product"
+          python3 tools/release/smoke.py --record "$RUNNER_TEMP/record.json" --directory "$RUNNER_TEMP/core-product"
+          python3 tools/release/build_part.py --record "$RUNNER_TEMP/record.json" --part ts-client --output "$RUNNER_TEMP/ts-product"
+          python3 tools/release/smoke.py --record "$RUNNER_TEMP/record.json" --directory "$RUNNER_TEMP/ts-product"
+
+  product-package-macos:
+    name: Product Package (macos-15)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_macos_product_package == true }}
+    needs: candidate-producer
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.CANDIDATE_SOURCE_SHA }}
+          fetch-depth: 1
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
+        with:
+          bun-version: 1.4.4
+      - name: Prepare fixture record at exact Candidate SHA
+        run: python3 tools/release/fixture_record.py > "$RUNNER_TEMP/record.json"
+      - name: Build and observe native package partitions
+        run: |
+          python3 tools/release/build_part.py --record "$RUNNER_TEMP/record.json" --part go-client --output "$RUNNER_TEMP/core-product"
+          python3 tools/release/smoke.py --record "$RUNNER_TEMP/record.json" --directory "$RUNNER_TEMP/core-product"
+          python3 tools/release/build_part.py --record "$RUNNER_TEMP/record.json" --part ts-client --output "$RUNNER_TEMP/ts-product"
+          python3 tools/release/smoke.py --record "$RUNNER_TEMP/record.json" --directory "$RUNNER_TEMP/ts-product"
