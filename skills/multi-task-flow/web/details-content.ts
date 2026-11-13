@@ -257,23 +257,25 @@ export function createDetailContent(context: DetailContentContext) {
       }
       return items;
     }, focusedAtomId, { kind: "group", id: group.id }));
-    if (group.coordination_execution?.state === "waiting") field(container, "协调等待", group.coordination_execution.reason ?? "等待贡献任务");
-    if (group.coordination_execution?.state === "blocked") field(container, "协调阻塞", group.coordination_execution.reason ?? "未知原因");
-    field(container, "交付协调者", coordinatorValue(group));
-    field(container, "运行就绪", readinessValue(group));
-    field(container, "任务数", `${tasks.length} 个任务`);
-    if (historicalTaskIds.length) field(container, "历史执行任务", historicalTaskIds.map((id) => data.tasks.find((task) => task.id === id)?.title ?? id).join("、"));
-    field(container, "持续时间", durationValue(group.started_at ?? null, group.finished_at ?? null));
+    const facts = text("div", "", "detail-group-facts");
+    container.append(facts);
+    if (group.coordination_execution?.state === "waiting") field(facts, "协调等待", group.coordination_execution.reason ?? "等待贡献任务");
+    if (group.coordination_execution?.state === "blocked") field(facts, "协调阻塞", group.coordination_execution.reason ?? "未知原因");
+    field(facts, "交付协调者", coordinatorValue(group));
+    field(facts, "运行就绪", readinessValue(group));
+    field(facts, "任务数", `${tasks.length} 个任务`);
+    if (historicalTaskIds.length) field(facts, "历史执行任务", historicalTaskIds.map((id) => data.tasks.find((task) => task.id === id)?.title ?? id).join("、"));
+    field(facts, "持续时间", durationValue(group.started_at ?? null, group.finished_at ?? null));
     if (context.profileContext) {
       const profileContext = context.profileContext();
-      field(container, "执行配置", createProfileEditor(profileContext, "group", group.id, group.execution_profile ?? null, group.effective_execution_profile ?? data.orchestration.execution_profile ?? null, data.profile_read_only ? "当前视图只读或尚未迁移" : group.profile_freeze_reason ?? (group.agent_thread_id ? "对话已创建" : null)));
+      field(facts, "执行配置", createProfileEditor(profileContext, "group", group.id, group.execution_profile ?? null, group.effective_execution_profile ?? data.orchestration.execution_profile ?? null, data.profile_read_only ? "当前视图只读或尚未迁移" : group.profile_freeze_reason ?? (group.agent_thread_id ? "对话已创建" : null)));
     }
-    field(container, "交付单元对话", group.agent_thread_id ? link("打开对话", conversationUrl(group.agent_thread_id)) : "尚未创建");
-    field(container, "交付 Agent", group.delivery_unit_kind === "bootstrap" ? "Main Agent（Bootstrap 特例）" : group.delivery_agent_readiness === "bound" ? "已绑定" : "未绑定");
-    field(container, "调度状态", group.dispatch_readiness === "blocked" ? `不可调度：${group.dispatch_diagnostics?.map((item) => item.message).join("；") || "未知原因"}` : group.dispatch_readiness === "ready" ? "可调度" : "未知");
+    field(facts, "交付单元对话", group.agent_thread_id ? link("打开对话", conversationUrl(group.agent_thread_id)) : "尚未创建");
+    field(facts, "交付 Agent", group.delivery_unit_kind === "bootstrap" ? "Main Agent（Bootstrap 特例）" : group.delivery_agent_readiness === "bound" ? "已绑定" : "未绑定");
+    field(facts, "调度状态", group.dispatch_readiness === "blocked" ? `不可调度：${group.dispatch_diagnostics?.map((item) => item.message).join("；") || "未知原因"}` : group.dispatch_readiness === "ready" ? "可调度" : "未知");
     const pr = context.safeExternal(group.parent_pr?.url ?? null);
-    field(container, "父 PR", pr ? link("查看 PR", pr) : "尚未创建");
-    field(container, "交付单元要求", requirementsValue(group.requirements_path, "group", group.id));
+    field(facts, "父 PR", pr ? link("查看 PR", pr) : "尚未创建");
+    field(facts, "交付单元要求", requirementsValue(group.requirements_path, "group", group.id));
     restore();
   };
 
