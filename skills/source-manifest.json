@@ -13984,7 +13984,7 @@
       "sourceBlob": "82ace22c73225e4796b15d03874f18a213c2929e",
       "sourceSha256": "72eab9db09110edbd680d48a2b919224f0ed9d684a1a720d7c5b145a58568125",
       "installedSha256": "5df2793739a5b4dcff5a6edde6b205fa877306c6b11c349ebcaa04d5d1d4a8df",
-      "adaptation": "unchanged"
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "skills/multi-task-flow/examples/orchestration-viewer/requirements/task-acceptance.md",
@@ -13992,7 +13992,7 @@
       "sourceBlob": "a536ded5a7547062711d87c40cc78c75d69c55bf",
       "sourceSha256": "688492de8ca5845a2a818d3a3910b91fd8eeae8301e9f6d6eeec0387aaa11f08",
       "installedSha256": "7588e800a7fc123290648b520a6c319c6a98c537405f4753a51e78a35727663a",
-      "adaptation": "unchanged"
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "skills/multi-task-flow/examples/orchestration-viewer/requirements/task-dashboard-ui.md",
@@ -14008,7 +14008,7 @@
       "sourceBlob": "b9dba41285574c95e60bced161a85b9f21b8b7f2",
       "sourceSha256": "ee8ad91df95bbf103d3e2a1f18d87c79a50b562a913e757a9d3d7166b82c1bff",
       "installedSha256": "df752061ee3f4ba588b5fa5efd9883e984189ac187be25df2212d29bccb693e4",
-      "adaptation": "unchanged"
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "skills/multi-task-flow/examples/orchestration-viewer/requirements/task-integration.md",
@@ -14032,7 +14032,7 @@
       "sourceBlob": "e3db8e1731762c83a358bc2f352a841089a762a5",
       "sourceSha256": "8216efa113033c469ba8ab902b01bf43417165444fc6fc5e70327fe9537f5e36",
       "installedSha256": "1b1b9e0dbdadbc2f28e10eb88ad62a2edd0bf6040ce6317b78d673d5bb1ef1fb",
-      "adaptation": "unchanged"
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "skills/multi-task-flow/examples/orchestration-viewer/requirements/task-release.md",
@@ -14040,7 +14040,7 @@
       "sourceBlob": "74fd6424216f1d243ea4d6e38bcb5a096392b436",
       "sourceSha256": "7b768842b7037045d6c90c0fd6c5d1144e4c29762fe354f72c12893645f5da0f",
       "installedSha256": "c59048d05a7a180ee7ee913923a44bea2987ba6e76342d682e4ed8b2a109f2b5",
-      "adaptation": "unchanged"
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "skills/multi-task-flow/examples/orchestration-viewer/requirements/task-scheduler.md",
@@ -14048,7 +14048,7 @@
       "sourceBlob": "1b7113b239c5d9af15c64b8ac63fd40d90c9ec94",
       "sourceSha256": "5a63baaaa5fbbccb70ca1d03afe716b541f5ac067204d68b6ca900ea81f295b3",
       "installedSha256": "13314e5583d819cb8d2bef4dddf052025aa93e3c20f4bda5f785187e68098eab",
-      "adaptation": "unchanged"
+      "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
       "source": "skills/multi-task-flow/examples/orchestration-viewer/requirements/task-server.md",
@@ -14367,7 +14367,7 @@
       "path": "skills/multi-task-flow/lib/service-pages.ts",
       "sourceBlob": "3164e9860cfa00bb27f4e6eb1db68134d2492e19",
       "sourceSha256": "c942d6659bc62bdb477fc85ac629a94ae38aa33440d73838e9b8c0491d41594e",
-      "installedSha256": "18743e38d91e4790b711f8314a5de13151d8f0523d4e0419ca93a20f2a74c679",
+      "installedSha256": "1b1a944fbc0b4836ed1cddd1e67f4414541f8c69fa107f633b1608840b165328",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14839,7 +14839,7 @@
       "path": "skills/multi-task-flow/tests/ui/details-content.test.ts",
       "sourceBlob": "bd05dc0398e199e9b5a5010ea4329af4ebf4991f",
       "sourceSha256": "e03962e6cdf54fd31b7c1d788a8b906f93fb3aaa4b8dc501733984d5a4e99bf3",
-      "installedSha256": "bb7037a8db984c01c3ffaea254c57607dbdfc550c32c7457f3f92130aa98725a",
+      "installedSha256": "072ca6d579265d84513553d7bdf1cfe05d434617423258669a4a8c2ce400a020",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14879,7 +14879,7 @@
       "path": "skills/multi-task-flow/tests/ui/responsive-width-contract.test.ts",
       "sourceBlob": "58d8e77fb0b36da066e720e5401ad7ca3df4b167",
       "sourceSha256": "dee7ba49c5276f366af96132a27cffda2a47325c7ef1e2657afdd5fe9ae5adaf",
-      "installedSha256": "ac2f0e97f94da0d568439739c2d2cb58e27f3434983621d76738ad89504763c3",
+      "installedSha256": "9b62ea644251461e4e07a5fd0d23b2a28de3d4c5a04c0f7f46ac717f56d2cce3",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14951,7 +14951,7 @@
       "path": "skills/multi-task-flow/web/app.css",
       "sourceBlob": "d780bf6377130ac519e4b7f2441da710b8767401",
       "sourceSha256": "1f59981d582f4ea2b4e012e16792075e82a2036cc05d6227159f487935f28e84",
-      "installedSha256": "b7ab3c0588f692800bbd7e26ef4c10a943d37984984a98314910721383fb9084",
+      "installedSha256": "1b25a5b71f1b4389aca5ddcafa14cff96cee16f3516c870d779257abdcc47fd6",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14959,7 +14959,7 @@
       "path": "skills/multi-task-flow/web/app.ts",
       "sourceBlob": "ad0cd71bd39e30cda7091c443db26e7b00452d56",
       "sourceSha256": "7de5958eda17175d1e68f79f07093bdd6f545228eb9fadd4b7e21c43a9a25940",
-      "installedSha256": "229f2a7c6a5c6ed0e8e8ad06dc70318508ffb4f8008c9b3045de60b9abc25f57",
+      "installedSha256": "c01143c02e8f7db9ed75fbaa1a2ff7dce2509c2e8d346711f2c6fa9e5209502d",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -14991,7 +14991,7 @@
       "path": "skills/multi-task-flow/web/details-content.ts",
       "sourceBlob": "45e9378337970c2ecbb86811d54c69224555792a",
       "sourceSha256": "e0b8c7aefe55105b49debc173dbe3e0922bbe35db435b3be8b3476fa35594ff1",
-      "installedSha256": "9620be071169d9a4f551717f3add1c05ffd47cc4b9d123a4eb7526cea95c9643",
+      "installedSha256": "ce1809f7e83460d82a98f1ccf71c598afcdce8cc7e90864317c38573e7f1aa29",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15047,7 +15047,7 @@
       "path": "skills/multi-task-flow/web/index.html",
       "sourceBlob": "2d86c1b94c2a324b2870b0b05568a41189a46540",
       "sourceSha256": "920f1792a900f707f6152939b810141d08ffa869e452b9e05ad74687010e86df",
-      "installedSha256": "a64785ec86c5d72200a9e83464af37b9d7a8616d0bca1ec72e97d4fe7c1d216c",
+      "installedSha256": "8408275bc1d78fb31e0f1536b1ebf364caef3cd302f71e4fc3072692571e0024",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15151,7 +15151,7 @@
       "path": "skills/multi-task-flow/web/timeline.ts",
       "sourceBlob": "3195c06446f9e13ed010d8e28ac46fd54b35b34e",
       "sourceSha256": "43b2b50d9c557da9c7913b32299b6efa7c94983b550f35e4b309caa9190d97ff",
-      "installedSha256": "4c4b8f4c27ba881136e0bab4ff44d9a3b0055191c78810ded05c20592addc2f7",
+      "installedSha256": "3acb1275eb4b13df0f247e3a1677decfa09ea7b572c1a79be3f1c36ce8b56661",
       "adaptation": "loomhelm-runtime-path-or-contract-adaptation"
     },
     {
@@ -15809,6 +15809,10 @@
       "installedSha256": "888575b18444b7eb4471a16fe92325829603cea2be95bb3c3d375944af09438e"
     },
     {
+      "path": "skills/multi-task-flow/tests/delivery-topology.test.ts",
+      "installedSha256": "60c3c895ee7f52250c199791904ff9f65be8758db77ea8dec5cc430e3344a312"
+    },
+    {
       "path": "skills/multi-task-flow/tests/ui/graph-controller.test.tsx",
       "installedSha256": "eb32564e67e55dd3498807ce0200dd86572caf48222d79be2d68a349e914546e"
     },
@@ -15826,7 +15830,7 @@
     },
     {
       "path": "skills/multi-task-flow/web/graph-view.tsx",
-      "installedSha256": "7b81909679226d0124644d5670195814d486aded33df7d652d74fea1b35793cd"
+      "installedSha256": "7badd239c7d74fe6228c5bb73d2176115b9f6dade794054de4608f2c99b9185a"
     },
     {
       "path": "skills/multi-task-flow/web/pr-status.ts",
@@ -15850,7 +15854,7 @@
     },
     {
       "path": "skills/multi-task-flow/scripts/check-client-skills.ts",
-      "installedSha256": "05063aced94070280ca39832d9002987be6c35150608934724298537cc3b4e33"
+      "installedSha256": "0afa6d3eca368563e50c698ced19d6ce218818d056985ec6fbadd83a1d6823f7"
     },
     {
       "path": "skills/multi-task-flow/tests/check-skills-installation.test.ts",
@@ -15866,8 +15870,7 @@
     },
     {
       "path": "skills/multi-task-flow/scripts/package-client-skills.ts",
-      "installedSha256": "e78f054198f728d8296752de9ac5a1a8b93dafdd94cb688e76492c8850999622",
-      "sha256": "e78f054198f728d8296752de9ac5a1a8b93dafdd94cb688e76492c8850999622"
+      "installedSha256": "e78f054198f728d8296752de9ac5a1a8b93dafdd94cb688e76492c8850999622"
     },
     {
       "path": "skills/multi-task-flow/lib/package-source.ts",
@@ -15919,7 +15922,7 @@
     },
     {
       "path": "skills/multi-task-flow/tests/ui/task-context-menu.test.ts",
-      "installedSha256": "55a7acbb9ca25a891286b3eab3bac75c3f4efcabe5d85e802623d86cbd892e61"
+      "installedSha256": "71cbcb2e5d14f93dbf753fce1ee3214b207885738b8b4ee3628882821efcf689"
     },
     {
       "path": "skills/multi-task-flow/tests/viewer-runtime.test.ts",
@@ -15928,6 +15931,310 @@
     {
       "path": "skills/multi-task-flow/tests/viewer-socket.test.ts",
       "installedSha256": "b9134c2a620cda0964728072a995442b4719c8d50a410f33b75b37262122076d"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/compatibility_cli.ts",
+      "installedSha256": "01ec1aebde5a63a5e0c8d125583bc3ab7e2efa81e36fb6690822dd8f31c244f0"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/compatibility_docs.ts",
+      "installedSha256": "9667a37ae7704fce28b7d967ac671f2d02d39309acad2d906b28849b91fa6420"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/compatibility_shared.ts",
+      "installedSha256": "dac757da193b15f7b8c5c31cae0f44acc5eb370336bcbd31dce3c26b710e39e3"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/checks/replay.ts",
+      "installedSha256": "22905c9504bf3a304618f582ea15ecfae5e9c6e51599d2839d32965e21fadef8"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/git.ts",
+      "installedSha256": "c9800c610e230f0ab274885e0ee927680d9c2062ec203c556117f06c8e74d0d3"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/hardware_ingest.ts",
+      "installedSha256": "b84b43ae3c33a8d5e056a92b550769a9347b5c1af631a9ac56c3369e53c671c7"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/hardware_locks.ts",
+      "installedSha256": "5b9e4211b5c5537a88dc6f06482f6d689e043c642bb676a8c640f3814f164d16"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/legacy_spec_id.ts",
+      "installedSha256": "04b130ea1d696f8c4f0e77efc7587615a9fcf37ebda86a797035f250b8fde8c2"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/migration_common.ts",
+      "installedSha256": "db4a608795b98718fc2ca0cc9e326f071cf80c842fee88137227cf2c6a623f21"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/next_plan.ts",
+      "installedSha256": "e14addce4a45a25bbea58fad9aa5e41c513735130b4df5ba9f37a66176b72337"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/next_plan_support.ts",
+      "installedSha256": "da64c49f508a31b720d80c84eb1fadf7b7cd51a59e6b25a2d1f9cd222b535f4f"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_contract.ts",
+      "installedSha256": "1e3cf99cb7bfa63baf8dae3f3d8d37fbf8eee846e8262af61dfbfcdfe1c7c075"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift.ts",
+      "installedSha256": "74e348ed8e97a77cb3d7e4d3fe4bfffec0f4b29aa49086767c0f3f50a4d29b81"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_helpers.ts",
+      "installedSha256": "039f0928fe42365ef380091ca8f5a8c72d5127c23f6870072ad4f2fce7d0b3de"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_legacy.ts",
+      "installedSha256": "2dc7e8319afdd2ad50a05d0b8af45f6dfdcee08990bcff06be11098113366e6d"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_paths.ts",
+      "installedSha256": "58df37350488de3e85906d22bc461a00de17293f57d73cfc126012df25d0d187"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_types.ts",
+      "installedSha256": "d1bd27dd615b78b882a662a5f2366ddaca710ff803e68dd368a1791aaea47189"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_validation.ts",
+      "installedSha256": "32eaaa686239c47f16f87ae677c8c806cfb43d4763bb5b3f7d48b0e8573823e2"
+    },
+    {
+      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_migration.ts",
+      "installedSha256": "06094de16ee7fefbd34b2022be16649a98af52347a1dd750f8fbfd27a6ceb4d5"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/compatibility_cli.ts",
+      "installedSha256": "01ec1aebde5a63a5e0c8d125583bc3ab7e2efa81e36fb6690822dd8f31c244f0"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/compatibility_docs.ts",
+      "installedSha256": "9667a37ae7704fce28b7d967ac671f2d02d39309acad2d906b28849b91fa6420"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/compatibility_shared.ts",
+      "installedSha256": "dac757da193b15f7b8c5c31cae0f44acc5eb370336bcbd31dce3c26b710e39e3"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/checks/replay.ts",
+      "installedSha256": "22905c9504bf3a304618f582ea15ecfae5e9c6e51599d2839d32965e21fadef8"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/git.ts",
+      "installedSha256": "c9800c610e230f0ab274885e0ee927680d9c2062ec203c556117f06c8e74d0d3"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/hardware_ingest.ts",
+      "installedSha256": "b84b43ae3c33a8d5e056a92b550769a9347b5c1af631a9ac56c3369e53c671c7"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/hardware_locks.ts",
+      "installedSha256": "5b9e4211b5c5537a88dc6f06482f6d689e043c642bb676a8c640f3814f164d16"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/legacy_spec_id.ts",
+      "installedSha256": "04b130ea1d696f8c4f0e77efc7587615a9fcf37ebda86a797035f250b8fde8c2"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/migration_common.ts",
+      "installedSha256": "db4a608795b98718fc2ca0cc9e326f071cf80c842fee88137227cf2c6a623f21"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/next_plan.ts",
+      "installedSha256": "e14addce4a45a25bbea58fad9aa5e41c513735130b4df5ba9f37a66176b72337"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/next_plan_support.ts",
+      "installedSha256": "da64c49f508a31b720d80c84eb1fadf7b7cd51a59e6b25a2d1f9cd222b535f4f"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_contract.ts",
+      "installedSha256": "1e3cf99cb7bfa63baf8dae3f3d8d37fbf8eee846e8262af61dfbfcdfe1c7c075"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_drift.ts",
+      "installedSha256": "74e348ed8e97a77cb3d7e4d3fe4bfffec0f4b29aa49086767c0f3f50a4d29b81"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_drift_helpers.ts",
+      "installedSha256": "039f0928fe42365ef380091ca8f5a8c72d5127c23f6870072ad4f2fce7d0b3de"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_drift_legacy.ts",
+      "installedSha256": "2dc7e8319afdd2ad50a05d0b8af45f6dfdcee08990bcff06be11098113366e6d"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_drift_paths.ts",
+      "installedSha256": "58df37350488de3e85906d22bc461a00de17293f57d73cfc126012df25d0d187"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_drift_types.ts",
+      "installedSha256": "d1bd27dd615b78b882a662a5f2366ddaca710ff803e68dd368a1791aaea47189"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_drift_validation.ts",
+      "installedSha256": "32eaaa686239c47f16f87ae677c8c806cfb43d4763bb5b3f7d48b0e8573823e2"
+    },
+    {
+      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_migration.ts",
+      "installedSha256": "06094de16ee7fefbd34b2022be16649a98af52347a1dd750f8fbfd27a6ceb4d5"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/compatibility_cli.ts",
+      "installedSha256": "01ec1aebde5a63a5e0c8d125583bc3ab7e2efa81e36fb6690822dd8f31c244f0"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/compatibility_docs.ts",
+      "installedSha256": "9667a37ae7704fce28b7d967ac671f2d02d39309acad2d906b28849b91fa6420"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/compatibility_shared.ts",
+      "installedSha256": "dac757da193b15f7b8c5c31cae0f44acc5eb370336bcbd31dce3c26b710e39e3"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/checks/replay.ts",
+      "installedSha256": "22905c9504bf3a304618f582ea15ecfae5e9c6e51599d2839d32965e21fadef8"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/git.ts",
+      "installedSha256": "c9800c610e230f0ab274885e0ee927680d9c2062ec203c556117f06c8e74d0d3"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/hardware_ingest.ts",
+      "installedSha256": "b84b43ae3c33a8d5e056a92b550769a9347b5c1af631a9ac56c3369e53c671c7"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/hardware_locks.ts",
+      "installedSha256": "5b9e4211b5c5537a88dc6f06482f6d689e043c642bb676a8c640f3814f164d16"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/legacy_spec_id.ts",
+      "installedSha256": "04b130ea1d696f8c4f0e77efc7587615a9fcf37ebda86a797035f250b8fde8c2"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/migration_common.ts",
+      "installedSha256": "db4a608795b98718fc2ca0cc9e326f071cf80c842fee88137227cf2c6a623f21"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/next_plan.ts",
+      "installedSha256": "e14addce4a45a25bbea58fad9aa5e41c513735130b4df5ba9f37a66176b72337"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/next_plan_support.ts",
+      "installedSha256": "da64c49f508a31b720d80c84eb1fadf7b7cd51a59e6b25a2d1f9cd222b535f4f"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_contract.ts",
+      "installedSha256": "1e3cf99cb7bfa63baf8dae3f3d8d37fbf8eee846e8262af61dfbfcdfe1c7c075"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift.ts",
+      "installedSha256": "74e348ed8e97a77cb3d7e4d3fe4bfffec0f4b29aa49086767c0f3f50a4d29b81"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_helpers.ts",
+      "installedSha256": "039f0928fe42365ef380091ca8f5a8c72d5127c23f6870072ad4f2fce7d0b3de"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_legacy.ts",
+      "installedSha256": "2dc7e8319afdd2ad50a05d0b8af45f6dfdcee08990bcff06be11098113366e6d"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_paths.ts",
+      "installedSha256": "58df37350488de3e85906d22bc461a00de17293f57d73cfc126012df25d0d187"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_types.ts",
+      "installedSha256": "d1bd27dd615b78b882a662a5f2366ddaca710ff803e68dd368a1791aaea47189"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_validation.ts",
+      "installedSha256": "32eaaa686239c47f16f87ae677c8c806cfb43d4763bb5b3f7d48b0e8573823e2"
+    },
+    {
+      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_migration.ts",
+      "installedSha256": "06094de16ee7fefbd34b2022be16649a98af52347a1dd750f8fbfd27a6ceb4d5"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/compatibility_cli.ts",
+      "installedSha256": "01ec1aebde5a63a5e0c8d125583bc3ab7e2efa81e36fb6690822dd8f31c244f0"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/compatibility_docs.ts",
+      "installedSha256": "9667a37ae7704fce28b7d967ac671f2d02d39309acad2d906b28849b91fa6420"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/compatibility_shared.ts",
+      "installedSha256": "dac757da193b15f7b8c5c31cae0f44acc5eb370336bcbd31dce3c26b710e39e3"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/checks/replay.ts",
+      "installedSha256": "22905c9504bf3a304618f582ea15ecfae5e9c6e51599d2839d32965e21fadef8"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/git.ts",
+      "installedSha256": "c9800c610e230f0ab274885e0ee927680d9c2062ec203c556117f06c8e74d0d3"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/hardware_ingest.ts",
+      "installedSha256": "b84b43ae3c33a8d5e056a92b550769a9347b5c1af631a9ac56c3369e53c671c7"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/hardware_locks.ts",
+      "installedSha256": "5b9e4211b5c5537a88dc6f06482f6d689e043c642bb676a8c640f3814f164d16"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/legacy_spec_id.ts",
+      "installedSha256": "04b130ea1d696f8c4f0e77efc7587615a9fcf37ebda86a797035f250b8fde8c2"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/migration_common.ts",
+      "installedSha256": "db4a608795b98718fc2ca0cc9e326f071cf80c842fee88137227cf2c6a623f21"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/next_plan.ts",
+      "installedSha256": "e14addce4a45a25bbea58fad9aa5e41c513735130b4df5ba9f37a66176b72337"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/next_plan_support.ts",
+      "installedSha256": "da64c49f508a31b720d80c84eb1fadf7b7cd51a59e6b25a2d1f9cd222b535f4f"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_contract.ts",
+      "installedSha256": "1e3cf99cb7bfa63baf8dae3f3d8d37fbf8eee846e8262af61dfbfcdfe1c7c075"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift.ts",
+      "installedSha256": "74e348ed8e97a77cb3d7e4d3fe4bfffec0f4b29aa49086767c0f3f50a4d29b81"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_helpers.ts",
+      "installedSha256": "039f0928fe42365ef380091ca8f5a8c72d5127c23f6870072ad4f2fce7d0b3de"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_legacy.ts",
+      "installedSha256": "2dc7e8319afdd2ad50a05d0b8af45f6dfdcee08990bcff06be11098113366e6d"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_paths.ts",
+      "installedSha256": "58df37350488de3e85906d22bc461a00de17293f57d73cfc126012df25d0d187"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_types.ts",
+      "installedSha256": "d1bd27dd615b78b882a662a5f2366ddaca710ff803e68dd368a1791aaea47189"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_validation.ts",
+      "installedSha256": "32eaaa686239c47f16f87ae677c8c806cfb43d4763bb5b3f7d48b0e8573823e2"
+    },
+    {
+      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_migration.ts",
+      "installedSha256": "06094de16ee7fefbd34b2022be16649a98af52347a1dd750f8fbfd27a6ceb4d5"
     },
     {
       "path": "skills/bin/modules/core/runtime.ts",
@@ -15982,320 +16289,12 @@
       "installedSha256": "099f723bab438afddc23f1aeae87b166bd26cd04572436d13a7dcc742bfd5732"
     },
     {
-      "path": "skills/multi-task-flow/web/atomic-graph-view.tsx",
-      "installedSha256": "c124d99254e6c88039e5720e0fc97cc60b41a4fb8e7a2cfeb8e0accea112cf09"
-    },
-    {
       "path": "skills/multi-task-flow/tests/task-kind.test.ts",
       "installedSha256": "9ec45fe7dd7209cec6cac9b392071c052f9d3f97533bcaf380fc1bfc2c5c8df3"
     },
     {
-      "path": "skills/docs-migrate/scripts/_runtime/compatibility_docs.ts",
-      "installedSha256": "9667a37ae7704fce28b7d967ac671f2d02d39309acad2d906b28849b91fa6420"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/compatibility_shared.ts",
-      "installedSha256": "dac757da193b15f7b8c5c31cae0f44acc5eb370336bcbd31dce3c26b710e39e3"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/compatibility_cli.ts",
-      "installedSha256": "01ec1aebde5a63a5e0c8d125583bc3ab7e2efa81e36fb6690822dd8f31c244f0"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/checks/replay.ts",
-      "installedSha256": "22905c9504bf3a304618f582ea15ecfae5e9c6e51599d2839d32965e21fadef8"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_helpers.ts",
-      "installedSha256": "039f0928fe42365ef380091ca8f5a8c72d5127c23f6870072ad4f2fce7d0b3de"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/hardware_ingest.ts",
-      "installedSha256": "b84b43ae3c33a8d5e056a92b550769a9347b5c1af631a9ac56c3369e53c671c7"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/next_plan.ts",
-      "installedSha256": "e14addce4a45a25bbea58fad9aa5e41c513735130b4df5ba9f37a66176b72337"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_contract.ts",
-      "installedSha256": "1e3cf99cb7bfa63baf8dae3f3d8d37fbf8eee846e8262af61dfbfcdfe1c7c075"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift.ts",
-      "installedSha256": "74e348ed8e97a77cb3d7e4d3fe4bfffec0f4b29aa49086767c0f3f50a4d29b81"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/next_plan_support.ts",
-      "installedSha256": "da64c49f508a31b720d80c84eb1fadf7b7cd51a59e6b25a2d1f9cd222b535f4f"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_types.ts",
-      "installedSha256": "d1bd27dd615b78b882a662a5f2366ddaca710ff803e68dd368a1791aaea47189"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_legacy.ts",
-      "installedSha256": "2dc7e8319afdd2ad50a05d0b8af45f6dfdcee08990bcff06be11098113366e6d"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_migration.ts",
-      "installedSha256": "06094de16ee7fefbd34b2022be16649a98af52347a1dd750f8fbfd27a6ceb4d5"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/migration_common.ts",
-      "installedSha256": "db4a608795b98718fc2ca0cc9e326f071cf80c842fee88137227cf2c6a623f21"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_validation.ts",
-      "installedSha256": "32eaaa686239c47f16f87ae677c8c806cfb43d4763bb5b3f7d48b0e8573823e2"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/legacy_spec_id.ts",
-      "installedSha256": "04b130ea1d696f8c4f0e77efc7587615a9fcf37ebda86a797035f250b8fde8c2"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/hardware_locks.ts",
-      "installedSha256": "5b9e4211b5c5537a88dc6f06482f6d689e043c642bb676a8c640f3814f164d16"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/git.ts",
-      "installedSha256": "c9800c610e230f0ab274885e0ee927680d9c2062ec203c556117f06c8e74d0d3"
-    },
-    {
-      "path": "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_paths.ts",
-      "installedSha256": "58df37350488de3e85906d22bc461a00de17293f57d73cfc126012df25d0d187"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/compatibility_docs.ts",
-      "installedSha256": "9667a37ae7704fce28b7d967ac671f2d02d39309acad2d906b28849b91fa6420"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/compatibility_shared.ts",
-      "installedSha256": "dac757da193b15f7b8c5c31cae0f44acc5eb370336bcbd31dce3c26b710e39e3"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/compatibility_cli.ts",
-      "installedSha256": "01ec1aebde5a63a5e0c8d125583bc3ab7e2efa81e36fb6690822dd8f31c244f0"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/checks/replay.ts",
-      "installedSha256": "22905c9504bf3a304618f582ea15ecfae5e9c6e51599d2839d32965e21fadef8"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_helpers.ts",
-      "installedSha256": "039f0928fe42365ef380091ca8f5a8c72d5127c23f6870072ad4f2fce7d0b3de"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/hardware_ingest.ts",
-      "installedSha256": "b84b43ae3c33a8d5e056a92b550769a9347b5c1af631a9ac56c3369e53c671c7"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/next_plan.ts",
-      "installedSha256": "e14addce4a45a25bbea58fad9aa5e41c513735130b4df5ba9f37a66176b72337"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_contract.ts",
-      "installedSha256": "1e3cf99cb7bfa63baf8dae3f3d8d37fbf8eee846e8262af61dfbfcdfe1c7c075"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift.ts",
-      "installedSha256": "74e348ed8e97a77cb3d7e4d3fe4bfffec0f4b29aa49086767c0f3f50a4d29b81"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/next_plan_support.ts",
-      "installedSha256": "da64c49f508a31b720d80c84eb1fadf7b7cd51a59e6b25a2d1f9cd222b535f4f"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_types.ts",
-      "installedSha256": "d1bd27dd615b78b882a662a5f2366ddaca710ff803e68dd368a1791aaea47189"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_legacy.ts",
-      "installedSha256": "2dc7e8319afdd2ad50a05d0b8af45f6dfdcee08990bcff06be11098113366e6d"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_migration.ts",
-      "installedSha256": "06094de16ee7fefbd34b2022be16649a98af52347a1dd750f8fbfd27a6ceb4d5"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/migration_common.ts",
-      "installedSha256": "db4a608795b98718fc2ca0cc9e326f071cf80c842fee88137227cf2c6a623f21"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_validation.ts",
-      "installedSha256": "32eaaa686239c47f16f87ae677c8c806cfb43d4763bb5b3f7d48b0e8573823e2"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/legacy_spec_id.ts",
-      "installedSha256": "04b130ea1d696f8c4f0e77efc7587615a9fcf37ebda86a797035f250b8fde8c2"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/hardware_locks.ts",
-      "installedSha256": "5b9e4211b5c5537a88dc6f06482f6d689e043c642bb676a8c640f3814f164d16"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/git.ts",
-      "installedSha256": "c9800c610e230f0ab274885e0ee927680d9c2062ec203c556117f06c8e74d0d3"
-    },
-    {
-      "path": "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_paths.ts",
-      "installedSha256": "58df37350488de3e85906d22bc461a00de17293f57d73cfc126012df25d0d187"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/compatibility_docs.ts",
-      "installedSha256": "9667a37ae7704fce28b7d967ac671f2d02d39309acad2d906b28849b91fa6420"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/compatibility_shared.ts",
-      "installedSha256": "dac757da193b15f7b8c5c31cae0f44acc5eb370336bcbd31dce3c26b710e39e3"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/compatibility_cli.ts",
-      "installedSha256": "01ec1aebde5a63a5e0c8d125583bc3ab7e2efa81e36fb6690822dd8f31c244f0"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/checks/replay.ts",
-      "installedSha256": "22905c9504bf3a304618f582ea15ecfae5e9c6e51599d2839d32965e21fadef8"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_helpers.ts",
-      "installedSha256": "039f0928fe42365ef380091ca8f5a8c72d5127c23f6870072ad4f2fce7d0b3de"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/hardware_ingest.ts",
-      "installedSha256": "b84b43ae3c33a8d5e056a92b550769a9347b5c1af631a9ac56c3369e53c671c7"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/next_plan.ts",
-      "installedSha256": "e14addce4a45a25bbea58fad9aa5e41c513735130b4df5ba9f37a66176b72337"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_contract.ts",
-      "installedSha256": "1e3cf99cb7bfa63baf8dae3f3d8d37fbf8eee846e8262af61dfbfcdfe1c7c075"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift.ts",
-      "installedSha256": "74e348ed8e97a77cb3d7e4d3fe4bfffec0f4b29aa49086767c0f3f50a4d29b81"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/next_plan_support.ts",
-      "installedSha256": "da64c49f508a31b720d80c84eb1fadf7b7cd51a59e6b25a2d1f9cd222b535f4f"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_types.ts",
-      "installedSha256": "d1bd27dd615b78b882a662a5f2366ddaca710ff803e68dd368a1791aaea47189"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_legacy.ts",
-      "installedSha256": "2dc7e8319afdd2ad50a05d0b8af45f6dfdcee08990bcff06be11098113366e6d"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_migration.ts",
-      "installedSha256": "06094de16ee7fefbd34b2022be16649a98af52347a1dd750f8fbfd27a6ceb4d5"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/migration_common.ts",
-      "installedSha256": "db4a608795b98718fc2ca0cc9e326f071cf80c842fee88137227cf2c6a623f21"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_validation.ts",
-      "installedSha256": "32eaaa686239c47f16f87ae677c8c806cfb43d4763bb5b3f7d48b0e8573823e2"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/legacy_spec_id.ts",
-      "installedSha256": "04b130ea1d696f8c4f0e77efc7587615a9fcf37ebda86a797035f250b8fde8c2"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/hardware_locks.ts",
-      "installedSha256": "5b9e4211b5c5537a88dc6f06482f6d689e043c642bb676a8c640f3814f164d16"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/git.ts",
-      "installedSha256": "c9800c610e230f0ab274885e0ee927680d9c2062ec203c556117f06c8e74d0d3"
-    },
-    {
-      "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_paths.ts",
-      "installedSha256": "58df37350488de3e85906d22bc461a00de17293f57d73cfc126012df25d0d187"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/compatibility_docs.ts",
-      "installedSha256": "9667a37ae7704fce28b7d967ac671f2d02d39309acad2d906b28849b91fa6420"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/compatibility_shared.ts",
-      "installedSha256": "dac757da193b15f7b8c5c31cae0f44acc5eb370336bcbd31dce3c26b710e39e3"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/compatibility_cli.ts",
-      "installedSha256": "01ec1aebde5a63a5e0c8d125583bc3ab7e2efa81e36fb6690822dd8f31c244f0"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/checks/replay.ts",
-      "installedSha256": "22905c9504bf3a304618f582ea15ecfae5e9c6e51599d2839d32965e21fadef8"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_drift_helpers.ts",
-      "installedSha256": "039f0928fe42365ef380091ca8f5a8c72d5127c23f6870072ad4f2fce7d0b3de"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/hardware_ingest.ts",
-      "installedSha256": "b84b43ae3c33a8d5e056a92b550769a9347b5c1af631a9ac56c3369e53c671c7"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/next_plan.ts",
-      "installedSha256": "e14addce4a45a25bbea58fad9aa5e41c513735130b4df5ba9f37a66176b72337"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_contract.ts",
-      "installedSha256": "1e3cf99cb7bfa63baf8dae3f3d8d37fbf8eee846e8262af61dfbfcdfe1c7c075"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_drift.ts",
-      "installedSha256": "74e348ed8e97a77cb3d7e4d3fe4bfffec0f4b29aa49086767c0f3f50a4d29b81"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/next_plan_support.ts",
-      "installedSha256": "da64c49f508a31b720d80c84eb1fadf7b7cd51a59e6b25a2d1f9cd222b535f4f"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_drift_types.ts",
-      "installedSha256": "d1bd27dd615b78b882a662a5f2366ddaca710ff803e68dd368a1791aaea47189"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_drift_legacy.ts",
-      "installedSha256": "2dc7e8319afdd2ad50a05d0b8af45f6dfdcee08990bcff06be11098113366e6d"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_migration.ts",
-      "installedSha256": "06094de16ee7fefbd34b2022be16649a98af52347a1dd750f8fbfd27a6ceb4d5"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/migration_common.ts",
-      "installedSha256": "db4a608795b98718fc2ca0cc9e326f071cf80c842fee88137227cf2c6a623f21"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_drift_validation.ts",
-      "installedSha256": "32eaaa686239c47f16f87ae677c8c806cfb43d4763bb5b3f7d48b0e8573823e2"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/legacy_spec_id.ts",
-      "installedSha256": "04b130ea1d696f8c4f0e77efc7587615a9fcf37ebda86a797035f250b8fde8c2"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/hardware_locks.ts",
-      "installedSha256": "5b9e4211b5c5537a88dc6f06482f6d689e043c642bb676a8c640f3814f164d16"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/git.ts",
-      "installedSha256": "c9800c610e230f0ab274885e0ee927680d9c2062ec203c556117f06c8e74d0d3"
-    },
-    {
-      "path": "skills/find-next-plan/scripts/_runtime/modules/docs/spec_drift_paths.ts",
-      "installedSha256": "58df37350488de3e85906d22bc461a00de17293f57d73cfc126012df25d0d187"
-    },
-    {
-      "path": "skills/multi-task-flow/tests/delivery-topology.test.ts",
-      "installedSha256": "60c3c895ee7f52250c199791904ff9f65be8758db77ea8dec5cc430e3344a312"
+      "path": "skills/multi-task-flow/web/atomic-graph-view.tsx",
+      "installedSha256": "4703f283653277b3b4cf6282407d03308ba5d5f6859efe11c21d1e560043cade"
     }
   ],
   "exclusions": [
