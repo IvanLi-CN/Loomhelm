@@ -196,6 +196,7 @@ function requireContributionDispatchGate(
   ledger: Ledger,
   owner: Ledger["groups"][number],
   requireParentPr = true,
+  retryAction: "dispatch-claim" | "task-update" = "dispatch-claim",
 ): void {
   if (legacyLedger(ledger)) return;
   const workspaceAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
@@ -224,8 +225,8 @@ function requireContributionDispatchGate(
           ...(missing.includes("parent_pr") ? [
             "publish-pr-claim + publish-pr-resolve for the parent PR",
             "group-atom-update pr_created completed",
-            "retry dispatch-claim",
-          ] : ["retry task-update"]),
+            `retry ${retryAction}`,
+          ] : [`retry ${retryAction}`]),
         ],
       },
     );
@@ -2848,7 +2849,18 @@ export function execute(
           mainOwned &&
           owner.delivery_unit_kind === "bootstrap" &&
           owner.owner_kind === "main";
-        requireContributionDispatchGate(ledger, owner, !bootstrapMainOwnedStart);
+        requireCondition(
+          owner.state === "active",
+          "GROUP_NOT_READY",
+          "Task group is not active",
+          4,
+        );
+        requireContributionDispatchGate(
+          ledger,
+          owner,
+          !bootstrapMainOwnedStart,
+          "task-update",
+        );
       }
       if (state === "running" && previousState !== "starting" && !occupiedSlot) {
         requireCondition(
