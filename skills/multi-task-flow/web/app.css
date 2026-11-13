@@ -696,6 +696,9 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 #atomic-graph .react-flow__node-card { pointer-events:none !important; }
 #atomic-graph .react-flow__node-card > .atomic-dependency-card { pointer-events:auto; }
 #atomic-graph .react-flow__node.selected .atomic-dependency-card { outline:2px solid var(--accent); outline-offset:3px; }
+#atomic-graph .atomic-dependency-card { border-color: var(--node-color, var(--border)); background: var(--raised); box-shadow: 0 3px 10px #00000022; }
+#atomic-graph .atomic-dependency-card[data-state="planned"] { border-style: dashed; }
+#atomic-graph .atomic-dependency-card[data-state="blocked"] { background: color-mix(in srgb, var(--raised) 92%, var(--negative) 8%); }
 #atomic-graph .react-flow__handle { opacity:0; width:1px; height:1px; border:0; pointer-events:none; }
 #atomic-graph .react-flow__attribution { background:var(--surface); color:var(--muted); font-size:9px; }
 .atomic-dependency-scope { margin-top:6px; color:var(--muted); font-size:11px; line-height:15px; overflow-wrap:anywhere; }
