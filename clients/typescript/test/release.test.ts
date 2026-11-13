@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { canonicalTarballDigest, packPackageTarball, removeTarballDirectory } from '../src/release-tarball.ts';
-import { compatibilityDistTag, identityDigest, isCompatibilityDistTag, isExactSemVer, parseCompatibilityDistTag, parseExactSemVer, validatePackageIdentity, validatePublication } from '../src/release.ts';
+import { CANONICAL_TARBALL_DIGEST_ALGORITHM, compatibilityDistTag, identityDigest, isCompatibilityDistTag, isExactSemVer, parseCompatibilityDistTag, parseExactSemVer, validatePackageIdentity, validatePublication } from '../src/release.ts';
 
 test('accepts exact SemVer and rejects ranges, build metadata, and leading zeroes', () => {
   assert.equal(isExactSemVer('1.2.3'), true);
@@ -44,6 +44,8 @@ test('validates independent package identity dimensions', () => {
   assert.equal(identityDigest({ ...identityWithoutBuildId, files: [{ path: 'a', sha256: 'c'.repeat(64) }] }).length, 64);
   assert.throws(() => validatePackageIdentity({ ...identity, compatibilityLine: 'compat-v0' }), /compatibility/);
   assert.throws(() => validatePackageIdentity({ ...identity, mergeSha: 'not-a-sha' }), /mergeSha/);
+  assert.equal(validatePackageIdentity({ ...identity, canonicalDigestAlgorithm: CANONICAL_TARBALL_DIGEST_ALGORITHM }).canonicalDigestAlgorithm, CANONICAL_TARBALL_DIGEST_ALGORITHM);
+  assert.throws(() => validatePackageIdentity({ ...identity, canonicalDigestAlgorithm: 'unknown' }), /canonicalDigestAlgorithm/);
 });
 
 test('release validation binds the requested version to the packaged artifact', () => {

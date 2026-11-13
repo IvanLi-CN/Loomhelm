@@ -61,6 +61,33 @@ class FailureNotificationTests(unittest.TestCase):
         self.assertEqual(notify.call_args.args[0],['scripts/product-release','notify','--identity',identity])
         self.assertEqual(notify.call_args.kwargs['env']['FAILURE_RUN_ID'],'123')
 
+    def test_skill_identity_creates_idempotent_metadata_only_issue(self):
+        self.run.update(name='Skill Runtime Release', path='.github/workflows/skill-release-publish.yml')
+        self.path.write_text(json.dumps({
+            'id': 'b' * 64,
+            'state': 'processing-timeout',
+            'packageName': '@loomhelm/multi-task-flow',
+            'packageVersion': '0.2.8',
+            'compatibilityLine': 'compat-v1',
+            'mergeSha': 'c' * 40,
+            'buildId': 'd' * 64,
+            'tag': 'multi-task-flow-v0.2.8',
+            'canonicalDigest': 'e' * 64,
+            'rawIntegrity': 'sha512-test',
+            'registryObservation': 'processing',
+        }))
+        api,notify=self.invoke()
+        notify.assert_not_called()
+        path,method,body=api.api.call_args.args
+        self.assertEqual((path,method),('issues','POST'))
+        self.assertIn('<!-- loomhelm-skill-release-run:123 -->',body['body'])
+        self.assertIn('Package: @loomhelm/multi-task-flow@0.2.8',body['body'])
+        self.assertIn('State: processing-timeout',body['body'])
+        api,notify=self.invoke([dict(number=9,body='<!-- loomhelm-skill-release-run:123 -->')])
+        notify.assert_not_called()
+        self.assertEqual(api.api.call_args.args[:2],('issues/9','PATCH'))
+        api.api.assert_called_once()
+
     def test_untrusted_failure_does_not_send_or_execute(self):
         self.run['head_repository']['full_name']='other/repo'
         self.event.write_text(json.dumps({'workflow_run':self.run}))

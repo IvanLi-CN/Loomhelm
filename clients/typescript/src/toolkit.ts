@@ -5,16 +5,16 @@ import { delimiter, isAbsolute, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { runProcess, type ProcessOptions, type ProcessResult } from './runtime/process.ts';
-import { identityDigest, validatePackageIdentity, type PackageIdentity } from './release.ts';
+import { identityDigest, validatePackageIdentity, type CanonicalDigestAlgorithm, type PackageIdentity } from './release.ts';
 
 export interface SkillCapabilityReport { name: string; ready: boolean; readinessScope: 'all-declared-scenarios'; resourcesValid: boolean; dependencies: { skill: string; kind: 'skill' | 'command' | 'host'; strength: string; condition: string; available: boolean; code: string }[]; platform: string; arch: string; nativeSupported: boolean; source: string }
 export interface ToolkitResource { path: string; source?: string; sourceSha256?: string; installedSha256?: string }
 export interface ToolkitManifest { schemaVersion: 1; commit: string; skills: string[]; files: ToolkitResource[]; additions?: ToolkitResource[] }
 export interface ToolkitOmittedResource { path: string; reason: string }
 export interface ToolkitArtifactFile { path: string; sha256: string }
-export interface ToolkitDependency { name: string; version: string; path: string; entry: string }
+export interface ToolkitDependency { name: string; version: string; mode?: 'consumer-install' | 'bundled'; path?: string; entry?: string }
 export interface ToolkitArtifactManifest {
-  schemaVersion: 2;
+  schemaVersion: 2 | 3;
   packageName: string;
   packageVersion: string;
   compatibilityLine: string;
@@ -29,6 +29,7 @@ export interface ToolkitArtifactManifest {
   buildId: string;
   tarballDigest: string | null;
   gitTag: string | null;
+  canonicalDigestAlgorithm?: CanonicalDigestAlgorithm;
   dependenciesBundled: boolean;
   dependencies: ToolkitDependency[];
   omittedResources: ToolkitOmittedResource[];
@@ -57,19 +58,25 @@ export class SkillsRuntime {
   }
   async artifact(): Promise<ToolkitArtifactManifest> {
     const value = JSON.parse(await readFile(resolve(this.root, 'artifact-manifest.json'), 'utf8')) as ToolkitArtifactManifest & { identity?: unknown };
-    if (value.schemaVersion !== 2 || value.packageName !== '@loomhelm/multi-task-flow' || value.runtime !== 'bun@1.4.4' || typeof value.sourceCommit !== 'string' || !/^[a-f0-9]{40}$/.test(value.sourceCommit) || typeof value.sourceSha !== 'string' || !/^[a-f0-9]{40}$/.test(value.sourceSha) || typeof value.candidateSha !== 'string' || !/^[a-f0-9]{40}$/.test(value.candidateSha) || value.candidateSha !== value.sourceSha || typeof value.dirty !== 'boolean' || value.dependenciesBundled !== true || !Array.isArray(value.dependencies) || value.dependencies.length === 0 || value.dependencies.some(item => !item || !isSafePackageName(item.name) || typeof item.version !== 'string' || item.version.length === 0 || !isSafeResourcePath(item.path) || !isSafeResourcePath(item.entry)) || new Set(value.dependencies.map(item => item.name)).size !== value.dependencies.length || !Array.isArray(value.omittedResources) || value.omittedResources.some(item => !item || typeof item.path !== 'string' || !isSafeResourcePath(item.path) || typeof item.reason !== 'string' || item.reason.length === 0) || new Set(value.omittedResources.map(item => item.path)).size !== value.omittedResources.length || !Array.isArray(value.files) || value.files.some(file => !file || typeof file.path !== 'string' || !isSafeResourcePath(file.path) || !/^[a-f0-9]{64}$/.test(file.sha256)) || new Set(value.files.map(file => file.path)).size !== value.files.length || !value.identity) throw new Error('Invalid toolkit artifact manifest');
+    const dependencyShapeIsValid = Array.isArray(value.dependencies) && value.dependencies.length > 0 && value.dependencies.every(dependency => {
+      if (!dependency || !isSafePackageName(dependency.name) || typeof dependency.version !== 'string' || dependency.version.length === 0) return false;
+      if (value.schemaVersion === 3) return value.dependenciesBundled === false && dependency.mode === 'consumer-install' && dependency.path === undefined && dependency.entry === undefined;
+      return value.dependenciesBundled === true && typeof dependency.path === 'string' && isSafeResourcePath(dependency.path) && typeof dependency.entry === 'string' && isSafeResourcePath(dependency.entry);
+    });
+    const commonShapeIsValid = (value.schemaVersion === 2 || value.schemaVersion === 3) && value.packageName === '@loomhelm/multi-task-flow' && value.runtime === 'bun@1.4.4' && typeof value.sourceCommit === 'string' && /^[a-f0-9]{40}$/.test(value.sourceCommit) && typeof value.sourceSha === 'string' && /^[a-f0-9]{40}$/.test(value.sourceSha) && typeof value.candidateSha === 'string' && /^[a-f0-9]{40}$/.test(value.candidateSha) && value.candidateSha === value.sourceSha && typeof value.dirty === 'boolean' && Array.isArray(value.dependencies) && new Set(value.dependencies.map(item => item.name)).size === value.dependencies.length && Array.isArray(value.omittedResources) && value.omittedResources.every(item => item && isSafeResourcePath(item.path) && typeof item.reason === 'string' && item.reason.length > 0) && new Set(value.omittedResources.map(item => item.path)).size === value.omittedResources.length && Array.isArray(value.files) && value.files.every(file => file && isSafeResourcePath(file.path) && /^[a-f0-9]{64}$/.test(file.sha256)) && new Set(value.files.map(file => file.path)).size === value.files.length && Boolean(value.identity);
+    if (!commonShapeIsValid || !dependencyShapeIsValid || (value.schemaVersion === 3 && value.canonicalDigestAlgorithm !== 'path-byte-v2') || (value.schemaVersion === 2 && value.canonicalDigestAlgorithm !== undefined && value.canonicalDigestAlgorithm !== 'legacy-locale-en-us-v1')) throw new Error('Invalid toolkit artifact manifest');
     const identity = validatePackageIdentity(value.identity);
-    if (identity.packageName !== value.packageName || identity.packageVersion !== value.packageVersion || identity.compatibilityLine !== value.compatibilityLine || identity.skillVersion !== value.skillVersion || identity.sourceSha !== value.sourceSha || identity.mergeSha !== value.mergeSha || identity.dirty !== value.dirty || identity.buildId !== value.buildId || identity.tarballDigest !== value.tarballDigest || identity.gitTag !== value.gitTag) throw new Error('Toolkit artifact identity mismatch');
+    if (identity.packageName !== value.packageName || identity.packageVersion !== value.packageVersion || identity.compatibilityLine !== value.compatibilityLine || identity.skillVersion !== value.skillVersion || identity.sourceSha !== value.sourceSha || identity.mergeSha !== value.mergeSha || identity.dirty !== value.dirty || identity.buildId !== value.buildId || identity.tarballDigest !== value.tarballDigest || identity.gitTag !== value.gitTag || identity.canonicalDigestAlgorithm !== value.canonicalDigestAlgorithm) throw new Error('Toolkit artifact identity mismatch');
     const { buildId, ...withoutBuildId } = identity;
     if (identityDigest({ ...withoutBuildId, files: value.files }) !== buildId) throw new Error('Toolkit artifact build ID mismatch');
-    for (const dependency of value.dependencies) {
+    if (value.schemaVersion === 2) for (const dependency of value.dependencies) {
       try {
-        const dependencyRoot = resolve(this.root, dependency.path);
+        const dependencyRoot = resolve(this.root, dependency.path!);
         const dependencyManifest = resolve(dependencyRoot, 'package.json');
         if (await realpath(dependencyRoot) !== dependencyRoot || !(await stat(dependencyRoot)).isDirectory() || await realpath(dependencyManifest) !== dependencyManifest || !(await stat(dependencyManifest)).isFile()) throw new Error('Unsafe toolkit dependency: ' + dependency.name);
         const metadata = JSON.parse(await readFile(dependencyManifest, 'utf8')) as { name?: string; version?: string };
         if (metadata.name !== dependency.name || metadata.version !== dependency.version) throw new Error('Toolkit dependency identity mismatch: ' + dependency.name);
-        const entry = resolve(dependencyRoot, dependency.entry);
+        const entry = resolve(dependencyRoot, dependency.entry!);
         const entryRel = relative(dependencyRoot, entry);
         if (isAbsolute(entryRel) || entryRel === '..' || entryRel.startsWith(`..${sep}`) || await realpath(entry) !== entry || !(await stat(entry)).isFile()) throw new Error('Unsafe toolkit dependency entry: ' + dependency.name);
       } catch (error) {
@@ -77,14 +84,29 @@ export class SkillsRuntime {
         throw error;
       }
     }
-    const packageManifest = resolve(this.root, '..', 'package.json');
-    try {
-      const packageMetadata = JSON.parse(await readFile(packageManifest, 'utf8')) as { dependencies?: Record<string, unknown> };
-      for (const dependency of value.dependencies) if (packageMetadata.dependencies?.[dependency.name] !== dependency.version) throw new Error('Toolkit package dependency declaration mismatch: ' + dependency.name);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
     return value;
+  }
+  private async findConsumerDependencyRoot(packageRoot: string, name: string): Promise<string> {
+    // Follow only the package's normal node_modules ancestry; never consult a global or checkout fallback.
+    const marker = `${sep}node_modules${sep}`;
+    const markerIndex = packageRoot.lastIndexOf(marker);
+    const boundary = markerIndex >= 0 ? packageRoot.slice(0, markerIndex) || sep : packageRoot;
+    let current = packageRoot;
+    while (true) {
+      const dependencyRoot = resolve(current, 'node_modules', name);
+      try {
+        const metadata = await lstat(dependencyRoot);
+        if (metadata.isSymbolicLink() || !metadata.isDirectory() || await realpath(dependencyRoot) !== dependencyRoot) throw new Error('Unsafe consumer dependency: ' + name);
+        return dependencyRoot;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      if (current === boundary) break;
+      const parent = resolve(current, '..');
+      if (parent === current) break;
+      current = parent;
+    }
+    throw new Error('Missing toolkit dependency: ' + name);
   }
   private async validateArtifact(): Promise<ToolkitArtifactManifest> {
     const rootStat = await lstat(this.root);
@@ -115,8 +137,42 @@ export class SkillsRuntime {
       }
     };
     await walk('');
+    if (artifact.schemaVersion === 3 && [...actual].some(path => path === 'node_modules' || path.startsWith('node_modules/') || path.includes('/node_modules/'))) throw new Error('Published toolkit contains node_modules');
     for (const path of actual) if (!seen.has(path) && !omitted.has(path)) throw new Error('Unlisted toolkit resource: ' + path);
+    if (artifact.schemaVersion === 3) await this.validateConsumerDependencies(artifact);
     return artifact;
+  }
+  private async validateConsumerDependencies(artifact: ToolkitArtifactManifest): Promise<void> {
+    let packageRoot = resolve(this.root, '..');
+    let packageManifest = resolve(packageRoot, 'package.json');
+    let packageMetadata: { dependencies?: Record<string, unknown> };
+    try {
+      packageMetadata = JSON.parse(await readFile(packageManifest, 'utf8')) as { dependencies?: Record<string, unknown> };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      packageRoot = this.root;
+      packageManifest = resolve(packageRoot, 'package.json');
+      try {
+        packageMetadata = JSON.parse(await readFile(packageManifest, 'utf8')) as { dependencies?: Record<string, unknown> };
+      } catch (fallbackError) {
+        if ((fallbackError as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('Missing package dependency manifest');
+        throw fallbackError;
+      }
+    }
+    for (const dependency of artifact.dependencies) {
+      if (packageMetadata.dependencies?.[dependency.name] !== dependency.version) throw new Error('Toolkit package dependency declaration mismatch: ' + dependency.name);
+      const dependencyRoot = await this.findConsumerDependencyRoot(packageRoot, dependency.name);
+      try {
+        const dependencyManifest = resolve(dependencyRoot, 'package.json');
+        const manifestStat = await lstat(dependencyManifest);
+        if (manifestStat.isSymbolicLink() || !manifestStat.isFile() || await realpath(dependencyManifest) !== dependencyManifest) throw new Error('Unsafe consumer dependency: ' + dependency.name);
+        const metadata = JSON.parse(await readFile(dependencyManifest, 'utf8')) as { name?: string; version?: string };
+        if (metadata.name !== dependency.name || metadata.version !== dependency.version) throw new Error('Consumer dependency identity mismatch: ' + dependency.name);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('Missing toolkit dependency: ' + dependency.name);
+        throw error;
+      }
+    }
   }
   async validate(): Promise<ToolkitArtifactManifest> { return this.validateArtifact(); }
   async list(): Promise<{ name: string; path: string; scripts: string[] }[]> {

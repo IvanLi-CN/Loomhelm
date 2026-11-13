@@ -24,7 +24,7 @@ export function canonicalTarballDigest(tarballPath: string): string {
     execFileSync('tar', ['-xzf', resolve(tarballPath), '-C', extractionRoot], { stdio: 'ignore' });
     const packageRoot = resolve(extractionRoot, 'package');
     if (!lstatSync(packageRoot).isDirectory()) throw new Error('Tarball does not contain a package root');
-    const files = walkFiles(packageRoot).sort((left, right) => left.localeCompare(right));
+    const files = walkFiles(packageRoot).sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')));
     const hash = createHash('sha256');
     for (const path of files) {
       if (path === 'toolkit/artifact-manifest.json') continue;

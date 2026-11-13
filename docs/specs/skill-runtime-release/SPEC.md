@@ -12,7 +12,7 @@
 
 ## Terms and Identity
 
-`Skill package` 是可从 npm 独立安装并运行的 `@loomhelm/multi-task-flow` 包，必须携带运行所需的 Skill、CLI、viewer 和依赖闭包。
+`Skill package` 是可从 npm 独立安装并运行的 `@loomhelm/multi-task-flow` 包，必须携带运行所需的 Skill、CLI、viewer，并通过明确的 production dependency declarations 形成可检查的消费者安装闭包。
 
 `package version` 是 npm 使用的完整 SemVer；它标识包内容身份，不从 `compat-vN`、`latest` 或调用者输入推断。
 
@@ -40,9 +40,9 @@
 
 ### REQ-SRR-001：独立包与资源闭包
 
-发布包 MUST 是可独立安装的 `@loomhelm/multi-task-flow` npm 包，包含完整 Skill 工具、共享合同、CLI、预构建 viewer 资源、运行时资源和完整生产依赖闭包。
+发布包 MUST 是可独立安装的 `@loomhelm/multi-task-flow` npm 包，包含完整 Skill 工具、共享合同、CLI、预构建 viewer 资源和运行时资源；`playwright`、`sharp`、`zod` MUST 作为根 package 的 production dependencies 由消费者安装，不能复制到 `toolkit/**/node_modules`。
 
-包内任何正式入口 MUST NOT 依赖父仓库 checkout、`~/.agents`、全局 Skill 安装、未打包的相邻 workspace、安装者的源目录或发布机上的偶然依赖；包外依赖只能是明确声明并可检查的运行时前置条件。
+包内任何正式入口 MUST NOT 依赖父仓库 checkout、`~/.agents`、全局 Skill 安装、未打包的相邻 workspace、安装者的源目录或发布机上的偶然依赖；包外 production dependencies 只能通过消费者安装解析，运行时缺失时必须 fail closed，不得联网安装或回退到 checkout/global Skill。
 
 发布包 MUST 带有机器可读的内容清单、文件摘要、package version、compatibility line、Skill version、source SHA、merge SHA、build ID、service/viewer/ledger/API/frontend 合同版本和 tarball digest。
 
@@ -58,7 +58,9 @@
 
 ### REQ-SRR-003：独立版本维度与精确身份
 
-发布合同 MUST 独立记录并校验 package version、compatibility line、Skill version、source SHA、merge SHA、ledger contract、API version、frontend contract、viewer contract、service version、build ID、package tarball digest 和 Git tag。
+发布合同 MUST 独立记录并校验 package version、compatibility line、Skill version、source SHA、merge SHA、ledger contract、API version、frontend contract、viewer contract、service version、build ID、package tarball digest、raw npm integrity、canonical digest algorithm 和 Git tag。
+
+新 artifact MUST 使用 `schemaVersion=3` 与 `canonicalDigestAlgorithm=path-byte-v2`；canonical digest MUST 按 UTF-8 path bytes 排序。`schemaVersion=2` 仅保留 legacy read-only verifier，缺少 current algorithm 时不得重算为新身份或重新上传；现有 `0.2.7` 只允许以 registry raw integrity 和 legacy identity 做对账。
 
 任何维度 MUST NOT 从另一个维度推断；尤其不得从 npm `latest`、调用者输入的 dist-tag、本地未提交 HEAD、最近 tag 或 package version 推断兼容线、merge SHA 或源身份。
 
@@ -130,7 +132,7 @@ fallback MUST 绑定明确 release、run、owner 和只读证据，禁止执行�
 
 技能发布 PR MUST 恰好带有一个 `release:skill`、`release:skill-initial-publication` 或 `release:skip` label；缺少、重复、冲突或在构建后改变 label MUST 使发布资格失效并要求重新验证。
 
-`release:skip` MUST 明确记录跳过原因，不得改变 canonical package version、compatibility line、merge SHA 或发布 tag；`release:skill` MUST 校验 SemVer 单调性、版本未占用、package projection、compat line 和完整包内容；`release:skill-initial-publication` MUST 仅允许 canonical identity 与 protected main 相同、exact npm version 尚未注册且 owner approval 锁定同一 merge SHA、build ID 和 tarball digest 的首次 registry publication。
+`release:skip` MUST 明确记录跳过原因，不得改变 canonical package version、compatibility line、merge SHA 或发布 tag；`release:skill` MUST 校验 SemVer 单调性、版本未占用、package projection、compat line 和完整包内容；`release:skill-initial-publication` MUST 仅允许 canonical identity 与 protected main 相同，并由 owner-approved workflow 明确选择 exact npm version 缺失的首次 registry publication 或对既有版本执行 read-only registry reconciliation，且始终锁定同一 merge SHA、build ID 和 tarball digest。
 
 发布资格检查 MUST 重新确认目标基线、PR 合并状态、实际 merge SHA、label、计划版本和工作区清洁状态，不得把草稿、未合并分支或历史成功结果当作当前发布事实。
 
@@ -148,21 +150,23 @@ fallback MUST 绑定明确 release、run、owner 和只读证据，禁止执行�
 
 ### REQ-SRR-012：单 tarball 发布
 
-发布 MUST 只构建一次完整 tarball，并在发布前计算、记录和校验其字节摘要、文件清单和 package identity；验证与实际 npm 上传 MUST 使用同一 tarball。
+发布流程 MUST 只保留一个可上传的候选 tarball，并在发布前计算、记录和校验其文件清单、canonical digest、raw npm integrity 和 package identity；验证、registry 对账和实际 npm 上传 MUST 使用同一候选字节，任何 digest provenance embedding 的中间文件都不得作为第二个候选上传。
 
 发布 promotion、重试或移动 dist-tag MUST NOT 重新构建；tarball 字节、文件数量、摘要、package version、compat line 或 manifest 任一变化 MUST 视为不同候选并停止当前发布。
 
-发布失败或网络响应不明确时 MUST 按 package identity、merge SHA、tag 和 tarball digest 对账后再重试，不得盲目重复上传可能已成功的副作用。
+发布失败或网络响应不明确时 MUST 进入 identity-first registry state machine：404、processing、已知 409、超时和 identity mismatch 必须分别记录并按 exact package metadata、raw integrity、canonical digest、merge SHA、tag 和 build ID 对账；不得盲目重复上传、重建 tarball、删除版本或移动 tag。
 
 - covers: `VER-SRR-021`, `VER-SRR-022`
 
 ### REQ-SRR-013：不可变 tag 与 dist-tag
 
-每个 package version MUST 绑定不可移动、可恢复的 Git tag `multi-task-flow-vX.Y.Z`；已有 tag 只有在其精确指向相同 merge SHA 且 package identity 完全一致时才可复用。
+每个 package version MUST 绑定不可移动、可恢复的 Git tag `multi-task-flow-vX.Y.Z`；已有 tag 只有在其精确指向相同 merge SHA 且 package identity 完全一致时才可复用。发布前的 tag 检查可以允许缺失，但 tag 的创建或复用 MUST 后置到 registry exact identity 与 raw integrity 对账成功之后。
 
 发布流程 MUST NOT 覆盖、移动或删除已存在的 tag；tag 冲突、候选身份不一致或 tag 保护失败 MUST 进入人工对账，不得用 force 操作修复。
 
 npm exact SemVer 发布成功后，流程才可按声明顺序移动 `compat-vN` 和 `latest`；`stable` 只有在发布意图显式声明时才可移动。并发发布和中断恢复 MUST 以 tag、registry metadata、tarball digest 和 merge SHA 的身份对账收敛。
+
+registry exact identity 只有在 exact-visible 且 tarball/raw integrity 对账成功后才算 `published`；compatibility line、`latest` 和显式 stable 必须按此顺序逐个 promotion 并逐个 read-back，全部目标 read-back 成功才算 `completed`。release receipt MUST 保存各阶段状态、registry observation 和 dist-tag read-back；`published` 不得伪装成 `completed`。
 
 - covers: `VER-SRR-023`, `VER-SRR-024`
 
@@ -174,19 +178,21 @@ npm exact SemVer 发布成功后，流程才可按声明顺序移动 `compat-vN`
 
 运行时和发布日志 MUST 记录足以对账的 package version、compat line、merge SHA、build ID、tag、tarball digest、release identity、generation、PID、run 和 lease，而不得输出凭据或敏感内容。
 
+预期成功的 Skill release workflow 失败时，default-branch metadata-only sidecar MUST 复用 `github-issue` transport 创建或更新一个幂等 Issue，通知失败不得覆盖原 workflow 失败；Issue 只包含安全的 receipt context 和下一步对账动作，不得伪造外部 publication receipt。
+
 - covers: `VER-SRR-025`, `VER-SRR-026`
 
 ## Verification
 
 ### VER-SRR-001
 
-- Method: 在独立临时目录安装生成的 npm tarball，断开父仓库、全局 Skill 和相邻 workspace，并按清单验证入口、资源和导入闭包。
+- Method: 在独立临时目录执行消费者 `bun install` 并安装生成的 npm tarball，断开父仓库、全局 Skill 和相邻 workspace，检查 tarball 不含 production `node_modules`，再按清单验证入口、资源和导入闭包。
 - covers: `REQ-SRR-001`, `REQ-SRR-002`
 - Pass condition: 独立目录可以运行正式 CLI 和 viewer 所需入口，缺失 Bun、依赖、资源或摘要时 fail closed，且没有从源 checkout 或全局 Skill 回退。
 
 ### VER-SRR-002
 
-- Method: 对包内文件、manifest、源提交、build ID、package version、compat line、合同版本和 tarball digest 做确定性重算与交叉校验。
+- Method: 对包内文件、manifest、源提交、build ID、package version、compat line、合同版本、`path-byte-v2` canonical digest 和 npm raw integrity 做确定性重算与交叉校验，并对 schema v2 legacy artifact 只读验证。
 - covers: `REQ-SRR-001`, `REQ-SRR-003`, `REQ-SRR-011`, `REQ-SRR-012`
 - Pass condition: 每个身份字段都有唯一来源，任一字段漂移会使候选或发布验证失败，同一候选可从 tarball 反向证明精确 merge SHA。
 
@@ -302,31 +308,31 @@ npm exact SemVer 发布成功后，流程才可按声明顺序移动 `compat-vN`
 
 - Method: 对单次构建的 tarball 执行文件清单、摘要、安装、测试和模拟 npm 上传的字节比对。
 - covers: `REQ-SRR-012`
-- Pass condition: 验证和上传使用同一 tarball，内容或摘要变化被识别为新候选。
+- Pass condition: 只有一个候选 tarball 进入验证和上传，内容、raw integrity 或摘要变化被识别为新候选，旧 schema v2 artifact 不会触发重传。
 
 ### VER-SRR-022
 
-- Method: 在上传成功、超时、网络断开、registry 响应不明确、promotion 中断和并发发布后按 identity 执行恢复对账。
+- Method: 在 registry 404、processing、已知 409、publish timeout、网络断开、identity mismatch、promotion 中断和并发发布后按 receipt identity 执行恢复对账。
 - covers: `REQ-SRR-012`, `REQ-SRR-013`
-- Pass condition: 恢复先读取 tag、registry、digest 和 merge SHA，再决定重试或停止，不重复未知副作用。
+- Pass condition: 恢复先读取 tag、exact registry metadata、raw integrity、canonical digest 和 merge SHA，再决定继续 reconcile 或停止，不重复未知上传、不重建 tarball。
 
 ### VER-SRR-023
 
 - Method: 对不存在 tag、相同身份已有 tag、不同 merge SHA 同名 tag、tag 被移动或删除的场景执行保护测试。
 - covers: `REQ-SRR-013`
-- Pass condition: `multi-task-flow-vX.Y.Z` 只可创建或复用相同完整身份，不能移动、覆盖或 force 修复冲突 tag。
+- Pass condition: `multi-task-flow-vX.Y.Z` 只可在 exact registry identity 对账成功后创建或复用相同完整身份，不能移动、覆盖或 force 修复冲突 tag。
 
 ### VER-SRR-024
 
 - Method: 按 exact SemVer、`compat-vN`、`latest` 和显式 `stable` 的顺序模拟发布、失败和并发 promotion。
 - covers: `REQ-SRR-013`
-- Pass condition: exact SemVer 成功后才移动声明的 dist-tag，未声明的 `stable` 不被修改，并发结果按完整 identity 收敛。
+- Pass condition: exact-visible 且 identity 对账成功后才按 compat line、`latest`、显式 `stable` 顺序移动并逐个 read-back，未声明的 `stable` 不被修改；exact 对账成功但 promotion 未完成时只能报告 `published`，不能报告 `completed`。
 
 ### VER-SRR-025
 
-- Method: 从 CLI、README、操作手册和发布日志检查安装前置条件、版本矩阵、服务边界、TTL、迁移、tag、label、回滚和失败恢复的完整性。
+- Method: 从 CLI、README、操作手册、release receipt、失败 Issue 和发布日志检查消费者依赖安装、版本矩阵、服务边界、TTL、迁移、tag、label、回滚、`published/completed` 语义和失败恢复的完整性。
 - covers: `REQ-SRR-014`
-- Pass condition: 新维护者可以根据文档定位正式入口、前置条件和停止边界，不依赖隐含源 checkout 或危险的删除/force 操作。
+- Pass condition: 新维护者可以根据文档定位正式入口、消费者安装前置条件、receipt 恢复顺序和停止边界，不依赖隐含源 checkout 或危险的删除/force 操作。
 
 ### VER-SRR-026
 
@@ -341,6 +347,7 @@ npm exact SemVer 发布成功后，流程才可按声明顺序移动 `compat-vN`
 - [Viewer compatibility lifecycle](../../adr/0026-viewer-compatibility-lifecycle.md)
 - [Multi-task Flow version propagation and safe migration](../../adr/0028-multi-task-flow-version-propagation-and-safe-migration.md)
 - [Skill runtime release and service boundary](../../adr/0029-skill-runtime-release-and-service-boundary.md)
+- [Skill runtime registry reconciliation and consumer dependencies](../../adr/0030-skill-runtime-registry-reconciliation-and-consumer-dependencies.md)
 
 ## References
 

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import tarfile
@@ -7,9 +8,12 @@ from pathlib import Path
 
 from release import (
     PACKAGE_NAME,
+    CANONICAL_TARBALL_DIGEST_ALGORITHM,
+    LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM,
     ReleaseError,
     Version,
     canonical_tarball_digest,
+    tarball_integrity,
     dist_tag_action,
     evaluate_gate,
     identity_digest,
@@ -123,6 +127,22 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn('promote "$COMPATIBILITY_LINE"', workflow)
         self.assertIn("promote latest", workflow)
         self.assertIn("canonical_file_differences=", workflow)
+        self.assertIn("resume_run_id", workflow)
+        self.assertIn('gh run download "$RESUME_RUN_ID" --pattern "skill-release-receipt-${MERGE_SHA}-*"', workflow)
+        self.assertIn("processing", workflow)
+        self.assertIn("known-409", workflow)
+        self.assertIn("processing-timeout", workflow)
+        self.assertIn("legacy-version-absent", workflow)
+        self.assertIn("0.2.7 is legacy read-only reconciliation", workflow)
+        self.assertIn("identity-mismatch", workflow)
+        self.assertIn("published", workflow)
+        self.assertIn("completed", workflow)
+        self.assertEqual(workflow.count('npm publish "$tarball"'), 1)
+        self.assertNotIn('npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null || true', workflow)
+        self.assertLess(
+            workflow.index("Publish exact package and reconcile registry identity"),
+            workflow.index("Create or reconcile immutable release tag after exact identity"),
+        )
 
     def test_release_skill_requires_strict_version_progression(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -341,6 +361,93 @@ class ReleasePolicyTests(unittest.TestCase):
                 expected_compatibility="compat-v1",
             )
             self.assertEqual(validated["tarballDigest"], digest)
+            self.assertFalse(validated["canonicalDigestVerified"])
+            self.assertEqual(validated["canonicalDigestAlgorithm"], LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM)
+            self.assertEqual(validated["rawIntegrity"], tarball_integrity(tarball))
+
+    def test_path_byte_digest_is_stable_for_non_ascii_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package_root = root / "package"
+            (package_root / "toolkit").mkdir(parents=True)
+            (package_root / "package.json").write_text(json.dumps({"name": PACKAGE_NAME, "version": "0.2.0"}), encoding="utf-8")
+            (package_root / "toolkit/z.txt").write_bytes(b"z")
+            (package_root / "toolkit/é.txt").write_bytes(b"e-acute")
+            tarball = root / "paths.tgz"
+            with tarfile.open(tarball, "w:gz") as archive:
+                archive.add(package_root, arcname="package")
+            expected = hashlib.sha256()
+            for path, contents in (("package.json", package_root.joinpath("package.json").read_bytes()), ("toolkit/z.txt", b"z"), ("toolkit/é.txt", b"e-acute")):
+                expected.update(path.encode("utf-8"))
+                expected.update(b"\0")
+                expected.update(contents)
+                expected.update(b"\0")
+            self.assertEqual(canonical_tarball_digest(tarball), expected.hexdigest())
+
+    def test_schema3_uses_consumer_dependencies_and_rejects_node_modules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package_root = root / "package"
+            (package_root / "toolkit/src").mkdir(parents=True)
+            (package_root / "toolkit/src/runtime.ts").write_bytes(b"runtime")
+            files = [{"path": "src/runtime.ts", "sha256": hashlib.sha256(b"runtime").hexdigest()}]
+            identity = {
+                "packageName": PACKAGE_NAME,
+                "packageVersion": "0.2.0",
+                "compatibilityLine": "compat-v1",
+                "skillVersion": "2.7.2",
+                "sourceSha": "a" * 40,
+                "mergeSha": "a" * 40,
+                "dirty": False,
+                "contracts": {"ledgerContract": 2, "apiVersion": 1, "frontendContract": 1, "viewerContract": 5, "serviceVersion": "1"},
+                "tarballDigest": None,
+                "gitTag": "multi-task-flow-v0.2.0",
+                "canonicalDigestAlgorithm": CANONICAL_TARBALL_DIGEST_ALGORITHM,
+            }
+            identity["buildId"] = identity_digest(identity, files)
+            artifact = {
+                "schemaVersion": 3,
+                "packageName": PACKAGE_NAME,
+                "packageVersion": "0.2.0",
+                "compatibilityLine": "compat-v1",
+                "skillVersion": "2.7.2",
+                "sourceSha": identity["sourceSha"],
+                "mergeSha": identity["mergeSha"],
+                "candidateSha": identity["sourceSha"],
+                "dirty": False,
+                "runtime": "bun@1.4.4",
+                "identity": identity,
+                "buildId": identity["buildId"],
+                "tarballDigest": None,
+                "gitTag": identity["gitTag"],
+                "canonicalDigestAlgorithm": CANONICAL_TARBALL_DIGEST_ALGORITHM,
+                "dependenciesBundled": False,
+                "dependencies": [{"name": "zod", "version": "4.6.7", "mode": "consumer-install"}],
+                "files": files,
+            }
+            (package_root / "package.json").write_text(json.dumps({"name": PACKAGE_NAME, "version": "0.2.0"}), encoding="utf-8")
+            (package_root / "toolkit/artifact-manifest.json").write_text(json.dumps(artifact), encoding="utf-8")
+            tarball = root / "schema3.tgz"
+            with tarfile.open(tarball, "w:gz") as archive:
+                archive.add(package_root, arcname="package")
+            digest = canonical_tarball_digest(tarball)
+            identity["tarballDigest"] = digest
+            identity["buildId"] = identity_digest(identity, files)
+            artifact["tarballDigest"] = digest
+            artifact["buildId"] = identity["buildId"]
+            artifact["identity"] = identity
+            (package_root / "toolkit/artifact-manifest.json").write_text(json.dumps(artifact), encoding="utf-8")
+            with tarfile.open(tarball, "w:gz") as archive:
+                archive.add(package_root, arcname="package")
+            validated = validate_tarball(tarball, expected_version="0.2.0", expected_merge_sha="a" * 40, expected_compatibility="compat-v1")
+            self.assertTrue(validated["canonicalDigestVerified"])
+            self.assertEqual(validated["canonicalDigestAlgorithm"], CANONICAL_TARBALL_DIGEST_ALGORITHM)
+            (package_root / "toolkit/node_modules").mkdir()
+            (package_root / "toolkit/node_modules/rogue.js").write_text("rogue", encoding="utf-8")
+            with tarfile.open(tarball, "w:gz") as archive:
+                archive.add(package_root, arcname="package")
+            with self.assertRaisesRegex(ReleaseError, "node_modules"):
+                validate_tarball(tarball, expected_version="0.2.0", expected_merge_sha="a" * 40, expected_compatibility="compat-v1")
 
     def _init_repo(self, root: Path) -> None:
         git(root, "init", "-q")

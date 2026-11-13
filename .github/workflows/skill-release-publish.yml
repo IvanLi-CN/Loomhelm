@@ -21,10 +21,16 @@ on:
         required: true
         default: false
         type: boolean
+      resume_run_id:
+        description: Previous workflow run whose candidate and receipt must be reconciled without rebuilding or republishing
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
   pull-requests: read
+  actions: read
 
 concurrency:
   group: loomhelm-skill-runtime-release-${{ inputs.merge_sha }}
@@ -39,7 +45,7 @@ jobs:
       reason: ${{ steps.gate.outputs.reason }}
       version: ${{ steps.gate.outputs.version }}
       compatibility_line: ${{ steps.gate.outputs.compatibility_line }}
-      artifact_name: ${{ steps.artifact.outputs.artifact_name }}
+      artifact_name: ${{ steps.artifact_build.outputs.artifact_name || steps.artifact_resume.outputs.artifact_name }}
     steps:
       - name: Check out the exact merge SHA
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -83,7 +89,7 @@ jobs:
           with open(output_path, "a", encoding="utf-8") as output:
               output.write(f"base_sha={parents[0]}\n")
           PY
-      - name: Verify exact npm version is unpublished
+      - name: Verify exact npm version state
         id: registry
         env:
           PACKAGE_NAME: '@loomhelm/multi-task-flow'
@@ -154,8 +160,8 @@ jobs:
           --sha "$MERGE_SHA"
           --allow-missing
       - name: Build and validate one candidate tarball
-        id: artifact
-        if: steps.gate.outputs.decision == 'release:skill' || steps.gate.outputs.decision == 'release:skill-initial-publication'
+        id: artifact_build
+        if: (steps.gate.outputs.decision == 'release:skill' || steps.gate.outputs.decision == 'release:skill-initial-publication') && inputs.resume_run_id == ''
         env:
           MERGE_SHA: ${{ inputs.merge_sha }}
           VERSION: ${{ steps.gate.outputs.version }}
@@ -231,13 +237,101 @@ jobs:
             --merge-sha "$MERGE_SHA" \
             --compatibility-line "$COMPATIBILITY_LINE"
           cp "${finals[0]}" "$RUNNER_TEMP/skill-package.tgz"
+          python3 - "${finals[0]}" "$RUNNER_TEMP/skill-release-validation.json" "$RUNNER_TEMP/release-identity.json" <<'PY'
+          import hashlib
+          import json
+          import sys
+
+          tarball, validation_path, identity_path = sys.argv[1:]
+          validation = json.loads(__import__('subprocess').check_output([
+              'python3', 'tools/skill-release/release.py', 'validate-tarball', tarball,
+              '--version', __import__('os').environ['VERSION'],
+              '--merge-sha', __import__('os').environ['MERGE_SHA'],
+              '--compatibility-line', __import__('os').environ['COMPATIBILITY_LINE'],
+          ], text=True))
+          open(validation_path, 'w', encoding='utf-8').write(json.dumps(validation, sort_keys=True) + '\n')
+          record = {
+              'state': 'candidate-validated',
+              'published': False,
+              'completed': False,
+              'packageName': validation['packageName'],
+              'packageVersion': validation['packageVersion'],
+              'compatibilityLine': validation['compatibilityLine'],
+              'mergeSha': validation['mergeSha'],
+              'buildId': validation['buildId'],
+              'tag': validation['gitTag'],
+              'canonicalDigest': validation['tarballDigest'],
+              'canonicalDigestAlgorithm': validation['canonicalDigestAlgorithm'],
+              'canonicalDigestVerified': validation['canonicalDigestVerified'],
+              'rawIntegrity': validation['rawIntegrity'],
+              'registryObservation': 'not-observed',
+              'distTags': {},
+          }
+          record['id'] = hashlib.sha256(json.dumps(record, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+          open(identity_path, 'w', encoding='utf-8').write(json.dumps(record, indent=2, sort_keys=True) + '\n')
+          PY
+          printf 'artifact_name=skill-release-%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Restore and validate one existing candidate tarball
+        id: artifact_resume
+        if: (steps.gate.outputs.decision == 'release:skill' || steps.gate.outputs.decision == 'release:skill-initial-publication') && inputs.resume_run_id != ''
+        env:
+          MERGE_SHA: ${{ inputs.merge_sha }}
+          VERSION: ${{ steps.gate.outputs.version }}
+          COMPATIBILITY_LINE: ${{ steps.gate.outputs.compatibility_line }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$RESUME_RUN_ID" != "$GITHUB_RUN_ID"
+          resume_dir="$RUNNER_TEMP/resumed-skill-release"
+          receipt_dir="$RUNNER_TEMP/resumed-skill-release-receipt"
+          rm -rf "$resume_dir" "$receipt_dir"
+          gh run download "$RESUME_RUN_ID" --name "skill-release-$VERSION" --dir "$resume_dir"
+          tarball="$(find "$resume_dir" -type f -name '*.tgz' -print -quit)"
+          test -n "$tarball"
+          python3 tools/skill-release/release.py validate-tarball "$tarball" --version "$VERSION" --merge-sha "$MERGE_SHA" --compatibility-line "$COMPATIBILITY_LINE" > "$RUNNER_TEMP/skill-release-validation.json"
+          cp "$tarball" "$RUNNER_TEMP/skill-package.tgz"
+          identity="$(find "$resume_dir" -type f -name 'release-identity.json' -print -quit)"
+          if [ -n "$identity" ]; then cp "$identity" "$RUNNER_TEMP/release-identity.json"; else echo 'resumed candidate has no release identity receipt' >&2; exit 1; fi
+          if ! gh run download "$RESUME_RUN_ID" --pattern "skill-release-receipt-${MERGE_SHA}-*" --dir "$receipt_dir"; then
+            echo 'resumed candidate has no downloadable release receipt' >&2
+            exit 1
+          fi
+          prior_receipt="$(find "$receipt_dir" -type f -name 'skill-release-receipt.json' -print -quit)"
+          test -n "$prior_receipt"
+          cp "$prior_receipt" "$RUNNER_TEMP/release-receipt.json"
+          python3 - "$RUNNER_TEMP/skill-release-validation.json" "$RUNNER_TEMP/release-receipt.json" <<'PY'
+          import json
+          import sys
+
+          validation = json.load(open(sys.argv[1], encoding='utf-8'))
+          receipt = json.load(open(sys.argv[2], encoding='utf-8'))
+          expected = {
+              'packageName': validation['packageName'],
+              'packageVersion': validation['packageVersion'],
+              'compatibilityLine': validation['compatibilityLine'],
+              'mergeSha': validation['mergeSha'],
+              'buildId': validation['buildId'],
+              'tag': validation['gitTag'],
+              'canonicalDigest': validation['tarballDigest'],
+              'canonicalDigestAlgorithm': validation['canonicalDigestAlgorithm'],
+              'rawIntegrity': validation['rawIntegrity'],
+          }
+          if receipt.get('schemaVersion') != 1 or any(receipt.get(key) != value for key, value in expected.items()):
+              raise SystemExit('resumed release receipt does not match the verified candidate')
+          if not isinstance(receipt.get('distTags'), dict):
+              raise SystemExit('resumed release receipt has invalid dist-tag state')
+          PY
           printf 'artifact_name=skill-release-%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
       - name: Upload the verified candidate tarball
         if: steps.gate.outputs.decision == 'release:skill' || steps.gate.outputs.decision == 'release:skill-initial-publication'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: skill-release-${{ steps.gate.outputs.version }}
-          path: ${{ runner.temp }}/skill-package.tgz
+          path: |
+            ${{ runner.temp }}/skill-package.tgz
+            ${{ runner.temp }}/release-identity.json
+            ${{ runner.temp }}/release-receipt.json
           if-no-files-found: error
           retention-days: 14
 
@@ -290,6 +384,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      actions: read
       id-token: write
     env:
       GH_TOKEN: ${{ github.token }}
@@ -297,6 +392,7 @@ jobs:
       MERGE_SHA: ${{ inputs.merge_sha }}
       VERSION: ${{ needs.verify.outputs.version }}
       COMPATIBILITY_LINE: ${{ needs.verify.outputs.compatibility_line }}
+      RESUME_RUN_ID: ${{ inputs.resume_run_id }}
     steps:
       - name: Check out the exact merge SHA
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -317,57 +413,285 @@ jobs:
           package-manager-cache: false
       - name: Ensure npm supports OIDC dist-tags
         run: npm install --global npm@11.21.0
-      - name: Create or reconcile immutable release tag
+      - name: Publish exact package and reconcile registry identity
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/skill-release/skill-package.tgz"
+          test -f "$tarball"
+          validation="$RUNNER_TEMP/skill-release-validation.json"
+          python3 tools/skill-release/release.py validate-tarball "$tarball" \
+            --version "$VERSION" \
+            --merge-sha "$MERGE_SHA" \
+            --compatibility-line "$COMPATIBILITY_LINE" > "$validation"
+          receipt="$RUNNER_TEMP/skill-release-receipt.json"
+          prior_receipt="$(find "$RUNNER_TEMP/skill-release" -type f -name 'release-receipt.json' -print -quit || true)"
+          if [ -n "$prior_receipt" ]; then
+            cp "$prior_receipt" "$receipt"
+            python3 - "$validation" "$receipt" <<'PY'
+          import json
+          import sys
+
+          validation = json.load(open(sys.argv[1], encoding='utf-8'))
+          receipt = json.load(open(sys.argv[2], encoding='utf-8'))
+          expected = {
+              'packageName': validation['packageName'],
+              'packageVersion': validation['packageVersion'],
+              'compatibilityLine': validation['compatibilityLine'],
+              'mergeSha': validation['mergeSha'],
+              'buildId': validation['buildId'],
+              'tag': validation['gitTag'],
+              'canonicalDigest': validation['tarballDigest'],
+              'canonicalDigestAlgorithm': validation['canonicalDigestAlgorithm'],
+              'rawIntegrity': validation['rawIntegrity'],
+          }
+          if receipt.get('schemaVersion') != 1 or any(receipt.get(key) != value for key, value in expected.items()):
+              raise SystemExit('candidate receipt does not match the verified tarball')
+          if not isinstance(receipt.get('distTags'), dict):
+              raise SystemExit('candidate receipt has invalid dist-tag state')
+          PY
+          elif [ -n "$RESUME_RUN_ID" ]; then
+            echo 'resume_run_id requires a release receipt in the candidate artifact' >&2
+            exit 1
+          else
+            python3 - "$validation" "$receipt" <<'PY'
+          import json
+          import sys
+
+          validation_path, receipt_path = sys.argv[1:]
+          validation = json.load(open(validation_path, encoding='utf-8'))
+          receipt = {
+              'schemaVersion': 1,
+              'state': 'candidate-validated',
+              'published': False,
+              'completed': False,
+              'packageName': validation['packageName'],
+              'packageVersion': validation['packageVersion'],
+              'compatibilityLine': validation['compatibilityLine'],
+              'mergeSha': validation['mergeSha'],
+              'buildId': validation['buildId'],
+              'tag': validation['gitTag'],
+              'canonicalDigest': validation['tarballDigest'],
+              'canonicalDigestAlgorithm': validation['canonicalDigestAlgorithm'],
+              'canonicalDigestVerified': validation['canonicalDigestVerified'],
+              'rawIntegrity': validation['rawIntegrity'],
+              'publishOutcome': 'not-attempted',
+              'registryObservation': {'state': 'not-observed'},
+              'distTags': {},
+          }
+          json.dump(receipt, open(receipt_path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
+          open(receipt_path, 'a', encoding='utf-8').write('\n')
+          PY
+          fi
+          update_receipt() {
+            local state="$1"
+            local published="$2"
+            local completed="$3"
+            local observation="$4"
+            STATE="$state" PUBLISHED="$published" COMPLETED="$completed" OBSERVATION="$observation" RECEIPT="$receipt" python3 - <<'PY'
+          import json
+          import os
+
+          path = os.environ['RECEIPT']
+          value = json.load(open(path, encoding='utf-8'))
+          value['state'] = os.environ['STATE']
+          value['published'] = os.environ['PUBLISHED'] == 'true'
+          value['completed'] = os.environ['COMPLETED'] == 'true'
+          if os.environ['OBSERVATION'] in ('submitted', 'known-409', 'timeout', 'unknown', 'resume-reconcile'):
+              value['publishOutcome'] = os.environ['OBSERVATION']
+          value['registryObservation'] = {'state': os.environ['OBSERVATION']}
+          json.dump(value, open(path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
+          open(path, 'a', encoding='utf-8').write('\n')
+          PY
+          }
+          exact_metadata="$RUNNER_TEMP/skill-release-exact.json"
+          exact_error="$RUNNER_TEMP/skill-release-exact.err"
+          package_versions="$RUNNER_TEMP/skill-release-package-versions.json"
+          package_error="$RUNNER_TEMP/skill-release-package.err"
+          observe_exact() {
+            local phase="$1"
+            rm -f "$exact_metadata" "$exact_error" "$package_versions" "$package_error"
+            if npm view "$PACKAGE_NAME@$VERSION" --json > "$exact_metadata" 2> "$exact_error"; then
+              echo exact-visible
+              return 0
+            fi
+            if npm view "$PACKAGE_NAME" versions --json > "$package_versions" 2> "$package_error"; then
+              if [ "$phase" = preflight ]; then echo exact-404; else echo processing; fi
+              return 0
+            fi
+            if grep -Eiq 'E404|404|no match found|not found' "$exact_error" "$package_error"; then
+              echo absent
+              return 0
+            fi
+            echo registry-error
+          }
+          initial_state="$(observe_exact preflight)"
+          case "$initial_state" in
+            exact-visible)
+              ;;
+            exact-404|absent)
+              if [ -n "$RESUME_RUN_ID" ]; then
+                update_receipt resume-reconcile false false exact-404
+              else
+                update_receipt exact-404 false false exact-404
+                set +e
+                timeout --signal=TERM 180s npm publish "$tarball" --access public --tag "$COMPATIBILITY_LINE" > "$RUNNER_TEMP/skill-release-publish.out" 2> "$RUNNER_TEMP/skill-release-publish.err"
+                publish_status=$?
+                set -e
+                if [ "$publish_status" -eq 0 ]; then
+                  update_receipt publish-submitted false false submitted
+                elif grep -Eiq 'E409|cannot publish over|cannot overwrite|previously published' "$RUNNER_TEMP/skill-release-publish.out" "$RUNNER_TEMP/skill-release-publish.err"; then
+                  update_receipt known-409 false false known-409
+                elif [ "$publish_status" -eq 124 ]; then
+                  update_receipt publish-timeout false false timeout
+                else
+                  update_receipt publish-unknown false false unknown
+                fi
+              fi
+              ;;
+            registry-error)
+              update_receipt registry-error false false registry-error
+              echo 'registry preflight failed; no npm write was attempted' >&2
+              exit 1
+              ;;
+            *)
+              update_receipt registry-error false false registry-error
+              echo "unexpected registry preflight state: $initial_state" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$VERSION" = '0.2.7' ] && [ "$initial_state" != exact-visible ]; then
+            update_receipt legacy-version-absent false false legacy-version-absent
+            echo '0.2.7 is legacy read-only reconciliation; it must never be uploaded again' >&2
+            exit 1
+          fi
+          reconcile_state=
+          for delay in 0 2 4 8 16 32; do
+            if [ "$delay" -gt 0 ]; then sleep "$delay"; fi
+            reconcile_state="$(observe_exact reconcile)"
+            case "$reconcile_state" in
+              exact-visible) break ;;
+              processing) update_receipt processing false false processing ;;
+              absent) update_receipt absent-after-submit false false absent-after-submit ;;
+              registry-error)
+                update_receipt registry-error false false registry-error
+                echo 'registry reconciliation failed; do not retry npm publish' >&2
+                exit 1
+                ;;
+              *)
+                update_receipt registry-error false false registry-error
+                echo "unexpected registry reconciliation state: $reconcile_state" >&2
+                exit 1
+                ;;
+            esac
+          done
+          if [ "$reconcile_state" != exact-visible ]; then
+            update_receipt processing-timeout false false processing-timeout
+            echo "registry did not expose the exact version after bounded reconciliation; resume from this receipt" >&2
+            exit 1
+          fi
+          npm view "$PACKAGE_NAME@$VERSION" --json > "$exact_metadata"
+          registry_url="$(python3 -c 'import json, os, sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert value.get("version") == os.environ["VERSION"], "registry version does not match the release candidate"; dist=value.get("dist") or {}; url=dist.get("tarball"); assert url, "registry metadata has no tarball URL"; print(url)' "$exact_metadata")"
+          downloaded="$RUNNER_TEMP/skill-release-registry.tgz"
+          curl --fail --silent --show-error --location "$registry_url" -o "$downloaded"
+          registry_validation="$RUNNER_TEMP/skill-release-registry-validation.json"
+          python3 tools/skill-release/release.py validate-tarball "$downloaded" --version "$VERSION" --merge-sha "$MERGE_SHA" --compatibility-line "$COMPATIBILITY_LINE" > "$registry_validation"
+          python3 - "$validation" "$registry_validation" "$exact_metadata" "$receipt" <<'PY'
+          import json
+          import sys
+
+          candidate_path, registry_path, metadata_path, receipt_path = sys.argv[1:]
+          candidate = json.load(open(candidate_path, encoding='utf-8'))
+          registry = json.load(open(registry_path, encoding='utf-8'))
+          metadata = json.load(open(metadata_path, encoding='utf-8'))
+          receipt = json.load(open(receipt_path, encoding='utf-8'))
+          observation = {
+              'state': 'exact-visible',
+              'packageName': registry['packageName'],
+              'version': metadata.get('version'),
+              'compatibilityLine': registry['compatibilityLine'],
+              'mergeSha': registry['mergeSha'],
+              'buildId': registry['buildId'],
+              'tag': registry['gitTag'],
+              'distIntegrity': (metadata.get('dist') or {}).get('integrity'),
+              'rawIntegrity': registry['rawIntegrity'],
+              'canonicalDigest': registry['tarballDigest'],
+              'canonicalDigestAlgorithm': registry['canonicalDigestAlgorithm'],
+              'canonicalDigestVerified': registry['canonicalDigestVerified'],
+              'publishOutcome': receipt.get('publishOutcome', 'not-attempted'),
+          }
+          receipt['registryObservation'] = observation
+          def mismatch(message):
+              observation['state'] = 'identity-mismatch'
+              observation['mismatch'] = message
+              receipt['state'] = 'identity-mismatch'
+              receipt['published'] = False
+              receipt['completed'] = False
+              json.dump(receipt, open(receipt_path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
+              open(receipt_path, 'a', encoding='utf-8').write('\n')
+              raise SystemExit(message)
+
+          for field in ('packageName', 'packageVersion', 'compatibilityLine', 'mergeSha', 'buildId', 'gitTag'):
+              if candidate[field] != registry[field]:
+                  mismatch(f'registry identity mismatch: {field}')
+          if candidate['rawIntegrity'] != registry['rawIntegrity']:
+              mismatch('registry raw integrity differs from the verified candidate')
+          if (metadata.get('dist') or {}).get('integrity') != registry['rawIntegrity']:
+              mismatch('registry metadata integrity differs from downloaded tarball')
+          if registry['canonicalDigestVerified'] and (candidate['tarballDigest'] != registry['tarballDigest'] or registry['canonicalDigestAlgorithm'] != candidate['canonicalDigestAlgorithm']):
+              mismatch('registry canonical digest differs from the verified candidate')
+          receipt['state'] = 'published'
+          receipt['published'] = True
+          receipt['registryObservation'] = {
+              'state': 'exact-visible',
+              'version': metadata.get('version'),
+              'distIntegrity': (metadata.get('dist') or {}).get('integrity'),
+              'rawIntegrity': registry['rawIntegrity'],
+              'canonicalDigest': registry['tarballDigest'],
+              'canonicalDigestAlgorithm': registry['canonicalDigestAlgorithm'],
+              'canonicalDigestVerified': registry['canonicalDigestVerified'],
+              'publishOutcome': receipt.get('publishOutcome', 'not-attempted'),
+          }
+          json.dump(receipt, open(receipt_path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
+          open(receipt_path, 'a', encoding='utf-8').write('\n')
+          PY
+          printf 'registry_state=exact-visible\n'
+      - name: Create or reconcile immutable release tag after exact identity
         run: >-
           python3 tools/skill-release/release.py verify-tag
           --repository "$GITHUB_REPOSITORY"
           --tag "multi-task-flow-v$VERSION"
           --sha "$MERGE_SHA"
           --create
-      - name: Publish exact package and reconcile registry identity
-        run: |
-          set -euo pipefail
-          tarball="$RUNNER_TEMP/skill-release/skill-package.tgz"
-          test -f "$tarball"
-          python3 tools/skill-release/release.py validate-tarball "$tarball" \
-            --version "$VERSION" \
-            --merge-sha "$MERGE_SHA" \
-            --compatibility-line "$COMPATIBILITY_LINE"
-          metadata="$RUNNER_TEMP/skill-release-metadata.json"
-          exact_exists=false
-          if npm view "$PACKAGE_NAME@$VERSION" --json > "$metadata" 2>/dev/null; then
-            exact_exists=true
-          fi
-          if [ "$exact_exists" = false ]; then
-            # npm rejects a SemVer range as a dist-tag; publish first under the declared compatibility line.
-            if npm publish "$tarball" --access public --tag "$COMPATIBILITY_LINE"; then
-              :
-            else
-              if ! npm view "$PACKAGE_NAME@$VERSION" --json > "$metadata" 2>/dev/null; then
-                echo "npm publish outcome is unknown; reconcile the exact package identity before retrying" >&2
-                exit 1
-              fi
-              exact_exists=true
-            fi
-          fi
-          test "$exact_exists" = true
-          npm view "$PACKAGE_NAME@$VERSION" --json > "$metadata"
-          registry_url="$(python3 -c 'import json, os, sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert value.get("version") == os.environ["VERSION"], "registry version does not match the release candidate"; dist=value.get("dist") or {}; url=dist.get("tarball"); assert url, "registry metadata has no tarball URL"; print(url)' "$metadata")"
-          downloaded="$RUNNER_TEMP/skill-release-registry.tgz"
-          curl --fail --silent --show-error --location "$registry_url" -o "$downloaded"
-          registry_result="$(python3 tools/skill-release/release.py validate-tarball "$downloaded" \
-            --version "$VERSION" --merge-sha "$MERGE_SHA" --compatibility-line "$COMPATIBILITY_LINE")"
-          printf '%s\n' "$registry_result"
-          candidate_result="$(python3 tools/skill-release/release.py validate-tarball "$tarball" \
-            --version "$VERSION" --merge-sha "$MERGE_SHA" --compatibility-line "$COMPATIBILITY_LINE")"
-          python3 -c 'import json, sys; candidate, registry = (json.loads(item) for item in sys.argv[1:]); assert candidate["tarballDigest"] == registry["tarballDigest"], "registry tarball digest differs from the verified candidate"' "$candidate_result" "$registry_result"
       - name: Promote compatibility and latest dist-tags monotonically
         run: |
           set -euo pipefail
+          receipt="$RUNNER_TEMP/skill-release-receipt.json"
+          test -f "$receipt"
+          update_tag_receipt() {
+            local tag="$1"
+            local value="$2"
+            local state="$3"
+            TAG="$tag" VALUE="$value" STATE="$state" RECEIPT="$receipt" python3 - <<'PY'
+          import json
+          import os
+
+          path = os.environ['RECEIPT']
+          value = json.load(open(path, encoding='utf-8'))
+          value['state'] = os.environ['STATE']
+          value['published'] = True
+          value['completed'] = False
+          value.setdefault('distTags', {})[os.environ['TAG']] = os.environ['VALUE']
+          json.dump(value, open(path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
+          open(path, 'a', encoding='utf-8').write('\n')
+          PY
+          }
           promote() {
             local tag="$1"
             local current
-            current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null || true)"
+            if ! current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null)"; then
+              echo "cannot read npm dist-tag: $tag" >&2
+              exit 1
+            fi
             action="$(python3 tools/skill-release/release.py dist-tag-policy --current "$current" --target "$VERSION")"
             if [ "$action" = promote ]; then
               npm dist-tag add "$PACKAGE_NAME@$VERSION" "$tag"
@@ -375,11 +699,36 @@ jobs:
               echo "unsupported dist-tag action: $action" >&2
               exit 1
             fi
-            current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null || true)"
+            if ! current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null)"; then
+              echo "cannot read npm dist-tag after promotion: $tag" >&2
+              exit 1
+            fi
             test "$current" = "\"$VERSION\""
+            update_tag_receipt "$tag" "$VERSION" "promotion-$tag"
           }
           promote "$COMPATIBILITY_LINE"
           promote latest
           if [ "${{ inputs.stable }}" = true ]; then
             promote stable
           fi
+          python3 - "$receipt" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+          value = json.load(open(path, encoding='utf-8'))
+          value['state'] = 'completed'
+          value['published'] = True
+          value['completed'] = True
+          json.dump(value, open(path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
+          open(path, 'a', encoding='utf-8').write('\n')
+          PY
+      - name: Upload release receipt
+        if: always() && (needs.verify.outputs.decision == 'release:skill' || needs.verify.outputs.decision == 'release:skill-initial-publication')
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: skill-release-receipt-${{ inputs.merge_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/skill-release-receipt.json
+          if-no-files-found: ignore
+          retention-days: 30

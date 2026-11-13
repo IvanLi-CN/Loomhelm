@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
-import locale
 import re
 import subprocess
 import sys
@@ -14,10 +14,12 @@ import tarfile
 from dataclasses import dataclass
 from functools import total_ordering
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 
 PACKAGE_NAME = "@loomhelm/multi-task-flow"
+CANONICAL_TARBALL_DIGEST_ALGORITHM = "path-byte-v2"
+LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM = "legacy-locale-en-us-v1"
 PACKAGE_JSON = Path("clients/typescript/package.json")
 SKILL_DOCUMENT = Path("skills/multi-task-flow/SKILL.md")
 CONTRACT_SOURCE = Path("skills/multi-task-flow/lib/contract.ts")
@@ -423,7 +425,7 @@ def evaluate_gate(
             head_projection.package_version,
             head_projection.compatibility_line,
             paths,
-            "exact npm package version is unpublished",
+            "exact npm package version is unpublished" if registry_version_missing else "explicit registry reconciliation",
         )
 
     if base_projection is not None and not head_projection.version > base_projection.version:
@@ -484,22 +486,15 @@ def archive_files(tarball: Path) -> dict[str, bytes]:
     return files
 
 
-def _locale_sorted(values: Iterable[Any], key: Callable[[Any], str]) -> list[Any]:
-    previous_locale = locale.setlocale(locale.LC_COLLATE)
-    try:
-        try:
-            locale.setlocale(locale.LC_COLLATE, "en_US.UTF-8")
-        except locale.Error as error:
-            raise ReleaseError("en-US collation is required to verify TypeScript release identity") from error
-        return sorted(values, key=lambda value: locale.strxfrm(key(value)))
-    finally:
-        locale.setlocale(locale.LC_COLLATE, previous_locale)
+def _path_byte_sorted(values: Iterable[str]) -> list[str]:
+    """Sort the same UTF-8 path bytes used by the TypeScript verifier."""
+    return sorted(values, key=lambda value: value.encode("utf-8"))
 
 
 def canonical_tarball_digest(tarball: Path) -> str:
     files = archive_files(tarball)
     digest = hashlib.sha256()
-    for path in _locale_sorted(files, lambda value: value):
+    for path in _path_byte_sorted(files):
         if path == "toolkit/artifact-manifest.json":
             continue
         digest.update(path.encode("utf-8"))
@@ -507,6 +502,11 @@ def canonical_tarball_digest(tarball: Path) -> str:
         digest.update(files[path])
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def tarball_integrity(tarball: Path) -> str:
+    """Return npm's raw SHA-512 integrity string for one exact tarball."""
+    return "sha512-" + base64.b64encode(hashlib.sha512(tarball.read_bytes()).digest()).decode("ascii")
 
 
 def _validate_identity(identity: Mapping[str, Any]) -> None:
@@ -539,6 +539,12 @@ def _validate_identity(identity: Mapping[str, Any]) -> None:
     git_tag = identity.get("gitTag")
     if git_tag is not None and git_tag != f"{RELEASE_TAG_PREFIX}{package_version}":
         raise ReleaseError("artifact identity Git tag does not match package version")
+    canonical_algorithm = identity.get("canonicalDigestAlgorithm")
+    if canonical_algorithm is not None and canonical_algorithm not in {
+        CANONICAL_TARBALL_DIGEST_ALGORITHM,
+        LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM,
+    }:
+        raise ReleaseError("artifact identity canonical digest algorithm is unsupported")
 
 
 def identity_digest(identity: Mapping[str, Any], files: Iterable[Mapping[str, str]]) -> str:
@@ -569,8 +575,19 @@ def validate_tarball(
     if "toolkit/artifact-manifest.json" not in files:
         raise ReleaseError("tarball does not contain toolkit/artifact-manifest.json")
     artifact = _read_json_bytes(files["toolkit/artifact-manifest.json"], "artifact manifest")
-    if artifact.get("schemaVersion") != 2 or artifact.get("runtime") != "bun@1.4.4":
+    schema_version = artifact.get("schemaVersion")
+    if schema_version not in (2, 3) or artifact.get("runtime") != "bun@1.4.4":
         raise ReleaseError("artifact manifest has an unsupported schema or runtime")
+    canonical_algorithm = artifact.get("canonicalDigestAlgorithm")
+    if canonical_algorithm is not None and canonical_algorithm not in {
+        CANONICAL_TARBALL_DIGEST_ALGORITHM,
+        LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM,
+    }:
+        raise ReleaseError("artifact manifest canonical digest algorithm is unsupported")
+    if schema_version == 3 and canonical_algorithm != CANONICAL_TARBALL_DIGEST_ALGORITHM:
+        raise ReleaseError("schema v3 artifacts must use path-byte-v2")
+    if schema_version == 2 and canonical_algorithm not in (None, LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM):
+        raise ReleaseError("schema v2 artifacts must use the legacy verifier")
     identity = _require_object(artifact.get("identity"), "artifact.identity")
     _validate_identity(identity)
     for field in (
@@ -584,6 +601,7 @@ def validate_tarball(
         "buildId",
         "tarballDigest",
         "gitTag",
+        "canonicalDigestAlgorithm",
     ):
         if artifact.get(field) != identity.get(field):
             raise ReleaseError(f"artifact identity projection mismatch: {field}")
@@ -605,6 +623,36 @@ def validate_tarball(
     if require_tag and tag != f"{RELEASE_TAG_PREFIX}{package_version}":
         raise ReleaseError("publication artifact does not carry its immutable release tag")
 
+    dependencies = artifact.get("dependencies")
+    if not isinstance(dependencies, list) or not dependencies:
+        raise ReleaseError("artifact manifest has no dependency projection")
+    dependency_names: set[str] = set()
+    for dependency_value in dependencies:
+        dependency = _require_object(dependency_value, "artifact.dependencies[]")
+        name = _require_string(dependency.get("name"), "artifact.dependencies[].name")
+        version = _require_string(dependency.get("version"), "artifact.dependencies[].version")
+        if name in dependency_names:
+            raise ReleaseError("artifact dependency projection contains duplicates")
+        dependency_names.add(name)
+        Version(version)
+        if schema_version == 3:
+            if dependency.get("mode") != "consumer-install" or "path" in dependency or "entry" in dependency:
+                raise ReleaseError("schema v3 dependencies must be resolved by the consumer")
+        else:
+            if artifact.get("dependenciesBundled") is not True or not isinstance(dependency.get("path"), str) or not isinstance(dependency.get("entry"), str):
+                raise ReleaseError("schema v2 dependencies must be bundled")
+            for field in ("path", "entry"):
+                value = dependency[field]
+                if value.startswith(("/", "\\")) or "\\" in value or any(part in ("", ".", "..") for part in value.split("/")):
+                    raise ReleaseError("schema v2 dependency path is unsafe")
+    if schema_version == 3:
+        if artifact.get("dependenciesBundled") is not False:
+            raise ReleaseError("schema v3 artifacts must not bundle dependencies")
+        if any(path == "node_modules" or path.startswith("node_modules/") or "/node_modules/" in path for path in files):
+            raise ReleaseError("schema v3 tarballs must not contain node_modules")
+    elif artifact.get("dependenciesBundled") is not True:
+        raise ReleaseError("schema v2 artifacts must declare bundled dependencies")
+
     inventory = artifact.get("files")
     if not isinstance(inventory, list) or not inventory:
         raise ReleaseError("artifact manifest has no resource inventory")
@@ -622,8 +670,11 @@ def validate_tarball(
     if identity_digest(identity, inventory) != identity.get("buildId"):
         raise ReleaseError("artifact build ID does not match the resource inventory")
 
-    digest = canonical_tarball_digest(tarball)
-    if identity.get("tarballDigest") != digest:
+    if schema_version == 2 and canonical_algorithm is None:
+        canonical_algorithm = LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM
+    canonical_digest_verified = canonical_algorithm == CANONICAL_TARBALL_DIGEST_ALGORITHM
+    digest = canonical_tarball_digest(tarball) if canonical_digest_verified else None
+    if canonical_digest_verified and identity.get("tarballDigest") != digest:
         raise ReleaseError("tarball digest does not match artifact identity")
     return {
         "packageName": PACKAGE_NAME,
@@ -631,7 +682,10 @@ def validate_tarball(
         "compatibilityLine": compatibility,
         "mergeSha": merge_sha,
         "buildId": identity["buildId"],
-        "tarballDigest": digest,
+        "tarballDigest": identity.get("tarballDigest") if digest is None else digest,
+        "canonicalDigestAlgorithm": canonical_algorithm,
+        "canonicalDigestVerified": canonical_digest_verified,
+        "rawIntegrity": tarball_integrity(tarball),
         "gitTag": tag,
         "files": len(files),
     }
@@ -756,6 +810,9 @@ def _build_parser() -> argparse.ArgumentParser:
     digest = subparsers.add_parser("tarball-digest", help="print the canonical tarball digest")
     digest.add_argument("tarball", type=Path)
 
+    integrity = subparsers.add_parser("tarball-integrity", help="print npm raw tarball integrity")
+    integrity.add_argument("tarball", type=Path)
+
     validate = subparsers.add_parser("validate-tarball", help="validate a package tarball")
     validate.add_argument("tarball", type=Path)
     validate.add_argument("--version")
@@ -804,6 +861,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "tarball-digest":
             print(canonical_tarball_digest(args.tarball.resolve()))
+            return 0
+        if args.command == "tarball-integrity":
+            print(tarball_integrity(args.tarball.resolve()))
             return 0
         if args.command == "verify-tag":
             if args.create:

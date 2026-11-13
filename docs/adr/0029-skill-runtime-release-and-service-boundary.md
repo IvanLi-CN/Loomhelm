@@ -4,6 +4,8 @@
 
 Accepted as the architecture contract for the standalone @loomhelm/multi-task-flow runtime; this ADR does not authorize an npm publication, user-service upgrade or production deployment.
 
+本 ADR 的 registry reconciliation、canonical digest 和 production dependency packaging 边界由后继 [ADR 0030](0030-skill-runtime-registry-reconciliation-and-consumer-dependencies.md) 细化；本文件保留服务、viewer、ledger 和 release identity 的基础边界。
+
 ## Context
 
 现有仓库已经有 29 套迁入 Skills、Bun source runtime、直接账本 CLI、共享 loopback viewer、service manifest、generation/PID/lease 和历史 viewer compatibility 机制，但这些能力目前分散在私有 monorepo package、客户端 toolkit 和 viewer/service bundle 中。
@@ -14,7 +16,7 @@ Accepted as the architecture contract for the standalone @loomhelm/multi-task-fl
 
 ## Decision
 
-Skill runtime 以独立的 @loomhelm/multi-task-flow npm package identity 发布；包必须携带完整 Skill、CLI、viewer 和生产依赖闭包，并显式记录 package version、compatibility line、Skill version、source SHA、merge SHA、ledger/API/frontend/viewer/service contract versions、build ID 和 tarball digest。
+Skill runtime 以独立的 @loomhelm/multi-task-flow npm package identity 发布；包必须携带完整 Skill、CLI、viewer 和可由消费者安装解析的生产依赖闭包，并显式记录 package version、compatibility line、Skill version、source SHA、merge SHA、ledger/API/frontend/viewer/service contract versions、build ID 和 tarball digest。
 
 package version 使用完整 SemVer，compatibility line 使用正整数 compat-vN；两者、Skill version、合同版本、source/merge SHA、build ID、tag 和 digest 互不推断。破坏 CLI、账本、viewer/service API、权限或迁移安全的变化创建新的 compatibility line，旧 line 的读取或维护策略必须保留并显式记录。
 
@@ -65,3 +67,4 @@ Skill 发布必须从受保护分支的 merge receipt 开始，并以实际 merg
 - [Viewer compatibility lifecycle](0026-viewer-compatibility-lifecycle.md)
 - [Multi-task Flow version propagation and safe migration](0028-multi-task-flow-version-propagation-and-safe-migration.md)
 - [Skill runtime release specification](../specs/skill-runtime-release/SPEC.md)
+- [Skill runtime registry reconciliation and consumer dependencies](0030-skill-runtime-registry-reconciliation-and-consumer-dependencies.md)

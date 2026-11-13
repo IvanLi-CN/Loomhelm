@@ -18,10 +18,10 @@ function readJson(path: string): JsonObject | null {
 const packageRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 function validatedArtifactIdentity(): PackageIdentity | null {
   const artifact = readJson(resolve(packageRoot, 'toolkit/artifact-manifest.json'));
-  if (!artifact || artifact.dependenciesBundled !== true || !Array.isArray(artifact.dependencies) || artifact.dependencies.length === 0 || artifact.dependencies.some(item => !item || typeof item !== 'object' || typeof (item as JsonObject).name !== 'string' || typeof (item as JsonObject).version !== 'string' || typeof (item as JsonObject).path !== 'string' || typeof (item as JsonObject).entry !== 'string') || !Array.isArray(artifact.files)) return null;
+  if (!artifact || artifact.schemaVersion !== 3 || artifact.dependenciesBundled !== false || artifact.canonicalDigestAlgorithm !== 'path-byte-v2' || !Array.isArray(artifact.dependencies) || artifact.dependencies.length === 0 || artifact.dependencies.some(item => !item || typeof item !== 'object' || typeof (item as JsonObject).name !== 'string' || typeof (item as JsonObject).version !== 'string' || (item as JsonObject).mode !== 'consumer-install') || !Array.isArray(artifact.files)) return null;
   try {
     const identity = validatePackageIdentity(artifact.identity);
-    if (artifact.packageName !== identity.packageName || artifact.packageVersion !== identity.packageVersion || artifact.compatibilityLine !== identity.compatibilityLine || artifact.skillVersion !== identity.skillVersion || artifact.sourceSha !== identity.sourceSha || artifact.mergeSha !== identity.mergeSha || artifact.dirty !== identity.dirty || artifact.buildId !== identity.buildId || artifact.tarballDigest !== identity.tarballDigest || artifact.gitTag !== identity.gitTag) return null;
+    if (artifact.packageName !== identity.packageName || artifact.packageVersion !== identity.packageVersion || artifact.compatibilityLine !== identity.compatibilityLine || artifact.skillVersion !== identity.skillVersion || artifact.sourceSha !== identity.sourceSha || artifact.mergeSha !== identity.mergeSha || artifact.dirty !== identity.dirty || artifact.buildId !== identity.buildId || artifact.tarballDigest !== identity.tarballDigest || artifact.gitTag !== identity.gitTag || artifact.canonicalDigestAlgorithm !== identity.canonicalDigestAlgorithm) return null;
     const { buildId, ...withoutBuildId } = identity;
     return identityDigest({ ...withoutBuildId, files: artifact.files as { path: string; sha256: string }[] }) === buildId ? identity : null;
   } catch {
@@ -47,6 +47,7 @@ export const buildInfo = Object.freeze(identity ? {
   skill_version: identity.skillVersion,
   build_id: identity.buildId,
   tarball_digest: identity.tarballDigest,
+  canonical_digest_algorithm: identity.canonicalDigestAlgorithm ?? null,
   contracts,
   policy: 'loomhelm-manual-v1',
 } : {
@@ -58,6 +59,7 @@ export const buildInfo = Object.freeze(identity ? {
   skill_version: 'unknown',
   build_id: null,
   tarball_digest: null,
+  canonical_digest_algorithm: null,
   contracts,
   policy: 'loomhelm-manual-v1',
 });
