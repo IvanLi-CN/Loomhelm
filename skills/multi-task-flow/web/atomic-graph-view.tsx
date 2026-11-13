@@ -149,7 +149,7 @@ export function createAtomicGraphController(context: GraphContext) {
       pending = false;
       container.style.height = `${Math.max(420, result.height + 80)}px`;
       update?.();
-      requestAnimationFrame(() => { if (serial !== generation) return; instance?.setViewport({ x: Math.max(24, (container.clientWidth - result.width) / 2), y: 24, zoom: 1 }); context.setZoom(1); highlightAccessibleSelection(projection, context); });
+      requestAnimationFrame(() => { if (serial !== generation) return; instance?.setViewport({ x: Math.max(24, (container.clientWidth - result.width) / 2), y: Math.max(24, (container.clientHeight - result.height) / 2), zoom: 1 }); context.setZoom(1); highlightAccessibleSelection(projection, context); });
     }).catch(() => { if (serial !== generation) return; pending = false; update?.(); });
   }
 

@@ -65,7 +65,7 @@ export function createGraphController(context: GraphContext, calculateLayout = l
     signature=key;layout=null;const serial=++generation;pending=true;error='';update?.();
     calculateLayout(next,direction).then(result=>{
       if(serial!==generation)return;const byId=new Map(projection!.nodes.map(n=>[n.id,n]));layout={...result,nodes:result.nodes.map(p=>({...p,node:byId.get(p.node.id)!}))};pending=false;container.style.height = `${Math.max(420,result.height+80)}px`;update?.();
-      requestAnimationFrame(()=>{if(serial!==generation)return;if(!viewportInitialized){instance?.setViewport({x:Math.max(24,(container.clientWidth-result.width)/2),y:24,zoom:1});context.setZoom(1);viewportInitialized=true;} highlightSelection();});
+      requestAnimationFrame(()=>{if(serial!==generation)return;if(!viewportInitialized){instance?.setViewport({x:Math.max(24,(container.clientWidth-result.width)/2),y:Math.max(24,(container.clientHeight-result.height)/2),zoom:1});context.setZoom(1);viewportInitialized=true;} highlightSelection();});
     }).catch(e=>{if(serial!==generation)return;pending=false;error=`依赖图布局失败：${e instanceof Error?e.message:String(e)}`;signature='';update?.();});
   }
   return {render,reset:()=>{container.replaceChildren();root.render(<Surface/>);},highlightSelection,zoomIn:()=>instance?.zoomIn(),zoomOut:()=>instance?.zoomOut(),fit:()=>instance?.fitView({padding:0.08}),rankDir:()=>direction==='DOWN'?'TB':'LR',projection:()=>projection};

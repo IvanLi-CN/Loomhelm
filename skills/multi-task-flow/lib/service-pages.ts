@@ -8,26 +8,6 @@ export function viewerPage(
 
 const runPathPattern = /^\/runs\/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\/$/;
 const viewIdPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-const viewParamValidators: Record<string, (value: string) => boolean> = {
-  tab: (value) => /^(graph|atomic|planned|actual)$/.test(value),
-  graph: (value) => /^(aggregate|atomic)$/.test(value),
-  layout: (value) => /^(board|grid)$/.test(value),
-  q: (value) => value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value),
-  group: (value) => viewIdPattern.test(value),
-  state: (value) => viewIdPattern.test(value),
-  kind: (value) => viewIdPattern.test(value),
-  plan: (value) => viewIdPattern.test(value),
-  selected: (value) => /^(task|group|milestone):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value),
-  detail: (value) => value === "1" || value === "true",
-  zoom: (value) => {
-    const zoom = Number(value);
-    return Number.isFinite(zoom) && zoom >= 0.2 && zoom <= 2.5;
-  },
-  plannedStart: (value) => value.length <= 64 && !Number.isNaN(Date.parse(value)),
-  plannedEnd: (value) => value.length <= 64 && !Number.isNaN(Date.parse(value)),
-  actualStart: (value) => value.length <= 64 && !Number.isNaN(Date.parse(value)),
-  actualEnd: (value) => value.length <= 64 && !Number.isNaN(Date.parse(value)),
-};
 const maxTimelineSpanMs = 10_000 * 365.25 * 24 * 60 * 60 * 1000;
 
 export type ViewerTarget = { target: string; ticket: string | null };
@@ -50,15 +30,10 @@ export function parseViewerTarget(
     if (ticketValues.length > 1 || (ticketValues.length > 0 && !allowTicket)) return null;
     const ticket = ticketValues[0] ?? null;
     if (ticket !== null && (ticket.length > 100 || /[\u0000-\u001f\u007f]/.test(ticket))) return null;
-    let selected = false;
-    let detail = false;
     for (const [key, parameter] of url.searchParams) {
       if (key === "ticket") continue;
-      if (home || /[\u0000-\u001f\u007f]/.test(parameter) || !viewParamValidators[key] || url.searchParams.getAll(key).length !== 1 || !viewParamValidators[key]!(parameter)) return null;
-      if (key === "selected") selected = true;
-      if (key === "detail") detail = true;
+      if (home || /[\u0000-\u001f\u007f]/.test(key) || /[\u0000-\u001f\u007f]/.test(parameter)) return null;
     }
-    if (detail && !selected) return null;
     for (const [start, end] of [["plannedStart", "plannedEnd"], ["actualStart", "actualEnd"]] as const) {
       const startValue = url.searchParams.get(start);
       const endValue = url.searchParams.get(end);
