@@ -79,6 +79,19 @@ test("multi-run routing has one listener, authenticated APIs and lazy watchers",
   expect(viewer.watcherCount).toBe(0);
   expect((await fetch(base + "/api/v1/lease", { method: "POST", headers: { ...headers, origin: "https://foreign.example" }, body: "{}" })).status).toBe(403);
 });
+test("one worker serves consecutive contract-3 run pages", async () => {
+  const { root, state } = fixture(); const release = fixtureRelease(root);
+  fixtureRun(state.paths.data, "contract3-first", 3); fixtureRun(state.paths.data, "contract3-second", 3);
+  const viewer = await startSharedViewer(state, release.manifest, join(release.source, "skills/multi-task-flow/dist"), 0); servers.push(viewer);
+  const base = `http://127.0.0.1:${viewer.port}`;
+  const headers = { authorization: "Bearer " + new ServiceAuth(state).credential() };
+  const responses = await Promise.all([
+    fetch(base + "/runs/contract3-first/api/view", { headers }),
+    fetch(base + "/runs/contract3-second/api/view", { headers }),
+  ]);
+  expect(responses.map((response) => response.status)).toEqual([200, 200]);
+  for (const response of responses) expect((await response.json()).view.orchestration.contract_version).toBe(3);
+});
 test("target tickets authenticate on the run route and recover safely", async () => {
   const { root, state } = fixture(); const release = fixtureRelease(root); fixtureRun(state.paths.data);
   const viewer = await startSharedViewer(state, release.manifest, join(release.source, "skills/multi-task-flow/dist"), 0); servers.push(viewer);

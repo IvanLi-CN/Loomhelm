@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { runProcess } from '../src/runtime/process.ts';
+import { flowProcessOptions } from '../src/cli/flow.ts';
 
 const cliPath = resolve('src/cli.ts');
 const fixturePath = resolve('test/fixtures/cli-codex-server.ts');
@@ -42,6 +43,11 @@ async function waitFor(predicate, message) {
   throw new Error(message);
 }
 function request(title, extras = {}) { return JSON.stringify({ title, prompt: 'initialize safely', cwd: '/tmp/project', model: 'fixture-model', effort: 'high', ...extras }); }
+
+test('flow subprocess inherits the caller repository cwd', () => {
+  const options = flowProcessOptions({ processTimeoutMs: 1000, maxOutputBytes: 1024 }, new Uint8Array());
+  assert.equal(options.cwd, process.cwd());
+});
 
 test('real CLI subprocess dispatch maps current Codex request shapes and waits for completion', async () => temporary(async dir => {
   const { config, env } = await setup(dir, 'slow-complete');
