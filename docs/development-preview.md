@@ -6,7 +6,7 @@
 
 | 开发对象或验证目的 | 入口与场景 |
 | - | - |
-| multi-task-flow 页面 | 在当前工作树的 `skills/multi-task-flow/` 运行下节源码预览；使用示例编排展示交互 |
+| multi-task-flow 页面 | 在当前工作树的 `skills/multi-task-flow-runtime/` 运行下节源码预览；使用示例编排展示交互 |
 | Loomhelm 产品整页 | 仓库根目录 `VITE_DEMO=true bun run dev`，选择覆盖目标页面的 login-free `ui_demo` 路由；真实认证集成另行验证 |
 | Loomhelm 可复用组件与状态 | 仓库根目录 `bun run storybook`，打开相应 story；整页变化还需覆盖对应页面 |
 | 候选部署、蓝绿切换与恢复 | 按[开发说明](development.md)及[候选构建](candidates.md)使用 `scripts/preview` 与会话 Agent VM |
@@ -17,7 +17,7 @@ Web 与 Storybook 启动时将实际监听端口设为当前任务租约获配�
 
 ## multi-task-flow 源码服务
 
-先按模块 `package.json` 和锁文件准备依赖；命令均在当前工作树的 `skills/multi-task-flow/` 执行。默认使用能覆盖本次改动的示例，主人已指定示例时遵循其选择。
+先按模块 `package.json` 和锁文件准备依赖；命令均在当前工作树的 `skills/multi-task-flow-runtime/` 执行。默认使用能覆盖本次改动的示例，主人已指定示例时遵循其选择。
 
 | 示例 | 命令 | 用途 |
 | - | - | - |

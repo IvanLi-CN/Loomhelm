@@ -7,7 +7,7 @@ import { dirname, resolve } from 'node:path';
 
 const source = process.argv[2];
 const commit = process.argv[3] ?? 'HEAD';
-if (!source) throw new Error('Usage: bun skills/multi-task-flow/scripts/import-client-skills.ts SOURCE_REPOSITORY [SOURCE_REF]');
+if (!source) throw new Error('Usage: bun skills/multi-task-flow-runtime/scripts/import-client-skills.ts SOURCE_REPOSITORY [SOURCE_REF]');
 const git = (...args) => execFileSync('git', ['-C', source, ...args], { maxBuffer: 32 * 1024 * 1024 });
 const tree = git('ls-tree', '-rz', commit, 'skills', 'bin', 'docs').toString().split('\0').filter(Boolean);
 const files = [];

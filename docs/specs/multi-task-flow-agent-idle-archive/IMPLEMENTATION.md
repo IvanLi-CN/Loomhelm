@@ -38,7 +38,7 @@ CLI 在终态更新和相关通知/操作对账后触发 sweep；dashboard 启�
 
 取消归档沿用 thread 级 OS 锁和 durable intent，使用 thread/unarchive；成功写 active 与 archive_policy=manual，避免自动 sweep 重复归档。失败和未知分别保留 unarchive_failed/unarchive_unknown；未知只查询 archived=false 列表做正向对账。已 closed 资源仅允许具有新 operation identity 和证据的 conversation/manual/unarchive_unknown 转换，其他终态资源保持不可重新打开。
 
-真实源码服务使用 `bun run --cwd skills/multi-task-flow preview:idle-archive`，命名示例提供合成对话、受控观察器和归档/取消归档 provider，通过实际 dashboard API 验证交互，不操作真实 Codex 对话。
+真实源码服务使用 `bun run --cwd skills/multi-task-flow-runtime preview:idle-archive`，命名示例提供合成对话、受控观察器和归档/取消归档 provider，通过实际 dashboard API 验证交互，不操作真实 Codex 对话。
 
 通知创建与发送均拒绝已归档或归档状态未知的接收方，要求先手动恢复；运行时 idle 使用最新 turn 的独立身份和明确终态，不复用较旧公开消息的 turn identity。
 
