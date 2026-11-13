@@ -24,7 +24,7 @@ def contract():
         target='semver-final-or-prerelease-without-build-metadata', baseline='verified-public-completed-final',
         ledger_ref='refs/heads/release-ledger', tag_prefix='v', single_active_reservation=True,
         notification_transport='github-issue', compatibility={'default':'exact-version','allow':[]})
-    artifacts = {'server-linux-amd64.tar.gz','go-client-darwin-arm64.tar.gz','go-client-linux-amd64.tar.gz','ts-client-darwin-arm64.tar.gz','ts-client-linux-amd64.tar.gz','web.tar.gz'}
+    artifacts = {'server-linux-amd64.tar.gz','go-client-linux-amd64.tar.gz','ts-client-linux-amd64.tar.gz','web.tar.gz'}
     if set(value) != set(expected) | {'artifacts'} or any(value.get(key) != expected[key] for key in expected) or len(value['artifacts']) != len(artifacts) or set(value['artifacts']) != artifacts:
         raise ReleaseError('unsupported or incomplete executable release policy')
     return value

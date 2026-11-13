@@ -102,12 +102,12 @@ def build(record, part, output):
             shutil.copytree(images,bundle/'images')
             archive(bundle,output/'server-linux-amd64.tar.gz',epoch)
         elif part=='go-client':
-            if machine!='darwin-arm64': raise ReleaseError('Go macOS package requires native macOS arm64')
+            if machine!='linux-amd64': raise ReleaseError('Go client package requires native Linux amd64')
             flags=f'-s -w -buildid= -X github.com/IvanLi-CN/Loomhelm/internal/buildinfo.Version={record["version"]} -X github.com/IvanLi-CN/Loomhelm/internal/buildinfo.SourceSHA={sha}'
             run('go','build','-trimpath','-buildvcs=false','-ldflags',flags,'-o',str(stage/'loomhelm-connector'),'./cmd/connector')
             archive(stage,output/f'go-client-{machine}.tar.gz',epoch)
         elif part=='ts-client':
-            if machine not in ('darwin-arm64','linux-amd64'): raise ReleaseError('unsupported TS native target')
+            if machine!='linux-amd64': raise ReleaseError('unsupported TS native target')
             run('bun','install','--cwd','skills','--frozen-lockfile','--ignore-scripts','--backend=copy')
             run('bun','install','--cwd','skills/multi-task-flow-runtime','--frozen-lockfile','--ignore-scripts','--backend=copy')
             run('bun','run','--cwd','skills/multi-task-flow-runtime','build')

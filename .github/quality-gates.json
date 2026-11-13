@@ -24,10 +24,8 @@
   ],
   "informational_checks": [
     "Candidate Reproducibility",
-    "Skills Native macOS",
     "Go Race Tests",
-    "Go Shuffle Tests",
-    "Product Package (macos-15)"
+    "Go Shuffle Tests"
   ],
   "waivers": [],
   "expected_pr_workflows": [
@@ -41,12 +39,10 @@
         "Go Race Tests",
         "Go Shuffle Tests",
         "Candidate Build",
-        "Skills Native macOS",
         "Candidate Reproducibility",
         "TypeScript Client (Bun)",
         "Product Release Contract",
-        "Product Package (ubuntu-24.04)",
-        "Product Package (macos-15)"
+        "Product Package (ubuntu-24.04)"
       ]
     },
     {

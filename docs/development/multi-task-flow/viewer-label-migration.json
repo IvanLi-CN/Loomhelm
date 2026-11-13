@@ -48,7 +48,7 @@
     "required_test_evidence": [
       "服务合同测试覆盖正式 label、隔离后缀、精确卸载新旧 label、重复卸载和旧 plist 拒绝",
       "发布切换测试覆盖失败恢复及原使用者期限保留，等待测试覆盖延迟健康、有限预算和维护租约覆盖",
-      "macOS CI 使用两个真实构建的 bundle，合成旧 label 注册后验证显式升级：旧身份卸载、新身份健康、端口保持及测试进程退出"
+      "隔离运行时测试使用两个真实构建的 bundle，合成旧 label 注册后验证显式升级：旧身份卸载、新身份健康、端口保持及测试进程退出"
     ],
     "public_cli_impact": "patch：CLI 命令不变；系统 label 按 owner 要求改名",
     "persistent_state_impact": "minor：不承诺旧维护 CLI 管理新 label"
