@@ -166,6 +166,8 @@ fallback MUST 绑定明确 release、run、owner 和只读证据，禁止执行�
 
 npm exact SemVer 发布成功后，流程才可按声明顺序移动 `compat-vN` 和 `latest`；`stable` 只有在发布意图显式声明时才可移动。并发发布和中断恢复 MUST 以 tag、registry metadata、tarball digest 和 merge SHA 的身份对账收敛。
 
+读取不到尚不存在的 dist-tag MUST 视为没有当前版本并进入单调 promotion；除明确的缺失 tag 外，registry 读取错误 MUST fail closed，promotion 后仍 MUST exact read-back。
+
 registry exact identity 只有在 exact-visible 且 tarball/raw integrity 对账成功后才算 `published`；compatibility line、`latest` 和显式 stable 必须按此顺序逐个 promotion 并逐个 read-back，全部目标 read-back 成功才算 `completed`。release receipt MUST 保存各阶段状态、registry observation 和 dist-tag read-back；`published` 不得伪装成 `completed`。
 
 - covers: `VER-SRR-023`, `VER-SRR-024`
@@ -179,6 +181,8 @@ registry exact identity 只有在 exact-visible 且 tarball/raw integrity 对账
 运行时和发布日志 MUST 记录足以对账的 package version、compat line、merge SHA、build ID、tag、tarball digest、release identity、generation、PID、run 和 lease，而不得输出凭据或敏感内容。
 
 预期成功的 Skill release workflow 失败时，default-branch metadata-only sidecar MUST 复用 `github-issue` transport 创建或更新一个幂等 Issue，通知失败不得覆盖原 workflow 失败；Issue 只包含安全的 receipt context 和下一步对账动作，不得伪造外部 publication receipt。
+
+候选构建完成后 MUST 在 publication 之前上传独立的 release identity artifact，使 verify 或 publish 任一阶段失败时 sidecar 都能读取同一候选身份；receipt 缺失或不一致 MUST 只产生可操作的失败上下文，不得推断外部 publication 成功。
 
 - covers: `VER-SRR-025`, `VER-SRR-026`
 

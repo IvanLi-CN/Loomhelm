@@ -30,6 +30,8 @@ ADR 0030 将 registry 对账和消费者依赖边界收敛为当前实现：新 
 
 当前实现还同步记录 consumer-install dependencies、tarball 无 production `node_modules`、UTF-8 path-byte digest、legacy integrity authority、processing/409/timeout reconcile、dist-tag逐个 read-back、release receipt 和 `github-issue` failure sidecar 的边界。
 
+后续实现收口补充了候选构建阶段的初始 receipt、缺失 dist-tag 的空值 promotion 规则，以及在 verify 阶段上传独立 release identity artifact 的失败对账入口；这些变化只强化已有 identity-first 合同，不代表发生了外部 publication、tag promotion 或 merge。
+
 这次文档同步只记录已经存在的源码合同和可执行 workflow，不创建 npm 凭据、不安装或升级用户 service，也不把本地 build、PR gate 或候选 tarball 视为 registry publication。后续真实发布仍须由 owner-approved workflow 产生完整 identity 和 provider receipt。
 
 ## Related Documents
