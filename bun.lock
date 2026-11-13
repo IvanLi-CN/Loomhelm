@@ -25,9 +25,7 @@
       "name": "@loomhelm/protocol",
       "version": "0.0.0",
     },
-    "web": {
-      "name": "@loomhelm/web",
-      "version": "0.2.9",
+    \g<1>0.2.10",
       "dependencies": {
         "@loomhelm/api-client": "workspace:*",
         "@radix-ui/react-context-menu": "2.4.1",
