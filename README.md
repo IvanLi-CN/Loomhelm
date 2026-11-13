@@ -20,15 +20,15 @@ TypeScript 客户端提供 Local mode 下的 Codex app-server 交互、Skills/�
 - React/Vite/TypeScript 构建 Web/PWA，Bun workspaces 管理前端工程；产品界面在完整设计确认后实现。
 - 非生产候选采用固定源码 SHA 和产物 digest，通过 Caddy 蓝绿切流；Worker 交接与共享状态兼容分别验证。
 
-## Go 客户端（macOS）
+## Go 客户端（Linux amd64）
 
-当前计算机为 Apple silicon 时，安装器可从 GitHub Release 下载客户端包并运行本地客户端；首次运行只需设置可选的 `LOOMHELM_CONNECTOR_BASE_URL`，默认值为 `https://loomhelm.ivanli.cc`，没有 API key 时会打开浏览器完成一次性本机授权。客户端同时连接本机 Codex managed app-server daemon 的 Unix Socket。
+统一产品发布会提供 Linux amd64 Go 客户端包。安装后设置可选的 `LOOMHELM_CONNECTOR_BASE_URL`，默认值为 `https://loomhelm.ivanli.cc`；没有 API key 时会打开浏览器完成一次性本机授权。客户端连接本机 Codex managed app-server daemon 的 Unix Socket。
 
 ```sh
 mkdir -p "$HOME/.local/loomhelm"
-curl -fL https://github.com/IvanLi-CN/Loomhelm/releases/latest/download/loomhelm-connector-darwin-arm64.tar.gz | tar -xzf - -C "$HOME/.local/loomhelm" --strip-components=1
+curl -fL https://github.com/IvanLi-CN/Loomhelm/releases/latest/download/go-client-linux-amd64.tar.gz | tar -xzf - -C "$HOME/.local/loomhelm" --strip-components=1
 chmod 755 "$HOME/.local/loomhelm/loomhelm-connector"
-LOOMHELM_CONNECTOR_BASE_URL=https://loomhelm.ivanli.cc "$HOME/.local/loomhelm/loomhelm-client"
+LOOMHELM_CONNECTOR_BASE_URL=https://loomhelm.ivanli.cc "$HOME/.local/loomhelm/loomhelm-connector"
 ```
 
 客户端不会启动替代的 `codex app-server`，而是连接当前用户的 managed daemon socket。Codex 登录凭据不会上传到 Loomhelm；客户端与 Codex CLI 使用同一 Host 运行时。

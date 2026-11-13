@@ -20,7 +20,7 @@ Dev Plan 通过受验证入口描述符读取 TS，再从私有、经检查的 T
 
 ## 取舍
 
-取消 Node 运行兼容、旧 dist 导入路径及自建二进制供应成本，代价是用户必须具备固定 Bun。旧运行的 schema、身份、revision、锁路径与 flock 协议保留。平台能力只声明已验证的 macOS arm64 和 Linux x64 glibc。
+取消 Node 运行兼容、旧 dist 导入路径及自建二进制供应成本，代价是用户必须具备固定 Bun。旧运行的 schema、身份、revision、锁路径与 flock 协议保留。发布与 CI 平台只声明已验证的 Linux x64 glibc；用户服务运行时仍按宿主平台能力单独处理。
 
 这项决定不授权修改用户级安装、其他项目、分支规则或部署服务。
 

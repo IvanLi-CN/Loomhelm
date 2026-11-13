@@ -6,7 +6,7 @@
 
 ## Terms and Interfaces
 
-产品端与产品发布术语以 [术语表](../../../GLOSSARY.md) 为准。入口只接收一个人工 release target；恢复入口引用既有 identity，不重新选择版本。已确认的平台目标为服务端 Linux amd64、客户端 macOS arm64 与 Linux amd64；平台矩阵必须分别声明 Go 与 TypeScript 客户端，不以一个客户端的验证替代另一个；平台名称使用 canonical architecture 映射，linux/x64 与 linux/amd64 指向同一目标。
+产品端与产品发布术语以 [术语表](../../../GLOSSARY.md) 为准。入口只接收一个人工 release target；恢复入口引用既有 identity，不重新选择版本。已确认的平台目标为服务端、Go 客户端与 TypeScript 客户端 Linux amd64；平台矩阵必须分别声明 Go 与 TypeScript 客户端，不以一个客户端的验证替代另一个；平台名称使用 canonical architecture 映射，linux/x64 与 linux/amd64 指向同一目标。
 
 ## Requirements
 
@@ -46,7 +46,7 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 
 ### REQ-MVR-009：必需平台
 
-正式交付 MUST 包含服务端 Linux amd64、Go 客户端、TypeScript 客户端及 Web/PWA；客户端平台目标为 macOS arm64 与 Linux amd64，验收矩阵 MUST 分别覆盖两种实现。TypeScript 客户端遵循 ADR 0021，仅支持 Bun 1.4.4 直接运行源码；包 MUST 包含源码、完整 Skills、依赖和 Bun FFI 所需资源，分别解包运行并验证版本及 SHA，不再要求 Node 22／24。所有必需平台 MUST 验证通过；编译成功不能替代运行与安装可用性验证。不得因某个平台失败而缩减该次产物清单或宣布整体成功。
+正式交付 MUST 包含服务端 Linux amd64、Go 客户端、TypeScript 客户端及 Web/PWA；客户端平台目标为 Linux amd64，验收矩阵 MUST 分别覆盖两种实现。TypeScript 客户端遵循 ADR 0021，仅支持 Bun 1.4.4 直接运行源码；包 MUST 包含源码、完整 Skills、依赖和 Bun FFI 所需资源，分别解包运行并验证版本及 SHA，不再要求 Node 22／24。所有必需平台 MUST 验证通过；编译成功不能替代运行与安装可用性验证。不得因某个平台失败而缩减该次产物清单或宣布整体成功。
 
 ### REQ-MVR-010：产物保留
 

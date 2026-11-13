@@ -14,7 +14,7 @@ Owner 明确要求正确识别 TypeScript 客户端与 Go 客户端；Connector 
 
 ## 项目适配确认
 
-Owner 确认服务端 Linux amd64、客户端 macOS arm64 与 Linux amd64 为首批必需目标；正式产物长期保留，未完成身份的冻结产物保留至恢复或显式终止；使用独立 GitHub Issue 流程记录发版故障。本次不执行真实通知。
+Owner 确认服务端、Go 客户端与 TypeScript 客户端 Linux amd64 为首批必需目标；正式产物长期保留，未完成身份的冻结产物保留至恢复或显式终止；使用独立 GitHub Issue 流程记录发版故障。本次不执行真实通知。
 
 ## 跨版本连接确认
 

@@ -11,7 +11,7 @@ Implementation: 统一发布合同及原生包入口已实现。Owner 指定并�
 | REQ-MVR-001、002 | release-contract、VERSION 投影、Go buildinfo、TS 构建 stamping、Web product-version；policy/projection 单测 |
 | REQ-MVR-003 | 签名 release-ledger、精确 ref CAS、追加事件、固定身份字段；裸 Git 并发测试 |
 | REQ-MVR-004 | 受保护准备 PR、签名及 exact merge/source/check 验证、平台规则 fail-closed；quality-gates 声明新增发布合同及双平台包检查 |
-| REQ-MVR-005、009 | 原生构建 partition、完整 product manifest、独立资产 digest 和共同公开；Linux/macOS 包 CI 与 Bun 1.4.4 源码运行与 FFI 检查 |
+| REQ-MVR-005、009 | 原生构建 partition、完整 product manifest、独立资产 digest 和共同公开；Linux 包 CI 与 Bun 1.4.4 源码运行和 FFI 检查 |
 | REQ-MVR-006、010 | draft 原件保留、公开/完成分阶段、未知结果对账、原身份恢复、completed-only Deploy verify；故障注入测试 |
 | REQ-MVR-007 | Go/Web/TS 门禁、426 失败、不可变 build identity、Web 受控错误及 TS Local mode 独立；Go 和 TS 覆盖测试 |
 | REQ-MVR-008、011 | Go 独立版本旁路关闭，保留其实现与统一包；可信默认分支通知 sidecar 与身份 Issue 对账 |

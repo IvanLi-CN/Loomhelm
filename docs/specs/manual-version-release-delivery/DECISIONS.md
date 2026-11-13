@@ -8,7 +8,7 @@
 
 规范依据为 style-playbook 的 `manual-version-release-delivery/TOPIC.md`；`blog-26` 项目快照提供多个产物共享身份的参考，其仍待平台验收的部分不当作本项目已验证事实。
 
-本仓库证据包括 `.github/workflows/release-candidate.yml`、`.github/workflows/connector-release.yml`、`scripts/build-candidate`、`clients/typescript/package.json` 和 `.github/quality-gates.json`。
+本仓库证据包括 `.github/workflows/release-candidate.yml`、`scripts/build-candidate`、`clients/typescript/package.json` 和 `.github/quality-gates.json`。
 
 ## Recommendation
 
@@ -22,7 +22,7 @@ Go 与 TypeScript 客户端是两种并存实现，均纳入统一交付；不�
 
 ## 项目适配结论
 
-- 已确认发布平台：服务端 Linux amd64；客户端 macOS arm64、Linux amd64；全部为必需门禁。
+- 已确认发布平台：服务端、Go 客户端和 TypeScript 客户端均为 Linux amd64；全部为必需门禁。
 - 已确认通知 transport：独立流程按 release identity 创建或更新 GitHub Issue；不新增外部通知凭据，本轮不实际创建 Issue。
 - 已确认保留策略：正式产物及元数据长期保留；未完成身份的冻结产物保留至恢复完成或维护者显式终止，不以重建替代丢失原件。
 - 两种客户端分别验证安装、运行和版本身份；Go 源码的 connector 标识不构成废弃依据。删除或迁移客户端能力不属于本次统一发版需求。

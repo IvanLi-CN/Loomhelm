@@ -57,11 +57,9 @@ jobs:
         include:
           - runner: ubuntu-24.04
             part: server
-          - runner: macos-15
+          - runner: ubuntu-24.04
             part: go-client
           - runner: ubuntu-24.04
-            part: ts-client
-          - runner: macos-15
             part: ts-client
     runs-on: ${{ matrix.runner }}
     steps:
