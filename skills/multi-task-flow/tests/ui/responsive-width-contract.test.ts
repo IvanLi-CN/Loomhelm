@@ -25,6 +25,8 @@ test("medium details stay in the static bottom layout instead of a side-by-side 
   expect(medium).toContain("#details-content > .detail-field:has(.atom-list) { grid-column: span 1; }");
   expect(medium).toContain("#details-content > .detail-field:has(.atom-list) { display: block; }");
   expect(medium).toContain("text-overflow: ellipsis; white-space: nowrap;");
+  expect(medium).toContain("#details-content > .detail-field:has(.atom-list li:only-child) { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; column-gap: 12px; }");
+  expect(medium).toContain("#details-content > .detail-field:has(.atom-list li:only-child) > .detail-value { min-width: 0; margin-top: 0; }");
   expect(medium).toContain("#details-content > .detail-group-facts { grid-column: 2 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));");
   expect(medium).toContain("#details-content > .detail-group-facts > .detail-field { min-width: 0; padding-block: 7px; display: block; }");
   expect(medium).toContain('.workspace[data-view-tab="tasks"] .details-slot { grid-column: 1; grid-row: 3; }');
