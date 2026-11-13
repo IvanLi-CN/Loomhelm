@@ -139,6 +139,8 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("completed", workflow)
         self.assertEqual(workflow.count('npm publish "$tarball"'), 1)
         self.assertNotIn('npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null || true', workflow)
+        self.assertIn("no dist-tag", workflow)
+        self.assertIn("'state': 'candidate-validated'", workflow)
         self.assertLess(
             workflow.index("Publish exact package and reconcile registry identity"),
             workflow.index("Create or reconcile immutable release tag after exact identity"),

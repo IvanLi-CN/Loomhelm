@@ -269,6 +269,28 @@ jobs:
           }
           record['id'] = hashlib.sha256(json.dumps(record, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
           open(identity_path, 'w', encoding='utf-8').write(json.dumps(record, indent=2, sort_keys=True) + '\n')
+          receipt = {
+              'schemaVersion': 1,
+              'state': 'candidate-validated',
+              'published': False,
+              'completed': False,
+              'packageName': validation['packageName'],
+              'packageVersion': validation['packageVersion'],
+              'compatibilityLine': validation['compatibilityLine'],
+              'mergeSha': validation['mergeSha'],
+              'buildId': validation['buildId'],
+              'tag': validation['gitTag'],
+              'canonicalDigest': validation['tarballDigest'],
+              'canonicalDigestAlgorithm': validation['canonicalDigestAlgorithm'],
+              'canonicalDigestVerified': validation['canonicalDigestVerified'],
+              'rawIntegrity': validation['rawIntegrity'],
+              'publishOutcome': 'not-attempted',
+              'registryObservation': {'state': 'not-observed'},
+              'distTags': {},
+          }
+          with open(validation_path.replace('skill-release-validation.json', 'release-receipt.json'), 'w', encoding='utf-8') as output:
+              json.dump(receipt, output, indent=2, sort_keys=True)
+              output.write('\n')
           PY
           printf 'artifact_name=skill-release-%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
       - name: Restore and validate one existing candidate tarball
@@ -688,9 +710,15 @@ jobs:
           promote() {
             local tag="$1"
             local current
-            if ! current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null)"; then
-              echo "cannot read npm dist-tag: $tag" >&2
-              exit 1
+            local tag_error="$RUNNER_TEMP/skill-release-dist-tag-${tag}.err"
+            if ! current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>"$tag_error")"; then
+              if grep -Eiq 'E404|404|not found|no dist-tag' "$tag_error"; then
+                current=
+              else
+                echo "cannot read npm dist-tag: $tag" >&2
+                cat "$tag_error" >&2
+                exit 1
+              fi
             fi
             action="$(python3 tools/skill-release/release.py dist-tag-policy --current "$current" --target "$VERSION")"
             if [ "$action" = promote ]; then
@@ -699,8 +727,9 @@ jobs:
               echo "unsupported dist-tag action: $action" >&2
               exit 1
             fi
-            if ! current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null)"; then
+            if ! current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>"$tag_error")"; then
               echo "cannot read npm dist-tag after promotion: $tag" >&2
+              cat "$tag_error" >&2
               exit 1
             fi
             test "$current" = "\"$VERSION\""
