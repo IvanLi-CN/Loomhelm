@@ -16054,12 +16054,12 @@
     {
       "path": "skills/multi-task-flow/scripts/package-client-skills.ts",
       "sourcePath": "skills/multi-task-flow-runtime/scripts/package-client-skills.ts",
-      "installedSha256": "f2a4c386d1131bd7e3b44913cc3824e0109b928fff20605cceee523684a6fbe6"
+      "installedSha256": "c76601bdd4cc2e7d61c9c712ac49b42925266a9c75c940ee70e60f2f7a9666f7"
     },
     {
       "path": "skills/multi-task-flow/lib/package-source.ts",
       "sourcePath": "skills/multi-task-flow-runtime/lib/package-source.ts",
-      "installedSha256": "f03fdf4164597e911e0453141127bb0bbabed331ee76fc00ba31a8471329d9ef"
+      "installedSha256": "7646f48fde51879af96a1f656d25b8434a58d678aa6be8f2872830c292571615"
     },
     {
       "path": "skills/multi-task-flow/scripts/test-skills-artifact.ts",
