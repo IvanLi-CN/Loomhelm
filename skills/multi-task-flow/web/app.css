@@ -482,7 +482,8 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
   .workspace-view, .workspace-tasks { min-height: 0; align-self: stretch; overflow: visible; }
   .workspace-view { display: flex; flex-direction: column; }
   .workspace-view > .canvas-view, .workspace-view > .timeline-view { flex: 1 1 auto; min-height: 0; margin-bottom: 0; }
-  .workspace-view > .canvas-view #graph { height: 100%; min-height: 0; }
+  .workspace-view > .canvas-view #graph { height: 100% !important; min-height: 0; }
+  .workspace-view > .canvas-view #atomic-graph { height: 100% !important; min-height: 0; }
   .workspace-view > .timeline-view { min-height: 0; display: flex; flex-direction: column; }
   .workspace-view > .timeline-view > #planned-timeline, .workspace-view > .timeline-view > #actual-timeline { flex: 1 1 auto; height: auto !important; min-height: 0; }
   .workspace-view > .timeline-view > .axis-timezone, .workspace-view > .timeline-view > .unknown { flex: none; }

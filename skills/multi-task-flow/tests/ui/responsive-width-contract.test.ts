@@ -41,6 +41,8 @@ test("tall medium details provide an independently scrollable content body", () 
   expect(tall).toContain("#details-content { flex: 1 1 auto; min-height: 0; overflow: auto; }");
   expect(tall).toContain(".workspace-view > .timeline-view { min-height: 0; display: flex; flex-direction: column; }");
   expect(tall).toContain("height: auto !important; min-height: 0;");
+  expect(tall).toContain(".workspace-view > .canvas-view #graph { height: 100% !important; min-height: 0; }");
+  expect(tall).toContain(".workspace-view > .canvas-view #atomic-graph { height: 100% !important; min-height: 0; }");
   expect(tall).toContain("overflow-anchor: none;");
 });
 
