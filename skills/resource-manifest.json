@@ -7541,7 +7541,7 @@
     {
       "path": "skills/multi-task-flow/tests/ui/details-content.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/ui/details-content.test.ts",
-      "installedSha256": "213a6fb6cfb64cb1791578a69f8598d1fd504ddb780c7101efc445d24df0791b"
+      "installedSha256": "c3247edad839ca04e834d1d72af4435196b922f7341968d59f8da9d83130cbca"
     },
     {
       "path": "skills/multi-task-flow/tests/ui/group-progress.test.ts",
@@ -7616,7 +7616,7 @@
     {
       "path": "skills/multi-task-flow/web/app.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/app.ts",
-      "installedSha256": "d2d7f0a66a6e611b256f2ce3365cd63047ea3350ac5b05e014f32bc89618db3a"
+      "installedSha256": "1637a0383f8a88098b1ee607bdb9af875f01b08b5ace670505c8135508046f46"
     },
     {
       "path": "skills/multi-task-flow/web/cards.ts",
@@ -7636,7 +7636,7 @@
     {
       "path": "skills/multi-task-flow/web/details-content.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/details-content.ts",
-      "installedSha256": "7d757a0f31502ccdfafb7a0f87053f104b64a46ad74c99db711d27a023945243"
+      "installedSha256": "b3f16d455e32d508dcdfca6cc394ab256ad59abf87b8e451bab4d223365e1cec"
     },
     {
       "path": "skills/multi-task-flow/web/execution-range.ts",
