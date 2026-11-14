@@ -22,7 +22,7 @@ on:
         default: false
         type: boolean
       resume_run_id:
-        description: Previous workflow run whose candidate and receipt must be reconciled without rebuilding or republishing
+        description: Previous workflow run whose candidate and receipt must be reconciled without rebuilding; one guarded republish is allowed only after processing-timeout
         required: false
         default: ''
         type: string
@@ -540,6 +540,33 @@ jobs:
           open(path, 'a', encoding='utf-8').write('\n')
           PY
           }
+          mark_resume_retry() {
+            RECEIPT="$receipt" python3 - <<'PY'
+          import json
+          import os
+
+          path = os.environ['RECEIPT']
+          value = json.load(open(path, encoding='utf-8'))
+          value['resumeRetryUsed'] = True
+          json.dump(value, open(path, 'w', encoding='utf-8'), indent=2, sort_keys=True)
+          open(path, 'a', encoding='utf-8').write('\n')
+          PY
+          }
+          publish_candidate() {
+            set +e
+            timeout --signal=TERM 180s npm publish "$tarball" --access public --tag "$COMPATIBILITY_LINE" > "$RUNNER_TEMP/skill-release-publish.out" 2> "$RUNNER_TEMP/skill-release-publish.err"
+            publish_status=$?
+            set -e
+            if [ "$publish_status" -eq 0 ]; then
+              update_receipt publish-submitted false false submitted
+            elif grep -Eiq 'E409|cannot publish over|cannot overwrite|previously published' "$RUNNER_TEMP/skill-release-publish.out" "$RUNNER_TEMP/skill-release-publish.err"; then
+              update_receipt known-409 false false known-409
+            elif [ "$publish_status" -eq 124 ]; then
+              update_receipt publish-timeout false false timeout
+            else
+              update_receipt publish-unknown false false unknown
+            fi
+          }
           exact_metadata="$RUNNER_TEMP/skill-release-exact.json"
           exact_error="$RUNNER_TEMP/skill-release-exact.err"
           package_versions="$RUNNER_TEMP/skill-release-package-versions.json"
@@ -584,22 +611,31 @@ jobs:
               ;;
             exact-404|absent)
               if [ -n "$RESUME_RUN_ID" ]; then
-                update_receipt resume-reconcile false false exact-404
+                prior_state="$(python3 - "$receipt" <<'PY'
+          import json
+          import sys
+
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          print(value.get('state', ''))
+          PY
+                )"
+                retry_used="$(python3 - "$receipt" <<'PY'
+          import json
+          import sys
+
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          print('true' if value.get('resumeRetryUsed') else 'false')
+          PY
+                )"
+                if [ "$prior_state" = 'processing-timeout' ] && [ "$retry_used" != 'true' ]; then
+                  mark_resume_retry
+                  publish_candidate
+                else
+                  update_receipt resume-reconcile false false exact-404
+                fi
               else
                 update_receipt exact-404 false false exact-404
-                set +e
-                timeout --signal=TERM 180s npm publish "$tarball" --access public --tag "$COMPATIBILITY_LINE" > "$RUNNER_TEMP/skill-release-publish.out" 2> "$RUNNER_TEMP/skill-release-publish.err"
-                publish_status=$?
-                set -e
-                if [ "$publish_status" -eq 0 ]; then
-                  update_receipt publish-submitted false false submitted
-                elif grep -Eiq 'E409|cannot publish over|cannot overwrite|previously published' "$RUNNER_TEMP/skill-release-publish.out" "$RUNNER_TEMP/skill-release-publish.err"; then
-                  update_receipt known-409 false false known-409
-                elif [ "$publish_status" -eq 124 ]; then
-                  update_receipt publish-timeout false false timeout
-                else
-                  update_receipt publish-unknown false false unknown
-                fi
+                publish_candidate
               fi
               ;;
             registry-error)
