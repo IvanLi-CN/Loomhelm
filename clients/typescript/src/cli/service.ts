@@ -2,7 +2,10 @@ import { SkillsRuntime } from '../toolkit.ts';
 
 export async function runServiceCommand(args: string[]): Promise<void> {
   if (args.length === 1 && args[0] === 'daemon') {
-    const result = await new SkillsRuntime().run('skills/multi-task-flow/scripts/service.ts', ['daemon']);
+    // A daemon has no bounded command lifetime; the launchd job owns its lifecycle.
+    const result = await new SkillsRuntime().run('skills/multi-task-flow/scripts/service.ts', ['daemon'], {
+      timeoutMs: 2_147_483_647,
+    });
     process.stdout.write(result.stdout);
     process.stderr.write(result.stderr);
     process.exitCode = result.code ?? 1;
