@@ -6,7 +6,7 @@
 
 ### 主 Agent（main Agent） 的首次交付顺序
 
-收到明确的任务编排请求后，主 Agent（main Agent） 先核对当前会话是否绑定未完成 run；若没有，则构造并校验 planned 任务图，调用 `orchestrate.ts init` 写入正式账本。随后调用 `service.ts ensure` 和 `service.ts login`，按 `skills/multi-task-flow/SKILL.md` 的 Dashboard browser route 使用当前宿主可用的内置浏览器打开对应 run 页面，确认真实 revision、任务节点和依赖。任务保持 `planned`，除非主人另行授权派发或外部操作。
+收到明确的任务编排请求后，主 Agent（main Agent） 先核对当前会话是否绑定未完成 run；若没有，则构造并校验 planned 任务图，调用 `bunx --bun @loomhelm/multi-task-flow@<exact-version> flow init --input -` 写入正式账本。随后调用 `bunx --bun @loomhelm/multi-task-flow@<exact-version> service ensure --input -` 和 `bunx --bun @loomhelm/multi-task-flow@<exact-version> service login --input -`，按 `skills/multi-task-flow/SKILL.md` 的 Dashboard browser route 使用当前宿主可用的内置浏览器打开对应 run 页面，确认真实 revision、任务节点和依赖。任务保持 `planned`，除非主人另行授权派发或外部操作。
 
 proposal、Markdown requirements 和 Mermaid 只能作为输入或补充材料，不能作为首次交付。任一步骤失败都必须报告具体阶段、命令结果和阻塞。
 

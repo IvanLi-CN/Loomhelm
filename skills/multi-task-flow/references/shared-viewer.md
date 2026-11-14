@@ -2,19 +2,39 @@
 
 The formal root is `~/.local/share/multi-task-flow/`: `config/`, `data/runs/`, `releases/`, `state/`, `logs/`. `CODEX_HOME` and the invoking worktree do not select a formal instance. `MULTI_TASK_FLOW_PROFILE=test|development` requires an absolute `MULTI_TASK_FLOW_ROOT`, distinct from the formal root. Isolated profiles derive separate launchd labels, port scopes and registry roots. `TASK_ORCHESTRATION_DATA_ROOT` is an explicit ledger-only fixture override; never use it to create a second formal authority.
 
-All commands use `multi-task-flow service <command> --input -`, consuming one JSON object. Normal usage:
+Published-package commands use only `bunx --bun @loomhelm/multi-task-flow@<exact-version> service <command> --input -`, consuming one JSON object. Do not replace this form with `npx`, `latest`, a compatibility-line tag, a bare cached binary, or a repository-local source path. Normal usage:
 
-- `ensure`, `renew`, `release`: `{"run_id":"example","thread_id":"main-thread","api_version":1}`.
-- `status`, `doctor`: `{}`. Inspect configured identity and runtime before remediation.
-- `login`: `{}` or `{"run_id":"example"}`. Its returned target URL contains a sensitive one-time query ticket.
+- `status`, `doctor`: `printf '{}\n' | bunx --bun @loomhelm/multi-task-flow@<exact-version> service status --input -` and the equivalent `doctor` command. Inspect configured identity and runtime before remediation.
+- `ensure`, `renew`, `release`: `bunx --bun @loomhelm/multi-task-flow@<exact-version> service <command> --input -` with `{"run_id":"example","thread_id":"main-thread","api_version":1}` on stdin.
+- `login`: the same exact-version prefix with `{}` or `{"run_id":"example"}`. Its returned target URL contains a sensitive one-time query ticket.
+
+## Version and runtime diagnosis
+
+Run `bunx --bun @loomhelm/multi-task-flow@<exact-version> --version` and the read-only `service status` command with the same exact package version. The package version identifies the CLI process; it is not the bundle `service_version`.
+
+For the formal service root, read `config/service.json.current_build`, then read `releases/<current_build>/manifest.json`. The manifest's `build_id` must equal `current_build`; its `source_sha` and `service_version` identify the installed bundle. A healthy `service status` must report `installed: true`, `running: true`, `result.build_id == current_build`, and `result.source_sha` equal to the selected manifest. Ignore other release directories, candidates and npm cache entries when deciding which version is running.
+
+The following is a read-only check for the formal macOS/Linux root and fails closed on a missing or mismatched build. It requires `jq`:
+
+```sh
+service_root="$HOME/.local/share/multi-task-flow"
+current_build="$(jq -er '.current_build' "$service_root/config/service.json")"
+manifest="$service_root/releases/$current_build/manifest.json"
+source_sha="$(jq -er --arg build "$current_build" 'select(.build_id == $build) | .source_sha' "$manifest")"
+status_json="$(printf '{}\n' | bunx --bun @loomhelm/multi-task-flow@<exact-version> service status --input -)"
+printf '%s\n' "$status_json" | jq -e --arg build "$current_build" --arg source "$source_sha" \
+  '.result.installed == true and .result.running == true and .result.build_id == $build and .result.source_sha == $source'
+```
+
+If this check fails, or `status` reports `installed: false`, stop after reporting the exact package version, `current_build`, manifest `service_version`/`source_sha`, and runtime `build_id`/`source_sha`. Do not call `install`, `upgrade`, `rollback`, credential maintenance, import, or `ensure` as a repair. An installed identity match is required before ordinary `ensure`; maintenance still requires the owner's explicit authorization.
 
 ## Explicit maintenance
 
 The protected Skill Runtime release workflow builds from clean committed source after `bun --no-install run build`: `bun --no-install scripts/build-service.ts --output /absolute/new-bundle --service-version <semver>`. User-side source builds are forbidden. The v2 bundle includes a shell launcher, TypeScript sources, prepared dependencies, browser assets and a manifest binding source SHA, platform, file digests and compatibility. A Skill release publishes a platform-matched verified bundle; the consumer selects that bundle or a verified candidate under `candidates/<build-id>/`. The next `ensure` verifies and stages it, runs compatibility preflight, and uses the normal live switch and health-check rollback path. The launcher requires the trusted Bun 1.4.4 executable at the absolute path and SHA-256 pinned when building; it validates and snapshots that runtime before use. It runs independently of the caller working directory but does not include Bun. The maintenance CLI runs with Bun or the shell `viewer` launcher. The viewer preserves the caller environment and Bun configuration; it does not strip runtime variables or replace PATH. The launchd definition records the installing or upgrading caller PATH so background PR queries can resolve gh from the same tool environment. After changing tool locations, regenerate the definition through explicit service maintenance. Before loading package TypeScript through its integrity bootstrap, the launcher verifies all listed resources and rejects unlisted files, links and unsafe package permissions. Legacy compiled v1 bundles remain diagnostic-only and are never a startup or rollback fallback.
 
-- `install`: `{"source":"/absolute/bundle"}`; optional `registry_dir` selects the registry once. Installation initializes credentials and fixed high port, writes a private plist, and does not bootstrap/start it. Formal label: `cc.ivanli.loomhelm.multi-task-flow.viewer`. Next `ensure` bootstraps into the current user's GUI domain, or user domain on headless macOS, and kickstarts it.
-- `upgrade`: `{"source":"/absolute/bundle"}`. Validate hashes, platform and existing ledger/custom-view compatibility before stopping the old build. Switch the configuration atomically, start and health-check; failed health restores old configuration and existing lease deadlines. Old releases remain.
-- `rollback`: `{}`; the previous build must still support current data. This never restores an old data backup over new writes.
+- `install`: `bunx --bun @loomhelm/multi-task-flow@<exact-version> service install --input -` with `{"source":"/absolute/bundle"}`; optional `registry_dir` selects the registry once. Installation initializes credentials and fixed high port, writes a private plist, and does not bootstrap/start it. Formal label: `cc.ivanli.loomhelm.multi-task-flow.viewer`. Next `ensure` bootstraps into the current user's GUI domain, or user domain on headless macOS, and kickstarts it.
+- `upgrade`: `bunx --bun @loomhelm/multi-task-flow@<exact-version> service upgrade --input -` with `{"source":"/absolute/bundle"}`. Validate hashes, platform and existing ledger/custom-view compatibility before stopping the old build. Switch the configuration atomically, start and health-check; failed health restores old configuration and existing lease deadlines. Old releases remain.
+- `rollback`: `bunx --bun @loomhelm/multi-task-flow@<exact-version> service rollback --input -` with `{}`; the previous build must still support current data. This never restores an old data backup over new writes.
 - `credential-rotate`, `credential-revoke`: `{}`; replace the credential and revoke sessions, tickets and browser leases. Agent leases keep their deadlines.
 
 `ensure` performs none of these maintenance actions. No `sudo`, login autostart or unconditional KeepAlive is used. A crash is recovered on the next ensure. A lifetime instance lock, serialized startup and generation/PID guards prevent old processes from altering successor runtime/port ownership. Port conflict fails instead of changing the configured number or taking over another process. The registry directory is resolved at install and saved; no synthetic worktree or `agent_session` is recorded. Active lease registration covers actual runtime only. Logs contain fixed event identities, rotate at 5 MiB and retain three files.

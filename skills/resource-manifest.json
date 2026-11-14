@@ -1150,7 +1150,7 @@
     },
     {
       "path": "skills/bin/tests/checks/multi-task-flow.test.ts",
-      "installedSha256": "077b5baa14b2e40a9b1711968ec170bc391d968a3769ae555a66551a895c3211"
+      "installedSha256": "70b4619d600c0ac4c53f4b6b9c8e2372baae60c77fe1c72ec2601f80f4800bcd"
     },
     {
       "path": "skills/bin/tests/checks/pr_replay_policy.test.ts",
@@ -2654,7 +2654,7 @@
     },
     {
       "path": "skills/docs/vendor/dot-codex/design/multi-task-flow/data-and-scripts.md",
-      "installedSha256": "e9fac1cab26a7335132069fbfbd27f0af4c3227234c1706c23d1c9bbf0a3d251"
+      "installedSha256": "98ce55cfa2b075b84b379b32cb943d14f3114608c955c2dd86663504ee1888a6"
     },
     {
       "path": "skills/docs/vendor/dot-codex/design/multi-task-flow/dev-plan-bridge.md",
@@ -2662,7 +2662,7 @@
     },
     {
       "path": "skills/docs/vendor/dot-codex/design/multi-task-flow/execution.md",
-      "installedSha256": "e7d0a4cff6c7e8b85c75eb515771d49941baea9dfdbe7bc0aef8980e36afe7cb"
+      "installedSha256": "3cc401f674b143383568315e1e41680af0f264f44ac9745c1d94625e9e27390b"
     },
     {
       "path": "skills/docs/vendor/dot-codex/design/multi-task-flow/orchestration.md",
@@ -2678,7 +2678,7 @@
     },
     {
       "path": "skills/docs/vendor/dot-codex/design/multi-task-flow/web-template.md",
-      "installedSha256": "c896f8e80ef7ed82ff329cbb6b4dadede3a93f0efe8b7b3b320ef8232eb139d1"
+      "installedSha256": "a00245222417e1418f74e8a07e97441cf8ecc1587acda6e914cde4b65ea6ad5d"
     },
     {
       "path": "skills/docs/vendor/dot-codex/engineering-workflow.md",
@@ -6962,7 +6962,7 @@
     },
     {
       "path": "skills/multi-task-flow/SKILL.md",
-      "installedSha256": "1e2909387584720d723246c1f31721711ac8a5cd6d551f834f2c76d328f737d5"
+      "installedSha256": "e3f56ecc87d8809520f2ec909f41653ee9b28345caa47255b40b8801596064af"
     },
     {
       "path": "skills/multi-task-flow/bun.lock",
@@ -6977,7 +6977,7 @@
     {
       "path": "skills/multi-task-flow/examples/README.md",
       "sourcePath": "packages/multi-task-flow-runtime/examples/README.md",
-      "installedSha256": "1850cedd1da8b11c993e6fe403058336e58c5865cb64cc8dc5a85879affe2391"
+      "installedSha256": "70ac8b17b5fcd01a940a34413a812eae7b8c684fd50aaa9ff8320ea58a2eae3a"
     },
     {
       "path": "skills/multi-task-flow/examples/ledger-initialization/README.md",
@@ -7326,7 +7326,7 @@
     },
     {
       "path": "skills/multi-task-flow/references/shared-viewer.md",
-      "installedSha256": "e28a1b16d4dc52a3f95b053fc2fec183d045ebd0a8b4d05009058881cd1b8bb0"
+      "installedSha256": "b4498fff06d5dbc3cd1c049eecf3a5b82ab8ad472eccb5f90e7bbb313a6565be"
     },
     {
       "path": "skills/multi-task-flow/scripts/build-service.ts",

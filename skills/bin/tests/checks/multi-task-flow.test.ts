@@ -45,6 +45,73 @@ test("multi-task-flow documents require formal dashboard delivery", () => {
   expect(viewer).toContain("正常 ledger 修订保持同一页面");
 });
 
+test("multi-task-flow CLI documentation pins package and service identity", () => {
+  const skill = readFileSync(
+    join(repositoryRoot, "skills/multi-task-flow/SKILL.md"),
+    "utf8",
+  );
+  const viewer = readFileSync(
+    join(repositoryRoot, "skills/multi-task-flow/references/shared-viewer.md"),
+    "utf8",
+  );
+  const packageReadme = readFileSync(
+    join(repositoryRoot, "clients/typescript/README.md"),
+    "utf8",
+  );
+  const examples = readFileSync(
+    join(repositoryRoot, "packages/multi-task-flow-runtime/examples/README.md"),
+    "utf8",
+  );
+  const designData = readFileSync(
+    join(
+      repositoryRoot,
+      "skills/docs/vendor/dot-codex/design/multi-task-flow/data-and-scripts.md",
+    ),
+    "utf8",
+  );
+  const designExecution = readFileSync(
+    join(
+      repositoryRoot,
+      "skills/docs/vendor/dot-codex/design/multi-task-flow/execution.md",
+    ),
+    "utf8",
+  );
+  const designWeb = readFileSync(
+    join(
+      repositoryRoot,
+      "skills/docs/vendor/dot-codex/design/multi-task-flow/web-template.md",
+    ),
+    "utf8",
+  );
+  const packageAdr = readFileSync(
+    join(repositoryRoot, "docs/adr/0032-package-backed-dashboard-daemon.md"),
+    "utf8",
+  );
+  for (const document of [
+    skill,
+    viewer,
+    packageReadme,
+    examples,
+    designData,
+    designExecution,
+    designWeb,
+    packageAdr,
+  ]) {
+    expect(document).toContain("bunx --bun @loomhelm/multi-task-flow@<exact-version>");
+  }
+  for (const document of [skill, viewer, packageReadme]) {
+    expect(document).toContain("service.json");
+    expect(document).toContain("current_build");
+    expect(document).toContain("npx");
+  }
+  expect(designData).not.toContain("`multi-task-flow flow <command> --input -`");
+  expect(designData).not.toContain("`orchestrate.ts migrate --input -`");
+  expect(designExecution).not.toContain("`orchestrate.ts init`");
+  expect(designExecution).not.toContain("`service.ts ensure`");
+  expect(designWeb).not.toContain("`multi-task-flow service ensure --input -`");
+  expect(packageAdr).not.toContain("bun x --bun --package @loomhelm/multi-task-flow");
+});
+
 test("multi-task-flow task-local direct delivery requires an open PR", () => {
   const temporary = mkdtempSync(join(tmpdir(), "checks-multi-task-terminal-"));
   try {
