@@ -155,7 +155,7 @@ function dependenciesFor(projection: ReturnType<typeof buildGraphProjection>, no
 }
 
 export function createDetailContent(context: DetailContentContext) {
-  function begin(kind: "task" | "group" | "milestone", id: string, title: string, state: string) {
+  function begin(kind: "task" | "group", id: string, title: string, state: string) {
     const container = document.getElementById("details-content")!;
     const selection = `${kind}:${id}`;
     const top = container.dataset.selection === selection ? container.scrollTop : 0;
@@ -304,26 +304,7 @@ export function createDetailContent(context: DetailContentContext) {
     const data = context.getData();
     const node = data?.nodes.find((item) => item.id === nodeId && item.kind === "milestone");
     if (!data || !node) return;
-    const atomicNode = data.atomic_nodes?.find((item) => item.id === nodeId);
-    const occurredAt = (data.actual_milestones ?? []).find((item) => item.node_id === nodeId)?.occurred_at ?? null;
-    const status = atomicNode?.state ?? (occurredAt ? "completed" : "planned");
-    const { container, restore } = begin("milestone", node.id, node.label, "里程碑");
-    const facts = text("div", "", "detail-group-facts");
-    const projection = buildGraphProjection(data);
-    const predecessors = dependenciesFor(projection, node.id, "incoming", data);
-    const successors = dependenciesFor(projection, node.id, "outgoing", data);
-    field(facts, "类型", "里程碑原子任务");
-    field(facts, "所属交付单元", group.title);
-    field(facts, "状态", context.labels[status] ?? status);
-    field(facts, "前驱", renderDependencyTooltip(predecessors, predecessors.length ? `查看 ${predecessors.length} 项依赖` : "无依赖"));
-    field(facts, "后继", renderDependencyTooltip(successors, successors.length ? `查看 ${successors.length} 项依赖` : "无依赖"));
-    field(facts, "验收条件", `${atomicNode?.acceptance?.length ?? 0} 项`);
-    field(facts, "发生时间", renderTimestamp(occurredAt));
-    const relatedAtoms = [...(group.atoms ?? group.planned_atoms ?? [])];
-    const relatedAtom = focusedAtomId ? relatedAtoms.find((atom) => atom.id === focusedAtomId) : null;
-    if (relatedAtom) field(facts, "关联原子任务", relatedAtom.title);
-    container.append(facts);
-    restore();
+    showGroup(group, focusedAtomId);
   };
   return { clearDetails, showTask, showGroup, showMilestone, taskPreview, groupPreview };
 }
