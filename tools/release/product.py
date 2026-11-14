@@ -234,7 +234,10 @@ def main():
         if args.identity not in records:
             raise ReleaseError('unknown release identity')
         record = records[args.identity]
-        if record['intent']['policy_hash'] != policy_hash():
+        if record['intent']['policy_hash'] != policy_hash() and args.action != 'terminate':
+            # A pre-publication reservation may outlive a policy change. Allow
+            # only its explicit cleanup; all preparation, build, and publish
+            # operations must continue to require the original policy.
             raise ReleaseError('policy differs from reserved identity')
         if args.action == 'prepare':
             if record['state'] in ('bound','staged','frozen','completed'):

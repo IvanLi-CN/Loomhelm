@@ -300,13 +300,11 @@ export function createDetailContent(context: DetailContentContext) {
     const progress = atoms.length === 0 ? "未配置原子任务" : atoms.every((item) => item.status === "completed") ? `${atoms.length}/${atoms.length} · 已完成` : atom ? `${atoms.indexOf(atom) + 1}/${atoms.length} · ${atom.title}` : `0/${atoms.length} · 待开始`;
     return renderGroupPreview({ title: group.title, state: context.labels[executionState] ?? executionState, atomProgress: progress, duration: formatDuration(group.started_at ?? null, group.finished_at ?? null), conversation: group.delivery_unit_kind === "bootstrap" ? "主对话" : group.agent_thread_id ? "已创建" : "尚未创建", parentPr: context.safeExternal(group.parent_pr?.url ?? null) ? "已关联" : "尚未创建" });
   };
-  const showMilestone = (nodeId: string, group: Group): void => {
+  const showMilestone = (nodeId: string, group: Group, focusedAtomId: string | null = null): void => {
     const data = context.getData();
     const node = data?.nodes.find((item) => item.id === nodeId && item.kind === "milestone");
-    const focusedAtomId = group.atoms?.find((atom) => atom.lifecycle_stage === "pr_merged")?.id ?? group.planned_atoms?.find((atom) => atom.lifecycle_stage === "pr_merged")?.id ?? null;
+    if (!data || !node) return;
     showGroup(group, focusedAtomId);
-    const summary = document.getElementById("details-summary");
-    if (summary && node) summary.replaceChildren(text("div", node.label, "detail-title"), text("div", "里程碑", "detail-state"));
   };
   return { clearDetails, showTask, showGroup, showMilestone, taskPreview, groupPreview };
 }
