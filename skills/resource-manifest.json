@@ -7616,7 +7616,7 @@
     {
       "path": "skills/multi-task-flow/web/app.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/app.ts",
-      "installedSha256": "3ef85892e14866c85b4283fbdcc659c1aa451745da4b9a2be3d85680b0462673"
+      "installedSha256": "07034edb767951693d22a6539626af1e4cd4e85bd84faf068e7d0771164ef5fa"
     },
     {
       "path": "skills/multi-task-flow/web/cards.ts",

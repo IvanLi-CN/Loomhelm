@@ -122,6 +122,7 @@ let reconnectBlocked = false;
 function showWorkerDiagnostic(value: Partial<typeof workerDiagnostic> & { diagnostic_id?: string; run_id?: string; stage?: string; code?: string }): void {
   workerDiagnostic = {
     ...workerDiagnostic,
+    ...value,
     diagnostic_id: value.diagnostic_id ?? "unknown",
     run_id: value.run_id ?? location.pathname.split("/")[2] ?? "unknown",
     stage: value.stage ?? "request_dispatch",
@@ -129,7 +130,7 @@ function showWorkerDiagnostic(value: Partial<typeof workerDiagnostic> & { diagno
     retryable: value.retryable ?? false,
     reconnect_required: value.reconnect_required ?? true,
   };
-  reconnectBlocked = value.code === "RUN_WORKER_UNAVAILABLE" || Boolean(value.diagnostic_id);
+  reconnectBlocked = value.code === "RUN_WORKER_UNAVAILABLE" || (Boolean(value.diagnostic_id) && value.state !== "recovered");
   const card = $("worker-diagnostic");
   $("worker-diagnostic-summary").textContent = `运行 ${workerDiagnostic.run_id} · 诊断 ${workerDiagnostic.diagnostic_id} · 阶段 ${workerDiagnostic.stage}：${workerDiagnostic.safe_summary}`;
   card.hidden = false;
