@@ -7,6 +7,7 @@ import {
 import {
   chmodSync,
   existsSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -93,9 +94,23 @@ function packageConfig(old: ServiceConfig | null, identity: PackageIdentity, reg
     compatibility_line: identity.compatibility_line,
     skill_version: identity.skill_version,
     service_contract: identity.contracts.service,
+    ledger_contract: identity.contracts.ledger,
+    api_contract: identity.contracts.api,
+    frontend_contract: identity.contracts.frontend,
+    viewer_contract: identity.contracts.viewer,
     source_sha: identity.source_sha,
     artifact_build_id: identity.build_id,
   };
+}
+
+function assertPackageUpgradeCompatible(old: ServiceConfig, next: PackageIdentity): void {
+  requireCondition(old.package_name === PACKAGE_NAME, "INCOMPATIBLE_RELEASE", "The installed service is not a supported package profile");
+  requireCondition(old.compatibility_line === next.compatibility_line, "INCOMPATIBLE_RELEASE", "Package compatibility line changed; explicit migration is required");
+  requireCondition(!old.service_contract || old.service_contract === next.contracts.service, "INCOMPATIBLE_RELEASE", "Package service contract changed; explicit migration is required");
+  requireCondition(old.ledger_contract === undefined || old.ledger_contract === next.contracts.ledger, "INCOMPATIBLE_RELEASE", "Package ledger contract changed; explicit migration is required");
+  requireCondition(old.api_contract === undefined || old.api_contract === next.contracts.api, "INCOMPATIBLE_RELEASE", "Package API contract changed; explicit migration is required");
+  requireCondition(old.frontend_contract === undefined || old.frontend_contract === next.contracts.frontend, "INCOMPATIBLE_RELEASE", "Package frontend contract changed; explicit migration is required");
+  requireCondition(old.viewer_contract === undefined || old.viewer_contract === next.contracts.viewer, "INCOMPATIBLE_RELEASE", "Package viewer contract changed; explicit migration is required");
 }
 
 export async function installPackageRelease(state: ServiceState, version: string, registryDir?: string) {
@@ -121,11 +136,21 @@ export async function upgradePackageRelease(state: ServiceState, version: string
     const old = state.config();
     const identity = resolvePackageIdentity(version);
     requireCondition(old.package_version !== version || old.package_name !== PACKAGE_NAME, "ALREADY_CURRENT", "The requested package version is already installed");
-    unloadUserService(state);
-    state.transaction((runtime) => { runtime.phase = "stopped"; runtime.pid = null; });
-    state.saveConfig({ ...packageConfig(old, identity, old.registry_dir), port: old.port });
-    writeLaunchdDefinition(state);
-    return { package_name: PACKAGE_NAME, version: identity.version, build_id: identity.build_id, port: old.port, root: state.paths.root, started: false };
+    assertPackageUpgradeCompatible(old, identity);
+    const oldPlistPath = join(state.paths.config, "viewer.plist");
+    const oldPlist = existsSync(oldPlistPath) ? readFileSync(oldPlistPath, "utf8") : null;
+    const nextConfig = { ...packageConfig(old, identity, old.registry_dir), port: old.port };
+    try {
+      state.saveConfig(nextConfig);
+      writeLaunchdDefinition(state);
+      unloadUserService(state);
+      state.transaction((runtime) => { runtime.phase = "stopped"; runtime.pid = null; });
+      return { package_name: PACKAGE_NAME, version: identity.version, build_id: identity.build_id, port: old.port, root: state.paths.root, started: false };
+    } catch (error) {
+      state.saveConfig(old);
+      if (oldPlist !== null) writeAtomic(oldPlistPath, oldPlist);
+      throw error;
+    }
   });
 }
 

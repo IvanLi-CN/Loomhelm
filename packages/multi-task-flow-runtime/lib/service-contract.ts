@@ -81,11 +81,34 @@ export const configSchema = z
     compatibility_line: z.string().regex(/^compat-v\d+$/).optional(),
     skill_version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).optional(),
     service_contract: z.string().min(1).optional(),
+    ledger_contract: z.number().int().positive().optional(),
+    api_contract: z.number().int().positive().optional(),
+    frontend_contract: z.number().int().positive().optional(),
+    viewer_contract: z.number().int().positive().optional(),
     source_sha: z.string().regex(/^[a-f0-9]{40}$/).optional(),
     artifact_build_id: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   })
   .strict();
 export type ServiceConfig = z.infer<typeof configSchema>;
+
+export function packageReleaseManifest(config: Pick<ServiceConfig, "current_build" | "source_sha" | "skill_version" | "service_contract" | "package_version" | "ledger_contract" | "api_contract" | "frontend_contract" | "viewer_contract">): ReleaseManifest {
+  return {
+    schema_version: 2,
+    build_id: config.current_build,
+    source_sha: config.source_sha ?? "0".repeat(40),
+    skill_id: SKILL_ID,
+    skill_version: config.skill_version ?? SKILL_VERSION,
+    ledger_contract: config.ledger_contract ?? 3,
+    viewer_contract: config.viewer_contract ?? VIEWER_CONTRACT,
+    service_version: config.service_contract ?? config.package_version ?? "0.0.0",
+    platform: `${process.platform}-${process.arch}` as ReleaseManifest["platform"],
+    api_versions: [config.api_contract ?? API_VERSION],
+    frontend_contracts: [config.frontend_contract ?? FRONTEND_CONTRACT],
+    readable: compatibility.readable,
+    writable: compatibility.writable,
+    files: {},
+  };
+}
 
 export function ledgerContract(value: unknown): string {
   const ledger = value as Record<string, unknown> | null;

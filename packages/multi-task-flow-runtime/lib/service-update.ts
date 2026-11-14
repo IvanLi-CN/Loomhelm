@@ -9,6 +9,8 @@ const CHECK_TIMEOUT_MS = 1500;
 const cachePath = (state: ServiceState) => join(state.paths.state, "daemon-update.json");
 type Cache = {
   checked_at: string;
+  package_name: string;
+  compatibility_line: string;
   compatible_version: string | null;
   latest_version: string | null;
 };
@@ -23,7 +25,7 @@ function readCache(state: ServiceState): Cache | null {
   try {
     if (!existsSync(cachePath(state))) return null;
     const value = JSON.parse(readRegular(cachePath(state))) as Cache;
-    if (typeof value.checked_at !== "string" || (value.compatible_version !== null && typeof value.compatible_version !== "string") || (value.latest_version !== null && typeof value.latest_version !== "string")) return null;
+    if (typeof value.checked_at !== "string" || !Number.isFinite(Date.parse(value.checked_at)) || typeof value.package_name !== "string" || typeof value.compatibility_line !== "string" || (value.compatible_version !== null && typeof value.compatible_version !== "string") || (value.latest_version !== null && typeof value.latest_version !== "string")) return null;
     return value;
   } catch { return null; }
 }
@@ -31,11 +33,22 @@ function readCache(state: ServiceState): Cache | null {
 export function cachedDaemonUpdate(state: ServiceState): DaemonUpdateHint | undefined {
   const config = state.config();
   const cache = readCache(state);
-  if (!cache || !config.package_version || Date.now() - Date.parse(cache.checked_at) > CACHE_TTL_MS) return undefined;
-  const compatible = cache.compatible_version && cache.compatible_version !== config.package_version ? cache.compatible_version : undefined;
-  const latest = cache.latest_version && cache.latest_version !== config.package_version && cache.latest_version !== compatible ? cache.latest_version : undefined;
+  if (!cache || !config.package_name || !config.package_version || cache.package_name !== config.package_name || cache.compatibility_line !== config.compatibility_line || Date.now() - Date.parse(cache.checked_at) > CACHE_TTL_MS) return undefined;
+  const newer = (candidate: string | null) => Boolean(candidate && compareSemver(candidate, config.package_version!) > 0);
+  const compatible = newer(cache.compatible_version) ? cache.compatible_version! : undefined;
+  const latest = newer(cache.latest_version) && cache.latest_version !== compatible ? cache.latest_version! : undefined;
   if (!compatible && !latest) return undefined;
   return { kind: "daemon_update", message: "A newer Dashboard daemon is available", ...(compatible ? { compatible_version: compatible } : {}), ...(latest ? { latest_version: latest } : {}) };
+}
+
+function compareSemver(left: string, right: string): number {
+  const parse = (value: string) => value.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+  const a = parse(left); const b = parse(right);
+  if (!a || !b) return -1;
+  for (const index of [1, 2, 3]) { const delta = Number(a[index]) - Number(b[index]); if (delta) return delta; }
+  if (!a[4] && b[4]) return 1;
+  if (a[4] && !b[4]) return -1;
+  return (a[4] ?? "").localeCompare(b[4] ?? "");
 }
 
 export function triggerDaemonUpdateCheck(state: ServiceState): void {
@@ -54,7 +67,7 @@ export function triggerDaemonUpdateCheck(state: ServiceState): void {
       const tags = metadata["dist-tags"] ?? {};
       const compatible = typeof tags[config.compatibility_line ?? ""] === "string" ? tags[config.compatibility_line ?? ""] as string : null;
       const latest = typeof tags.latest === "string" ? tags.latest : null;
-      writeAtomic(cachePath(state), JSON.stringify({ checked_at: new Date().toISOString(), compatible_version: compatible, latest_version: latest }) + "\n");
+      writeAtomic(cachePath(state), JSON.stringify({ checked_at: new Date().toISOString(), package_name: config.package_name, compatibility_line: config.compatibility_line ?? "", compatible_version: compatible, latest_version: latest }) + "\n");
     } catch { /* Update discovery is an optional side channel. */ }
     finally { lock?.release(); }
   })();

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { readRegularNoFollow } from "../../../skills/bin/modules/visual/secure_io";
+import { packageReleaseManifest } from "../lib/service-contract";
 import { LedgerStore, safeId } from "../lib/store";
 import { ServiceState } from "../lib/service-state";
 import { digest, verifyRelease } from "../lib/service-release";
@@ -90,6 +91,8 @@ function readRaw(state: ServiceState, runId: string) {
   return { raw, content };
 }
 function installedManifest(state: ServiceState) {
+  const config = state.config();
+  if (config.package_name && config.package_version) return packageReleaseManifest(config);
   try {
     return verifyRelease(
       join(state.paths.releases, state.config().current_build),

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { servicePaths } from "../lib/service-paths";
 import { ServiceState } from "../lib/service-state";
-import { API_VERSION, releaseManifestSchema } from "../lib/service-contract";
+import { API_VERSION, packageReleaseManifest, releaseManifestSchema } from "../lib/service-contract";
 import { readRegular, LedgerStore, safeId } from "../lib/store";
 import { requireCondition } from "../lib/errors";
 
@@ -16,6 +16,11 @@ export function checkViewerCompatibility(root: string): void {
   const state = installedState(root);
   if (!state) return;
   const config = state.config();
+  if (config.package_name && config.package_version) {
+    const manifest = packageReleaseManifest(config);
+    requireCondition(manifest.api_versions.includes(API_VERSION), "INCOMPATIBLE_API", "Installed package does not support this CLI API");
+    return;
+  }
   const manifest = releaseManifestSchema.parse(
     JSON.parse(
       readRegular(

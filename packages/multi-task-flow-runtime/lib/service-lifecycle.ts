@@ -13,29 +13,13 @@ import {
 import { ServiceState } from "../lib/service-state";
 import { ServiceAuth } from "../lib/service-auth";
 import { startSharedViewer, agentLease } from "../lib/service-http";
-import { requireApi, type ReleaseManifest } from "../lib/service-contract";
+import { packageReleaseManifest, requireApi, type ReleaseManifest } from "../lib/service-contract";
 import { startUserService } from "../lib/service-launchd";
 import { verifyRelease, requireSourceRelease } from "../lib/service-release";
 import { requireCondition, ContractError } from "../lib/errors";
 import { serviceLog } from "../lib/service-log";
 
 export const SERVICE_STARTUP_TIMEOUT_MS = 60_000;
-const packageManifest = (config: ReturnType<ServiceState["config"]>): ReleaseManifest => ({
-  schema_version: 2,
-  build_id: config.current_build,
-  source_sha: config.source_sha ?? "0".repeat(40),
-  skill_id: "multi-task-flow",
-  skill_version: config.skill_version ?? "0.0.0",
-  ledger_contract: 3,
-  viewer_contract: 5,
-  service_version: config.service_contract ?? config.package_version ?? "0.0.0",
-  platform: `${process.platform}-${process.arch}` as ReleaseManifest["platform"],
-  api_versions: [1],
-  frontend_contracts: [1],
-  readable: ["schema-2/contract-1", "schema-2/contract-2", "schema-2/contract-3"],
-  writable: ["schema-2/contract-2", "schema-2/contract-3"],
-  files: {},
-});
 function verifyPackageIdentity(config: ReturnType<ServiceState["config"]>): void {
   const root = process.env.LOOMHELM_TOOLKIT_ROOT;
   requireCondition(root, "PACKAGE_IDENTITY_UNAVAILABLE", "Package toolkit identity is unavailable");
@@ -135,7 +119,7 @@ export async function ensureService(
     async () => {
       const config = state.config();
       const manifest = config.package_name && config.package_version
-        ? packageManifest(config)
+        ? packageReleaseManifest(config)
         : verifyRelease(join(state.paths.releases, config.current_build));
       if (!config.package_name) requireSourceRelease(manifest);
       requireCondition(
@@ -214,7 +198,7 @@ export async function runDaemon(
   const packageBacked = Boolean(config.package_name && config.package_version);
   if (packageBacked) verifyPackageIdentity(config);
   const manifest = source?.manifest ??
-    (packageBacked ? packageManifest(config) : verifyRelease(join(state.paths.releases, config.current_build)));
+    (packageBacked ? packageReleaseManifest(config) : verifyRelease(join(state.paths.releases, config.current_build)));
   // Isolated live-source previews use metadata, not an installed release package.
   // Installed services must still reject legacy executable bundles.
   if (!source && !packageBacked) requireSourceRelease(manifest);

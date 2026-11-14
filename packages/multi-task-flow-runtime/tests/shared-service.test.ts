@@ -417,6 +417,6 @@ test("daemon update hints expose only confirmed newer daemon candidates", async 
     source_sha: "e".repeat(40),
     artifact_build_id: "d".repeat(64),
   });
-  writeAtomic(join(state.paths.state, "daemon-update.json"), JSON.stringify({ checked_at: new Date().toISOString(), compatible_version: "0.2.13", latest_version: "0.2.14" }));
+  writeAtomic(join(state.paths.state, "daemon-update.json"), JSON.stringify({ checked_at: new Date().toISOString(), package_name: "@loomhelm/multi-task-flow", compatibility_line: "compat-v1", compatible_version: "0.2.13", latest_version: "0.2.14" }));
   expect(cachedDaemonUpdate(state)).toEqual({ kind: "daemon_update", message: "A newer Dashboard daemon is available", compatible_version: "0.2.13", latest_version: "0.2.14" });
 });
