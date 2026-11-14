@@ -10,7 +10,7 @@ version: 2.7.7
 
 本文统一使用以下双语标准称谓：主 Agent（main Agent）负责整个编排；交付 Agent（Delivery Agent）负责所属交付单元；任务 Agent（Task Agent）负责所属子任务。英文名称是稳定的运行时角色标识，中文名称是面向读者的正式称谓，两者不得互相删减或替换为其他别名。
 
-本 Skill 用于经主人批准、具有明确任务依赖的多对话流程。它拥有独立的输入合同和运行时生命周期，与 `$dev-plan` 相互独立，也不会迁移或修改已有运行。初始化是有副作用的运行时操作；只读审查、诊断、代码探索或仅制定计划时不得调用本 Skill。主 Agent（main Agent）按需创建和管理平级的交付单元及任务对话。恰好只有一个 contribution Task 的 regular 交付单元使用共享交付拓扑：交付单元对话、工作区、分支和 PR 同时服务两个作用域。存在多个 contribution Task 时，使用独立的任务 Agent 对话和 child PR，由交付 Agent（Delivery Agent）负责父 PR 集成。主 Agent（main Agent）负责调度，并将只提交证据的工作与产生 PR 的贡献工作分开。
+本 Skill 用于经主人批准、具有明确任务依赖的正式多对话运行。它拥有独立的输入合同和运行时生命周期，与 `$dev-plan` 相互独立，也不会迁移或修改已有运行。初始化是有副作用的运行时操作；只读审查、诊断、代码探索或仅制定计划时不得调用本 Skill。主 Agent（main Agent）按需创建和管理平级的交付单元及任务对话。恰好只有一个 contribution Task 的 regular 交付单元使用共享交付拓扑：交付单元对话、工作区、分支和 PR 同时服务两个作用域。存在多个 contribution Task 时，使用独立的任务 Agent 对话和 child PR，由交付 Agent（Delivery Agent）负责父 PR 集成。主 Agent（main Agent）负责调度，并将只提交证据的工作与产生 PR 的贡献工作分开。
 
 每次运行可以包含一个 `bootstrap` 交付单元，后接零个或多个 `regular` 交付单元。默认第一个交付单元 MUST 为 `bootstrap`；只有提案记录了明确的例外原因和证据时，才允许第一个单元为 `regular`。Bootstrap 是唯一的主会话所有单元：绑定的主对话可以提交初始 SPEC/ADR/计划文档并管理第一个 parent PR。它使用 `owner_kind: "main"`，没有交付单元对话绑定，且必须位于第一位。Regular 单元保留交付单元所有权合同，激活前必须有交付单元对话；当其中恰好只有一个 contribution Task 时，该对话同时拥有任务对话、工作区、分支和 PR。Parent PR 默认串行；只有依赖允许时，regular 单元才可以并行。交付单元类型、所有权和交付单元对话绑定不能通过普通交付单元更新或计划修订改写。本版本不提供原地所有权转移命令；已有运行保留当前所有权。先初始化计划中的 bootstrap，再发布其 parent PR，并在同一个主会话工作区记录工作区和发布回执。
 
