@@ -1150,7 +1150,7 @@
     },
     {
       "path": "skills/bin/tests/checks/multi-task-flow.test.ts",
-      "installedSha256": "75dab9272a88fda2fcb6b75c79ef93038cfa1cab2baad635496424d14978ab06"
+      "installedSha256": "6caf7fc8ed879957c84f20a4b0afcda9750ffa6c69a056741e28023f76807d42"
     },
     {
       "path": "skills/bin/tests/checks/pr_replay_policy.test.ts",
@@ -6962,7 +6962,7 @@
     },
     {
       "path": "skills/multi-task-flow/SKILL.md",
-      "installedSha256": "9685b259a0a199234665dc72c11eacf61514f09ffb48648c8499cdd064c0acb7"
+      "installedSha256": "737d7d086b3ac92b7be454be19800e3ca28e56d54995012ec9910beba74522f2"
     },
     {
       "path": "skills/multi-task-flow/bun.lock",
@@ -7102,7 +7102,7 @@
     {
       "path": "skills/multi-task-flow/lib/contract.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/contract.ts",
-      "installedSha256": "53ee735195ec313f1c6b3229db3ed963209b20db28a1fc8da9a9ac69d00847a7"
+      "installedSha256": "aa5f139a65901993aef966dd68dda512377ad6ab0cc0c3e3ce36ad28b1fc9328"
     },
     {
       "path": "skills/multi-task-flow/lib/conversation-history.ts",
@@ -7187,7 +7187,7 @@
     {
       "path": "skills/multi-task-flow/lib/schema.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/schema.ts",
-      "installedSha256": "864eddffd536ded84f35be53b9aed5cd760ac19fa551c4d3d3000e532b567047"
+      "installedSha256": "82602deaff2e8f9086ba437f01143b12ab8a60f90925bf7decb4e72228e61dfa"
     },
     {
       "path": "skills/multi-task-flow/lib/server-contract.ts",
@@ -8762,12 +8762,12 @@
     {
       "path": "skills/multi-task-flow/lib/atomic-orchestration.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/atomic-orchestration.ts",
-      "installedSha256": "1e1ffdcae18fa25789e99b29c0440257ef149c467604f4c429905200d391dca7"
+      "installedSha256": "2708abf1b1733446877aaf912e66fd723faca4dfbfa86dd622c30c589693664b"
     },
     {
       "path": "skills/multi-task-flow/tests/atomic-orchestration-schema.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/atomic-orchestration-schema.test.ts",
-      "installedSha256": "416410b1d9fc65132677a57c010c0e730d4668eca78655cdf0a83b2121a3f0e8"
+      "installedSha256": "71717813e643b931f9efcfcbcd5a45e667a30331290ac3d66dc6356b560ef7c6"
     },
     {
       "path": "skills/multi-task-flow/tests/task-kind.test.ts",

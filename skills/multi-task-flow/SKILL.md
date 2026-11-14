@@ -1,7 +1,7 @@
 ---
 name: multi-task-flow
 description: 通过隔离的 JSON 账本、按需创建的交付单元和任务对话、PR 协调及已认证的本地仪表板，编排依赖驱动的 Codex 任务。
-version: 2.7.9
+version: 2.7.10
 ---
 
 # Multi-task flow
@@ -41,6 +41,14 @@ version: 2.7.9
 为了获取模型、合同和展示要求，读取当前 Skill 包内对应的 SPEC 和 design references；不要把运行时输入解析为外部仓库源文件。命令中的 `<skill>` 必须指向已安装 Skill 目录，除非明确测试候选 checkout，否则不能指向候选 checkout。依赖安装使用 `bun install --frozen-lockfile`，本地资源构建从 `<skill>` 目录执行 `bun --no-install run build`。正式运行独立存在于 `~/.local/share/multi-task-flow/data/runs/`，不受 Skill 安装目录和 `CODEX_HOME` 影响。查看或维护 viewer 前读取 `references/shared-viewer.md`。代码升级不会重写运行数据。历史只读运行升级 viewer 不需要迁移；只有写能力新近丢失时，才需要准确的兼容性报告批准。主人批准的维护迁移使用 `references/shared-viewer.md` 中的独立 `ledger-maintenance-check` / `ledger-maintenance-apply` 命令，保留原所有者，不得冒充所有者。普通绑定主会话的迁移权限不变。
 
 ## 计划与调度
+
+### Contract 3 不可绕过硬门禁
+
+主 Agent 在调用 `init` 前 MUST 形成完整 canonical plan：每个 contribution Task 都必须有自己的原子任务；原子图 MUST 明确声明开始节点、结束节点、里程碑节点和全部 `atomic_edges`。系统预设的交付单元生命周期原子只提供节点定义，不提供依赖关系；生命周期关系必须由 Agent 在 plan 中显式声明。运行时不得从任务图、交付单元数组顺序、原子数组顺序或名称推导任何原子依赖。
+
+对话创建只有一条正式路径：`dispatch-claim`/`dispatch-group-claim` → exact-version CLI `conversation-create` → native evidence reconcile → formal dispatch。Contract 3 下任何 Agent 都不得直接调用 `mcp__codex_app__create_thread`、裸 `thread/start`、`codex://threads/...` 或 `thread/resume + turn/start` 创建或启动交付对话；这些结果不能绑定到账本。发现绕过路径时必须记录 `orphan thread / orchestration violation`，保持 claim 和容量占用并停止调度，不能释放 claim 后静默重试或伪造成功。
+
+五个预设生命周期原子必须按 `prepare-parent → create-pr → verify-integration → merge-pr → closeout` 保持可达顺序。两节点之间允许插入其他原子，但只能使用 Agent 声明的边形成路径；缺失、逆序、无关或自动补出的关系都必须使计划拒绝。
 
 ### 交付单元归纳
 
