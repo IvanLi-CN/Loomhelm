@@ -9,3 +9,5 @@
 | [账本初始化](ledger-initialization/README.md) | 尚未获批的初始化请求模板 | `ledger-initialization/initial.json` |
 
 源码预览的启动、场景选择、刷新与生命周期见[开发预览说明](../../../docs/development-preview.md#multi-task-flow-源码服务)。
+
+表中的 `bun run preview:*` 和 `bun run demo:*` 仅用于仓库内合成示例与源码预览，不是正式发布包的 CLI 入口；正式运行必须使用 `bunx --bun @loomhelm/multi-task-flow@<exact-version> ...`，并遵守 `skills/multi-task-flow/references/shared-viewer.md` 的版本核对与维护授权边界。

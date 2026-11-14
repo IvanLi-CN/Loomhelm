@@ -10,7 +10,7 @@ Dashboard currently has a one-shot CLI and a user-level service lifecycle, while
 
 ## Decision
 
-The one-shot CLI and long-lived daemon are two execution modes of the same exact npm package. User-level launchd starts `bun x --bun --package @loomhelm/multi-task-flow@X.Y.Z multi-task-flow service daemon`; the service root stores configuration, package identity, ledger data, leases, logs and the plist, but does not copy a new service bundle as production code.
+The one-shot CLI and long-lived daemon are two execution modes of the same exact npm package. User-level launchd starts `bunx --bun @loomhelm/multi-task-flow@<exact-version> service daemon`; the service root stores configuration, package identity, ledger data, leases, logs and the plist, but does not copy a new service bundle as production code.
 
 Installation and upgrade accept an exact SemVer, resolve the package, validate its self-reported artifact identity and persist that identity atomically. A daemon startup compares its self-reported identity with the persisted identity and fails closed on mismatch. Bun and production dependencies remain external package prerequisites.
 

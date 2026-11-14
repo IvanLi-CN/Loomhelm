@@ -52,7 +52,7 @@ Skill 自带 Bun + TypeScript 固定脚本，所有账本操作通过脚本完�
 
 编码与版本。采用 UTF-8 JSON 对象，新的 ledger 使用 `schema_version: 2`；不认识的版本或必需语义拒绝写入。
 
-兼容读取与迁移。schema v1 默认只能通过规范化读取为内存中的 v2 视图；需要持久升级时，主 Agent（main Agent）必须显式调用 `orchestrate.ts migrate --input -`，指定准确 `run_id`、owner-only actor、唯一 `request_id` 和当前 `expected_revision`。
+兼容读取与迁移。schema v1 默认只能通过规范化读取为内存中的 v2 视图；需要持久升级时，主 Agent（main Agent）必须显式调用 `bunx --bun @loomhelm/multi-task-flow@<exact-version> flow migrate --input -`，指定准确 `run_id`、owner-only actor、唯一 `request_id` 和当前 `expected_revision`。
 
 迁移边界。迁移在维护锁和 run 锁内校验完整 v1 ledger，先保存 `ledger.migration-v1-<request_id>.json` 完整旧快照，再原子替换为 `schema_version: 2`、`contract_version: 1`；迁移新增 request record，因此 `revision` 单调增加 1，记录的 `committed_revision` 与返回 revision 相同。
 
@@ -181,7 +181,7 @@ type Ledger = {
 
 ### 调用格式
 
-入口为 `multi-task-flow flow <command> --input -`，标准输入为一个 JSON 对象；禁止通过命令行传递凭据。输出只有一个 JSON 对象到 stdout，诊断写 stderr。读命令不修改账本；写命令必须先有本编排操作权限，且共同遵循以下信封：
+入口为 `bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --input -`，标准输入为一个 JSON 对象；禁止通过命令行传递凭据。输出只有一个 JSON 对象到 stdout，诊断写 stderr。读命令不修改账本；写命令必须先有本编排操作权限，且共同遵循以下信封：
 
 ```json
 {
