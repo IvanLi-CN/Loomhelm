@@ -117,7 +117,7 @@ function time(value: string | null): string {
   return formatLocalTime(value);
 }
 let serviceSessionExpired = false;
-let workerDiagnostic: { diagnostic_id: string; run_id: string; stage: string; safe_summary?: string; retryable: boolean; reconnect_required: boolean } | null = null;
+let workerDiagnostic: { diagnostic_id: string; run_id: string; stage: string; worker_key?: string; worker_generation?: string; error_code?: string; safe_summary?: string; retry_count?: number; state?: string; retryable: boolean; reconnect_required: boolean } | null = null;
 let reconnectBlocked = false;
 function showWorkerDiagnostic(value: Partial<typeof workerDiagnostic> & { diagnostic_id?: string; run_id?: string; stage?: string; code?: string }): void {
   workerDiagnostic = {
@@ -128,7 +128,7 @@ function showWorkerDiagnostic(value: Partial<typeof workerDiagnostic> & { diagno
     retryable: value.retryable ?? false,
     reconnect_required: value.reconnect_required ?? true,
   };
-  reconnectBlocked = true;
+  reconnectBlocked = value.code === "RUN_WORKER_UNAVAILABLE" || Boolean(value.diagnostic_id);
   const card = $("worker-diagnostic");
   $("worker-diagnostic-summary").textContent = `运行 ${workerDiagnostic.run_id} · 诊断 ${workerDiagnostic.diagnostic_id} · 阶段 ${workerDiagnostic.stage}：${workerDiagnostic.safe_summary}`;
   card.hidden = false;
@@ -672,7 +672,7 @@ async function refresh(): Promise<void> {
     if (response.status === 404 && requestedPlan) { if (serial !== requestSerial) return; activePlan = ""; viewState = { ...viewState, plan: null }; syncUrl(); response = await fetch("api/view", { cache: "no-store" }); }
     if (!response.ok) {
       const failure = await response.json().catch(() => ({})) as { code?: string; diagnostic_id?: string; run_id?: string; stage?: string; retryable?: boolean; reconnect_required?: boolean };
-      if (failure.code === "RUN_WORKER_UNAVAILABLE" || response.status === 401 || response.status === 409 || response.status === 503) showWorkerDiagnostic(failure);
+      if (failure.code === "RUN_WORKER_UNAVAILABLE" && failure.diagnostic_id) showWorkerDiagnostic(failure);
       throw new Error(`HTTP ${response.status}`);
     }
     let result = await response.json() as ViewResponse;
@@ -729,7 +729,7 @@ installViewStateNavigation(window, { getSearch: () => window.location.search, ge
 window.addEventListener("keydown", (event) => { trapDetailsFocus(event); trapPlanInfoFocus(event); if (event.key === "Escape" && planInfoIsOpen()) { event.preventDefault(); closePlanInfo(); } else if (event.key === "Escape" && viewState.detail) closeDetails(); });
 window.addEventListener("resize", () => { setDetailsHeight(Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.4, false); refreshResponsiveDetails(); syncPlanInfoSurface(); if (data && viewState.tab === "graph" && graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")) graphController.render(filteredTasks(), viewState.group ? new Set([viewState.group]) : undefined); window.requestAnimationFrame(() => timelineController.redraw()); });
 anyHoverCapability.addEventListener("change", refreshResponsiveDetails); anyFinePointerCapability.addEventListener("change", refreshResponsiveDetails);
-const stream = new EventSource("api/events"); stream.addEventListener("open", () => { if (reconnectBlocked) return; connected = true; connection("live"); void refresh(); }); stream.addEventListener("revision", () => void refresh()); stream.addEventListener("stale", () => { connected = false; connection("stale"); }); stream.addEventListener("heartbeat", (event) => { try { if (!reconnectBlocked && JSON.parse((event as MessageEvent).data).watching && !connected) { connected = true; void refresh(); } } catch { connection("stale"); } }); stream.addEventListener("error", () => { connected = false; stream.close(); if (!reconnectBlocked) connection("stale"); });
+const stream = new EventSource("api/events"); stream.addEventListener("open", () => { if (reconnectBlocked) return; connected = true; connection("live"); void refresh(); }); stream.addEventListener("revision", () => void refresh()); stream.addEventListener("stale", () => { connected = false; connection("stale"); }); stream.addEventListener("heartbeat", (event) => { try { if (!reconnectBlocked && JSON.parse((event as MessageEvent).data).watching && !connected) { connected = true; void refresh(); } } catch { connection("stale"); } }); stream.addEventListener("error", () => { connected = false; stream.close(); void fetch("api/diagnostics/worker?run_id=" + encodeURIComponent(location.pathname.split("/")[2] ?? "")).then((response) => response.ok ? response.json() : null).then((value) => { if (value?.diagnostic) showWorkerDiagnostic(value.diagnostic); }); });
 hoverBridge = createHoverPreviewBridge($("hover-preview"), dismissHoverPreview);
 window.setInterval(refreshCardDurations, 60_000); window.setInterval(() => { if (!connected && !reconnectBlocked) void refresh(); }, 5_000);
 $("worker-diagnostic-copy").addEventListener("click", async () => { if (!workerDiagnostic) return; await navigator.clipboard?.writeText(JSON.stringify(workerDiagnostic)); });

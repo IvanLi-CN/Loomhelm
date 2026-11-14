@@ -214,6 +214,7 @@ export async function startSharedViewer(
   state.initialize();
   const auth = new ServiceAuth(state);
   const diagnostics = new WorkerDiagnosticStore(state.paths);
+  diagnostics.sweep(undefined, (runId) => existsSync(join(state.paths.data, "runs", runId)));
   const recordDiagnostic = (input: Parameters<WorkerDiagnosticStore["record"]>[0]) => {
     const diagnostic = diagnostics.record(input);
     try {
@@ -499,7 +500,7 @@ export async function startSharedViewer(
             run_id: id,
             worker_key: workerKey,
             worker_generation: workerPool.generation(workerKey) ?? "unknown-generation",
-            stage: workerStage,
+            stage: error instanceof Error && /socket (connection|connect)/i.test(error.message) ? "socket_connect" : workerStage,
             retry_count: workerPool.failureCount(workerKey),
             retryable: workerPool.failureCount(workerKey) < 3,
             reconnect_required: true,
@@ -523,7 +524,7 @@ export async function startSharedViewer(
             run_id: id,
             worker_key: workerKey,
             worker_generation: lease.generation,
-            stage: "request_dispatch",
+            stage: error instanceof Error && /socket (connection|connect|closed|timeout)/i.test(error.message) ? "socket_connect" : "request_dispatch",
             retry_count: workerPool.failureCount(workerKey),
             retryable: workerPool.failureCount(workerKey) < 3,
             reconnect_required: true,
@@ -550,8 +551,9 @@ export async function startSharedViewer(
             }));
           },
         );
-        if (path !== "/api/events" && diagnostics.get(id)) {
-          const recovered = diagnostics.recover(id);
+        if (path !== "/api/events") {
+          const beforeRecovery = diagnostics.get(id);
+          const recovered = beforeRecovery ? diagnostics.recover(id, beforeRecovery) : null;
           if (recovered) {
             try {
               serviceLog(state.paths, "worker_diagnostic", state.runtime().generation ?? "unknown-generation", manifest.build_id, {
@@ -560,6 +562,12 @@ export async function startSharedViewer(
                 worker_generation: recovered.worker_generation,
                 stage: recovered.stage,
                 error_code: recovered.error_code,
+                safe_summary: recovered.safe_summary,
+                retryable: recovered.retryable,
+                reconnect_required: recovered.reconnect_required,
+                worker_key: recovered.worker_key,
+                worker_generation: recovered.worker_generation,
+                retry_count: recovered.retry_count,
                 state: recovered.state,
                 recovered_at: recovered.recovered_at,
               });
@@ -602,6 +610,12 @@ export async function startSharedViewer(
                 diagnostic_id: diagnosticResponse.diagnostic_id,
                 run_id: diagnosticResponse.run_id,
                 stage: diagnosticResponse.stage,
+                worker_key: diagnosticResponse.worker_key,
+                worker_generation: diagnosticResponse.worker_generation,
+                error_code: diagnosticResponse.error_code,
+                safe_summary: diagnosticResponse.safe_summary,
+                retry_count: diagnosticResponse.retry_count,
+                state: diagnosticResponse.state,
                 retryable: diagnosticResponse.retryable,
                 reconnect_required: diagnosticResponse.reconnect_required,
               }

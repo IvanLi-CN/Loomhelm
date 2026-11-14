@@ -88,10 +88,11 @@ export class WorkerDiagnosticStore {
       return diagnostic;
     });
   }
-  recover(runId: string): WorkerDiagnostic | null {
+  recover(runId: string, expected?: Pick<WorkerDiagnostic, "diagnostic_id" | "last_seen_at">): WorkerDiagnostic | null {
     return this.transaction((state) => {
       const previous = state.diagnostics[runId];
       if (!previous) return null;
+      if (expected && (previous.diagnostic_id !== expected.diagnostic_id || previous.last_seen_at !== expected.last_seen_at)) return null;
       const now = this.now().toISOString();
       const diagnostic = workerDiagnosticSchema.parse({ ...previous, state: "recovered", recovered_at: previous.recovered_at ?? now, last_seen_at: now });
       state.diagnostics[runId] = diagnostic;
