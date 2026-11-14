@@ -23,7 +23,7 @@ export const SERVICE_STARTUP_TIMEOUT_MS = 60_000;
 function verifyPackageIdentity(config: ReturnType<ServiceState["config"]>): void {
   const root = process.env.LOOMHELM_TOOLKIT_ROOT;
   requireCondition(root, "PACKAGE_IDENTITY_UNAVAILABLE", "Package toolkit identity is unavailable");
-  let artifact: { packageName?: string; packageVersion?: string; compatibilityLine?: string; skillVersion?: string; sourceSha?: string; buildId?: string; identity?: { contracts?: { service?: string } } };
+  let artifact: { packageName?: string; packageVersion?: string; compatibilityLine?: string; skillVersion?: string; sourceSha?: string; buildId?: string; identity?: { contracts?: { serviceVersion?: string } } };
   try { artifact = JSON.parse(readFileSync(join(root, "artifact-manifest.json"), "utf8")); }
   catch { throw new ContractError("PACKAGE_IDENTITY_UNAVAILABLE", "Package artifact identity cannot be read"); }
   requireCondition(
@@ -34,7 +34,7 @@ function verifyPackageIdentity(config: ReturnType<ServiceState["config"]>): void
       artifact.sourceSha === config.source_sha &&
       artifact.buildId === config.artifact_build_id &&
       artifact.buildId === config.current_build &&
-      artifact.identity?.contracts?.service === config.service_contract,
+      artifact.identity?.contracts?.serviceVersion === config.service_contract,
     "SERVICE_IDENTITY_MISMATCH",
     "Package artifact identity does not match service configuration",
   );
