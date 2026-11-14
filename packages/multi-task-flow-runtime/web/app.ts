@@ -440,7 +440,11 @@ function openPlanInfo(): void {
   panel.setAttribute("aria-hidden", "false");
   $("plan-info-trigger").setAttribute("aria-expanded", "true");
   syncPlanInfoSurface();
-  window.requestAnimationFrame(() => $("close-plan-info").focus({ preventScroll: true }));
+  window.requestAnimationFrame(() => {
+    const closeButton = $("close-plan-info");
+    closeButton.dataset.suppressTooltipFocus = "true";
+    closeButton.focus({ preventScroll: true });
+  });
 }
 function closePlanInfo(restoreFocus = true): void {
   const panel = $("plan-info-panel");

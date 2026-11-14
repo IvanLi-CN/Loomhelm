@@ -72,6 +72,7 @@ export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label:
   let longPressTimer: ReturnType<typeof setTimeout> | null = null;
   let closeTimer: ReturnType<typeof setTimeout> | null = null;
   let pointerStart: { x: number; y: number } | null = null;
+  let suppressUntilPointerLeave = false;
   const cancelTimers = (): void => {
     if (hoverTimer) clearTimeout(hoverTimer);
     if (longPressTimer) clearTimeout(longPressTimer);
@@ -100,13 +101,24 @@ export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label:
     closeTimer = setTimeout(() => { closeTimer = null; close(); }, 180);
   };
   trigger.addEventListener("pointerenter", (event) => {
-    if (event.pointerType === "mouse") hoverTimer = setTimeout(open, 250);
+    if (closeTimer) {
+      clearTimeout(closeTimer);
+      closeTimer = null;
+    }
+    if (event.pointerType === "mouse" && !suppressUntilPointerLeave) hoverTimer = setTimeout(open, 250);
   });
-  trigger.addEventListener("pointerleave", scheduleClose);
+  trigger.addEventListener("pointerleave", () => {
+    suppressUntilPointerLeave = false;
+    scheduleClose();
+  });
   tooltip.addEventListener("pointerenter", () => { if (closeTimer) clearTimeout(closeTimer); closeTimer = null; });
   tooltip.addEventListener("pointerleave", scheduleClose);
   trigger.addEventListener("pointerdown", (event) => {
     pointerStart = { x: event.clientX, y: event.clientY };
+    if (event.pointerType === "mouse" && !options.interactive) {
+      suppressUntilPointerLeave = true;
+      close();
+    }
     if (event.pointerType !== "mouse") longPressTimer = setTimeout(open, 500);
   });
   trigger.addEventListener("pointermove", (event) => {
@@ -122,7 +134,14 @@ export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label:
     longPressTimer = null;
   });
   trigger.addEventListener("pointercancel", () => { pointerStart = null; cancelTimers(); });
-  trigger.addEventListener("focus", () => { if (!touchModality) open(); });
+  trigger.addEventListener("focus", () => {
+    if (trigger.dataset.suppressTooltipFocus === "true") {
+      delete trigger.dataset.suppressTooltipFocus;
+      return;
+    }
+    if (suppressUntilPointerLeave) return;
+    if (!touchModality) open();
+  });
   if (options.interactive) trigger.addEventListener("click", event => {
     event.stopPropagation();
     open();
