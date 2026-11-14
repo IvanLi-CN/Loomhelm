@@ -443,19 +443,11 @@
     {
       "name": "multi-task-flow",
       "entry": "skills/multi-task-flow/SKILL.md",
-      "files": 161,
+      "files": 164,
       "internalSkills": [
-        "dev-plan",
-        "fast-flow",
-        "gui-escalation-gate"
+        "dev-plan"
       ],
-      "externalSkills": [
-        {
-          "skill": "ego-browser",
-          "strength": "required-when-applicable",
-          "condition": "browser operations and controlled visual evidence"
-        }
-      ],
+      "externalSkills": [],
       "externalCommands": [
         {
           "command": "launchctl",

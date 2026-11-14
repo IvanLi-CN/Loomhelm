@@ -29,6 +29,7 @@ import {
   validateProfileCapability,
   type ProfileCapabilities,
 } from "../lib/execution-profile";
+import { canonicalizeContract3Ledger } from "../lib/atomic-orchestration";
 
 const text = z.string().trim().min(1);
 const sha = z.string().regex(/^[a-f0-9]{64}$/);
@@ -42,7 +43,7 @@ const id = text.refine((value) => {
 }, "Invalid identifier");
 const operation = z.object({
   run_id: id,
-  action: z.enum(["contract", "execution-profile"]),
+  action: z.enum(["contract", "atomic", "execution-profile"]),
   execution_profile: executionProfile.optional(),
 });
 function validAction(value: { action: string; execution_profile?: unknown }) {
@@ -140,7 +141,16 @@ function prepare(
         : contractMigrationCandidate(raw, {
             allowHistoricalTaskExecutionPolicies: true,
           })
+      : op.action === "atomic"
+        ? canonicalizeContract3Ledger(raw)
       : structuredClone(ledger);
+  if (op.action === "atomic")
+    requireCondition(
+      ledger.contract_version === 3,
+      "ATOMIC_CONTRACT_REQUIRED",
+      "Atomic projection maintenance requires contract 3",
+      3,
+    );
   if (op.action === "execution-profile") {
     requireLedgerCompatibility(raw, "write");
     migrateProfile(candidate, op.execution_profile);
@@ -170,6 +180,14 @@ function prepare(
             taskExecutionPolicyGaps.some((gap) => gap.missing_fields.includes(field)),
           ),
           tasks: taskExecutionPolicyGaps,
+        }
+      : null,
+    atomic_projection_migration: op.action === "atomic"
+      ? {
+          mode: "materialize-canonical-graph",
+          plan_count: candidate.plans.length,
+          atomic_node_count: candidate.atomic_nodes.length,
+          atomic_edge_count: candidate.atomic_edges.length,
         }
       : null,
   };

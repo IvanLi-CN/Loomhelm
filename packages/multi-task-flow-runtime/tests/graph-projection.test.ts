@@ -19,6 +19,16 @@ describe("dashboard graph projection", () => {
     expect(projection.nodes[0]).toMatchObject({ scope: "task:t-1 / delivery-unit:du-1", evidence: ["receipt:1"] });
     expect(projection.edges[0]).toMatchObject({ source: "w-1", target: "m-1", requires: "source_terminal_success" });
   });
+  test("projects start and end boundaries as distinct graph nodes", () => {
+    const projection = projectAtomicGraph([
+      { kind: "boundary", id: "atomic-start", title: "开始", boundary: "start", state: "completed" },
+      { kind: "boundary", id: "atomic-end", title: "结束", boundary: "end", state: "planned" },
+    ] as any, [{ id: "boundary-edge", from_node_id: "atomic-start", to_node_id: "atomic-end", requires: { kind: "source_terminal_success" } }] as any);
+    expect(projection.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "atomic-start", kind: "boundary", boundary: "start", scope: "global" }),
+      expect.objectContaining({ id: "atomic-end", kind: "boundary", boundary: "end", scope: "global" }),
+    ]));
+  });
   test("keeps every task and milestone once while hiding boundary node text", () => {
     const view = demoView();
     const projection = buildGraphProjection(view);

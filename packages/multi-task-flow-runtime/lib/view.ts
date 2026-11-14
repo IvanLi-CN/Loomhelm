@@ -25,7 +25,7 @@ import {
 import { initialOutput, type AgentOutput } from "../web/agent-output";
 import { localSemanticProjection } from "../lib/contract";
 import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
-import { deriveBusinessStatus, evaluateMilestone, type AtomicEdge, type AtomicNode, type MilestoneEvaluation } from "../lib/atomic-orchestration";
+import { canonicalizeContract3Plan, deriveBusinessStatus, evaluateMilestone, type AtomicBoundaryNode, type AtomicEdge, type AtomicNode, type MilestoneEvaluation } from "../lib/atomic-orchestration";
 
 export type PlannedInterval = {
   node_id: string;
@@ -36,6 +36,107 @@ export type PlannedInterval = {
 };
 
 const RELATIVE_EPOCH = Date.parse("2000-01-01T00:00:00.000Z");
+
+function compatibilityAtomicNodeState(node: AtomicNode, ledger: Ledger): AtomicNode {
+  if (node.kind === "boundary") {
+    const started = ledger.events.some((event) => event.type === "task_started") || ledger.tasks.some((task) => task.started_at !== null);
+    const finished = ledger.events.some((event) => event.type === "run_completed");
+    return { ...node, state: node.boundary === "start" ? (started ? "completed" : "planned") : (finished ? "completed" : "planned") };
+  }
+  if (node.kind !== "work") return node;
+  const scope = (node as any).scope as { kind: "task" | "delivery_unit"; task_id?: string; delivery_unit_id: string } | undefined;
+  const task = scope?.kind === "task"
+    ? ledger.tasks.find((item) => item.id === scope.task_id)
+    : undefined;
+  const taskAtom = task?.atoms.find((atom) => atom.id === node.id);
+  const groupAtom = scope?.kind === "delivery_unit"
+    ? ledger.groups.find((item) => item.id === scope.delivery_unit_id)?.atoms.find((atom) => atom.id === node.id)
+    : undefined;
+  const status = taskAtom?.status ?? groupAtom?.status ?? "planned";
+  if (status === "planned") return { ...node, state: "planned", scope } as AtomicNode;
+  const startedAt = task?.started_at ?? new Date(RELATIVE_EPOCH).toISOString();
+  const updatedAt = task?.finished_at ?? startedAt;
+  const runtime = { started_at: startedAt, updated_at: updatedAt, evidence_refs: [] };
+  if (status === "running") return { ...node, state: "running", scope, runtime } as AtomicNode;
+  if (status === "blocked") return {
+    ...node,
+    state: "blocked",
+    scope,
+    runtime,
+    blocker: { code: "LEGACY_BLOCKED", message: task?.blocker ?? "Atomic work is blocked", evidence_refs: [] },
+  } as AtomicNode;
+  return {
+    ...node,
+    state: "completed",
+    scope,
+    runtime,
+    result: { completed_at: task?.finished_at ?? updatedAt, evidence_refs: [`legacy:atomic:${node.id}`] },
+  } as AtomicNode;
+}
+
+function syntheticAtomicBoundaries(ledger: Ledger): AtomicBoundaryNode[] {
+  const started = ledger.events.some((event) => event.type === "task_started") || ledger.tasks.some((task) => task.started_at !== null);
+  const finished = ledger.events.some((event) => event.type === "run_completed");
+  return [
+    { kind: "boundary", id: "atomic-start", title: "开始", boundary: "start", state: started ? "completed" : "planned" },
+    { kind: "boundary", id: "atomic-end", title: "结束", boundary: "end", state: finished ? "completed" : "planned" },
+  ];
+}
+
+function appendAtomicBoundaryEdges(
+  plan: Plan,
+  nodes: readonly AtomicNode[],
+  existing: readonly AtomicEdge[],
+): AtomicEdge[] {
+  const boundaryStart = nodes.find((node): node is AtomicBoundaryNode => node.kind === "boundary" && node.boundary === "start");
+  const boundaryEnd = nodes.find((node): node is AtomicBoundaryNode => node.kind === "boundary" && node.boundary === "end");
+  if (!boundaryStart || !boundaryEnd) return [...existing];
+  const atomicIds = new Set(nodes.map((node) => node.id));
+  const planToAtomic = new Map<string, string>();
+  for (const node of plan.nodes) {
+    if (node.kind === "main_start") planToAtomic.set(node.id, boundaryStart.id);
+    else if (node.kind === "main_end") planToAtomic.set(node.id, boundaryEnd.id);
+    else if (node.kind === "task" && node.ref_id) {
+      const atomic = nodes.find((candidate) => candidate.kind === "work" && candidate.scope?.kind === "task" && candidate.scope.task_id === node.ref_id);
+      if (atomic) planToAtomic.set(node.id, atomic.id);
+    } else if (node.kind === "milestone" && atomicIds.has(node.id)) planToAtomic.set(node.id, node.id);
+  }
+  const outgoing = new Map<string, Plan["edges"]>();
+  for (const edge of plan.edges) outgoing.set(edge.from_node_id, [...(outgoing.get(edge.from_node_id) ?? []), edge]);
+  const hidden = new Set(plan.nodes.filter((node) => ["group_start", "group_end"].includes(node.kind)).map((node) => node.id));
+  const derived: AtomicEdge[] = [];
+  const add = (id: string, from: string, to: string) => {
+    if (from === to || !atomicIds.has(from) || !atomicIds.has(to)) return;
+    derived.push({ id, from_node_id: from, to_node_id: to, requires: { kind: "source_terminal_success" } });
+  };
+  const walk = (sourcePlanId: string, currentPlanId: string, visited: Set<string>) => {
+    if (visited.has(currentPlanId)) return;
+    const nextVisited = new Set(visited).add(currentPlanId);
+    for (const edge of outgoing.get(currentPlanId) ?? []) {
+      const target = planToAtomic.get(edge.to_node_id);
+      const source = planToAtomic.get(sourcePlanId);
+      if (source && target) add(`atomic-boundary-${edge.id}-${source}-${target}`, source, target);
+      else if (hidden.has(edge.to_node_id)) walk(sourcePlanId, edge.to_node_id, nextVisited);
+    }
+  };
+  for (const planNodeId of planToAtomic.keys()) walk(planNodeId, planNodeId, new Set());
+  const merged = [...existing, ...derived];
+  const seen = new Set<string>();
+  const result = merged.filter((edge) => {
+    const key = `${edge.from_node_id}->${edge.to_node_id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const incoming = new Set(result.map((edge) => edge.to_node_id));
+  const outgoingIds = new Set(result.map((edge) => edge.from_node_id));
+  for (const node of nodes) {
+    if (node.kind === "boundary") continue;
+    if (!incoming.has(node.id)) result.push({ id: `atomic-boundary-start-${node.id}`, from_node_id: boundaryStart.id, to_node_id: node.id, requires: { kind: "source_terminal_success" } });
+    if (!outgoingIds.has(node.id)) result.push({ id: `atomic-boundary-end-${node.id}`, from_node_id: node.id, to_node_id: boundaryEnd.id, requires: { kind: "source_terminal_success" } });
+  }
+  return result;
+}
 
 function deliveryUnitPr(group: Ledger["groups"][number]) {
   if (group.pr && "state" in group.pr) return "pr" in group.pr ? group.pr.pr : null;
@@ -776,9 +877,15 @@ export function buildView(
     : runtimeProjection.summary.status === "ready"
       ? "eligible"
       : runtimeProjection.summary.status;
-  const canonicalAtomicNodes: AtomicNode[] = plan.atomic_nodes.length
-    ? plan.atomic_nodes
-    : plan.nodes
+  const hasLegacyAtomicProjection = !plan.atomic_nodes.length && (plan.atoms.length > 0 || plan.group_atoms.length > 0);
+  const compatibilityPlan = hasLegacyAtomicProjection
+    ? canonicalizeContract3Plan(plan, ledger.tasks)
+    : null;
+  const canonicalAtomicNodes: AtomicNode[] = (plan.atomic_nodes.length
+    ? plan.atomic_nodes.map((node) => compatibilityAtomicNodeState(node, ledger))
+    : hasLegacyAtomicProjection
+      ? (compatibilityPlan.atomic_nodes as AtomicNode[]).map((node) => compatibilityAtomicNodeState(node, ledger))
+      : plan.nodes
         .filter((node) => node.kind === "task" || node.kind === "milestone")
         .map((node) => {
           const task = node.kind === "task" && node.ref_id ? ledger.tasks.find((item) => item.id === node.ref_id) : undefined;
@@ -803,11 +910,7 @@ export function buildView(
             state: task?.state === "starting" ? "starting" : task?.state === "running" ? "running" : task?.state === "blocked" ? "blocked" : ["integrated", "completed", "closed"].includes(task?.state ?? "") ? "completed" : "planned",
             scope: { kind: "task" as const, task_id: node.ref_id ?? node.id, delivery_unit_id: task?.group_id ?? node.group_id ?? "unassigned" },
           };
-        });
-  const legacyAtomicNodeIds = new Map<string, string>([
-    ...plan.atoms.map((atom) => [atom.id, atom.task_id] as const),
-    ...plan.group_atoms.map((atom) => [atom.id, atom.group_id] as const),
-  ]);
+        })) as AtomicNode[];
   const nodeData = plan.nodes.map((node) => ({
     ...node,
     planned_group_id: node.group_id,
@@ -824,22 +927,27 @@ export function buildView(
       acceptance: [],
     });
   }
+  for (const boundary of syntheticAtomicBoundaries(ledger)) {
+    if (!canonicalAtomicNodes.some((node) => node.id === boundary.id)) canonicalAtomicNodes.push(boundary);
+  }
   const canonicalAtomicNodeIds = new Set(canonicalAtomicNodes.map((node) => node.id));
-  const declaredAtomicEdges: AtomicEdge[] = plan.atomic_edges.map((edge) =>
+  const sourceAtomicEdges: Plan["atomic_edges"] = compatibilityPlan?.atomic_edges ?? plan.atomic_edges;
+  const declaredAtomicEdges: AtomicEdge[] = sourceAtomicEdges.map((edge) =>
     "from_node_id" in edge
       ? edge
-      : { id: edge.id, from_node_id: legacyAtomicNodeIds.get(edge.from_atom_id) ?? edge.from_atom_id, to_node_id: legacyAtomicNodeIds.get(edge.to_atom_id) ?? edge.to_atom_id, requires: { kind: "source_terminal_success" as const } },
+      : { id: edge.id, from_node_id: edge.from_atom_id, to_node_id: edge.to_atom_id, requires: { kind: "source_terminal_success" as const } },
   );
   const legacyAtomicEdges: AtomicEdge[] = plan.edges
     .filter((edge) => canonicalAtomicNodeIds.has(edge.from_node_id) && canonicalAtomicNodeIds.has(edge.to_node_id))
     .map((edge) => ({ id: edge.id, from_node_id: edge.from_node_id, to_node_id: edge.to_node_id, requires: { kind: edge.requires as "source_terminal_success" } }));
   const seenAtomicEdges = new Set(declaredAtomicEdges.map((edge) => `${edge.from_node_id}->${edge.to_node_id}`));
-  const canonicalAtomicEdges: AtomicEdge[] = [...declaredAtomicEdges, ...legacyAtomicEdges.filter((edge) => {
+  const baseAtomicEdges: AtomicEdge[] = [...declaredAtomicEdges, ...legacyAtomicEdges.filter((edge) => {
     const key = `${edge.from_node_id}->${edge.to_node_id}`;
     if (seenAtomicEdges.has(key)) return false;
     seenAtomicEdges.add(key);
     return true;
   })];
+  const canonicalAtomicEdges = appendAtomicBoundaryEdges(plan, canonicalAtomicNodes, baseAtomicEdges);
   const atomicNodeById = new Map(canonicalAtomicNodes.map((node) => [node.id, node]));
   const milestoneEvaluations = new Map<string, MilestoneEvaluation>();
   for (const milestone of canonicalAtomicNodes.filter((node): node is Extract<AtomicNode, { kind: "milestone" }> => node.kind === "milestone")) {

@@ -636,8 +636,8 @@ describe("orchestrate init", () => {
       "utf8",
     );
 
-    expect(skill).toContain("初始化是有副作用的运行时操作");
-    expect(skill).toContain("只读审查、诊断、代码探索或仅制定计划时不得调用本 Skill");
+    expect(skill).toContain("正式多对话运行");
+    expect(skill).toContain("只读审查、诊断和计划工作使用源检查或 `show`/`view`");
     expect(design).toContain("失败返回 `INVALID_INITIAL_STATE`");
     expect(design).toContain("不创建任务会话");
   });

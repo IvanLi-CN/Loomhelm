@@ -1,5 +1,6 @@
 import { desktopHandoff } from "../lib/desktop-handoff";
 import { createCliThread, verifyRepositoryIdentity } from "../lib/codex-cli-create";
+import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import { sweepConversationArchives } from "../lib/conversation-archive";
 import { Runtime } from "../../../skills/bin/modules/core/runtime";
 import {
@@ -26,6 +27,7 @@ import {
   validatePlan,
   validateSchedulablePlan,
   validateTaskExecutionPolicies,
+  isContributionKind,
   defaultGroupAtoms,
   executionProfile,
   DEFAULT_EXECUTION_PROFILE,
@@ -186,7 +188,7 @@ try {
         "ORPHAN_GROUP",
         "Runtime group is not present in the active plan",
       );
-    const initialPlan =
+    const initialPlanDraft =
       configuredGroupIds.size === parsed.payload.groups.length
         ? requestedPlan
         : {
@@ -205,13 +207,24 @@ try {
                 ),
             ],
           };
+    const initialPlan = canonicalizeContract3Plan(
+      initialPlanDraft,
+      parsed.payload.tasks,
+    );
     validatePlan(initialPlan);
     validateSchedulablePlan(initialPlan);
+    validateInitialRuntimeState(parsed.payload.groups, parsed.payload.tasks);
+    validateNewTaskKinds(parsed.payload.tasks);
     validateTaskExecutionPolicies(parsed.payload.tasks, true);
     const groups = parsed.payload.groups.map((group) => {
+      const canonicalPr = group.pr && "state" in group.pr
+        ? group.pr
+        : group.pr
+          ? { state: "published" as const, pr: group.pr, parent_branch: group.parent_branch ?? "main" }
+          : { state: "unpublished" as const };
       const plannedAtoms = initialPlan.group_atoms
-        .filter((atom) => atom.group_id === group.id)
-        .map((atom) => ({
+        .filter((atom: any) => atom.group_id === group.id)
+        .map((atom: any) => ({
           id: atom.id,
           title: atom.title,
           purpose: atom.purpose,
@@ -219,12 +232,17 @@ try {
           lifecycle_stage: atom.lifecycle_stage,
           status: "planned" as const,
         }));
-      return group.atoms.length === 0 && plannedAtoms.length > 0
-        ? { ...group, atoms: plannedAtoms }
-        : group;
+      return {
+        ...group,
+        pr: canonicalPr,
+        ...(group.atoms.length === 0 && plannedAtoms.length > 0 ? { atoms: plannedAtoms } : {}),
+      };
     });
-    validateInitialRuntimeState(groups, parsed.payload.tasks);
-    validateNewTaskKinds(parsed.payload.tasks);
+    const tasks = parsed.payload.tasks.map((task) =>
+      isContributionKind(task.kind) && (!task.pr || !("state" in task.pr))
+        ? { ...task, pr: { state: "unbound" as const } }
+        : task,
+    );
     const timestamp = new Date().toISOString();
     const ledger = validateLedger({
       schema_version: 2,
@@ -245,10 +263,12 @@ try {
           parsed.payload.config.execution_profile ?? DEFAULT_EXECUTION_PROFILE,
       },
       plans: [initialPlan],
+      atomic_nodes: initialPlan.atomic_nodes,
+      atomic_edges: initialPlan.atomic_edges,
       active_plan_id: initialPlan.id,
       execution_plan_id: initialPlan.id,
       groups,
-      tasks: parsed.payload.tasks,
+      tasks,
       follow_prs: [],
       facts: [],
       operations: [],
@@ -560,6 +580,16 @@ try {
   } else {
     const parsed = requestSchema.parse(input);
     const store = new LedgerStore(root, parsed.run_id);
+    const commandLedger = validateLedger(store.read());
+    if (
+      commandLedger.contract_version >= 3 &&
+      ["dispatch-bind-request", "dispatch-resolve"].includes(command)
+    )
+      throw new ContractError(
+        "CLI_ONLY_DISPATCH",
+        "Contract-3 dispatch binding and resolution must run inside conversation-create; direct native thread creation is not an accepted flow",
+        5,
+      );
     const result = record(command === "notification-reconcile"
       ? reconcileNotification(store, parsed)
       : store.update((raw) => apply(raw, command, parsed)));

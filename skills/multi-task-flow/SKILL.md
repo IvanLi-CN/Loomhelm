@@ -1,7 +1,7 @@
 ---
 name: multi-task-flow
 description: 通过隔离的 JSON 账本、按需创建的交付单元和任务对话、PR 协调及已认证的本地仪表板，编排依赖驱动的 Codex 任务。
-version: 2.7.7
+version: 2.7.8
 ---
 
 # Multi-task flow
@@ -10,7 +10,7 @@ version: 2.7.7
 
 本文统一使用以下双语标准称谓：主 Agent（main Agent）负责整个编排；交付 Agent（Delivery Agent）负责所属交付单元；任务 Agent（Task Agent）负责所属子任务。英文名称是稳定的运行时角色标识，中文名称是面向读者的正式称谓，两者不得互相删减或替换为其他别名。
 
-本 Skill 用于经主人批准、具有明确任务依赖的多对话流程。它拥有独立的输入合同和运行时生命周期，与 `$dev-plan` 相互独立，也不会迁移或修改已有运行。初始化是有副作用的运行时操作；只读审查、诊断、代码探索或仅制定计划时不得调用本 Skill。主 Agent（main Agent）按需创建和管理平级的交付单元及任务对话。恰好只有一个 contribution Task 的 regular 交付单元使用共享交付拓扑：交付单元对话、工作区、分支和 PR 同时服务两个作用域。存在多个 contribution Task 时，使用独立的任务 Agent 对话和 child PR，由交付 Agent（Delivery Agent）负责父 PR 集成。主 Agent（main Agent）负责调度，并将只提交证据的工作与产生 PR 的贡献工作分开。
+本 Skill 用于经主人批准、具有明确任务依赖的正式多对话运行。它拥有独立的输入合同和运行时生命周期，与 `$dev-plan` 相互独立，也不会迁移或修改已有运行。初始化是有副作用的运行时操作；只读审查、诊断、代码探索或仅制定计划时不得调用本 Skill。主 Agent（main Agent）按需创建和管理平级的交付单元及任务对话。恰好只有一个 contribution Task 的 regular 交付单元使用共享交付拓扑：交付单元对话、工作区、分支和 PR 同时服务两个作用域。存在多个 contribution Task 时，使用独立的任务 Agent 对话和 child PR，由交付 Agent（Delivery Agent）负责父 PR 集成。主 Agent（main Agent）负责调度，并将只提交证据的工作与产生 PR 的贡献工作分开。
 
 每次运行可以包含一个 `bootstrap` 交付单元，后接零个或多个 `regular` 交付单元。默认第一个交付单元 MUST 为 `bootstrap`；只有提案记录了明确的例外原因和证据时，才允许第一个单元为 `regular`。Bootstrap 是唯一的主会话所有单元：绑定的主对话可以提交初始 SPEC/ADR/计划文档并管理第一个 parent PR。它使用 `owner_kind: "main"`，没有交付单元对话绑定，且必须位于第一位。Regular 单元保留交付单元所有权合同，激活前必须有交付单元对话；当其中恰好只有一个 contribution Task 时，该对话同时拥有任务对话、工作区、分支和 PR。Parent PR 默认串行；只有依赖允许时，regular 单元才可以并行。交付单元类型、所有权和交付单元对话绑定不能通过普通交付单元更新或计划修订改写。本版本不提供原地所有权转移命令；已有运行保留当前所有权。先初始化计划中的 bootstrap，再发布其 parent PR，并在同一个主会话工作区记录工作区和发布回执。
 
@@ -58,7 +58,7 @@ Use the published npm CLI only with the exact-version Bun runner and one JSON ob
 
 先建模原子任务及其前驱；每个原子任务都是不可再拆的调度单位。新任务定义只能使用四种类型：`contribution`、`release`、`deployment` 或 `verification`。 `development`、`other` 和 `coordination` 仅是历史账本值，不能由 `init` 或计划修订引入。等待、阻塞、集成和交付单元管理通过交付单元协调状态和里程碑表达。把连续原子任务分组为子任务，然后同时校验两张图和显式交接事实。交付单元恰好只有一个 contribution Task 时选择共享交付拓扑；verification、release 和 deployment Task 不计入该数量。计划交付单元 PR，仅在多贡献单元中计划 child PR，并同时计划单元级 post-merge release、deployment、 verification 任务及带来源和置信度的预计时间。默认最多三个任务并行运行；等待和阻塞任务释放运行名额。主人一次批准实现计划；该批准覆盖计划已表示的所有操作，包括计划中的仓库写入。只有交付单元合并以及 release/deploy 操作在最终目标和证据边界暂停等待受保护批准。不能从分组顺序或文件重叠推断依赖。
 
-正式使用 Bun CLI 时，唯一推荐入口是通过 stdin 传入一个 JSON 对象的 `bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --input -`。不得改用 `npx`、`latest`、兼容线 tag、未锁版本的裸 CLI、或仓库内源码路径；仓库内 `bun --no-install run <skill>/scripts/orchestrate.ts ...` 仅限本仓库构建与测试。其 schema 位于 `lib/schema.ts`，完整命令和 envelope 合同位于数据设计文档。`init` 是经主人批准的变更命令，用于把仓库和主对话绑定到新运行；它只接受未绑定的 `planned` group 和 canonical task definition，并写入初始账本，不创建 group 或 task 对话。`migrate` 是唯一允许将 schema v1 或 schema v2/contract 1 写入 schema v2/contract 2 的路径：它要求绑定主 actor、准确 run ID、request ID 和 expected revision，保留完整备份，使用 request record 递增账本 revision，并且只有 canonical input 完全相同时才幂等。只读审查、诊断和计划必须使用源代码检查或 `show`/`view`，不得调用 `init` 或原生对话创建工具。`show` 读取一致快照。每次变更都要提供唯一的 `request_id`、当前 `expected_revision`、绑定 actor 和 command payload。发生冲突时读取账本并重新判断；只有同一操作的相同 request ID 才能重放。不得手工编辑账本 JSON。Agent 编写的 Markdown 需求文件属于运行目录下 `requirements/` 中的普通文件。
+正式使用 Bun CLI 时，唯一推荐入口是通过 stdin 传入一个 JSON 对象的 `bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --input -`。不得改用 `npx`、`latest`、兼容线 tag、未锁版本的裸 CLI、或仓库内源码路径；仓库内 `bun --no-install run <skill>/scripts/orchestrate.ts ...` 仅限本仓库构建与测试。其 schema 位于 `lib/schema.ts`，完整命令和 envelope 合同位于数据设计文档。`init` 是经主人批准的变更命令，用于把仓库和主对话绑定到新运行；它只接受未绑定的 `planned` group 和 canonical task definition，并写入初始账本，不创建 group 或 task 对话。`migrate` 是唯一允许将 schema v1 或 schema v2/contract 1 写入 schema v2/contract 2 的路径：它要求绑定主 actor、准确 run ID、request ID 和 expected revision，保留完整备份，使用 request record 递增账本 revision，并且只有 canonical input 完全相同时才幂等。只读审查、诊断和计划工作使用源检查或 `show`/`view`；必须使用源代码检查或 `show`/`view`，不得调用 `init` 或原生对话创建工具。`show` 读取一致快照。每次变更都要提供唯一的 `request_id`、当前 `expected_revision`、绑定 actor 和 command payload。发生冲突时读取账本并重新判断；只有同一操作的相同 request ID 才能重放。不得手工编辑账本 JSON。Agent 编写的 Markdown 需求文件属于运行目录下 `requirements/` 中的普通文件。
 
 ### 分阶段计划修订
 
@@ -131,3 +131,11 @@ Use the published npm CLI only in this form: `bunx --bun @loomhelm/multi-task-fl
 The explicitly installed shared user service uses the system-service exception for its background lifecycle. See `references/shared-viewer.md` for fixed-port ownership, compatibility, maintenance and migration recovery.
 
 显式安装的共享用户服务使用系统服务例外管理后台生命周期。固定端口所有权、兼容性、维护和迁移恢复见 `references/shared-viewer.md`。
+
+## Contract 3 强制边界
+
+Contract 3 下任何 Agent 都不得直接调用 `mcp__codex_app__create_thread`、`fork_thread` 或其他原生 thread-create/fork 工具创建 group/task 对话；`conversation-create` 是唯一入口。宿主无法保证普通 Agent 不具备上述原生创建能力时，必须在 dispatch 前报告 capability gap 并阻塞运行，不能用提示词约定替代工具授权。
+
+发现未由 `conversation-create` 产生、未绑定 dispatch operation 或未经过 native evidence 核验的 `codex://threads/<thread-id>` 时，将其标记为 orphan thread / orchestration violation；不得绑定、resolve、handoff、释放 claim 或容量，也不得把它作为依赖事实，暂停受影响运行并交给主人复核。
+
+regular 贡献任务必须先有 workspace ready 和已创建且验证为 open 的 parent PR；只有 main-owned bootstrap 在 workspace ready 且 provider 明确证明 parent PR `absent` 时可例外，pending、unknown、closed 或缺少证据都不满足例外。

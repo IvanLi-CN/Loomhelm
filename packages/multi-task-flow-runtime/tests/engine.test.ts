@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { apply, ready, type Request } from "../lib/engine";
+import { apply, ready, requireGroupDispatchGate, type Request } from "../lib/engine";
 import {
   validateLedger,
   taskExecutionPolicyIssues,
@@ -193,6 +193,51 @@ test("planned delivery units cannot record running execution", () => {
     state: "running",
     observed_at: at,
   }, groupActor))).toThrow("Only active delivery units can record runtime execution");
+});
+
+test("contract-3 group dispatch waits for upstream delivery-unit PR merge", () => {
+  const ledger = fixture();
+  ledger.contract_version = 3;
+  ledger.source_schema_version = null;
+  const plan = ledger.plans[0]!;
+  plan.nodes.push({
+    id: "upstream-node",
+    kind: "milestone",
+    ref_id: null,
+    group_id: "upstream",
+    label: "Upstream",
+    estimate_minutes: 1,
+    estimate_basis: "fixture",
+    estimate_confidence: "high",
+  });
+  plan.edges.push({ id: "upstream-a", from_node_id: "upstream-node", to_node_id: "node-a", requires: "completed" });
+  expect(() => requireGroupDispatchGate(ledger, ledger.groups[0]!)).toThrow("upstream delivery-unit PRs");
+});
+
+test("contract-3 group dispatch binds only the multi-task-flow codex exec transport", () => {
+  const ledger = fixture();
+  approve(ledger);
+  ledger.groups[0]!.state = "planned";
+  ledger.groups[0]!.agent_thread_id = null;
+  apply(ledger, "dispatch-group-claim", request(ledger, "group-claim", { group_id: "g", operation_id: "group-op" }));
+  ledger.contract_version = 3;
+  ledger.source_schema_version = null;
+  expect(() => apply(ledger, "dispatch-bind-request", request(ledger, "missing-transport", {
+    operation_id: "group-op", native_request_id: "native-group",
+  }))).toThrow("codex exec transport");
+});
+
+test("contract-3 execution waits for an acknowledged formal handoff", () => {
+  const ledger = fixture();
+  approve(ledger);
+  ledger.contract_version = 3;
+  ledger.source_schema_version = null;
+  expect(() => apply(ledger, "group-execution-update", request(ledger, "group-start-without-handoff", {
+    group_id: "g",
+    state: "running",
+    reason: null,
+    waiting_for_task_ids: [],
+  }, groupActor))).toThrow("formal handoff");
 });
 
 test("runtime observation persists the formal agent_idle task state and restores it", () => {

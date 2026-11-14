@@ -16,16 +16,17 @@ export type GraphContext = {
   showHoverPreview: (content: HTMLElement, anchor: DOMRect) => void;
   hideHoverPreview: () => void;
   recordPointerType: (pointerType: string | null) => void;
-  selectTask: (id: string) => void;
-  selectGroup: (id: string) => void;
+  selectTask: (id: string, atomId?: string | null) => void;
+  selectGroup: (id: string, atomId?: string | null) => void;
   selectMilestone: (id: string) => void;
-  getSelected: () => { task: string | null; group: string | null; milestone: string | null };
+  getSelected: () => { task: string | null; group: string | null; milestone: string | null; atom?: string | null };
 };
 
 function nodeKindLabel(node: GraphProjectionNode): string {
   if (node.nodeKind === "group") return "交付单元";
   if (node.nodeKind === "task") return taskKindLabel(node.taskKind ?? "coordination");
   if (node.nodeKind === "milestone") return "里程碑 milestone";
+  if (node.nodeKind === "boundary") return node.boundary === "start" ? "起点" : "终点";
   return "节点";
 }
 
@@ -64,8 +65,8 @@ export function accessibleNodeLabel(node: GraphProjectionNode, projection: Graph
 
 function selectedProjectionNode(node: GraphProjectionNode, context: GraphContext): void {
   if (!node.refId) return;
-  if (node.nodeKind === "task") context.selectTask(node.refId);
-  else if (node.nodeKind === "group") context.selectGroup(node.refId);
+  if (node.nodeKind === "task") context.selectTask(node.refId, node.id);
+  else if (node.nodeKind === "group") context.selectGroup(node.refId, node.id);
   else if (node.nodeKind === "milestone") context.selectMilestone(node.id);
 }
 
@@ -98,7 +99,7 @@ export function highlightAccessibleSelection(projection: GraphProjection | null,
   const selected = context.getSelected();
   for (const button of context.element("graph-a11y").querySelectorAll<HTMLButtonElement>("[data-graph-node-id]")) {
     const node = projection?.nodes.find((item) => item.id === button.dataset.graphNodeId);
-    const active = Boolean(node && ((node.nodeKind === "task" && node.refId === selected.task) || (node.nodeKind === "group" && node.refId === selected.group) || (node.nodeKind === "milestone" && node.id === selected.milestone)));
+    const active = Boolean(node && ((node.nodeKind === "task" && node.refId === selected.task && (!selected.atom || selected.atom === node.id)) || (node.nodeKind === "group" && node.refId === selected.group && (!selected.atom || selected.atom === node.id)) || (node.nodeKind === "milestone" && node.id === selected.milestone)));
     button.setAttribute("aria-pressed", String(active));
   }
 }

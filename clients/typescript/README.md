@@ -5,9 +5,9 @@
 安装包不依赖父仓库 checkout、`~/.agents` 或全局 Skill 源包。`playwright`、`sharp`、`zod` 由 npm 根 package 声明并在消费者 `bun install` 时解析；React、ELK、vis 等只用于 workspace viewer build，Bun 是包外部前置条件，不由包自动安装或升级。
 
 ```sh
-bunx --bun @loomhelm/multi-task-flow@0.2.16 skills list
-bunx --bun @loomhelm/multi-task-flow@0.2.16 skills check multi-task-flow
-bunx --bun @loomhelm/multi-task-flow@0.2.16 flow view --input - < view-request.json
+bunx --bun @loomhelm/multi-task-flow@0.2.17 skills list
+bunx --bun @loomhelm/multi-task-flow@0.2.17 skills check multi-task-flow
+bunx --bun @loomhelm/multi-task-flow@0.2.17 flow view --input - < view-request.json
 ```
 
 生产调用必须锁定 exact package version，并使用 `bunx --bun @loomhelm/multi-task-flow@<exact-version> ...`；不得改用 `npx`、`latest`、兼容线 tag、未锁版本的裸 CLI 或仓库内源码路径。package version、compatibility line、Skill version、source/merge SHA、合同版本、build ID 和 digest 在包内 artifact manifest 中分别记录，不能从另一字段或 npm cache 推断身份。破坏 CLI 输入输出、账本语义或 viewer/service 边界的变更必须建立新的兼容线，旧兼容线继续保留为可安装版本。
@@ -17,18 +17,18 @@ bunx --bun @loomhelm/multi-task-flow@0.2.16 flow view --input - < view-request.j
 可重复的生产安装必须固定 package version；compatibility line 和 `latest` 不构成当前 CLI 身份或兼容性证明。运行前置条件是 `bun --version` 返回 `1.4.4`；Bun 由宿主提供，包不会替换或升级它。
 
 ```sh
-bunx --bun @loomhelm/multi-task-flow@0.2.16 skills list
-bunx --bun @loomhelm/multi-task-flow@0.2.16 --version
-bunx --bun @loomhelm/multi-task-flow@0.2.16 flow view --input - < view-request.json
+bunx --bun @loomhelm/multi-task-flow@0.2.17 skills list
+bunx --bun @loomhelm/multi-task-flow@0.2.17 --version
+bunx --bun @loomhelm/multi-task-flow@0.2.17 flow view --input - < view-request.json
 ```
 
 当前源码投影的内部合同矩阵如下；`source_sha`、`merge_sha`、`build_id`、`canonicalDigestAlgorithm=path-byte-v2`、canonical digest 和 raw npm integrity 是每个候选构建的独立身份字段，不能由这张静态表推断。
 
 | 维度 | 当前值 |
 | - | - |
-| package | `@loomhelm/multi-task-flow@0.2.16` |
+| package | `@loomhelm/multi-task-flow@0.2.17` |
 | compatibility line | `compat-v1` |
-| Skill | `2.7.7` |
+| Skill | `2.7.8` |
 | ledger contract | `3` |
 | API | `1` |
 | frontend | `1` |
@@ -148,12 +148,12 @@ viewer 新包采用 v2 清单，覆盖启动 shell、TS、依赖及网页的逐�
 viewer service 由单一 loopback gateway 管理，实际 worker 通过 owner-only Unix socket 受控；直接 ledger CLI 不经过 viewer HTTP，也不能借 viewer 路由绕过 ledger owner、revision 或 command identity。以下命令均使用已发布 npm 包的 exact-version 入口，输入必须是一个 JSON 对象并通过 stdin 传入：`bunx --bun @loomhelm/multi-task-flow@<exact-version> service <command> --input -`。不要使用 `npx`、兼容线 tag、裸 CLI 或仓库内源码路径。
 
 ```sh
-bunx --bun @loomhelm/multi-task-flow@0.2.16 service status --input - < status.json
-bunx --bun @loomhelm/multi-task-flow@0.2.16 service doctor --input - < empty.json
-bunx --bun @loomhelm/multi-task-flow@0.2.16 service ensure --input - < ensure.json
+bunx --bun @loomhelm/multi-task-flow@0.2.17 service status --input - < status.json
+bunx --bun @loomhelm/multi-task-flow@0.2.17 service doctor --input - < empty.json
+bunx --bun @loomhelm/multi-task-flow@0.2.17 service ensure --input - < ensure.json
 ```
 
-运行前先执行 `bunx --bun @loomhelm/multi-task-flow@0.2.16 --version` 与 `service status`。`config/service.json` 的 `current_build` 必须匹配 `releases/<current_build>/manifest.json` 的 `build_id`；当前 `status` 的 `result.build_id` 与 `result.source_sha` 必须分别匹配该 build 和 manifest 的 `source_sha`。manifest 的 `service_version` 是 bundle 版本，不等同于 package version；不要根据其他 release、candidate 或 npm cache 目录判断当前运行时。若 `installed: false`、`running: false` 或任一 identity 不一致，停止并报告这些只读事实；不得无授权调用 `service install`、`upgrade`、`rollback`、凭据维护或把 `ensure` 当作修复。只有身份一致时才按正常路径调用 `ensure`。`published-bundle.json` 必须引用由受保护 Skill Runtime release workflow 生成并校验的、与当前平台匹配的 v2 bundle；用户侧不运行 `build-service.ts`，也不把 npm CLI 或 Skill source 目录作为 viewer。`ensure` 的 actor 至少包含 `{ "run_id": "<run-id>", "thread_id": "<thread-id>", "api_version": 1 }`；它会核对安装 manifest、generation、PID、port 和 health identity，并在旧实例停止后重新建立租约。`status` 或 `doctor` 先确认安装、运行阶段和当前 build；启动失败时保留 runtime 状态并检查配置 user service 的 launchd 记录，不删除 data 或 release 目录。
+运行前先执行 `bunx --bun @loomhelm/multi-task-flow@0.2.17 --version` 与 `service status`。`config/service.json` 的 `current_build` 必须匹配 `releases/<current_build>/manifest.json` 的 `build_id`；当前 `status` 的 `result.build_id` 与 `result.source_sha` 必须分别匹配该 build 和 manifest 的 `source_sha`。manifest 的 `service_version` 是 bundle 版本，不等同于 package version；不要根据其他 release、candidate 或 npm cache 目录判断当前运行时。若 `installed: false`、`running: false` 或任一 identity 不一致，停止并报告这些只读事实；不得无授权调用 `service install`、`upgrade`、`rollback`、凭据维护或把 `ensure` 当作修复。只有身份一致时才按正常路径调用 `ensure`。`published-bundle.json` 必须引用由受保护 Skill Runtime release workflow 生成并校验的、与当前平台匹配的 v2 bundle；用户侧不运行 `build-service.ts`，也不把 npm CLI 或 Skill source 目录作为 viewer。`ensure` 的 actor 至少包含 `{ "run_id": "<run-id>", "thread_id": "<thread-id>", "api_version": 1 }`；它会核对安装 manifest、generation、PID、port 和 health identity，并在旧实例停止后重新建立租约。`status` 或 `doctor` 先确认安装、运行阶段和当前 build；启动失败时保留 runtime 状态并检查配置 user service 的 launchd 记录，不删除 data 或 release 目录。
 
 维护命令 `service install|upgrade|rollback` 只在主人明确授权对应动作后使用，并且仍必须使用同一个 exact-version CLI 和已验证 bundle；常规 Agent 不得把版本不一致自动解释为需要维护。
 
