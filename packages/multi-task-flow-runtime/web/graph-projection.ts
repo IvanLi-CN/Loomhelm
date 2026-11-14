@@ -184,7 +184,6 @@ type DisplayDependencyOptions = {
   boundaryEndpointIds?: ReadonlyMap<string, string>;
   syntheticOutgoing?: ReadonlyMap<string, View["edges"]>;
   syntheticBoundaryStarts?: ReadonlyMap<string, string>;
-  hiddenNodeKinds?: ReadonlySet<string>;
 };
 
 function walkHiddenPaths(
@@ -195,7 +194,6 @@ function walkHiddenPaths(
   onVisible: (nodeId: string, path: GraphDependencyPath) => void,
   onTerminal: (path: GraphDependencyPath) => void,
   boundaryEndpointIds: ReadonlyMap<string, string> = new Map(),
-  hiddenNodeKinds: ReadonlySet<string> = HIDDEN_BOUNDARY_KINDS,
 ): boolean {
   const queue: WalkState[] = [initial];
   let processed = 0;
@@ -229,7 +227,7 @@ function walkHiddenPaths(
         continue;
       }
       const hiddenTarget = nodeById.get(edge.to_node_id);
-      if (!hiddenTarget || !hiddenNodeKinds.has(hiddenTarget.kind) || current.visited.has(edge.to_node_id)) {
+      if (!hiddenTarget || !HIDDEN_BOUNDARY_KINDS.has(hiddenTarget.kind) || current.visited.has(edge.to_node_id)) {
         blocked = true;
         continue;
       }
@@ -242,7 +240,7 @@ function walkHiddenPaths(
   return overflow;
 }
 
-function findVisibleWitnesses(initial: WalkState, outgoing: Map<string, View["edges"]>, visibleNodeIds: Set<string>, nodeById: Map<string, Node>, boundaryEndpointIds: ReadonlyMap<string, string> = new Map(), hiddenNodeKinds: ReadonlySet<string> = HIDDEN_BOUNDARY_KINDS): Map<string, GraphDependencyPath> {
+function findVisibleWitnesses(initial: WalkState, outgoing: Map<string, View["edges"]>, visibleNodeIds: Set<string>, nodeById: Map<string, Node>, boundaryEndpointIds: ReadonlyMap<string, string> = new Map()): Map<string, GraphDependencyPath> {
   const queue: WalkState[] = [initial];
   const visited = new Set(initial.visited);
   const witnesses = new Map<string, GraphDependencyPath>();
@@ -260,7 +258,7 @@ function findVisibleWitnesses(initial: WalkState, outgoing: Map<string, View["ed
         continue;
       }
       const hiddenTarget = nodeById.get(edge.to_node_id);
-      if (!hiddenTarget || !hiddenNodeKinds.has(hiddenTarget.kind) || visited.has(edge.to_node_id)) continue;
+      if (!hiddenTarget || !HIDDEN_BOUNDARY_KINDS.has(hiddenTarget.kind) || visited.has(edge.to_node_id)) continue;
       visited.add(edge.to_node_id);
       if (queue.length < MAX_GRAPH_PATHS) queue.push({ nodeId: edge.to_node_id, path: appendPath(current.path, edge, edge.to_node_id), visited: new Set([edge.to_node_id]) });
     }
@@ -268,7 +266,7 @@ function findVisibleWitnesses(initial: WalkState, outgoing: Map<string, View["ed
   return witnesses;
 }
 
-function findTerminalWitnesses(initial: WalkState, outgoing: Map<string, View["edges"]>, visibleNodeIds: Set<string>, nodeById: Map<string, Node>, boundaryEndpointIds: ReadonlyMap<string, string> = new Map(), hiddenNodeKinds: ReadonlySet<string> = HIDDEN_BOUNDARY_KINDS): GraphDependencyPath[] {
+function findTerminalWitnesses(initial: WalkState, outgoing: Map<string, View["edges"]>, visibleNodeIds: Set<string>, nodeById: Map<string, Node>, boundaryEndpointIds: ReadonlyMap<string, string> = new Map()): GraphDependencyPath[] {
   const queue: WalkState[] = [initial];
   const visited = new Set(initial.visited);
   const terminals: GraphDependencyPath[] = [];
@@ -284,7 +282,7 @@ function findTerminalWitnesses(initial: WalkState, outgoing: Map<string, View["e
         continue;
       }
       const hiddenTarget = nodeById.get(edge.to_node_id);
-      if (!hiddenTarget || !hiddenNodeKinds.has(hiddenTarget.kind) || visited.has(edge.to_node_id)) {
+      if (!hiddenTarget || !HIDDEN_BOUNDARY_KINDS.has(hiddenTarget.kind) || visited.has(edge.to_node_id)) {
         blocked = true;
         continue;
       }
@@ -357,20 +355,18 @@ function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeId
       addVisiblePath,
       addOutgoingPath,
       options.boundaryEndpointIds,
-      options.hiddenNodeKinds,
     );
     if (overflow) {
       warn(`节点 ${source.id}`);
-      for (const [targetId, path] of findVisibleWitnesses(initial, outgoing, visibleNodeIds, nodeById, options.boundaryEndpointIds, options.hiddenNodeKinds)) {
+      for (const [targetId, path] of findVisibleWitnesses(initial, outgoing, visibleNodeIds, nodeById, options.boundaryEndpointIds)) {
         const edge = collapsed.get(displayEdgeKey(source.id, targetId));
         if (!edge?.paths.some((item) => item.truncated)) addVisiblePath(targetId, { ...path, truncated: true });
       }
-      for (const path of findTerminalWitnesses(initial, outgoing, visibleNodeIds, nodeById, options.boundaryEndpointIds, options.hiddenNodeKinds)) addOutgoingPath({ ...path, truncated: true });
+      for (const path of findTerminalWitnesses(initial, outgoing, visibleNodeIds, nodeById, options.boundaryEndpointIds)) addOutgoingPath({ ...path, truncated: true });
     }
   }
 
-  const hiddenNodeKinds = options.hiddenNodeKinds ?? HIDDEN_BOUNDARY_KINDS;
-  const hiddenNodeIds = new Set(view.nodes.filter((node) => hiddenNodeKinds.has(node.kind)).map((node) => node.id));
+  const hiddenNodeIds = new Set(view.nodes.filter((node) => HIDDEN_BOUNDARY_KINDS.has(node.kind)).map((node) => node.id));
   const incoming = new Map<string, View["edges"]>();
   for (const edge of view.edges) incoming.set(edge.to_node_id, [...(incoming.get(edge.to_node_id) ?? []), edge]);
   const roots = [...hiddenNodeIds].filter((nodeId) => !(incoming.get(nodeId) ?? []).some((edge) => hiddenNodeIds.has(edge.from_node_id) || visibleNodeIds.has(edge.from_node_id)));
@@ -407,12 +403,11 @@ function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeId
   return { edges: [...collapsed.values()], boundaryDependencies: [...boundary.values()], warnings };
 }
 
-export function buildGraphProjection(view: View, visibleTaskIds?: ReadonlySet<string>, visibleGroupIds?: ReadonlySet<string>, options: { includeMilestones?: boolean } = {}): GraphProjection {
+export function buildGraphProjection(view: View, visibleTaskIds?: ReadonlySet<string>, visibleGroupIds?: ReadonlySet<string>): GraphProjection {
   const taskById = new Map(view.tasks.map((task) => [task.id, task]));
   const nodeById = new Map(view.nodes.map((node) => [node.id, node]));
   const includedTasks = visibleTaskIds ?? new Set(view.tasks.map((task) => task.id));
-  const includeMilestones = options.includeMilestones ?? true;
-  const visibleNodes = view.nodes.filter((node) => !HIDDEN_BOUNDARY_KINDS.has(node.kind) && (includeMilestones || node.kind !== "milestone") && (node.kind !== "task" || (!!node.ref_id && includedTasks.has(node.ref_id))));
+  const visibleNodes = view.nodes.filter((node) => !HIDDEN_BOUNDARY_KINDS.has(node.kind) && (node.kind !== "task" || (!!node.ref_id && includedTasks.has(node.ref_id))));
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
   const groupIds = new Set(visibleNodes.map((node) => currentGroupId(node, taskForNode(node, taskById))).filter((id): id is string => !!id));
   if (visibleGroupIds) for (const groupId of visibleGroupIds) groupIds.add(groupId);
@@ -484,8 +479,7 @@ export function buildGraphProjection(view: View, visibleTaskIds?: ReadonlySet<st
   }
   const dependencyNodes = [...visibleNodes, ...syntheticSources];
   const dependencyNodeIds = new Set(dependencyNodes.map((node) => node.id));
-  const hiddenNodeKinds = includeMilestones ? HIDDEN_BOUNDARY_KINDS : new Set([...HIDDEN_BOUNDARY_KINDS, "milestone"]);
-  const dependencies = makeDisplayDependencies(view, dependencyNodes, dependencyNodeIds, nodeById, taskById, new Set(nodes.map((node) => node.id)), { boundaryEndpointIds, syntheticOutgoing, syntheticBoundaryStarts, hiddenNodeKinds });
+  const dependencies = makeDisplayDependencies(view, dependencyNodes, dependencyNodeIds, nodeById, taskById, new Set(nodes.map((node) => node.id)), { boundaryEndpointIds, syntheticOutgoing, syntheticBoundaryStarts });
   return { nodes, ...dependencies };
 }
 
