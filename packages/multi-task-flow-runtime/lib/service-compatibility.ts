@@ -5,7 +5,7 @@ import { z } from "zod";
 import { readRegularNoFollow } from "../../../skills/bin/modules/visual/secure_io";
 import { ServiceState } from "../lib/service-state";
 import { verifyRelease, digest } from "../lib/service-release";
-import { ledgerContract, type ReleaseManifest } from "../lib/service-contract";
+import { ledgerContract, packageReleaseManifest, type ReleaseManifest } from "../lib/service-contract";
 import { validateLedger } from "../lib/schema";
 import { ContractError, requireCondition } from "../lib/errors";
 import { stable } from "../lib/store-migration";
@@ -99,8 +99,9 @@ export function compatibilityReport(
   target: ReleaseManifest,
   targetRoot?: string,
 ) {
-  const current = existsSync(join(state.paths.config, "service.json"))
-    ? verifyRelease(join(state.paths.releases, state.config().current_build))
+  const config = existsSync(join(state.paths.config, "service.json")) ? state.config() : null;
+  const current = config
+    ? (config.package_name && config.package_version ? packageReleaseManifest(config) : verifyRelease(join(state.paths.releases, config.current_build)))
     : null;
   const errors: { run_id: string; capability: string; code: string }[] = [];
   const runs: {
@@ -119,7 +120,7 @@ export function compatibilityReport(
   }[] = [];
   const root = join(state.paths.data, "runs");
   const releaseWindowErrors: { run_id: string; capability: string; code: string }[] = [];
-  if (existsSync(state.paths.releases)) {
+  if (!config?.package_name && existsSync(state.paths.releases)) {
     const prior = readdirSync(state.paths.releases, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => { try { return verifyRelease(join(state.paths.releases, entry.name)); } catch { return null; } })
@@ -178,15 +179,20 @@ export function compatibilityReport(
         // prove that its own reader can consume the exact raw ledger.
         validateLedger(raw);
         const currentRoot = current ? releaseRootFor(state, current) : null;
-        const currentReader = current && currentRoot
-          ? releaseReader(currentRoot, raw)
-          : { ok: false as const, code: "NO_CURRENT_RELEASE" };
+        const packageBacked = Boolean(config?.package_name && config.package_version);
+        const currentReader = packageBacked && current && current.readable.includes(row.contract)
+          ? { ok: true as const, contract: row.contract, revision: raw.revision }
+          : current && currentRoot
+            ? releaseReader(currentRoot, raw)
+            : { ok: false as const, code: "NO_CURRENT_RELEASE" };
         row.current_readable = currentReader.ok && current?.readable.includes(row.contract) === true;
         row.current_writable =
           current?.writable.includes(row.contract) ?? false;
         const targetReleaseRoot = releaseRootFor(state, target, targetRoot);
-        const targetReader = target.readable.includes(row.contract) && targetReleaseRoot
-          ? releaseReader(targetReleaseRoot, raw)
+        const targetReader = target.readable.includes(row.contract) && packageBacked
+          ? { ok: true as const, contract: row.contract, revision: raw.revision }
+          : target.readable.includes(row.contract) && targetReleaseRoot
+            ? releaseReader(targetReleaseRoot, raw)
           : { ok: false as const, code: "INCOMPATIBLE_LEDGER" };
         row.target_readable = targetReader.ok;
         row.target_writable = target.writable.includes(row.contract);

@@ -7,6 +7,7 @@ import {
 import {
   chmodSync,
   existsSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -31,12 +32,132 @@ import { ServiceAuth } from "../lib/service-auth";
 import { verifyRelease, requireSourceRelease } from "../lib/service-release";
 import { requireCondition } from "../lib/errors";
 import { type ReleaseManifest } from "../lib/service-contract";
+import type { ServiceConfig } from "../lib/service-contract";
 import { serviceStatus, SERVICE_STARTUP_TIMEOUT_MS, waitForServiceHealth } from "../lib/service-lifecycle";
 import {
   unloadUserService,
   writeLaunchdDefinition,
   startUserService,
 } from "../lib/service-launchd";
+
+export const PACKAGE_NAME = "@loomhelm/multi-task-flow";
+export interface PackageIdentity {
+  package_name: string;
+  version: string;
+  source_sha: string;
+  compatibility_line: string;
+  skill_version: string;
+  build_id: string;
+  tarball_digest: string | null;
+  package_integrity?: string;
+  contracts: { ledger: number; api: number; frontend: number; viewer: number; service: string };
+}
+
+export function resolvePackageIdentity(version: string): PackageIdentity {
+  requireCondition(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version), "INVALID_PACKAGE_VERSION", "Package version must be an exact SemVer");
+  const result = Runtime.spawnSync([
+    process.execPath, "x", "--bun", "--package", `${PACKAGE_NAME}@${version}`,
+    "multi-task-flow", "--version",
+  ], { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+  requireCondition(result.exitCode === 0, "PACKAGE_RESOLUTION_FAILED", "Unable to resolve the exact Dashboard package");
+  let identity: PackageIdentity;
+  try { identity = JSON.parse(result.stdout.toString("utf8")) as PackageIdentity; }
+  catch { throw new ContractError("PACKAGE_IDENTITY_INVALID", "Resolved package did not return a valid identity"); }
+  requireCondition(identity.package_name === PACKAGE_NAME && identity.version === version, "PACKAGE_IDENTITY_MISMATCH", "Resolved package identity does not match the requested version");
+  requireCondition(/^[a-f0-9]{64}$/.test(identity.build_id) && /^[a-f0-9]{40}$/.test(identity.source_sha), "PACKAGE_IDENTITY_INVALID", "Resolved package identity is incomplete");
+  requireCondition(/^compat-v\d+$/.test(identity.compatibility_line), "PACKAGE_IDENTITY_INVALID", "Resolved package compatibility line is invalid");
+  const metadataResult = Runtime.spawnSync([process.execPath, "pm", "view", `${PACKAGE_NAME}@${version}`, "--json"], { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+  requireCondition(metadataResult.exitCode === 0, "PACKAGE_METADATA_FAILED", "Unable to verify registry metadata for the exact Dashboard package");
+  try {
+    const metadata = JSON.parse(metadataResult.stdout.toString("utf8")) as { dist?: { integrity?: unknown } };
+    const integrity = metadata.dist?.integrity;
+    requireCondition(typeof integrity === "string" && integrity.startsWith("sha512-"), "PACKAGE_INTEGRITY_INVALID", "Registry metadata did not provide a valid tarball integrity");
+    identity.package_integrity = integrity;
+  } catch (error) {
+    if (error instanceof ContractError) throw error;
+    throw new ContractError("PACKAGE_METADATA_INVALID", "Registry metadata for the exact Dashboard package is invalid");
+  }
+  return identity;
+}
+
+function packageConfig(old: ServiceConfig | null, identity: PackageIdentity, registryDir: string): ServiceConfig {
+  return {
+    schema_version: 1,
+    port: old?.port ?? 0,
+    registry_dir: registryDir,
+    current_build: identity.build_id,
+    previous_build: old?.current_build ?? null,
+    agent_ttl_ms: old?.agent_ttl_ms ?? 3_600_000,
+    package_name: identity.package_name,
+    package_version: identity.version,
+    ...(identity.package_integrity ? { package_integrity: identity.package_integrity } : {}),
+    compatibility_line: identity.compatibility_line,
+    skill_version: identity.skill_version,
+    service_contract: identity.contracts.service,
+    ledger_contract: identity.contracts.ledger,
+    api_contract: identity.contracts.api,
+    frontend_contract: identity.contracts.frontend,
+    viewer_contract: identity.contracts.viewer,
+    source_sha: identity.source_sha,
+    artifact_build_id: identity.build_id,
+  };
+}
+
+function assertPackageUpgradeCompatible(old: ServiceConfig, next: PackageIdentity): void {
+  if (!old.package_name) return;
+  requireCondition(old.package_name === PACKAGE_NAME, "INCOMPATIBLE_RELEASE", "The installed service is not a supported package profile");
+  requireCondition(old.compatibility_line === next.compatibility_line, "INCOMPATIBLE_RELEASE", "Package compatibility line changed; explicit migration is required");
+  requireCondition(!old.service_contract || old.service_contract === next.contracts.service, "INCOMPATIBLE_RELEASE", "Package service contract changed; explicit migration is required");
+  requireCondition(old.ledger_contract === undefined || old.ledger_contract === next.contracts.ledger, "INCOMPATIBLE_RELEASE", "Package ledger contract changed; explicit migration is required");
+  requireCondition(old.api_contract === undefined || old.api_contract === next.contracts.api, "INCOMPATIBLE_RELEASE", "Package API contract changed; explicit migration is required");
+  requireCondition(old.frontend_contract === undefined || old.frontend_contract === next.contracts.frontend, "INCOMPATIBLE_RELEASE", "Package frontend contract changed; explicit migration is required");
+  requireCondition(old.viewer_contract === undefined || old.viewer_contract === next.contracts.viewer, "INCOMPATIBLE_RELEASE", "Package viewer contract changed; explicit migration is required");
+}
+
+export async function installPackageRelease(state: ServiceState, version: string, registryDir?: string) {
+  state.initialize();
+  return withExclusiveLockAsync(join(state.paths.state, "startup.lock"), async () => {
+    requireCondition(!existsSync(join(state.paths.config, "service.json")), "ALREADY_INSTALLED", "Use explicit upgrade for an existing installation");
+    const identity = resolvePackageIdentity(version);
+    const directory = registryDir ? resolve(registryDir) : state.paths.isolated ? join(state.paths.state, "port-registry") : defaultRegistryDir();
+    const registry = new PortRegistry(directory);
+    const result = await registry.allocate({ scopeId: state.paths.scope, service: "viewer", project: "multi-task-flow", repoRoot: "", branch: "", worktreePath: "" });
+    try {
+      state.saveConfig({ ...packageConfig(null, identity, directory), port: Number(result.port) });
+      new ServiceAuth(state).initialize();
+      writeLaunchdDefinition(state);
+      return { package_name: PACKAGE_NAME, version: identity.version, build_id: identity.build_id, port: Number(result.port), root: state.paths.root, started: false };
+    } finally { await registry.releaseService(state.paths.scope, "viewer"); }
+  });
+}
+
+export async function upgradePackageRelease(state: ServiceState, version: string) {
+  state.initialize();
+  return withExclusiveLockAsync(join(state.paths.state, "startup.lock"), async () => {
+    const old = state.config();
+    const identity = resolvePackageIdentity(version);
+    requireCondition(old.package_version !== version || old.package_name !== PACKAGE_NAME, "ALREADY_CURRENT", "The requested package version is already installed");
+    assertPackageUpgradeCompatible(old, identity);
+    const oldPlistPath = join(state.paths.config, "viewer.plist");
+    const oldPlist = existsSync(oldPlistPath) ? readFileSync(oldPlistPath, "utf8") : null;
+    const wasRunning = state.runtime().phase === "running";
+    const nextConfig = { ...packageConfig(old, identity, old.registry_dir), port: old.port };
+    try {
+      state.saveConfig(nextConfig);
+      writeLaunchdDefinition(state);
+      unloadUserService(state);
+      state.transaction((runtime) => { runtime.phase = "stopped"; runtime.pid = null; });
+      return { package_name: PACKAGE_NAME, version: identity.version, build_id: identity.build_id, port: old.port, root: state.paths.root, started: false };
+    } catch (error) {
+      state.saveConfig(old);
+      if (oldPlist !== null) writeAtomic(oldPlistPath, oldPlist);
+      if (wasRunning) {
+        try { startUserService(state); } catch { /* Preserve the original failure and runtime evidence. */ }
+      }
+      throw error;
+    }
+  });
+}
 
 export function stageRelease(
   state: ServiceState,

@@ -369,3 +369,54 @@ test("launchd definition preserves the installing caller PATH without assuming t
     expect(xml).not.toContain("<string>/usr/bin:/bin</string>");
   } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 });
+
+test("package-backed launchd definition pins the exact npm package and keeps the service on demand", async () => {
+  const { writeLaunchdDefinition } = await import("../lib/service-launchd");
+  const { readFileSync } = await import("node:fs");
+  const { root, state } = fixture();
+  state.saveConfig({
+    schema_version: 1,
+    port: 61191,
+    registry_dir: join(root, "registry"),
+    current_build: "b".repeat(64),
+    previous_build: null,
+    agent_ttl_ms: 3_600_000,
+    package_name: "@loomhelm/multi-task-flow",
+    package_version: "0.2.12",
+    compatibility_line: "compat-v1",
+    skill_version: "2.7.7",
+    service_contract: "1",
+    source_sha: "c".repeat(40),
+    artifact_build_id: "b".repeat(64),
+  });
+  const xml = readFileSync(writeLaunchdDefinition(state), "utf8");
+  expect(xml).toContain("<string>x</string><string>--bun</string>");
+  expect(xml).toContain("<string>--package</string><string>@loomhelm/multi-task-flow@0.2.12</string>");
+  expect(xml).toContain("<string>multi-task-flow</string><string>service</string><string>daemon</string>");
+  expect(xml).toContain("<key>RunAtLoad</key><false/>");
+  expect(xml).toContain("<key>KeepAlive</key><false/>");
+  expect(xml).not.toContain("releases");
+});
+
+test("daemon update hints expose only confirmed newer daemon candidates", async () => {
+  const { writeAtomic } = await import("../lib/store");
+  const { cachedDaemonUpdate } = await import("../lib/service-update");
+  const { root, state } = fixture();
+  state.saveConfig({
+    schema_version: 1,
+    port: 61192,
+    registry_dir: join(root, "registry"),
+    current_build: "d".repeat(64),
+    previous_build: null,
+    agent_ttl_ms: 3_600_000,
+    package_name: "@loomhelm/multi-task-flow",
+    package_version: "0.2.12",
+    compatibility_line: "compat-v1",
+    skill_version: "2.7.7",
+    service_contract: "1",
+    source_sha: "e".repeat(40),
+    artifact_build_id: "d".repeat(64),
+  });
+  writeAtomic(join(state.paths.state, "daemon-update.json"), JSON.stringify({ checked_at: new Date().toISOString(), package_name: "@loomhelm/multi-task-flow", compatibility_line: "compat-v1", compatible_version: "0.2.13", latest_version: "0.2.14" }));
+  expect(cachedDaemonUpdate(state)).toEqual({ kind: "daemon_update", message: "A newer Dashboard daemon is available", compatible_version: "0.2.13", latest_version: "0.2.14" });
+});
