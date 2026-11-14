@@ -43,7 +43,7 @@
 
 - REQ-ORCH-015：bootstrap 的 owner 通过 run 主线程解析；schema 完整账本校验、运行时生命周期/合并/收口、计划身份保护及 dashboard readiness 使用相同边界。legacy 字段默认 regular/group，不自动转换历史运行；当前未提供 group 原地迁移命令。
 
-- 合成界面证据通过 `bun skills/multi-task-flow-runtime/scripts/demo-static.ts --bootstrap` 生成，仅修改展示 fixture，不转换真实账本。[交付单元类型展示](./assets/bootstrap-ownership.png) 对照首个 bootstrap 与后续 regular 卡片。
+- 合成界面证据通过 `bun packages/multi-task-flow-runtime/scripts/demo-static.ts --bootstrap` 生成，仅修改展示 fixture，不转换真实账本。[交付单元类型展示](./assets/bootstrap-ownership.png) 对照首个 bootstrap 与后续 regular 卡片。
 
 - 交付单元卡片的耗时只显示数值，移除“交付单元用时”和“进行中”前缀；定时刷新沿用同一显示规则。
 
@@ -83,7 +83,7 @@
 - 桌面实时接管必须由当前候选真实 CLI 创建、退出、原生消息回执和主人确认共同证明，不能用源码测试或历史冒烟替代。
 
 - The dashboard emits the canonical native `codex://threads/<thread_id>` links without forcing a new browser window, matching the working local dashboard pattern. The current candidate records one native-navigation observation for each fixture ID; the evidence is reused for this candidate and is not re-run by ordinary checks. This does not claim to prove host-specific browser click bridging, which is outside the Skill gate.
-- Responsive width acceptance is exercised through the real-browser runner in `skills/multi-task-flow-runtime/tests/browser/card-width-regression.mjs`, covering board/grid layouts, detail toggles, cross-layout outer widths, fixed inspector limits and maximal task-column allocation at five medium viewport widths. Local DOM/source tests cover detail interaction and URL serialization; the owner-confirmed mock-demo evidence is recorded in the Spec.
+- Responsive width acceptance is exercised through the real-browser runner in `packages/multi-task-flow-runtime/tests/browser/card-width-regression.mjs`, covering board/grid layouts, detail toggles, cross-layout outer widths, fixed inspector limits and maximal task-column allocation at five medium viewport widths. Local DOM/source tests cover detail interaction and URL serialization; the owner-confirmed mock-demo evidence is recorded in the Spec.
 
 ## References
 

@@ -2,7 +2,7 @@
 
 ## 代码覆盖
 
-任务上下文菜单由 `skills/multi-task-flow-runtime/web/task-context-menu.ts` 统一实现，入口覆盖依赖图节点及其无障碍列表、任务卡片、两种时间轴的任务名称、时间条和行内空白。多 PR 合并当前任务 PR 与该任务的 follow PR，去重后供选择。
+任务上下文菜单由 `packages/multi-task-flow-runtime/web/task-context-menu.ts` 统一实现，入口覆盖依赖图节点及其无障碍列表、任务卡片、两种时间轴的任务名称、时间条和行内空白。多 PR 合并当前任务 PR 与该任务的 follow PR，去重后供选择。
 
 任务 URL 复用 `selected=task:<id>&detail=1`；不保留历史计划、筛选、时间窗口或凭据。首次加载解除任务筛选，滚动任务卡片到可见区域并打开详情；任务丢失显示明确提示。服务登录前在当前标签页保存经过校验的站内任务目标，登录成功后恢复；其他标签页登录后可返回原链接刷新。
 

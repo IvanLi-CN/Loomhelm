@@ -1,6 +1,6 @@
 {
   "name": "@loomhelm/multi-task-flow",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "description": "Versioned Bun CLI and complete Multi-task Flow Skill runtime for Loomhelm",
   "type": "module",
   "engines": {
@@ -24,7 +24,7 @@
   },
   "types": "src/index.ts",
   "scripts": {
-    "build": "bun --cwd ../../skills/multi-task-flow-runtime build && bun ../../skills/multi-task-flow-runtime/scripts/package-client-skills.ts --require-dependencies",
+    "build": "bun --cwd ../../packages/multi-task-flow-runtime build && bun ../../packages/multi-task-flow-runtime/scripts/package-client-skills.ts --require-dependencies",
     "check": "bun x --no-install tsc -p tsconfig.json --noEmit",
     "test": "bun run build && bun test test/*.test.ts",
     "pack:check": "bun run build && bun pm pack --dry-run"

@@ -29,5 +29,6 @@
     "web/.storybook",
     "web/vite.config.ts",
     "packages"
-  ]
+  ],
+  "exclude": ["packages/multi-task-flow-runtime"]
 }

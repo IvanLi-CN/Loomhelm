@@ -17,16 +17,16 @@ bunx --bun --package @loomhelm/multi-task-flow@compat-v1 multi-task-flow flow vi
 可重复的生产安装必须固定 package version；`@compat-v1` 只用于接收同一兼容线内经过门禁的最新版本，`latest` 不构成身份或兼容性证明。运行前置条件是 `bun --version` 返回 `1.4.4`；Bun 由宿主提供，包不会替换或升级它。
 
 ```sh
-bunx --bun --package @loomhelm/multi-task-flow@0.2.12 multi-task-flow skills list
+bunx --bun --package @loomhelm/multi-task-flow@0.2.13 multi-task-flow skills list
 bunx --bun --package @loomhelm/multi-task-flow@compat-v1 multi-task-flow skills list
-bunx --bun --package @loomhelm/multi-task-flow@0.2.12 multi-task-flow flow view --input - < view-request.json
+bunx --bun --package @loomhelm/multi-task-flow@0.2.13 multi-task-flow flow view --input - < view-request.json
 ```
 
 当前源码投影的内部合同矩阵如下；`source_sha`、`merge_sha`、`build_id`、`canonicalDigestAlgorithm=path-byte-v2`、canonical digest 和 raw npm integrity 是每个候选构建的独立身份字段，不能由这张静态表推断。
 
 | 维度 | 当前值 |
 | - | - |
-| package | `@loomhelm/multi-task-flow@0.2.12` |
+| package | `@loomhelm/multi-task-flow@0.2.13` |
 | compatibility line | `compat-v1` |
 | Skill | `2.7.7` |
 | ledger contract | `3` |
@@ -45,7 +45,7 @@ npm 发布需要 npm Trusted Publisher 绑定 `IvanLi-CN/Loomhelm` 与 `skill-re
 
 ```sh
 bun install --frozen-lockfile
-bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile
+bun install --cwd packages/multi-task-flow-runtime --frozen-lockfile
 bun --no-install run skills:build
 cd clients/typescript
 bun install --frozen-lockfile
@@ -54,7 +54,7 @@ bun --no-install run test
 bun --no-install src/cli.ts --config config.example.json status
 ```
 
-发布包构建前需要准备 Skill build inputs 与消费者依赖：`bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy`、`bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile` 和 `bun install --cwd clients/typescript --frozen-lockfile --ignore-scripts --backend=copy`。随后在 `clients/typescript/` 执行 `bun --no-install run build`，构建会拒绝摘要不一致、缺失 consumer dependency、符号链接资源和非法 package identity。
+发布包构建前需要准备 Skill build inputs 与消费者依赖：`bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy`、`bun install --cwd packages/multi-task-flow-runtime --frozen-lockfile` 和 `bun install --cwd clients/typescript --frozen-lockfile --ignore-scripts --backend=copy`。随后在 `clients/typescript/` 执行 `bun --no-install run build`，构建会拒绝摘要不一致、缺失 consumer dependency、符号链接资源和非法 package identity。
 
 配置路径显式传入；相对 `stateDir` 相对于配置文件所在目录解析。未传配置时使用 `~/.loomhelm`。配置拒绝未知字段、未知版本及尚未实现的 Connected mode。源码从 `client/` 移入本目录后，示例配置使用 `../../client/.loomhelm`，继续读取仓库中原来的 `client/.loomhelm/`，该目录仍被根 Git 忽略规则排除。此兼容目录只保存状态，不放置客户端源码。
 
@@ -108,9 +108,9 @@ bun --no-install src/cli.ts --config config.example.json codex retry DISPATCH_ID
 
 完整源包位于包内 `toolkit/skills/`，共享支持位于 `toolkit/skills/bin/`，预构建 viewer 资产位于对应的 Multi-task Flow dist 目录。`skills/source-manifest.json` 记录固定源提交、源摘要、安装摘要和迁移差异；`skills/catalog.json` 记录入口、脚本及依赖强度；`artifact-manifest.json` 记录 schema v3 package identity、`path-byte-v2` canonical digest 和逐文件摘要。资源打包将 TS 源码、完整资源和浏览器资产复制到 `toolkit/`，不复制 production `node_modules`，不转译、不搜索全局 dot-codex 执行代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根；`skills run` 原样执行 `.ts` 脚本。包的 bin、exports 和类型入口均指向 `src/`。
 
-所有随包执行代码、合同资源和构建支持都位于 `skills/`：共享脚本在 `skills/bin/`，上游合同在 `skills/docs/vendor/dot-codex/`，维护与构建入口在 `skills/multi-task-flow-runtime/scripts/`。vendor 仅检出 `skills/` 即可保留完整源资源，不需要修改用户的 sparse checkout 或安装配置。安装目录内执行 `bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy` 与 `bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile` 准备声明的依赖，再执行 `bun --no-install run --cwd skills/multi-task-flow-runtime build` 仅构建浏览器 JS/CSS；本机 TS 无需编译。外部 Git、Codex 宿主工具及条件性 Skills 仍按既有合同检测，不复制到源包中。
+可发布 Skill 资源位于 `skills/`；Multi-task Flow 的内部 runtime、viewer/service、构建和测试源码位于 `packages/multi-task-flow-runtime/`，不属于用户安装面。受保护发布构建把 runtime 映射到 npm 包内的 `skills/multi-task-flow/` 路径。vendor checkout 必须同时保留 `skills/` 与 `packages/multi-task-flow-runtime/` 才能执行源码构建和验证；消费者安装 npm 包时不需要这两个源码目录。开发验证在 `packages/multi-task-flow-runtime/` 执行；用户侧不得从该目录构建 viewer bundle。
 
-`bun --no-install skills/multi-task-flow-runtime/scripts/check-skills-installation.ts --root <installation-root> --probe` 分别报告源码完整性、Bun 运行时及实际入口探测；宿主能力单独验收。该检查不会修改任何用户级安装或运行账本。
+`bun --no-install packages/multi-task-flow-runtime/scripts/check-skills-installation.ts --root <installation-root> --probe` 分别报告源码完整性、Bun 运行时及实际入口探测；宿主能力单独验收。该检查不会修改任何用户级安装或运行账本。
 
 ```sh
 bun --no-install src/cli.ts skills list
