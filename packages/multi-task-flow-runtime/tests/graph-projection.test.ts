@@ -29,16 +29,17 @@ describe("dashboard graph projection", () => {
       expect.objectContaining({ id: "atomic-end", kind: "boundary", boundary: "end", scope: "global" }),
     ]));
   });
-  test("keeps every task and milestone once while hiding boundary node text", () => {
+  test("keeps every task and milestone once and exposes boundary anchors", () => {
     const view = demoView();
     const projection = buildGraphProjection(view);
-    const sourceNodes = projection.nodes.filter((node) => node.nodeKind !== "group");
+    const sourceNodes = projection.nodes.filter((node) => node.nodeKind !== "group" && node.nodeKind !== "boundary");
 
     expect(sourceNodes).toHaveLength(view.tasks.length + 2);
     expect(new Set(sourceNodes.map((node) => node.sourceNodeId)).size).toBe(sourceNodes.length);
-    expect(sourceNodes.map((node) => node.sourceNodeId)).not.toContain("start");
-    expect(sourceNodes.map((node) => node.sourceNodeId)).not.toContain("end");
-    expect(sourceNodes.map((node) => node.fullLabel).join(" ")).not.toMatch(/开始|结束/);
+    expect(projection.nodes.filter((node) => node.nodeKind === "boundary")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceNodeId: "start", boundary: "start", fullLabel: "开始" }),
+      expect.objectContaining({ boundary: "end", fullLabel: "结束" }),
+    ]));
   });
 
   test("collapses only hidden boundary nodes and preserves explicit gate provenance", () => {
@@ -51,8 +52,8 @@ describe("dashboard graph projection", () => {
       paths: [{ requires: ["merged", "completed"], sourceEdgeIds: ["edge-10", "edge-13"], boundaryNodeIds: ["dashboard-start"] }],
       crossGroup: "yes",
     }));
-    expect(projection.boundaryDependencies.some((item) => item.direction === "incoming" && item.nodeId === "node-model")).toBe(true);
-    expect(projection.boundaryDependencies.some((item) => item.direction === "outgoing" && item.nodeId === "node-verify")).toBe(true);
+    expect(projection.edges.some((edge) => edge.source.startsWith("boundary:") && edge.target === "node-model")).toBe(true);
+    expect(projection.edges.some((edge) => edge.source === "node-verify" && edge.target.startsWith("boundary:") && edge.paths[0]?.boundaryNodeIds.length)).toBe(true);
     expect(projection.edges.some((edge) => edge.source === "node-model" && edge.target === "core-merge")).toBe(false);
     expect(JSON.stringify(view)).toBe(before);
   });
@@ -73,17 +74,24 @@ describe("dashboard graph projection", () => {
     ]);
   });
 
-  test("preserves hidden plan entry and exit metadata without projecting boundary nodes", () => {
+  test("projects hidden plan entry and exit as explicit boundary anchors", () => {
     const view = minimalView([
       node("start", "main_start"), node("end", "main_end"), node("target", "milestone"), node("source", "milestone"),
     ], [edge("entry", "start", "target", "completed"), edge("exit", "source", "end", "merged")]);
     const projected = buildGraphProjection(view);
 
+    expect(projected.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "boundary:start", target: "target", paths: [{ requires: ["completed"], sourceEdgeIds: ["entry"], boundaryNodeIds: ["start"] }] }),
+      expect.objectContaining({ source: "source", target: "boundary:end", paths: [{ requires: ["merged"], sourceEdgeIds: ["exit"], boundaryNodeIds: ["end"] }] }),
+    ]));
+    expect(projected.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "boundary:start", sourceNodeId: "start", nodeKind: "boundary", boundary: "start" }),
+      expect.objectContaining({ id: "boundary:end", sourceNodeId: "end", nodeKind: "boundary", boundary: "end" }),
+    ]));
     expect(projected.boundaryDependencies).toEqual(expect.arrayContaining([
       expect.objectContaining({ direction: "incoming", nodeId: "target", paths: [{ requires: ["completed"], sourceEdgeIds: ["entry"], boundaryNodeIds: ["start"] }] }),
       expect.objectContaining({ direction: "outgoing", nodeId: "source", paths: [{ requires: ["merged"], sourceEdgeIds: ["exit"], boundaryNodeIds: ["end"] }] }),
     ]));
-    expect(projected.nodes.map((item) => item.id)).not.toEqual(expect.arrayContaining(["start", "end"]));
   });
 
   test("uses collision-safe edge ids and bounds pathological hidden path expansion", () => {

@@ -8,10 +8,10 @@ import { accessibleNodeLabel, renderAccessibleNodes, highlightAccessibleSelectio
 import { taskKindLabel } from './labels';
 import type { Task } from './model';
 
-type CardData = { title: string; kind: string; state: string; idle: boolean; color: string; label: string; ports: {id:string; source:boolean}[]; direction: Direction; group: boolean; taskId: string | null; contextKind: "task" | "group" | null; contextId: string | null };
+type CardData = { title: string; kind: string; state: string; idle: boolean; color: string; label: string; ports: {id:string; source:boolean}[]; direction: Direction; group: boolean; boundary: "start" | "end" | null; taskId: string | null; contextKind: "task" | "group" | null; contextId: string | null };
 const Card = memo(function Card({data}: NodeProps) {
   const d = data as unknown as CardData;
-  return <div data-context-kind={d.contextKind ?? undefined} data-context-id={d.contextId ?? undefined} data-context-task={d.taskId ?? undefined} className={d.group ? 'dependency-group' : 'dependency-card'} style={{'--node-color':d.color} as React.CSSProperties}>
+  return <div data-context-kind={d.contextKind ?? undefined} data-context-id={d.contextId ?? undefined} data-context-task={d.taskId ?? undefined} data-boundary={d.boundary ?? undefined} className={d.group ? 'dependency-group' : d.boundary ? 'dependency-boundary' : 'dependency-card'} style={{'--node-color':d.color} as React.CSSProperties}>
     <div className="dependency-card-meta"><span>{d.kind}</span><span className={d.idle ? "dependency-state-idle" : undefined}>{d.idle ? <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{TreePalm.map(([tag, props], i) => React.createElement(tag, {...props, key:i}))}</svg> : null}{d.state}</span></div>
     <div className="dependency-card-title">{d.title}</div>
     {d.ports.map(p => <Handle key={p.id} id={p.id} type={p.source?'source':'target'} position={d.direction==='DOWN'?(p.source?Position.Bottom:Position.Top):(p.source?Position.Right:Position.Left)} />)}
@@ -38,9 +38,9 @@ export function createGraphController(context: GraphContext, calculateLayout = l
       zIndex:n.nodeKind==='group'?-1:1,
       selectable: true, draggable:false,
       ariaLabel: projection ? accessibleNodeLabel(n, projection) : n.title,
-      selected:n.nodeKind==='task'?selected.task===n.refId:selected.group===n.refId,
+      selected:n.nodeKind==='task'?selected.task===n.refId:n.nodeKind==='group'?selected.group===n.refId:false,
       style:{width,height},
-      data:{taskId:n.nodeKind==='task'?n.refId:null,contextKind:n.nodeKind==='task'?'task':n.nodeKind==='group'?'group':n.nodeKind==='milestone'?'milestone':null,contextId:n.nodeKind==='task'||n.nodeKind==='group'?n.refId:n.nodeKind==='milestone'?n.id:null,title:n.title,group:n.nodeKind==='group',kind:n.nodeKind==='group'?'交付单元':n.nodeKind==='milestone'?'里程碑':taskKindLabel(n.taskKind??'coordination').split(' ')[0],state:n.stateLabel??'',idle:n.state==='agent_idle',direction,
+      data:{taskId:n.nodeKind==='task'?n.refId:null,contextKind:n.nodeKind==='task'?'task':n.nodeKind==='group'?'group':n.nodeKind==='milestone'?'milestone':null,contextId:n.nodeKind==='task'||n.nodeKind==='group'?n.refId:n.nodeKind==='milestone'?n.id:null,title:n.title,group:n.nodeKind==='group',boundary:n.nodeKind==='boundary'?(n.boundary??'start'):null,kind:n.nodeKind==='group'?'交付单元':n.nodeKind==='milestone'?'里程碑':n.nodeKind==='boundary'?(n.boundary==='end'?'终点':'起点'):taskKindLabel(n.taskKind??'coordination').split(' ')[0],state:n.stateLabel??'',idle:n.state==='agent_idle',direction,
         color:n.nodeKind==='group'?context.groupColor(n.groupId):n.state?context.stateColor(n.state):context.css('--accent','#5889c4'),
         ports:(projection?.edges??[]).filter(e=>e.source===n.id||e.target===n.id).map(e=>({id:`port:${e.id}:${e.source===n.id?'source':'target'}`,source:e.source===n.id})),},
     }));

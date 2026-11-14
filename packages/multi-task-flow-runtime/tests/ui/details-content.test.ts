@@ -340,8 +340,7 @@ describe("dashboard details content", () => {
     details.showTask(view.tasks[0]!);
 
     const content = document.getElementById("details-content")?.textContent ?? "";
-    expect(content).toContain("计划入口");
-    expect(content).toContain("路径1：");
+    expect(content).toContain("开始");
     expect(content).toContain("任务已完成 completed");
     expect(content).toContain("子 PR 已集成 integrated");
     expect(content).toContain("父 PR 已合并 merged");
@@ -350,8 +349,8 @@ describe("dashboard details content", () => {
     expect(content).toContain("b-task");
     const trigger = document.querySelector<HTMLButtonElement>(".dependency-tooltip-trigger");
     const tooltip = trigger ? document.getElementById(trigger.getAttribute("aria-describedby") ?? "") : null;
-    expect(trigger?.textContent).toBe("查看 1 项依赖");
+    expect(trigger?.textContent).toBe("查看 3 项依赖");
     expect(tooltip?.getAttribute("role")).toBe("tooltip");
-    expect(tooltip?.textContent).toContain("计划入口");
+    expect(tooltip?.textContent).toContain("开始");
   });
 });
