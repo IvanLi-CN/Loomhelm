@@ -29,6 +29,8 @@ import { parseViewerRoute } from "../scripts/viewer-gateway";
 import { startUnixViewerWorkerServer, viewerWorkerSocketPath } from "../scripts/viewer-socket";
 import { createUnixViewerWorker, dataVersionOf, workerKeyOf } from "../scripts/viewer-worker";
 import { createWorkerGeneration, ViewerWorkerPool } from "../scripts/viewer-runtime";
+import { WorkerDiagnosticStore, workerDiagnosticFromError, type WorkerDiagnosticStage } from "./worker-diagnostics";
+import { serviceLog } from "./service-log";
 
 const json = (
   value: unknown,
@@ -211,6 +213,23 @@ export async function startSharedViewer(
     );
   state.initialize();
   const auth = new ServiceAuth(state);
+  const diagnostics = new WorkerDiagnosticStore(state.paths);
+  diagnostics.sweep(undefined, (runId) => existsSync(join(state.paths.data, "runs", runId)));
+  const recordDiagnostic = (input: Parameters<WorkerDiagnosticStore["record"]>[0]) => {
+    const diagnostic = diagnostics.record(input);
+    try {
+      serviceLog(state.paths, "worker_diagnostic", state.runtime().generation ?? "unknown-generation", manifest.build_id, {
+        diagnostic_id: diagnostic.diagnostic_id,
+        run_id: diagnostic.run_id,
+        worker_generation: diagnostic.worker_generation,
+        stage: diagnostic.stage,
+        error_code: diagnostic.error_code,
+        state: diagnostic.state,
+        retry_count: diagnostic.retry_count,
+      });
+    } catch { /* Diagnostics remain available through the runtime state file. */ }
+    return diagnostic;
+  };
   const fallbackViewer = (() => {
     let previous: string | null = null;
     try { if (!sourceRevision && !demoHooks && !state.config().package_name) previous = state.config().previous_build; } catch {}
@@ -308,6 +327,7 @@ export async function startSharedViewer(
       )
         return json({ code: "FORBIDDEN" }, 403);
       const url = new URL(request.url);
+      let diagnosticResponse: ReturnType<WorkerDiagnosticStore["get"]> = null;
       try {
         if (url.pathname === "/login" || url.pathname === "/login.js" || url.pathname === "/resume-task.js" || url.pathname === "/api/v1/login")
           return json({ code: "NOT_FOUND" }, 404);
@@ -349,6 +369,14 @@ export async function startSharedViewer(
           } else if (url.pathname !== "/") {
             return redirect(authFailureLocation(viewerTarget.target));
           }
+        }
+        if (url.pathname === "/api/v1/reconnect" && request.method === "POST") {
+          if (!request.headers.get("cookie")) return json({ code: "UNAUTHENTICATED" }, 401);
+          const target = parseViewerTarget(url.searchParams.get("target") ?? "/", `http://${host}`, { allowHome: false })?.target;
+          if (!target) return json({ code: "INVALID_TARGET" }, 400);
+          const targetPath = new URL(target, `http://${host}`).pathname;
+          const ticket = auth.ticket(targetPath);
+          return json({ login_url: `http://${host}${target}${target.includes("?") ? "&" : "?"}ticket=${encodeURIComponent(ticket)}`, expires_in_seconds: 60, single_use: true });
         }
         if (!actor)
           return request.method === "GET" && !url.pathname.startsWith("/api/")
@@ -443,6 +471,12 @@ export async function startSharedViewer(
             build_id: manifest.build_id,
             warning: warnings.get(id),
           });
+        if (path === "/api/diagnostics/worker" && request.method === "GET") {
+          const requestedRun = url.searchParams.get("run_id") ?? id;
+          if (requestedRun !== id) return json({ code: "FORBIDDEN" }, 403);
+          new LedgerStore(state.paths.data, id).read();
+          return json({ diagnostic: diagnostics.get(id) });
+        }
         if (
           path === "/api/lease" &&
           request.method === "POST" &&
@@ -457,7 +491,26 @@ export async function startSharedViewer(
           manifest.build_id,
         );
         const workerKey = workerKeyOf(version);
-        const lease = await workerPool.acquire(workerKey);
+        let workerStage: WorkerDiagnosticStage = "worker_select";
+        let lease: Awaited<ReturnType<typeof workerPool.acquire>>;
+        try {
+          lease = await workerPool.acquire(workerKey);
+          workerStage = "request_dispatch";
+        } catch (error) {
+          const diagnostic = recordDiagnostic(workerDiagnosticFromError({
+            run_id: id,
+            worker_key: workerKey,
+            worker_generation: workerPool.generation(workerKey) ?? "unknown-generation",
+            stage: error instanceof Error && /socket (connection|connect)/i.test(error.message) ? "socket_connect" : workerStage,
+            retry_count: workerPool.failureCount(workerKey),
+            retryable: workerPool.failureCount(workerKey) < 3,
+            reconnect_required: true,
+            state: workerPool.failureCount(workerKey) >= 3 ? "degraded" : undefined,
+            error,
+          }));
+          diagnosticResponse = diagnostic;
+          throw error;
+        }
         let response: Response;
         try {
           response = await lease.worker.handle(request, currentServer, path, {
@@ -468,13 +521,60 @@ export async function startSharedViewer(
         } catch (error) {
           lease.release();
           await workerPool.invalidate(workerKey, lease.generation);
+          diagnosticResponse = recordDiagnostic(workerDiagnosticFromError({
+            run_id: id,
+            worker_key: workerKey,
+            worker_generation: lease.generation,
+            stage: error instanceof Error && /socket (connection|connect|closed|timeout)/i.test(error.message) ? "socket_connect" : "request_dispatch",
+            retry_count: workerPool.failureCount(workerKey),
+            retryable: workerPool.failureCount(workerKey) < 3,
+            reconnect_required: true,
+            state: workerPool.failureCount(workerKey) >= 3 ? "degraded" : undefined,
+            error,
+          }));
           throw error;
         }
         const leasedResponse = releaseWorkerResponse(
           response,
           lease.release,
-          () => workerPool.invalidate(workerKey, lease.generation),
+          async () => {
+            await workerPool.invalidate(workerKey, lease.generation);
+            recordDiagnostic(workerDiagnosticFromError({
+              run_id: id,
+              worker_key: workerKey,
+              worker_generation: lease.generation,
+              stage: "response_stream",
+              retry_count: workerPool.failureCount(workerKey),
+              retryable: workerPool.failureCount(workerKey) < 3,
+              reconnect_required: true,
+              state: workerPool.failureCount(workerKey) >= 3 ? "degraded" : undefined,
+              error: new Error("worker response stream failed"),
+            }));
+          },
         );
+        if (path !== "/api/events") {
+          const beforeRecovery = diagnostics.get(id);
+          const recovered = beforeRecovery ? diagnostics.recover(id, beforeRecovery) : null;
+          if (recovered) {
+            try {
+              serviceLog(state.paths, "worker_diagnostic", state.runtime().generation ?? "unknown-generation", manifest.build_id, {
+                diagnostic_id: recovered.diagnostic_id,
+                run_id: recovered.run_id,
+                worker_generation: recovered.worker_generation,
+                stage: recovered.stage,
+                error_code: recovered.error_code,
+                safe_summary: recovered.safe_summary,
+                retryable: recovered.retryable,
+                reconnect_required: recovered.reconnect_required,
+                worker_key: recovered.worker_key,
+                worker_generation: recovered.worker_generation,
+                retry_count: recovered.retry_count,
+                state: recovered.state,
+                recovered_at: recovered.recovered_at,
+              });
+            } catch { /* Do not turn a recovered request into a logging failure. */ }
+          }
+        }
         if (
           path === "/" &&
           leasedResponse.ok &&
@@ -504,7 +604,24 @@ export async function startSharedViewer(
               : code === "INVALID_INPUT"
                 ? 400
                 : 503;
-        return json({ code }, status);
+        return json({
+          code: code === "SERVICE_ERROR" && diagnosticResponse ? "RUN_WORKER_UNAVAILABLE" : code,
+          ...(diagnosticResponse
+            ? {
+                diagnostic_id: diagnosticResponse.diagnostic_id,
+                run_id: diagnosticResponse.run_id,
+                stage: diagnosticResponse.stage,
+                worker_key: diagnosticResponse.worker_key,
+                worker_generation: diagnosticResponse.worker_generation,
+                error_code: diagnosticResponse.error_code,
+                safe_summary: diagnosticResponse.safe_summary,
+                retry_count: diagnosticResponse.retry_count,
+                state: diagnosticResponse.state,
+                retryable: diagnosticResponse.retryable,
+                reconnect_required: diagnosticResponse.reconnect_required,
+              }
+            : {}),
+        }, status);
       }
     },
     });
