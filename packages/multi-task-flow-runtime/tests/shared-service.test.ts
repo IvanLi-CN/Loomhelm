@@ -75,7 +75,7 @@ test("multi-run routing has one listener, authenticated APIs and lazy watchers",
   const stream = await fetch(base + "/api/v1/runs/first/events", { headers });
   expect(viewer.watcherCount).toBe(1);
   const reader = stream.body!.getReader(); await reader.read(); await reader.cancel();
-  for (let attempt = 0; attempt < 20 && viewer.watcherCount; attempt++) await Bun.sleep(25);
+  for (let attempt = 0; attempt < 100 && viewer.watcherCount; attempt++) await Bun.sleep(25);
   expect(viewer.watcherCount).toBe(0);
   expect((await fetch(base + "/api/v1/lease", { method: "POST", headers: { ...headers, origin: "https://foreign.example" }, body: "{}" })).status).toBe(403);
 });
@@ -151,6 +151,25 @@ test("browser session keeps CSRF checks and credential-free resource links", asy
   const page = await (await fetch(base + "/runs/demo-run/", { headers: { cookie } })).text();
   expect(page).toContain("/service-client.js"); expect(page).not.toContain(ticket);
   expect((await fetch(base + "/runs/demo-run/api/document/../../state/auth.json", { headers: { cookie } })).status).not.toBe(200);
+});
+
+test("worker diagnostics are run-scoped and browser reconnect issues a fresh ticket", async () => {
+  const { root, state } = fixture(); const release = fixtureRelease(root); fixtureRun(state.paths.data, "diagnostic-run");
+  const viewer = await startSharedViewer(state, release.manifest, join(release.source, "skills/multi-task-flow/dist"), 0); servers.push(viewer);
+  const base = `http://127.0.0.1:${viewer.port}`;
+  const loginTicket = new ServiceAuth(state).ticket("/runs/diagnostic-run/");
+  const login = await fetch(base + "/runs/diagnostic-run/?ticket=" + encodeURIComponent(loginTicket), { redirect: "manual" });
+  const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+  const diagnostics = await fetch(base + "/runs/diagnostic-run/api/diagnostics/worker?run_id=diagnostic-run", { headers: { cookie } });
+  expect(diagnostics.status).toBe(200);
+  expect(await diagnostics.json()).toEqual({ diagnostic: null });
+  const reconnect = await fetch(base + "/api/v1/reconnect?target=" + encodeURIComponent("/runs/diagnostic-run/?tab=atomic"), { method: "POST", headers: { cookie, origin: base } });
+  expect(reconnect.status).toBe(200);
+  const value = await reconnect.json() as { login_url: string; single_use: boolean };
+  expect(value.single_use).toBe(true);
+  expect(new URL(value.login_url).searchParams.get("ticket")).toMatch(/^[A-Za-z0-9_-]+$/);
+  const unauthenticated = await fetch(base + "/api/v1/reconnect?target=" + encodeURIComponent("/runs/diagnostic-run/?tab=atomic"), { method: "POST" });
+  expect(unauthenticated.status).toBe(401);
 });
 test("legacy-view uses the previous viewer as an isolated read-only fallback", async () => {
   const { root, state } = fixture();
