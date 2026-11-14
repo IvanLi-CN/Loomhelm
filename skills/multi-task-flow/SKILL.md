@@ -1,7 +1,7 @@
 ---
 name: multi-task-flow
 description: 通过隔离的 JSON 账本、按需创建的交付单元和任务对话、PR 协调及已认证的本地仪表板，编排依赖驱动的 Codex 任务。
-version: 2.7.7
+version: 2.7.8
 ---
 
 # Multi-task flow
