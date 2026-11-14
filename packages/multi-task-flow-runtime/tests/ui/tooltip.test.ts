@@ -31,6 +31,34 @@ test("focus opens immediately; Escape closes only the tooltip and outside click 
   expect(tooltip.hidden).toBe(true);
 });
 
+test("suppresses the one focus caused by opening a panel", () => {
+  const { trigger, tooltip } = fixture();
+  trigger.dataset.suppressTooltipFocus = "true";
+
+  trigger.focus();
+
+  expect(tooltip.hidden).toBe(true);
+  expect(trigger.dataset.suppressTooltipFocus).toBeUndefined();
+});
+
+test("keeps a clicked control tooltip closed until the pointer leaves", async () => {
+  const { trigger, tooltip } = fixture();
+  pointer(trigger, "pointerenter", 0, 0, "mouse");
+  await pause(280);
+  expect(tooltip.hidden).toBe(false);
+
+  pointer(trigger, "pointerdown", 0, 0, "mouse");
+  pointer(trigger, "pointerup", 0, 0, "mouse");
+  trigger.focus();
+  await pause(280);
+  expect(tooltip.hidden).toBe(true);
+
+  pointer(trigger, "pointerleave", 0, 0, "mouse");
+  pointer(trigger, "pointerenter", 0, 0, "mouse");
+  await pause(280);
+  expect(tooltip.hidden).toBe(false);
+});
+
 test("hover respects its delay and blur dismisses a focus tooltip", async () => {
   const { trigger, tooltip, outside } = fixture();
   pointer(trigger, "pointerenter", 0, 0, "mouse");
