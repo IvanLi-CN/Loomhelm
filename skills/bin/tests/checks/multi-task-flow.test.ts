@@ -123,6 +123,9 @@ test("multi-task-flow documents the coordinator-only native conversation boundar
   expect(skill).toContain("capability gap");
   expect(skill).toContain("orphan thread / orchestration violation");
   expect(skill).toContain("释放 claim 或容量");
+  expect(skill).toContain("原子图 MUST 明确声明开始节点、结束节点、里程碑节点和全部 `atomic_edges`");
+  expect(skill).toContain("系统预设的交付单元生命周期原子只提供节点定义，不提供依赖关系");
+  expect(skill).toContain("orphan thread / orchestration violation");
 });
 
 test("multi-task-flow task-local direct delivery requires an open PR", () => {

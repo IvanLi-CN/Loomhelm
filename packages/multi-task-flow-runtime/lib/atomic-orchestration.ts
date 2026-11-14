@@ -202,6 +202,25 @@ export function validateAtomicGraph(nodes: readonly AtomicNode[], edges: readonl
   }
 }
 
+export function validateAtomicBoundaries(nodes: readonly AtomicNode[], edges: readonly AtomicEdge[]): void {
+  const starts = nodes.filter((node): node is Extract<AtomicNode, { kind: "boundary" }> => node.kind === "boundary" && node.boundary === "start");
+  const ends = nodes.filter((node): node is Extract<AtomicNode, { kind: "boundary" }> => node.kind === "boundary" && node.boundary === "end");
+  if (starts.length !== 1 || ends.length !== 1) throw new Error("Contract-3 atomic graph requires exactly one start and one end boundary");
+  const incoming = new Set(edges.map((edge) => edge.to_node_id));
+  const outgoing = new Set(edges.map((edge) => edge.from_node_id));
+  if (incoming.has(starts[0]!.id) || outgoing.has(ends[0]!.id)) throw new Error("Atomic start/end boundaries have invalid direction");
+  const adjacency = new Map<string, string[]>();
+  for (const edge of edges) adjacency.set(edge.from_node_id, [...(adjacency.get(edge.from_node_id) ?? []), edge.to_node_id]);
+  const reachable = (from: string, target: string): boolean => {
+    const seen = new Set<string>();
+    const visit = (node: string): boolean => node === target || (!seen.has(node) && (seen.add(node), (adjacency.get(node) ?? []).some(visit)));
+    return visit(from);
+  };
+  for (const node of nodes) {
+    if (!reachable(starts[0]!.id, node.id) || !reachable(node.id, ends[0]!.id)) throw new Error(`Atomic node ${node.id} is outside the start/end path`);
+  }
+}
+
 /**
  * Materialize the contract-3 atomic projection for a newly initialized plan.
  * Legacy atom definitions remain in the plan for compatibility, but they must
@@ -266,28 +285,10 @@ export function canonicalizeContract3Plan(
     const matching = atomicNodes.find((node: any) => node.scope?.kind === "delivery_unit" && node.scope.delivery_unit_id === atom.group_id && node.id === atom.id);
     nodeIdForLegacyAtom.set(atom.id, matching?.id ?? atom.id);
   }
-  const planNodeToAtomicNode = new Map<string, string>();
-  for (const node of rawPlan.nodes ?? []) {
-    const taskId = node.kind === "task" ? node.ref_id : null;
-    const atomicId = taskId ? nodeIdForLegacyAtom.get(taskId) : nodeIdForLegacyAtom.get(node.id);
-    if (atomicId) planNodeToAtomicNode.set(node.id, atomicId);
-  }
-  for (const node of atomicNodes) {
-    const scope = node.scope;
-    if (node.kind === "work" && scope?.kind === "task") {
-      for (const planNode of rawPlan.nodes ?? [])
-        if (planNode.kind === "task" && planNode.ref_id === scope.task_id) planNodeToAtomicNode.set(planNode.id, node.id);
-    }
-  }
   const declaredEdges = Array.isArray(rawPlan.atomic_edges) ? rawPlan.atomic_edges : [];
-  const derivedEdges = (rawPlan.edges ?? []).flatMap((edge: any) => {
-    const from = planNodeToAtomicNode.get(edge.from_node_id);
-    const to = planNodeToAtomicNode.get(edge.to_node_id);
-    return from && to && from !== to
-      ? [{ id: `atomic-${edge.id}`, from_node_id: from, to_node_id: to, requires: { kind: "source_terminal_success" } }]
-      : [];
-  });
-  const edgeCandidates = [...declaredEdges, ...(declaredEdges.length ? [] : derivedEdges)];
+  // Contract 3 never infers atomic dependencies from the task/group graph.
+  // The Agent must declare every atomic edge explicitly.
+  const edgeCandidates = declaredEdges;
   const atomicEdges = edgeCandidates.filter((edge: any, index: number, all: any[]) => {
     const key = `${edge.from_node_id ?? edge.from_atom_id}->${edge.to_node_id ?? edge.to_atom_id}`;
     return all.findIndex((candidate: any) => `${candidate.from_node_id ?? candidate.from_atom_id}->${candidate.to_node_id ?? candidate.to_atom_id}` === key) === index;

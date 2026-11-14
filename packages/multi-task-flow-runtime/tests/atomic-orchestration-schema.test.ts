@@ -121,7 +121,7 @@ test("materializes legacy task and delivery-unit atoms into the contract-3 graph
   expect(() => validateAtomicGraph(plan.atomic_nodes, plan.atomic_edges)).not.toThrow();
 });
 
-test("derives atomic dependencies from the legacy task graph when no atom edges were declared", () => {
+test("does not derive atomic dependencies from the legacy task graph when no atom edges were declared", () => {
   const plan = canonicalizeContract3Plan({
     atoms: [
       { id: "atom-a", title: "A", task_id: "task-a", purpose: "A", output: "A" },
@@ -138,12 +138,7 @@ test("derives atomic dependencies from the legacy task graph when no atom edges 
     { id: "task-b", group_id: "du-1", kind: "contribution" },
   ]);
 
-  expect(plan.atomic_edges).toEqual([{
-    id: "atomic-task-edge",
-    from_node_id: "atom-a",
-    to_node_id: "atom-b",
-    requires: { kind: "source_terminal_success" },
-  }]);
+  expect(plan.atomic_edges).toEqual([]);
   expect(() => validateAtomicGraph(plan.atomic_nodes, plan.atomic_edges)).not.toThrow();
 });
 

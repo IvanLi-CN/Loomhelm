@@ -4,7 +4,7 @@ import { posix as posixPath } from "node:path";
 import { z } from "zod";
 import { topologicalOrder, validateGrouping } from "../lib/graph";
 import { requireCondition } from "../lib/errors";
-import { atomicNode, atomicEdge as canonicalAtomicEdge, taskPrBinding, deliveryUnitExternalFacts, validateAtomicGraph, validateDeliveryUnitLifecycleEdges } from "../lib/atomic-orchestration";
+import { atomicNode, atomicEdge as canonicalAtomicEdge, taskPrBinding, deliveryUnitExternalFacts, validateAtomicGraph, validateAtomicBoundaries, validateDeliveryUnitLifecycleEdges } from "../lib/atomic-orchestration";
 
 export const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
 const text = z.string().trim().min(1);
@@ -1486,6 +1486,13 @@ export function validatePlan(candidate: Plan): void {
       "Contract-3 atomic plans must use node-based atomic edges",
     );
     validateAtomicGraph(candidate.atomic_nodes, candidate.atomic_edges as any);
+    if (candidate.atomic_nodes.some((node) => node.kind === "boundary")) {
+      try {
+        validateAtomicBoundaries(candidate.atomic_nodes, candidate.atomic_edges as any);
+      } catch (error) {
+        requireCondition(false, "ATOMIC_GRAPH_INCOMPLETE", error instanceof Error ? error.message : String(error));
+      }
+    }
     const canonicalById = new Map(candidate.atomic_nodes.map((node) => [node.id, node]));
     for (const atom of candidate.atoms) {
       const node = canonicalById.get(atom.id);
@@ -1508,6 +1515,9 @@ export function validatePlan(candidate: Plan): void {
     } catch (error) {
       requireCondition(false, "ATOMIC_GRAPH_INCOMPLETE", error instanceof Error ? error.message : String(error));
     }
+  }
+  for (const task of (candidate.tasks ?? []).filter((item) => isContributionKind(item.kind))) {
+    requireCondition(candidate.atoms.some((atom) => atom.task_id === task.id), "MISSING_CONTRIBUTION_ATOM", `Contribution task ${task.id} must declare at least one atomic task`);
   }
   validateGrouping(
     candidate.atoms,
