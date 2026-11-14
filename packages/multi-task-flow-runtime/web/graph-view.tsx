@@ -56,7 +56,7 @@ export function createGraphController(context: GraphContext, calculateLayout = l
   root.render(<Surface/>);
   function render(tasks: Task[], visibleGroupIds?: ReadonlySet<string>) {
     latest=tasks;latestGroupIds=visibleGroupIds;const data=context.getData();if(!data)return;
-    const next=buildGraphProjection(data,new Set(tasks.map(t=>t.id)),visibleGroupIds);
+    const next=buildGraphProjection(data,new Set(tasks.map(t=>t.id)),visibleGroupIds,{includeMilestones:false});
     context.element('graph-empty').hidden=next.nodes.length>0;
     const warning=context.element('graph-projection-warning');warning.hidden=!next.warnings.length;warning.textContent=next.warnings.join(' ');
     projection=next;renderAccessibleNodes(next,context);

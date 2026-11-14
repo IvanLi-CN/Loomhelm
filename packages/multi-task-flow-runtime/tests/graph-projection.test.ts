@@ -41,6 +41,15 @@ describe("dashboard graph projection", () => {
     expect(sourceNodes.map((node) => node.fullLabel).join(" ")).not.toMatch(/开始|结束/);
   });
 
+  test("aggregate dependency graph can hide milestone nodes while preserving collapsed paths", () => {
+    const view = demoView();
+    const projection = buildGraphProjection(view, undefined, undefined, { includeMilestones: false });
+
+    expect(projection.nodes.some((node) => node.nodeKind === "milestone")).toBe(false);
+    expect(projection.nodes.filter((node) => node.nodeKind === "task")).toHaveLength(view.tasks.length);
+    expect(projection.edges.length).toBeGreaterThan(0);
+  });
+
   test("collapses only hidden boundary nodes and preserves explicit gate provenance", () => {
     const view = demoView();
     const before = JSON.stringify(view);
