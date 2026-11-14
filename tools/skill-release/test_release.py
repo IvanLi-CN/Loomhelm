@@ -151,6 +151,8 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertEqual(workflow.count('npm publish "$tarball"'), 1)
         self.assertNotIn('npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>/dev/null || true', workflow)
         self.assertIn("no dist-tag", workflow)
+        self.assertIn("for attempt in 1 2 3 4 5", workflow)
+        self.assertIn("bounded reconciliation", workflow)
         self.assertIn("'state': 'candidate-validated'", workflow)
         self.assertIn("name: release-identity", workflow)
         self.assertLess(

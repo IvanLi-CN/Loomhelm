@@ -864,15 +864,24 @@ jobs:
             local tag="$1"
             local current
             local tag_error="$RUNNER_TEMP/skill-release-dist-tag-${tag}.err"
-            if ! current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>"$tag_error")"; then
-              if grep -Eiq 'E404|404|not found|no dist-tag' "$tag_error"; then
-                current=
-              else
-                echo "cannot read npm dist-tag: $tag" >&2
-                cat "$tag_error" >&2
-                exit 1
-              fi
-            fi
+            read_tag() {
+              local attempt
+              for attempt in 1 2 3 4 5; do
+                if current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>"$tag_error")"; then
+                  printf '%s' "$current"
+                  return 0
+                fi
+                if grep -Eiq 'E404|404|not found|no dist-tag' "$tag_error"; then
+                  printf '%s' ''
+                  return 0
+                fi
+                if [ "$attempt" -lt 5 ]; then sleep $((attempt * 2)); fi
+              done
+              echo "cannot read npm dist-tag: $tag" >&2
+              cat "$tag_error" >&2
+              return 1
+            }
+            current="$(read_tag)"
             action="$(python3 tools/skill-release/release.py dist-tag-policy --current "$current" --target "$VERSION")"
             if [ "$action" = promote ]; then
               npm dist-tag add "$PACKAGE_NAME@$VERSION" "$tag"
@@ -880,20 +889,24 @@ jobs:
               echo "unsupported dist-tag action: $action" >&2
               exit 1
             fi
-            if ! current="$(npm view "$PACKAGE_NAME" "dist-tags.$tag" --json 2>"$tag_error")"; then
-              echo "cannot read npm dist-tag after promotion: $tag" >&2
-              cat "$tag_error" >&2
-              exit 1
-            fi
-            CURRENT="$current" VERSION="$VERSION" TAG="$tag" python3 - <<'PY'
+            for attempt in 1 2 3 4 5; do
+              current="$(read_tag)"
+              if CURRENT="$current" VERSION="$VERSION" TAG="$tag" python3 - <<'PY'
           import json
           import os
 
           current = json.loads(os.environ['CURRENT'])
           target = os.environ['VERSION']
           if current != target:
-              raise SystemExit(f'dist-tag {os.environ["TAG"]!r} resolved to {current!r}, expected {target!r}')
+              raise SystemExit(1)
           PY
+              then break; fi
+              if [ "$attempt" -eq 5 ]; then
+                echo "dist-tag '$tag' resolved to '$current', expected '$VERSION' after bounded reconciliation" >&2
+                exit 1
+              fi
+              sleep $((attempt * 2))
+            done
             update_tag_receipt "$tag" "$VERSION" "promotion-$tag"
           }
           promote "$COMPATIBILITY_LINE"
