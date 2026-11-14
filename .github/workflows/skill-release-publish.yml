@@ -650,7 +650,9 @@ jobs:
               ;;
           esac
           reconcile_state=
-          for delay in 0 2 4 8 16 32; do
+          # npm may accept the write before its public metadata and tarball become readable.
+          # Keep the candidate frozen and reconcile for about 15 minutes first.
+          for delay in 0 5 15 30 60 120 240 480; do
             if [ "$delay" -gt 0 ]; then sleep "$delay"; fi
             reconcile_state="$(observe_exact reconcile)"
             case "$reconcile_state" in
