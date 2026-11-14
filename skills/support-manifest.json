@@ -42,7 +42,6 @@
   "skills/multi-task-flow/scripts/check-client-skills.ts",
   "skills/multi-task-flow/tests/check-skills-installation.test.ts",
   "skills/multi-task-flow/scripts/check-skills-installation.ts",
-  "skills/multi-task-flow/scripts/import-client-skills.ts",
   "skills/multi-task-flow/scripts/package-client-skills.ts",
   "skills/multi-task-flow/lib/package-source.ts",
   "skills/multi-task-flow/scripts/test-skills-artifact.ts",

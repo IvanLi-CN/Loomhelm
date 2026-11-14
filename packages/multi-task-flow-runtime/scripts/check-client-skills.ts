@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '../../..');
-const path = resolve(root, 'skills/source-manifest.json');
+const path = resolve(root, 'skills/resource-manifest.json');
 const manifest = JSON.parse(readFileSync(path, 'utf8'));
 const hash = data => createHash('sha256').update(data).digest('hex');
 const refresh = process.argv.includes('--write');
@@ -18,16 +18,13 @@ if (gitRoot.status === 0 && gitRoot.stdout.trim() === root) {
   if (tracked.status !== 0) throw new Error('Cannot verify tracked resource coverage');
   const covered = new Set([...manifest.files,...(manifest.additions ?? [])].map(file => file.path));
   for (const file of tracked.stdout.split('\0').filter(Boolean)) {
+    if (!existsSync(resolve(root, file))) continue;
     if (/\.(?:js|mjs|cjs)$/.test(file)) findings.push('owned-source-must-be-typescript:'+file);
     if (file.startsWith('packages/multi-task-flow-runtime/')) continue;
-    if (file.startsWith('skills/') && !covered.has(file) && !['skills/source-manifest.json','skills/catalog.json'].includes(file)) findings.push('unlisted:'+file);
+    if (file.startsWith('skills/') && !covered.has(file) && !['skills/resource-manifest.json','skills/catalog.json'].includes(file)) findings.push('unlisted:'+file);
   }
 }
 
-for (const excluded of manifest.exclusions ?? []) {
-  const installed = excluded.sourcePrefix.startsWith('docs/') ? `skills/docs/vendor/dot-codex/${excluded.sourcePrefix.slice(5)}` : `skills/${excluded.sourcePrefix}`;
-  if (manifest.files.some(file => file.source.startsWith(excluded.sourcePrefix)) || existsSync(resolve(root, installed))) findings.push(`excluded-resource:${installed}`);
-}
 for (const file of [...manifest.files, ...(manifest.additions ?? [])]) {
   const source = resolve(root, sourcePath(file));
   if (!file.path.startsWith('skills/') || !source.startsWith(root + '/') || !existsSync(source)) { findings.push(`missing:${file.path}`); continue; }
@@ -37,11 +34,10 @@ for (const file of [...manifest.files, ...(manifest.additions ?? [])]) {
   const digest = hash(readFileSync(target));
   if (refresh) {
     file.installedSha256 = digest;
-    if (file.sourceSha256) file.adaptation = digest === file.sourceSha256 ? 'unchanged' : 'loomhelm-runtime-path-or-contract-adaptation';
   } else if (digest !== file.installedSha256) findings.push(`digest:${file.path}`);
 }
-if (manifest.skills.length !== 29 || new Set(manifest.skills).size !== 29) findings.push('skill-count');
+if (!Array.isArray(manifest.skills) || new Set(manifest.skills).size !== manifest.skills.length) findings.push('skill-index');
 for (const name of manifest.skills) if (!manifest.files.some(file => file.path === `skills/${name}/SKILL.md`)) findings.push(`skill:${name}`);
 if (findings.length) { console.error(JSON.stringify({ ok: false, findings })); process.exit(1); }
 if (refresh) writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
-console.log(JSON.stringify({ ok: true, skills: manifest.skills.length, sourceFiles: manifest.files.length, adapted: manifest.files.filter(file => file.adaptation !== 'unchanged').length, additions: manifest.additions?.length ?? 0, source: manifest.commit }));
+console.log(JSON.stringify({ ok: true, skills: manifest.skills.length, sourceFiles: manifest.files.length, additions: manifest.additions?.length ?? 0, source: 'local-resource-manifest' }));

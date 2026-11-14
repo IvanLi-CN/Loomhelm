@@ -38,7 +38,7 @@ version: 2.7.7
 
 新运行只接收本 Skill 的仓库、交付单元、任务、依赖、所有权和验收输入。`init` 拒绝 dev-plan 专用字段，也不要求 plan digest、handoff envelope 或外部计划来源。任务 Agent（Task Agent）可以为自己的直接 PR 调用 `$fast-flow`，主 Agent（main Agent）仍保留任务图、账本、parent PR 和交付单元收口责任。
 
-为了获取模型、合同和展示要求，读取 dot-codex 源安装中的 `<skill>/../../skills/docs/vendor/dot-codex/specs/multi-task-flow/SPEC.md` 和 `<skill>/../../skills/docs/vendor/dot-codex/design/multi-task-flow/{orchestration,execution,data-and-scripts,web-template,plan-revision-and-change-audit}.md` ，不要读取目标项目中同名文件。命令中的 `<skill>` 必须指向已安装 Skill 目录，除非明确测试候选 checkout，否则不能指向候选 checkout。依赖安装使用 `bun install --frozen-lockfile`，本地资源构建从 `<skill>` 目录执行 `bun --no-install run build`。正式运行独立存在于 `~/.local/share/multi-task-flow/data/runs/`，不受 Skill 安装目录和 `CODEX_HOME` 影响。查看或维护 viewer 前读取 `references/shared-viewer.md`。代码升级不会重写运行数据。历史只读运行升级 viewer 不需要迁移；只有写能力新近丢失时，才需要准确的兼容性报告批准。主人批准的维护迁移使用 `references/shared-viewer.md` 中的独立 `ledger-maintenance-check` / `ledger-maintenance-apply` 命令，保留原所有者，不得冒充所有者。普通绑定主会话的迁移权限不变。
+为了获取模型、合同和展示要求，读取当前 Skill 包内对应的 SPEC 和 design references；不要把运行时输入解析为外部仓库源文件。命令中的 `<skill>` 必须指向已安装 Skill 目录，除非明确测试候选 checkout，否则不能指向候选 checkout。依赖安装使用 `bun install --frozen-lockfile`，本地资源构建从 `<skill>` 目录执行 `bun --no-install run build`。正式运行独立存在于 `~/.local/share/multi-task-flow/data/runs/`，不受 Skill 安装目录和 `CODEX_HOME` 影响。查看或维护 viewer 前读取 `references/shared-viewer.md`。代码升级不会重写运行数据。历史只读运行升级 viewer 不需要迁移；只有写能力新近丢失时，才需要准确的兼容性报告批准。主人批准的维护迁移使用 `references/shared-viewer.md` 中的独立 `ledger-maintenance-check` / `ledger-maintenance-apply` 命令，保留原所有者，不得冒充所有者。普通绑定主会话的迁移权限不变。
 
 ## 计划与调度
 

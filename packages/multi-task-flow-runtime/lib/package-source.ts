@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { dirname, join, resolve } from 'node:path';
 export const digest = value => createHash('sha256').update(value).digest('hex');
 export function copySkillSources(root, output, { dependencies = false } = {}) {
-  const manifest = JSON.parse(readFileSync(join(root, 'skills/source-manifest.json'), 'utf8'));
+  const manifest = JSON.parse(readFileSync(join(root, 'skills/resource-manifest.json'), 'utf8'));
   const files = new Map();
   const copy = (path, expected, sourcePath = path) => {
     const source = resolve(root, sourcePath);
@@ -21,7 +21,7 @@ export function copySkillSources(root, output, { dependencies = false } = {}) {
     files.set(path, digest(packagedContents));
   };
   for (const file of [...manifest.files, ...(manifest.additions ?? [])]) copy(file.path, file.installedSha256, file.sourcePath ?? file.path);
-  for (const path of ['skills/source-manifest.json', 'skills/catalog.json']) copy(path);
+  for (const path of ['skills/resource-manifest.json', 'skills/catalog.json']) copy(path);
   for (const name of ['index.html','app.js','app.css']) copy('skills/multi-task-flow/dist/' + name, undefined, 'packages/multi-task-flow-runtime/dist/' + name);
   if (dependencies) {
     const walk = (path, outputPrefix) => {

@@ -10,7 +10,7 @@ Multi-task Flow proposal quality gates, structured acceptance contracts and expl
 
 Viewer 维护按 [ADR 0026](../../adr/0026-viewer-compatibility-lifecycle.md) 执行：最新 viewer 保持受支持历史格式的双读，旧 viewer 只读兜底与写入路径隔离，无法证明读取安全时在服务控制前阻塞升级。旧格式测试、迁移测试、只读兜底测试和拒绝路径测试长期保留。
 
-根 `skills/` 保存可发布 Skill、references、上游合同归档和共享安装支持；`packages/multi-task-flow-runtime/` 保存 Multi-task Flow 的内部 runtime、viewer/service、构建脚本、测试和依赖。`skills/source-manifest.json` 以 `path` 记录 npm 包内的 Skill 资源，以 `sourcePath` 记录其 runtime 源文件；构建器在打包时完成这层映射。资源校验不执行专项外部操作，不将源包存在视为宿主能力可用。
+根 `skills/` 保存源 Skill、references、测试及模板，根 `skills/bin/` 保存共享执行模块；资源合同和实现均以当前仓库内容为准。`skills/resource-manifest.json` 保存本地资源路径、逐文件摘要和安装摘要，`skills/catalog.json` 提供入口、脚本和条件性外部依赖。资源校验不执行专项外部操作，不将源包存在视为宿主能力可用。
 
 生产仅使用 Bun 1.4.4 直接运行 TS。源码打包保留模块和完整资源路径，无服务端 JS 编译或导入后缀改写。计划 finalizer 从校验过的 TS 描述符读取私有快照，清理预加载和配置环境；POSIX 操作通过 Bun 内置 FFI 保留原子不覆盖重命名、目录描述符相对操作与原 flock 互斥，不构建 Node-API 模块。
 

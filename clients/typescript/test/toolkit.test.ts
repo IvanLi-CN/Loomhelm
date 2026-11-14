@@ -114,11 +114,11 @@ test('missing runtime dependencies fail without registry access or cache writes'
     const scriptContents=`import ${JSON.stringify(dependency)}; console.log('unexpected execution');`;
     await writeFile(join(root,script),scriptContents);
     const scriptSha256=createHash('sha256').update(scriptContents).digest('hex');
-    await writeFile(join(root,'skills/source-manifest.json'),JSON.stringify({...await runtime.manifest(),files:[{path:script,source:script,sourceSha256:'',installedSha256:scriptSha256}]}));
+    await writeFile(join(root,'skills/resource-manifest.json'),JSON.stringify({...await runtime.manifest(),files:[{path:script,installedSha256:scriptSha256}]}));
     const template=await runtime.artifact();
     const files=[
       {path:'skills/bin/no-install-probe.ts',sha256:scriptSha256},
-      {path:'skills/source-manifest.json',sha256:createHash('sha256').update(await readFile(join(root,'skills/source-manifest.json'))).digest('hex')},
+      {path:'skills/resource-manifest.json',sha256:createHash('sha256').update(await readFile(join(root,'skills/resource-manifest.json'))).digest('hex')},
       {path:'.npmrc',sha256:createHash('sha256').update(npmrc).digest('hex')},
     ];
     const {buildId: _templateBuildId, ...identityWithoutBuildId}=template.identity;

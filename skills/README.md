@@ -1,12 +1,12 @@
 # 客户端 Skills 资源索引
 
-本目录完整迁入批准的 29 套 dot-codex 自有源包；固定源提交、逐文件摘要和迁移适配见 `source-manifest.json`，依赖与脚本发现见 `catalog.json`。独立可复用的外部 Skills 仍由宿主提供，不复制其源包。上游合同归档在 `skills/docs/vendor/dot-codex/`，不覆盖项目 Policy。
+本目录包含本地运行所需的 29 套 Skill 资源；逐文件摘要和资源索引见 `resource-manifest.json`，依赖与脚本发现见 `catalog.json`。资源索引只描述当前仓库文件，不声明外部来源。
 
 生产仅支持 Bun 1.4.4；`bun clients/typescript/src/cli.ts skills list/check/run` 直接执行 TS。`skills run <资源相对路径>` 不改写脚本后缀；`LOOMHELM_TOOLKIT_ROOT` 指向包内 `toolkit/` 或本仓库资源根。vendor 仅检出 `skills/` 后，使用 Bun 和锁文件准备声明依赖即可运行脚本；浏览器资产单独构建，不要求本机 TS 编译、Node 或项目原生模块。专项操作仍需要原授权、外部工具和宿主能力。
 
-This directory contains only Skills whose contracts are coupled to this Codex configuration, its workflow state, native task lifecycle, owner-facing evidence, or private service layout. These Skills are intentionally not part of the public `agent-toolkit` source.
+This directory contains the Skill resources required by this Loomhelm runtime and its owner-facing workflow integration.
 
-Standalone reusable Skills are maintained in [agent-toolkit](https://github.com/IvanLi-CN/agent-toolkit) and consumed from its direct checkout or per-Skill symlinks. Do not copy public Skill files into this directory.
+The local resource index describes only the files present in this repository. It does not declare an external source repository.
 
 Run the local index check after changing this directory:
 
