@@ -38,6 +38,34 @@ describe("dashboard details content", () => {
     expect(document.querySelector("#details-content")?.textContent).toContain("创建父 PR");
     expect(document.querySelector("#details-content")?.textContent).not.toContain("贡献任务原子");
   });
+  test("milestone selection renders the milestone atomic task instead of the group lifecycle inspector", () => {
+    const group = { id: "g-bootstrap", title: "Bootstrap", state: "active", parent_pr: { url: null }, atoms: [{ id: "group-atom-merge", title: "合并父 PR", purpose: "", output: "", lifecycle_stage: "pr_merged", status: "planned" }] } as unknown as Group;
+    const view = {
+      groups: [group],
+      tasks: [],
+      nodes: [{ id: "milestone-accepted", kind: "milestone", ref_id: null, group_id: "g-bootstrap", planned_group_id: "g-bootstrap", label: "g-bootstrap 交付单元验收" }],
+      edges: [],
+      atomic_nodes: [{ kind: "milestone", id: "milestone-accepted", title: "g-bootstrap 交付单元验收", state: "planned", acceptance: [{}], scope: { kind: "delivery_unit", delivery_unit_id: "g-bootstrap" } }],
+      atomic_edges: [],
+      canonical_atomic_edges: [],
+      actual_milestones: [],
+      planned_intervals: [],
+      actual_intervals: [],
+      follow_prs: [],
+      plans: [],
+      warnings: [],
+      orchestration: { execution_profile: null },
+    } as unknown as View;
+    const details = createDetailContent({ getData: () => view, labels: { planned: "计划中" }, labelTask: () => "", time: () => "", safeExternal: () => null });
+    details.showMilestone("milestone-accepted", group, "group-atom-merge");
+    const content = document.querySelector("#details-content")?.textContent ?? "";
+    expect(document.querySelector("#details-content")?.dataset.detailKind).toBe("milestone");
+    expect(document.querySelector("#details-summary")?.textContent).toContain("g-bootstrap 交付单元验收");
+    expect(content).toContain("里程碑原子任务");
+    expect(content).toContain("验收条件1 项");
+    expect(content).toContain("关联原子任务合并父 PR");
+    expect(content).not.toContain("交付协调者");
+  });
   test("group details include the full Agent output at the end", () => {
     const group = { id: "core", title: "核心", state: "closed", agent_thread_id: "thread-group", parent_pr: { url: null }, latest_agent_output: { thread_id: "thread-group", agent_state: "idle", stale: false, state: "available", text: "交付单元已完成", turn_id: null, message_id: null, phase: null, message_status: null, observed_at: null } } as Group;
     const view = { groups: [group], tasks: [], actual_intervals: [] } as unknown as View;

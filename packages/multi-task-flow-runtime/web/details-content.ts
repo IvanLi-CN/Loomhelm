@@ -155,7 +155,7 @@ function dependenciesFor(projection: ReturnType<typeof buildGraphProjection>, no
 }
 
 export function createDetailContent(context: DetailContentContext) {
-  function begin(kind: "task" | "group", id: string, title: string, state: string) {
+  function begin(kind: "task" | "group" | "milestone", id: string, title: string, state: string) {
     const container = document.getElementById("details-content")!;
     const selection = `${kind}:${id}`;
     const top = container.dataset.selection === selection ? container.scrollTop : 0;
@@ -300,13 +300,30 @@ export function createDetailContent(context: DetailContentContext) {
     const progress = atoms.length === 0 ? "未配置原子任务" : atoms.every((item) => item.status === "completed") ? `${atoms.length}/${atoms.length} · 已完成` : atom ? `${atoms.indexOf(atom) + 1}/${atoms.length} · ${atom.title}` : `0/${atoms.length} · 待开始`;
     return renderGroupPreview({ title: group.title, state: context.labels[executionState] ?? executionState, atomProgress: progress, duration: formatDuration(group.started_at ?? null, group.finished_at ?? null), conversation: group.delivery_unit_kind === "bootstrap" ? "主对话" : group.agent_thread_id ? "已创建" : "尚未创建", parentPr: context.safeExternal(group.parent_pr?.url ?? null) ? "已关联" : "尚未创建" });
   };
-  const showMilestone = (nodeId: string, group: Group): void => {
+  const showMilestone = (nodeId: string, group: Group, focusedAtomId: string | null = null): void => {
     const data = context.getData();
     const node = data?.nodes.find((item) => item.id === nodeId && item.kind === "milestone");
-    const focusedAtomId = group.atoms?.find((atom) => atom.lifecycle_stage === "pr_merged")?.id ?? group.planned_atoms?.find((atom) => atom.lifecycle_stage === "pr_merged")?.id ?? null;
-    showGroup(group, focusedAtomId);
-    const summary = document.getElementById("details-summary");
-    if (summary && node) summary.replaceChildren(text("div", node.label, "detail-title"), text("div", "里程碑", "detail-state"));
+    if (!data || !node) return;
+    const atomicNode = data.atomic_nodes?.find((item) => item.id === nodeId);
+    const occurredAt = (data.actual_milestones ?? []).find((item) => item.node_id === nodeId)?.occurred_at ?? null;
+    const status = atomicNode?.state ?? (occurredAt ? "completed" : "planned");
+    const { container, restore } = begin("milestone", node.id, node.label, "里程碑");
+    const facts = text("div", "", "detail-group-facts");
+    const projection = buildGraphProjection(data);
+    const predecessors = dependenciesFor(projection, node.id, "incoming", data);
+    const successors = dependenciesFor(projection, node.id, "outgoing", data);
+    field(facts, "类型", "里程碑原子任务");
+    field(facts, "所属交付单元", group.title);
+    field(facts, "状态", context.labels[status] ?? status);
+    field(facts, "前驱", renderDependencyTooltip(predecessors, predecessors.length ? `查看 ${predecessors.length} 项依赖` : "无依赖"));
+    field(facts, "后继", renderDependencyTooltip(successors, successors.length ? `查看 ${successors.length} 项依赖` : "无依赖"));
+    field(facts, "验收条件", `${atomicNode?.acceptance?.length ?? 0} 项`);
+    field(facts, "发生时间", renderTimestamp(occurredAt));
+    const relatedAtoms = [...(group.atoms ?? group.planned_atoms ?? [])];
+    const relatedAtom = focusedAtomId ? relatedAtoms.find((atom) => atom.id === focusedAtomId) : null;
+    if (relatedAtom) field(facts, "关联原子任务", relatedAtom.title);
+    container.append(facts);
+    restore();
   };
   return { clearDetails, showTask, showGroup, showMilestone, taskPreview, groupPreview };
 }
