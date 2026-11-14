@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createDemoLedger, createPlanningDemoLedger } from "../examples/orchestration-viewer/ledger";
-import { plan, validateSchedulablePlan } from "../lib/schema";
+import { plan, theoreticalScheduleIssues, validateSchedulablePlan } from "../lib/schema";
 import { actualIntervals, buildView, planWarnings, plannedIntervals } from "../lib/view";
 import { initialOutput } from "../web/agent-output";
 import { rangeFromIntervals } from "../web/execution-range";
@@ -87,6 +87,23 @@ function addDefinitiveAbsentParentPrFact(ledger: ReturnType<typeof createPlannin
 }
 
 describe("timeline projections", () => {
+  test("rejects incomplete theoretical schedules before approval", () => {
+    const missing = theoreticalScheduleIssues(fixture([taskNode("missing", null)], []));
+    expect(missing).toEqual([expect.objectContaining({ code: "SCHEDULE_MISSING_DURATION", node_id: "missing" })]);
+    const nonPositive = theoreticalScheduleIssues(fixture([taskNode("zero", 0)], []));
+    expect(nonPositive).toEqual([expect.objectContaining({ code: "SCHEDULE_NONPOSITIVE_DURATION", node_id: "zero" })]);
+  });
+
+  test("reports dangling and cyclic dependencies as schedule blockers", () => {
+    const dangling = theoreticalScheduleIssues(fixture([taskNode("a", 30)], [{ id: "dangling", from_node_id: "missing", to_node_id: "a", requires: "integrated" }]));
+    expect(dangling.some((issue) => issue.code === "SCHEDULE_DANGLING_DEPENDENCY")).toBe(true);
+    const cyclic = theoreticalScheduleIssues(fixture([taskNode("a", 30), taskNode("b", 30)], [
+      { id: "a-b", from_node_id: "a", to_node_id: "b", requires: "integrated" },
+      { id: "b-a", from_node_id: "b", to_node_id: "a", requires: "integrated" },
+    ]));
+    expect(cyclic.some((issue) => issue.code === "SCHEDULE_CYCLE")).toBe(true);
+  });
+
   test("rejects incomplete plans before formal scheduling", () => {
     expect(() => validateSchedulablePlan(fixture([taskNode("a", null)], []))).toThrow("缺少原子任务");
     const complete = plan.parse({ id: "complete", supersedes_id: null, approval_id: null, created_at: at, start_at: null, atoms: [{ id: "atom-a", title: "a", task_id: "a", purpose: "work", output: "done" }], atomic_edges: [], nodes: [{ ...taskNode("a", 30), estimate_basis: "fixture", estimate_confidence: "medium" }], edges: [], cut_rules: [], actions: [] });
