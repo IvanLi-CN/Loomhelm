@@ -300,7 +300,11 @@ export function canonicalizeContract3Plan(
       if (from && to) derivedEdges.push({ id: `atomic-lifecycle-${groupId}-${index}`, from_node_id: from, to_node_id: to, requires: { kind: "source_terminal_success" } });
     }
   }
-  const atomicEdges = (declaredEdges.length ? declaredEdges : derivedEdges).map((edge: any) => {
+  const edgeCandidates = [...declaredEdges, ...derivedEdges];
+  const atomicEdges = edgeCandidates.filter((edge: any, index: number, all: any[]) => {
+    const key = `${edge.from_node_id ?? edge.from_atom_id}->${edge.to_node_id ?? edge.to_atom_id}`;
+    return all.findIndex((candidate: any) => `${candidate.from_node_id ?? candidate.from_atom_id}->${candidate.to_node_id ?? candidate.to_atom_id}` === key) === index;
+  }).map((edge: any) => {
     if ("from_node_id" in edge)
       return {
         id: edge.id,

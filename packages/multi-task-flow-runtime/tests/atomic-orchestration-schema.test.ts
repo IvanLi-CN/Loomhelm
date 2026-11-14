@@ -147,6 +147,26 @@ test("derives atomic dependencies from the legacy task graph when no atom edges 
   expect(() => validateAtomicGraph(plan.atomic_nodes, plan.atomic_edges)).not.toThrow();
 });
 
+test("keeps delivery-unit lifecycle edges when explicit atomic edges also exist", () => {
+  const plan = canonicalizeContract3Plan({
+    nodes: [],
+    edges: [],
+    atoms: [{ id: "task-atom", task_id: "task-1", title: "贡献实现", purpose: "", output: "" }],
+    group_atoms: [
+      { id: "group-prepare", group_id: "group-1", title: "准备父分支", purpose: "", output: "", lifecycle_stage: "workspace_ready" },
+      { id: "group-pr", group_id: "group-1", title: "创建父 PR", purpose: "", output: "", lifecycle_stage: "pr_created" },
+      { id: "group-verify", group_id: "group-1", title: "验收集成结果", purpose: "", output: "", lifecycle_stage: null },
+    ],
+    atomic_edges: [{ id: "explicit", from_atom_id: "task-atom", to_atom_id: "group-prepare" }],
+  }, [{ id: "task-1", group_id: "group-1", kind: "contribution" }]);
+
+  expect(plan.atomic_edges.map((edge: { from_node_id: string; to_node_id: string }) => `${edge.from_node_id}->${edge.to_node_id}`)).toEqual([
+    "task-atom->group-prepare",
+    "group-prepare->group-pr",
+    "group-pr->group-verify",
+  ]);
+});
+
 test("derives delivery-unit lifecycle order when legacy group atoms have no edges", () => {
   const plan = canonicalizeContract3Plan({
     atoms: [],
