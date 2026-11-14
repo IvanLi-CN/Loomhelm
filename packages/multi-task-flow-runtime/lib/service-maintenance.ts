@@ -104,6 +104,7 @@ function packageConfig(old: ServiceConfig | null, identity: PackageIdentity, reg
 }
 
 function assertPackageUpgradeCompatible(old: ServiceConfig, next: PackageIdentity): void {
+  if (!old.package_name) return;
   requireCondition(old.package_name === PACKAGE_NAME, "INCOMPATIBLE_RELEASE", "The installed service is not a supported package profile");
   requireCondition(old.compatibility_line === next.compatibility_line, "INCOMPATIBLE_RELEASE", "Package compatibility line changed; explicit migration is required");
   requireCondition(!old.service_contract || old.service_contract === next.contracts.service, "INCOMPATIBLE_RELEASE", "Package service contract changed; explicit migration is required");
@@ -139,6 +140,7 @@ export async function upgradePackageRelease(state: ServiceState, version: string
     assertPackageUpgradeCompatible(old, identity);
     const oldPlistPath = join(state.paths.config, "viewer.plist");
     const oldPlist = existsSync(oldPlistPath) ? readFileSync(oldPlistPath, "utf8") : null;
+    const wasRunning = state.runtime().phase === "running";
     const nextConfig = { ...packageConfig(old, identity, old.registry_dir), port: old.port };
     try {
       state.saveConfig(nextConfig);
@@ -149,6 +151,9 @@ export async function upgradePackageRelease(state: ServiceState, version: string
     } catch (error) {
       state.saveConfig(old);
       if (oldPlist !== null) writeAtomic(oldPlistPath, oldPlist);
+      if (wasRunning) {
+        try { startUserService(state); } catch { /* Preserve the original failure and runtime evidence. */ }
+      }
       throw error;
     }
   });

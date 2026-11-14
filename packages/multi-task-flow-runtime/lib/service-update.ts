@@ -48,14 +48,26 @@ function compareSemver(left: string, right: string): number {
   for (const index of [1, 2, 3]) { const delta = Number(a[index]) - Number(b[index]); if (delta) return delta; }
   if (!a[4] && b[4]) return 1;
   if (a[4] && !b[4]) return -1;
-  return (a[4] ?? "").localeCompare(b[4] ?? "");
+  if (!a[4] || !b[4]) return 0;
+  const leftParts = a[4].split("."); const rightParts = b[4].split(".");
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index++) {
+    const l = leftParts[index]; const r = rightParts[index];
+    if (l === undefined) return -1;
+    if (r === undefined) return 1;
+    if (l === r) continue;
+    const lNumeric = /^\d+$/.test(l); const rNumeric = /^\d+$/.test(r);
+    if (lNumeric && rNumeric) return Number(l) - Number(r);
+    if (lNumeric !== rNumeric) return lNumeric ? -1 : 1;
+    return l < r ? -1 : 1;
+  }
+  return 0;
 }
 
 export function triggerDaemonUpdateCheck(state: ServiceState): void {
   const config = state.config();
   if (!config.package_name || !config.package_version) return;
   const existing = readCache(state);
-  if (existing && Date.now() - Date.parse(existing.checked_at) <= CACHE_TTL_MS) return;
+  if (existing && existing.package_name === config.package_name && existing.compatibility_line === (config.compatibility_line ?? "") && Date.now() - Date.parse(existing.checked_at) <= CACHE_TTL_MS) return;
   let lock: { release(): void } | undefined;
   try { lock = tryLockFile(join(state.paths.state, "daemon-update.lock")); } catch { return; }
   if (!lock) return;
