@@ -16,7 +16,7 @@
 ## Verification
 
 - `bun test bin/tests/plan --timeout 30000`：74 tests passed。
-- `bun test skills/multi-task-flow-runtime/tests/engine.test.ts skills/multi-task-flow-runtime/tests/orchestrate.test.ts --timeout 30000`：26 tests passed。
+- `bun test packages/multi-task-flow-runtime/tests/engine.test.ts packages/multi-task-flow-runtime/tests/orchestrate.test.ts --timeout 30000`：26 tests passed。
 - `bun check bin/modules/plan/contract.ts bin/modules/plan/review.ts bin/plan_review_view.ts bin/plan_contract_check.ts`：无类型错误。
 - `bun run bin/spec_contract_check.ts --path docs/specs/dev-plan-standalone-typescript-finalizer/SPEC.md`：通过。
 - `git diff --check`：通过。

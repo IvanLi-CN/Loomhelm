@@ -10,7 +10,7 @@ Multi-task Flow proposal quality gates, structured acceptance contracts and expl
 
 Viewer 维护按 [ADR 0026](../../adr/0026-viewer-compatibility-lifecycle.md) 执行：最新 viewer 保持受支持历史格式的双读，旧 viewer 只读兜底与写入路径隔离，无法证明读取安全时在服务控制前阻塞升级。旧格式测试、迁移测试、只读兜底测试和拒绝路径测试长期保留。
 
-根 `skills/` 保存源 Skill、references、测试及模板，根 `skills/bin/` 保存共享执行模块；上游合同归档在 `skills/docs/vendor/dot-codex/`。`skills/source-manifest.json` 保存源提交、逐文件源摘要和安装摘要，`skills/catalog.json` 提供入口、脚本和条件性外部依赖。资源校验不执行专项外部操作，不将源包存在视为宿主能力可用。
+根 `skills/` 保存可发布 Skill、references、上游合同归档和共享安装支持；`packages/multi-task-flow-runtime/` 保存 Multi-task Flow 的内部 runtime、viewer/service、构建脚本、测试和依赖。`skills/source-manifest.json` 以 `path` 记录 npm 包内的 Skill 资源，以 `sourcePath` 记录其 runtime 源文件；构建器在打包时完成这层映射。资源校验不执行专项外部操作，不将源包存在视为宿主能力可用。
 
 生产仅使用 Bun 1.4.4 直接运行 TS。源码打包保留模块和完整资源路径，无服务端 JS 编译或导入后缀改写。计划 finalizer 从校验过的 TS 描述符读取私有快照，清理预加载和配置环境；POSIX 操作通过 Bun 内置 FFI 保留原子不覆盖重命名、目录描述符相对操作与原 flock 互斥，不构建 Node-API 模块。
 
@@ -28,7 +28,7 @@ Viewer 维护按 [ADR 0026](../../adr/0026-viewer-compatibility-lifecycle.md) �
 
 ## 验证边界
 
-vendor 源码安装只需保留 `skills/`。共享执行模块、合同资源、构建和检查支持分别位于 `skills/bin/`、`skills/docs/vendor/dot-codex/` 与 `skills/multi-task-flow-runtime/scripts/`；来源清单拒绝任何安装路径越出 `skills/`。隔离验证仅复制该目录并在其中安装声明依赖，验证原始 Skill 入口和生产脚本，不借用根 `bin/`、源码 checkout 或用户级全局程序。
+vendor 源码安装只需保留 `skills/`。共享执行模块、合同资源、构建和检查支持分别位于 `skills/bin/`、`skills/docs/vendor/dot-codex/` 与 `packages/multi-task-flow-runtime/scripts/`；来源清单拒绝任何安装路径越出 `skills/`。隔离验证仅复制该目录并在其中安装声明依赖，验证原始 Skill 入口和生产脚本，不借用根 `bin/`、源码 checkout 或用户级全局程序。
 
 原共享脚本回归、原 Multi-task Flow 与网页回归、原生安全回归、客户端双运行时测试及来源隔离测试分别运行。macOS 本地结果不能代替 Linux CI，模拟 socket 不能代替真实宿主接力，已有旧运行的测试副本不能授权写入真实账本。当前候选的精确提交、经验验收和正式审查证据由交付流程保管；没有完整证据时不宣称合并就绪。
 
@@ -48,7 +48,7 @@ vendor 源码安装只需保留 `skills/`。共享执行模块、合同资源、
 
 依赖图使用 MIT 许可的 React Flow 与 EPL-2.0 许可的 elkjs，保留现有投影、悬浮预览、详情与可访问节点列表。ELK 同时计算卡片位置与正交连线路径，按 edge container 转换坐标；默认横向，标题字号 15px，卡片按标题长度取 136–184px 宽度，状态更新复用结构布局。任务网格默认值按交付单元数量决定，并通过 URL 保留显式布局选择。
 
-`skills/multi-task-flow-runtime/examples/single-delivery-unit/` 提供文档检索服务的独立合成快照。源码预览与静态预览共享该数据，合成输出通过内存适配器投影；正式服务配置拒绝该适配器。示例入口和命令见该目录 README。合成对话只显示 Mock 标识，不生成原生应用链接。控制器回归验证布局计算期间重复刷新、最新状态合并与过期结果丢弃。回归覆盖 `tests/ui/graph-controller.test.tsx`、`graph-layout.test.ts`、`view-state.test.ts`、`single-delivery-unit.test.ts`、`source-preview.test.ts`；执行 `bun run --cwd skills/multi-task-flow-runtime verify` 验证。
+`packages/multi-task-flow-runtime/examples/single-delivery-unit/` 提供文档检索服务的独立合成快照。源码预览与静态预览共享该数据，合成输出通过内存适配器投影；正式服务配置拒绝该适配器。示例入口和命令见该目录 README。合成对话只显示 Mock 标识，不生成原生应用链接。控制器回归验证布局计算期间重复刷新、最新状态合并与过期结果丢弃。回归覆盖 `tests/ui/graph-controller.test.tsx`、`graph-layout.test.ts`、`view-state.test.ts`、`single-delivery-unit.test.ts`、`source-preview.test.ts`；执行 `bun run --cwd packages/multi-task-flow-runtime verify` 验证。
 
 新增图布局模块、React 卡片渲染器、独立示例与回归文件同时登记在 `skills/support-manifest.json`，由来源校验脚本刷新安装摘要；维护者修改这些资源后需要同步来源摘要，再通过安装闭包检查。
 

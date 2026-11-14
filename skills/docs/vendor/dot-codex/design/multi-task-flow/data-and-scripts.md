@@ -336,7 +336,7 @@ flowchart TD
 
 桌面与独立 app-server daemon 可能是不同实例。`CodexDesktopFollower` 只使用当前用户拥有的桌面 IPC socket，按已绑定 thread 发现现有 owner，以跟随通道获取公开 assistant 快照和文本补丁。只支持已核实的 stream version 11；按平台 islands/entries/item 顺序选择消息。保留索引占位但丢弃工具、用户与推理正文；验证 owner 和本地 host，重复旧版本丢弃，revision 缺口重新订阅取得快照。取消绑定及连接结束释放跟随关系；它不暴露任何执行或配置控制请求。
 
-- 会话链接：当前候选已证明真实 ID、原生 `codex://threads/<thread_id>` 锚点合同，并记录了 Codex 原生导航结果，证据见 `skills/multi-task-flow-runtime/examples/orchestration-viewer/link-verification.json`。该记录不声称证明宿主浏览器点击桥接；后续候选只有在链接合同或绑定身份变化时才需要新的观察；不得编造链接或自动重复创建。
+- 会话链接：当前候选已证明真实 ID、原生 `codex://threads/<thread_id>` 锚点合同，并记录了 Codex 原生导航结果，证据见 `packages/multi-task-flow-runtime/examples/orchestration-viewer/link-verification.json`。该记录不声称证明宿主浏览器点击桥接；后续候选只有在链接合同或绑定身份变化时才需要新的观察；不得编造链接或自动重复创建。
 
 ## 执行配置与创建接口
 

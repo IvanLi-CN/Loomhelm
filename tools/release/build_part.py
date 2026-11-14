@@ -109,8 +109,8 @@ def build(record, part, output):
         elif part=='ts-client':
             if machine!='linux-amd64': raise ReleaseError('unsupported TS native target')
             run('bun','install','--cwd','skills','--frozen-lockfile','--ignore-scripts','--backend=copy')
-            run('bun','install','--cwd','skills/multi-task-flow-runtime','--frozen-lockfile','--ignore-scripts','--backend=copy')
-            run('bun','run','--cwd','skills/multi-task-flow-runtime','build')
+            run('bun','install','--cwd','packages/multi-task-flow-runtime','--frozen-lockfile','--ignore-scripts','--backend=copy')
+            run('bun','run','--cwd','packages/multi-task-flow-runtime','build')
             run('bun','install','--cwd','clients/typescript','--frozen-lockfile','--ignore-scripts','--backend=copy')
             run('bun','run','--cwd','clients/typescript','build')
             shutil.copytree(ROOT/'clients/typescript/src',stage/'src')

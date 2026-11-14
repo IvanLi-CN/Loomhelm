@@ -169,11 +169,11 @@ jobs:
         run: |
           set -euo pipefail
           bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy
-          bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile
+          bun install --cwd packages/multi-task-flow-runtime --frozen-lockfile
           bun install --cwd clients/typescript --frozen-lockfile
-          bun run --cwd skills/multi-task-flow-runtime build
+          bun run --cwd packages/multi-task-flow-runtime build
           export LOOMHELM_SERVICE_BUNDLE_BUILD=1
-          bun skills/multi-task-flow-runtime/scripts/build-service.ts \
+          bun packages/multi-task-flow-runtime/scripts/build-service.ts \
             --output "$RUNNER_TEMP/multi-task-flow-service-bundle" \
             --service-version "$VERSION"
           version_tag="multi-task-flow-v$VERSION"

@@ -3,10 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun run --cwd multi-task-flow-runtime build",
+    "build": "bun run --cwd ../packages/multi-task-flow-runtime build",
     "test": "bun test ./bin/tests ./bin/native-tests",
     "skills:test": "bun test ./bin/tests ./bin/native-tests",
-    "skills:build": "bun run --cwd multi-task-flow-runtime build",
+    "skills:build": "bun run --cwd ../packages/multi-task-flow-runtime build",
     "test:core": "bun test ./bin/tests/core",
     "test:hosting": "bun test ./bin/tests/hosting",
     "test:flow": "bun test ./bin/tests/flow",

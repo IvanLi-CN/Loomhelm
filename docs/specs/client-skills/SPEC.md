@@ -7,7 +7,7 @@
 ## Terms and Interfaces
 
 - Skill 是命名的指令与资源包，不是一次任务执行，也不授予超出调用者授权的权限。
-- 迁入资源以项目根 `skills/` 为源包目录、`skills/bin/` 为共享执行支持目录；所有随包执行代码、合同资源、依赖声明与构建支持必须位于 `skills/` 内；仅安装该目录即可保留依赖闭包，生产产物必须携带必要资源。
+- 可发布 Skill 资源以项目根 `skills/` 为源包目录；`packages/multi-task-flow-runtime/` 是独立的内部 runtime、viewer/service、构建与测试源码，不属于 Skill 安装面。构建系统必须把 runtime 映射到 npm 包内的 `skills/multi-task-flow/`，消费者只接收生成后的包资源；不能要求用户 checkout 或构建 `packages/` 源码。
 - 外部宿主能力包括未迁入的 Skills、原生 Codex 工具及专项 CLI；缺失能力必须明确检测。
 
 ## Requirements

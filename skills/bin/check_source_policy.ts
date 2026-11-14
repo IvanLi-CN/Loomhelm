@@ -18,19 +18,21 @@ const grandfathered = new Set([
   "skills/bin/modules/plan/contract.ts",
   "skills/bin/modules/workspace/port_registry.ts",
   "skills/bin/modules/visual/secure_io.ts",
-  "skills/multi-task-flow-runtime/web/app.ts",
-  "skills/multi-task-flow-runtime/web/graph-projection.ts",
-  "skills/multi-task-flow-runtime/lib/schema.ts",
-  "skills/multi-task-flow-runtime/lib/engine.ts",
-  "skills/multi-task-flow-runtime/scripts/orchestrate.ts",
-  "skills/multi-task-flow-runtime/tests/engine.test.ts",
-  "skills/multi-task-flow-runtime/tests/orchestrate.test.ts",
-  "skills/multi-task-flow-runtime/scripts/viewer-socket.ts",
-  "skills/multi-task-flow-runtime/lib/service-http.ts",
-  "skills/multi-task-flow-runtime/lib/store-migration.ts",
-  "skills/multi-task-flow-runtime/lib/view.ts",
-  "skills/multi-task-flow-runtime/lib/server.ts",
-  "skills/multi-task-flow-runtime/lib/store.ts",
+  "skills/bin/modules/plan/io.ts",
+  "skills/bin/plan_review_view.ts",
+  "packages/multi-task-flow-runtime/web/app.ts",
+  "packages/multi-task-flow-runtime/web/graph-projection.ts",
+  "packages/multi-task-flow-runtime/lib/schema.ts",
+  "packages/multi-task-flow-runtime/lib/engine.ts",
+  "packages/multi-task-flow-runtime/scripts/orchestrate.ts",
+  "packages/multi-task-flow-runtime/tests/engine.test.ts",
+  "packages/multi-task-flow-runtime/tests/orchestrate.test.ts",
+  "packages/multi-task-flow-runtime/scripts/viewer-socket.ts",
+  "packages/multi-task-flow-runtime/lib/service-http.ts",
+  "packages/multi-task-flow-runtime/lib/store-migration.ts",
+  "packages/multi-task-flow-runtime/lib/view.ts",
+  "packages/multi-task-flow-runtime/lib/server.ts",
+  "packages/multi-task-flow-runtime/lib/store.ts",
 ]);
 
 async function checkFile(path: string): Promise<void> {
@@ -58,6 +60,7 @@ async function visit(directory: string): Promise<void> {
 
 
 await visit(join(root, "skills"));
+await visit(join(root, "packages/multi-task-flow-runtime"));
 for (const entry of await readdir(root, { withFileTypes: true })) {
   if (!entry.name.endsWith(".ts")) continue;
   const path = join(root, entry.name);

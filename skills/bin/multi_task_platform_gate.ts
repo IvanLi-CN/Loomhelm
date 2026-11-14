@@ -15,8 +15,8 @@ const child = Runtime.spawn(
     process.execPath,
     "test",
     "--path-ignore-patterns",
-    "skills/multi-task-flow-runtime/tests/ui/**",
-    "skills/multi-task-flow-runtime/tests",
+    "packages/multi-task-flow-runtime/tests/ui/**",
+    "packages/multi-task-flow-runtime/tests",
   ],
   { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
 );
