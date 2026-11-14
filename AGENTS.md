@@ -31,6 +31,7 @@ Business feature implementation and public business contract finalization requir
 - Markdown edits and hooks: `.agents/skills/markdown-style/SKILL.md`.
 - Fresh worktrees, setup and local resource recovery: `.agents/skills/worktree-bootstrap/SKILL.md`.
 - CI, required checks, waivers and delivery gates: `.agents/skills/quality-gates/SKILL.md`.
+- Loomhelm Skill runtime publication, npm reconciliation and dist-tag recovery: `.agents/skills/loomhelm-release/SKILL.md`.
 - Durable database, journal, queue or artifact state: `.agents/skills/persistent-state-migrations/SKILL.md`.
 - Public interface or persistent-state compatibility changes: `.agents/skills/semver-change-governance/SKILL.md`.
 - Expected-success workflow failures: `.agents/skills/release-failure-notification/SKILL.md`; installing this Policy does not select a notification provider, destination or credential.

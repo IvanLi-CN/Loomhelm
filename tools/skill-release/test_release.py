@@ -132,6 +132,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("processing", workflow)
         self.assertIn("known-409", workflow)
         self.assertIn("processing-timeout", workflow)
+        self.assertIn("for delay in 0 5 15 30 60 120 240 480; do", workflow)
         self.assertIn("resumeRetryUsed", workflow)
         self.assertIn("one guarded republish is allowed only after processing-timeout", workflow)
         self.assertIn("publish_candidate()", workflow)

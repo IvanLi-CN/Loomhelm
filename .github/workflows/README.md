@@ -67,7 +67,7 @@ Immutable tag 冲突时运行 `verify-tag` 对账现有 tag 的目标 SHA；目�
 
 `npm publish` 返回未知结果时不得立即重试；先查询 exact package、registry metadata 和 tarball digest，只有明确不存在且候选身份仍未被占用时才允许由 owner-approved workflow 重试。dist-tag policy 返回 regression 或 registry 元数据无法解析时停止，不手工把 tag 指向旧版本。
 
-首次发布在 npm 已接受写入但 processing 延迟导致 workflow 退出时，owner-approved retry 必须携带 `resume_run_id`，只下载同一 candidate 和 receipt context；若 receipt 明确为 `processing-timeout` 且 npm 仍返回 404，只允许对同一 candidate 做一次受控 republish，随后进入 exact package、registry raw integrity、legacy/current identity 和 provenance 对账，不能跳过 immutable tag 或 registry identity 校验。known 409、timeout、identity mismatch、dist-tag read-back 失败都必须停止并保留 receipt；不得使用新构建替换候选。
+首次发布在 npm 已接受写入但 processing 延迟导致 workflow 退出时，发布 job 会使用 `0, 5, 15, 30, 60, 120, 240, 480` 秒的分阶段退避，在约 15 分钟内持续读取同一 exact package；owner-approved retry 必须携带 `resume_run_id`，只下载同一 candidate 和 receipt context。若 receipt 明确为 `processing-timeout` 且 npm 仍返回 404，只允许对同一 candidate 做一次受控 republish，随后进入 exact package、registry raw integrity、legacy/current identity 和 provenance 对账，不能跳过 immutable tag 或 registry identity 校验。known 409、timeout、identity mismatch、dist-tag read-back 失败都必须停止并保留 receipt；不得使用新构建替换候选。
 
 受控 republish 会在 receipt 写入 `resumeRetryUsed`，后续 resume 只能继续对账，不能再次写入 npm。
 
