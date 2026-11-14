@@ -371,6 +371,7 @@ export async function startSharedViewer(
           }
         }
         if (url.pathname === "/api/v1/reconnect" && request.method === "POST") {
+          if (!request.headers.get("cookie")) return json({ code: "UNAUTHENTICATED" }, 401);
           const target = parseViewerTarget(url.searchParams.get("target") ?? "/", `http://${host}`, { allowHome: false })?.target;
           if (!target) return json({ code: "INVALID_TARGET" }, 400);
           const targetPath = new URL(target, `http://${host}`).pathname;

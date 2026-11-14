@@ -169,7 +169,7 @@ test("worker diagnostics are run-scoped and browser reconnect issues a fresh tic
   expect(value.single_use).toBe(true);
   expect(new URL(value.login_url).searchParams.get("ticket")).toMatch(/^[A-Za-z0-9_-]+$/);
   const unauthenticated = await fetch(base + "/api/v1/reconnect?target=" + encodeURIComponent("/runs/diagnostic-run/?tab=atomic"), { method: "POST" });
-  expect(unauthenticated.status).toBe(200);
+  expect(unauthenticated.status).toBe(401);
 });
 test("legacy-view uses the previous viewer as an isolated read-only fallback", async () => {
   const { root, state } = fixture();
