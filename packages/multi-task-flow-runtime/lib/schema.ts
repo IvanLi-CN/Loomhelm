@@ -1486,6 +1486,23 @@ export function validatePlan(candidate: Plan): void {
       "Contract-3 atomic plans must use node-based atomic edges",
     );
     validateAtomicGraph(candidate.atomic_nodes, candidate.atomic_edges as any);
+    const canonicalById = new Map(candidate.atomic_nodes.map((node) => [node.id, node]));
+    for (const atom of candidate.atoms) {
+      const node = canonicalById.get(atom.id);
+      requireCondition(
+        node?.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === atom.task_id,
+        "ATOMIC_GRAPH_INCOMPLETE",
+        `Canonical graph must contain task atom ${atom.id} with matching scope`,
+      );
+    }
+    for (const atom of candidate.group_atoms) {
+      const node = canonicalById.get(atom.id);
+      requireCondition(
+        node?.kind === "work" && node.scope?.kind === "delivery_unit" && node.scope.delivery_unit_id === atom.group_id,
+        "ATOMIC_GRAPH_INCOMPLETE",
+        `Canonical graph must contain delivery-unit atom ${atom.id} with matching scope`,
+      );
+    }
   }
   validateGrouping(
     candidate.atoms,

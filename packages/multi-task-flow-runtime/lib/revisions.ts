@@ -87,6 +87,7 @@ function planContent(plan: Plan): Record<string, unknown> {
     start_at: plan.start_at,
     atoms: plan.atoms,
     group_atoms: plan.group_atoms,
+    atomic_nodes: plan.atomic_nodes,
     atomic_edges: plan.atomic_edges,
     nodes: plan.nodes,
     edges: plan.edges,

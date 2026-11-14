@@ -245,9 +245,20 @@ export function canonicalizeContract3Plan(
           scope: { kind: "delivery_unit", delivery_unit_id: atom.group_id },
         })),
       ];
+  if (currentNodes.length) {
+    const expected = new Set([
+      ...(rawPlan.atoms ?? []).map((atom: any) => atom.id),
+      ...(rawPlan.group_atoms ?? []).map((atom: any) => atom.id),
+    ]);
+    const actual = new Set(atomicNodes.map((node: any) => node.id));
+    for (const id of expected) if (!actual.has(id)) throw new Error(`Canonical atomic graph is missing node for atom ${id}`);
+  }
   const nodeIdForLegacyAtom = new Map<string, string>();
   for (const atom of rawPlan.atoms ?? []) {
-    const matching = atomicNodes.find((node: any) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === atom.task_id);
+    const matching = atomicNodes.find((node: any) => node.id === atom.id) ?? (() => {
+      const matches = atomicNodes.filter((node: any) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === atom.task_id);
+      return matches.length === 1 ? matches[0] : undefined;
+    })();
     nodeIdForLegacyAtom.set(atom.id, matching?.id ?? atom.id);
     nodeIdForLegacyAtom.set(atom.task_id, matching?.id ?? atom.id);
   }
@@ -295,7 +306,7 @@ export function canonicalizeContract3Plan(
         id: edge.id,
         from_node_id: nodeIdForLegacyAtom.get(edge.from_node_id) ?? edge.from_node_id,
         to_node_id: nodeIdForLegacyAtom.get(edge.to_node_id) ?? edge.to_node_id,
-        requires: typeof edge.requires === "object" ? edge.requires : { kind: "source_terminal_success" },
+        requires: typeof edge.requires === "object" ? edge.requires : (() => { throw new Error(`Unsupported legacy atomic dependency condition: ${String(edge.requires)}`); })(),
       };
     return {
       id: edge.id,
@@ -364,7 +375,11 @@ export function migrateLegacyTaskAtoms(raw: any): any[] {
 export function contract3MigrationCandidate(raw: any): any {
   const candidate = structuredClone(raw);
   const legacyNodes = migrateLegacyTaskAtoms(raw);
-  const legacyEdges = Array.isArray(raw?.plans?.[0]?.atomic_edges) ? raw.plans[0].atomic_edges : [];
+  const selectedPlanId = raw?.execution_plan_id ?? raw?.active_plan_id;
+  const selectedPlan = Array.isArray(raw?.plans)
+    ? raw.plans.find((plan: any) => plan.id === selectedPlanId) ?? raw.plans.find((plan: any) => plan.lifecycle === "approved") ?? raw.plans[0]
+    : null;
+  const legacyEdges = Array.isArray(selectedPlan?.atomic_edges) ? selectedPlan.atomic_edges : [];
   const canonicalEdges = legacyEdges
     .filter((edge: any) => edge && typeof edge.from_atom_id === "string" && typeof edge.to_atom_id === "string")
     .map((edge: any) => ({ id: edge.id, from_node_id: edge.from_atom_id, to_node_id: edge.to_atom_id, requires: { kind: "source_terminal_success" } }));

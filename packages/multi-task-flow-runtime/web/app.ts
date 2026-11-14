@@ -398,7 +398,7 @@ const atomicGraphController = createAtomicGraphController({
   selectTask,
   selectGroup,
   selectMilestone,
-  getSelected: () => ({ task: selectedTask, group: selectedGroup, milestone: selectedMilestone }),
+  getSelected: () => ({ task: selectedTask, group: selectedGroup, milestone: selectedMilestone, atom: viewState.atom }),
 });
 function openDetails(): void { updateDetailsSurface(true, true); }
 function restoreClosedDetails(): void {

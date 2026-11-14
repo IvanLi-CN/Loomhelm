@@ -113,7 +113,7 @@ export function createAtomicGraphController(context: GraphContext) {
         height: placed.height,
         draggable: false,
         selectable: true,
-        selected: taskId ? selected.task === taskId : node.nodeKind === "group" ? selected.group === node.groupId && selected.atom === node.id : node.nodeKind === "milestone" && selected.milestone === node.id,
+        selected: taskId ? selected.task === taskId && (!selected.atom || selected.atom === node.id) : node.nodeKind === "group" ? selected.group === node.groupId && selected.atom === node.id : node.nodeKind === "milestone" && selected.milestone === node.id,
         style: { width: placed.width, height: placed.height },
         data: {
           title: node.title,

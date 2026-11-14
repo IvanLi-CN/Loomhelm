@@ -149,6 +149,22 @@ function executionPlan(ledger: Ledger): Plan {
     "Execution plan",
   );
 }
+function atomicNodeSatisfied(ledger: Ledger, node: any): boolean {
+  if (node.kind === "boundary") return node.boundary === "start" || ledger.events.some((event) => event.type === "run_completed");
+  if (node.kind === "milestone") return node.state === "completed";
+  const scope = node.scope;
+  const atoms = scope?.kind === "task"
+    ? ledger.tasks.find((task) => task.id === scope.task_id)?.atoms
+    : ledger.groups.find((group) => group.id === scope?.delivery_unit_id)?.atoms;
+  return atoms?.find((atom) => atom.id === node.id)?.status === "completed" || node.state === "completed";
+}
+function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): boolean {
+  const nodes = (plan.atomic_nodes ?? []) as any[];
+  const edges = (plan.atomic_edges ?? []).filter((edge: any) => "from_node_id" in edge) as any[];
+  if (!nodes.length || !edges.length) return true;
+  const targets = nodes.filter((node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId);
+  return targets.every((target) => edges.filter((edge) => edge.to_node_id === target.id).every((edge) => atomicNodeSatisfied(ledger, nodes.find((node) => node.id === edge.from_node_id))));
+}
 function approved(ledger: Ledger): Plan {
   const current = executionPlan(ledger);
   requireCondition(
@@ -469,12 +485,15 @@ function parentPrReady(
 ): boolean {
   const pr = deliveryUnitPr(owner);
   const canonicalState = owner.pr && "state" in owner.pr ? owner.pr.state : null;
+  const receipt = latestPublication(ledger, owner.id, "pr_published")?.receipt;
   return (
     owner.lifecycle.pr_created === "passed" &&
     prAtom?.status === "completed" &&
     !!pr &&
     (canonicalState === null || canonicalState === "published") &&
-    prReceipt(ledger, owner.id, pr, undefined, undefined, "open")
+    prReceipt(ledger, owner.id, pr, undefined, undefined, "open") &&
+    (ledger.contract_version < 3 || !receipt || owner.current_sha === null || receipt.target_branch === null || receipt.head_sha === null ||
+      (receipt.target_branch === owner.parent_branch && receipt.head_sha === owner.current_sha))
   );
 }
 function parentPrDefinitivelyAbsent(
@@ -938,7 +957,7 @@ export function ready(ledger: Ledger, taskId: string): boolean {
   );
   if (!target) return false;
   const nodes = new Map(currentPlan.nodes.map((item) => [item.id, item]));
-  return nodeSatisfied(ledger, target, nodes, currentPlan.edges, new Set());
+  return nodeSatisfied(ledger, target, nodes, currentPlan.edges, new Set()) && atomicDependenciesReady(ledger, currentPlan, taskId);
 }
 
 function deliveryUnitPrMerged(group: Ledger["groups"][number]): boolean {
@@ -1894,7 +1913,7 @@ export function execute(
         op.request.target_type === "group"
           ? find(ledger.groups, (item) => item.id === op.target_id, "Group")
           : null;
-      if (targetGroup && ledger.contract_version >= 3)
+      if (targetGroup && ledger.contract_version >= 3 && outcome === "succeeded")
         requireGroupDispatchGate(ledger, targetGroup);
       const evidence = object(payload.native_evidence ?? {});
       const observed = creationObservations(op, payload);
@@ -3607,6 +3626,16 @@ export function execute(
           current.current_sha === incoming.current_sha,
         "EVIDENCE_REQUIRED",
         "Group lineage changes require a verified operation",
+        5,
+      );
+      requireCondition(
+        stable(current.parent_branch) === stable(incoming.parent_branch) &&
+          stable(current.branch) === stable(incoming.branch) &&
+          stable(current.parent_pr) === stable(incoming.parent_pr) &&
+          stable(current.pr) === stable(incoming.pr) &&
+          stable(current.lifecycle) === stable(incoming.lifecycle),
+        "EVIDENCE_REQUIRED",
+        "Provider identity and lifecycle changes require a verified publication or merge operation",
         5,
       );
       requireCondition(

@@ -40,7 +40,7 @@ const RELATIVE_EPOCH = Date.parse("2000-01-01T00:00:00.000Z");
 function compatibilityAtomicNodeState(node: AtomicNode, ledger: Ledger): AtomicNode {
   if (node.kind === "boundary") {
     const started = ledger.events.some((event) => event.type === "task_started") || ledger.tasks.some((task) => task.started_at !== null);
-    const finished = ledger.events.some((event) => event.type === "run_completed") || (ledger.tasks.length > 0 && ledger.tasks.every((task) => ["closed", "completed", "integrated"].includes(task.state)));
+    const finished = ledger.events.some((event) => event.type === "run_completed");
     return { ...node, state: node.boundary === "start" ? (started ? "completed" : "planned") : (finished ? "completed" : "planned") };
   }
   if (node.kind !== "work") return node;
@@ -76,7 +76,7 @@ function compatibilityAtomicNodeState(node: AtomicNode, ledger: Ledger): AtomicN
 
 function syntheticAtomicBoundaries(ledger: Ledger): AtomicBoundaryNode[] {
   const started = ledger.events.some((event) => event.type === "task_started") || ledger.tasks.some((task) => task.started_at !== null);
-  const finished = ledger.events.some((event) => event.type === "run_completed") || (ledger.tasks.length > 0 && ledger.tasks.every((task) => ["closed", "completed", "integrated"].includes(task.state)));
+  const finished = ledger.events.some((event) => event.type === "run_completed");
   return [
     { kind: "boundary", id: "atomic-start", title: "开始", boundary: "start", state: started ? "completed" : "planned" },
     { kind: "boundary", id: "atomic-end", title: "结束", boundary: "end", state: finished ? "completed" : "planned" },
@@ -882,7 +882,7 @@ export function buildView(
     ? canonicalizeContract3Plan(plan, ledger.tasks)
     : null;
   const canonicalAtomicNodes: AtomicNode[] = (plan.atomic_nodes.length
-    ? plan.atomic_nodes
+    ? plan.atomic_nodes.map((node) => compatibilityAtomicNodeState(node, ledger))
     : hasLegacyAtomicProjection
       ? (compatibilityPlan.atomic_nodes as AtomicNode[]).map((node) => compatibilityAtomicNodeState(node, ledger))
       : plan.nodes
