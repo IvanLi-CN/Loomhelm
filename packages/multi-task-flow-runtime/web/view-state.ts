@@ -98,7 +98,6 @@ export function parseViewState(search: string, validation: ViewStateValidation =
   const tab = requestedTab === "graph" && graphMode === "atomic" ? "atomic" : requestedTab;
   const layout = taskLayouts.has(params.get("layout") as TaskLayout) ? params.get("layout") as TaskLayout : defaultTaskLayout(validation.groups?.size ?? 0);
   const selected = parseSelection(params.get("selected"), validation);
-  const [plannedStart, plannedEnd] = validDateRange(params.get("plannedStart"), params.get("plannedEnd"));
   const [actualStart, actualEnd] = validDateRange(params.get("actualStart"), params.get("actualEnd"));
   return {
     tab, graphMode,
@@ -112,8 +111,8 @@ export function parseViewState(search: string, validation: ViewStateValidation =
     atom: validId(params.get("atom")),
     detail: ["1", "true"].includes(params.get("detail") ?? "") && selected !== null,
     zoom,
-    plannedStart,
-    plannedEnd,
+    plannedStart: null,
+    plannedEnd: null,
     actualStart,
     actualEnd,
   };
@@ -162,8 +161,6 @@ export function serializeViewState(state: ViewState, defaultPlan: string | null 
   if (state.selected) params.set("selected", `${state.selected.kind}:${state.selected.id}`);
   if (state.atom) params.set("atom", state.atom);
   if (state.detail && state.selected) params.set("detail", "1");
-  if (state.plannedStart) params.set("plannedStart", state.plannedStart);
-  if (state.plannedEnd) params.set("plannedEnd", state.plannedEnd);
   if (state.actualStart) params.set("actualStart", state.actualStart);
   if (state.actualEnd) params.set("actualEnd", state.actualEnd);
   return params.toString();

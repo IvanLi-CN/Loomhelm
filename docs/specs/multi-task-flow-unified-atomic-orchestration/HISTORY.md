@@ -7,3 +7,5 @@
 - 2026-11-13: Closed bootstrap readiness consistently across engine, atomic validation and viewer projections, including provider identity, parent PR state and active workspace gates.
 - 2026-11-13: Required explicit failed PR absence evidence and propagated DeliveryUnit gates into plan-level bootstrap readiness projections.
 - 2026-11-13: Aligned engine bootstrap dispatch with the same explicit parent PR absence evidence required by validator and viewer.
+
+- 2026-11-15: Added a fail-closed theoretical scheduling gate: plans with incomplete or indeterminate intervals cannot be approved or scheduled, incomplete viewers hide the timeline and list blockers, and user-visible planned time is relative hours from `0h` without date or timezone semantics.

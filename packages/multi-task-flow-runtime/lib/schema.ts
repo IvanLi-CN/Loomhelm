@@ -1658,6 +1658,35 @@ export function validateSchedulablePlan(candidate: Plan): void {
   requireCondition(!issue, "PLAN_INCOMPLETE", issue?.message ?? "计划内容不完整。", 3);
 }
 
+export type TheoreticalScheduleIssue = { code: string; node_id: string | null; message: string };
+
+export function theoreticalScheduleIssues(candidate: Plan): TheoreticalScheduleIssue[] {
+  const issues: TheoreticalScheduleIssue[] = [];
+  const nodes = new Map(candidate.nodes.map((node) => [node.id, node]));
+  const incoming = new Map<string, string[]>();
+  for (const edge of candidate.edges) {
+    if (!nodes.has(edge.from_node_id) || !nodes.has(edge.to_node_id)) {
+      issues.push({ code: "SCHEDULE_DANGLING_DEPENDENCY", node_id: edge.to_node_id, message: `依赖引用不存在：${edge.from_node_id} → ${edge.to_node_id}。` });
+      continue;
+    }
+    incoming.set(edge.to_node_id, [...(incoming.get(edge.to_node_id) ?? []), edge.from_node_id]);
+  }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): void => {
+    if (visiting.has(id)) { issues.push({ code: "SCHEDULE_CYCLE", node_id: id, message: `理论排期存在循环依赖：${id}。` }); return; }
+    if (visited.has(id)) return;
+    visiting.add(id);
+    for (const predecessor of incoming.get(id) ?? []) visit(predecessor);
+    visiting.delete(id); visited.add(id);
+  };
+  for (const node of candidate.nodes) visit(node.id);
+  for (const node of candidate.nodes) if (node.kind === "task" && (node.estimate_minutes === null || node.estimate_minutes <= 0)) {
+    issues.push({ code: node.estimate_minutes === null ? "SCHEDULE_MISSING_DURATION" : "SCHEDULE_NONPOSITIVE_DURATION", node_id: node.id, message: node.estimate_minutes === null ? `任务 ${node.label} 缺少理论排期时长。` : `任务 ${node.label} 的理论排期时长必须大于 0。` });
+  }
+  return issues;
+}
+
 export type CutAssignmentEvidence = {
   assignments: Map<string, Set<string>>;
   dynamicGroupIds: Set<string>;

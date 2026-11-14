@@ -26,6 +26,18 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 
 原子图、任务图和交付单元图 MUST 使用同一份 canonical 原子数据，聚合投影 MUST 保留回溯到原子节点、条件、证据和阻塞原因的路径；历史格式只能按兼容合同读取或经可恢复的显式迁移处理。
 
+### REQ-SCHEDULE-001
+
+计划在批准前 MUST 通过完整理论排期校验；任一可执行节点缺少可计算的正确定时、存在悬空依赖、循环依赖、未批准计划或其他导致开始/结束偏移不可确定的情况时，批准和 scheduled 状态转换 MUST 被拒绝。
+
+### REQ-SCHEDULE-002
+
+理论排期 MUST 使用纯相对小时坐标，时间原点固定为 `0h`；排期计算、持久化投影、URL 状态、图表轴、节点标签和详情 MUST NOT 展示日期、时间戳或时区语义。分钟可以作为内部计算精度，但用户可见值 MUST 格式化为小时。
+
+### REQ-SCHEDULE-003
+
+理论排期不完整时，viewer MUST 隐藏理论时间轴并显示逐项阻断原因，包括缺少 duration、悬空依赖、循环依赖和未批准状态；不得把未知时间渲染成零点、默认时长或看似有效的时间轴。
+
 ## Verification
 
 ### VER-ATOMIC-001
@@ -45,6 +57,18 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 - covers: `REQ-ATOMIC-004`
 - Method: viewer projection、原子依赖图、聚合依赖回溯、历史兼容和迁移测试。
 - Pass condition: 三种图使用同一 canonical 数据，页面可定位具体原子和证据，历史数据不会被无语义推断地覆盖或清理。
+
+### VER-SCHEDULE-001
+
+- covers: `REQ-SCHEDULE-001`, `REQ-SCHEDULE-003`
+- Method: 计划批准、scheduled 转换、排期校验器和 viewer 空状态测试，覆盖缺失 duration、悬空依赖、循环、未批准计划和合法完整计划。
+- Pass condition: 所有非法计划在批准前失败并返回逐项原因；viewer 不创建理论时间轴；合法计划才显示完整排期。
+
+### VER-SCHEDULE-002
+
+- covers: `REQ-SCHEDULE-002`
+- Method: 排期计算、序列化、URL 状态和 timeline formatter 测试，覆盖零点、并行节点、小数小时和跨内部日期边界的长排期。
+- Pass condition: 用户可见坐标始终从 `0h` 开始并以小时显示，输出不包含日期、时区或 ISO 时间戳。
 
 ## 1. 核心模型
 
