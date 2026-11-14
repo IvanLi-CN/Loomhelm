@@ -54,7 +54,7 @@ test('release validation binds the requested version to the packaged artifact', 
   assert.notEqual(mismatched.status, 0);
   assert.match(mismatched.stderr + mismatched.stdout, /Publication version does not match artifact version/);
 
-  const missingProvenance = spawnSync(process.execPath, ['--no-install', cli, 'release', 'validate', '--version', '0.2.11', '--require-provenance'], { encoding: 'utf8' });
+  const missingProvenance = spawnSync(process.execPath, ['--no-install', cli, 'release', 'validate', '--version', '0.2.12', '--require-provenance'], { encoding: 'utf8' });
   assert.notEqual(missingProvenance.status, 0);
   assert.match(missingProvenance.stderr + missingProvenance.stdout, /Publication requires (a clean toolkit artifact|artifact merge provenance)/);
 });
