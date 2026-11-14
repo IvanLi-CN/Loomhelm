@@ -16,16 +16,17 @@ export type GraphContext = {
   showHoverPreview: (content: HTMLElement, anchor: DOMRect) => void;
   hideHoverPreview: () => void;
   recordPointerType: (pointerType: string | null) => void;
-  selectTask: (id: string) => void;
-  selectGroup: (id: string) => void;
+  selectTask: (id: string, atomId?: string | null) => void;
+  selectGroup: (id: string, atomId?: string | null) => void;
   selectMilestone: (id: string) => void;
-  getSelected: () => { task: string | null; group: string | null; milestone: string | null };
+  getSelected: () => { task: string | null; group: string | null; milestone: string | null; atom?: string | null };
 };
 
 function nodeKindLabel(node: GraphProjectionNode): string {
   if (node.nodeKind === "group") return "交付单元";
   if (node.nodeKind === "task") return taskKindLabel(node.taskKind ?? "coordination");
   if (node.nodeKind === "milestone") return "里程碑 milestone";
+  if (node.nodeKind === "boundary") return node.boundary === "start" ? "起点" : "终点";
   return "节点";
 }
 

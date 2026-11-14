@@ -131,3 +131,11 @@ Use the published npm CLI only in this form: `bunx --bun @loomhelm/multi-task-fl
 The explicitly installed shared user service uses the system-service exception for its background lifecycle. See `references/shared-viewer.md` for fixed-port ownership, compatibility, maintenance and migration recovery.
 
 显式安装的共享用户服务使用系统服务例外管理后台生命周期。固定端口所有权、兼容性、维护和迁移恢复见 `references/shared-viewer.md`。
+
+## Contract 3 强制边界
+
+Contract 3 下任何 Agent 都不得直接调用 `mcp__codex_app__create_thread`、`fork_thread` 或其他原生 thread-create/fork 工具创建 group/task 对话；`conversation-create` 是唯一入口。宿主无法保证普通 Agent 不具备上述原生创建能力时，必须在 dispatch 前报告 capability gap 并阻塞运行，不能用提示词约定替代工具授权。
+
+发现未由 `conversation-create` 产生、未绑定 dispatch operation 或未经过 native evidence 核验的 `codex://threads/<thread-id>` 时，将其标记为 orphan thread / orchestration violation；不得绑定、resolve、handoff、释放 claim 或容量，也不得把它作为依赖事实，暂停受影响运行并交给主人复核。
+
+regular 贡献任务必须先有 workspace ready 和已创建且验证为 open 的 parent PR；只有 main-owned bootstrap 在 workspace ready 且 provider 明确证明 parent PR `absent` 时可例外，pending、unknown、closed 或缺少证据都不满足例外。

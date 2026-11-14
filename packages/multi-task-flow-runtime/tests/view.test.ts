@@ -115,6 +115,31 @@ describe("timeline projections", () => {
     expect((view.semantic_context as { field_metadata: Record<string, unknown> }).field_metadata).toHaveProperty("execution_phase");
   });
 
+  test("projects legacy plan atoms as atomic nodes instead of task graph nodes", () => {
+    const ledger = createDemoLedger(1_767_200_000_000);
+    const view = buildView(ledger) as any;
+    expect(view.atomic_nodes.some((node: { id: string }) => node.id.startsWith("atom-"))).toBe(true);
+    expect(view.atomic_nodes.some((node: { id: string }) => node.id.startsWith("group-atom-"))).toBe(true);
+    expect(view.atomic_nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "boundary", id: "atomic-start", title: "开始", boundary: "start", state: "completed" }),
+      expect.objectContaining({ kind: "boundary", id: "atomic-end", title: "结束", boundary: "end", state: "planned" }),
+    ]));
+    expect(view.canonical_atomic_edges.every((edge: { from_node_id: string; to_node_id: string }) =>
+      view.atomic_nodes.some((node: { id: string }) => node.id === edge.from_node_id) &&
+      view.atomic_nodes.some((node: { id: string }) => node.id === edge.to_node_id))).toBe(true);
+    expect(view.canonical_atomic_edges.some((edge: { from_node_id: string }) => edge.from_node_id === "atomic-start")).toBe(true);
+    expect(view.canonical_atomic_edges.some((edge: { to_node_id: string }) => edge.to_node_id === "atomic-end")).toBe(true);
+  });
+
+  test("projects contribution atoms alongside delivery-unit lifecycle atoms", () => {
+    const ledger = createDemoLedger(1_767_200_000_000);
+    const view = buildView(ledger) as any;
+    const group = view.groups.find((item: { id: string }) => item.id === "dashboard");
+    expect(group.atoms.length).toBeGreaterThan(0);
+    expect(group.contribution_atoms.length).toBeGreaterThan(0);
+    expect(group.contribution_atoms.every((atom: { task_id: string; task_title: string }) => atom.task_id && atom.task_title)).toBe(true);
+  });
+
   test("separates proposal approval from runtime readiness for an unbound regular unit", () => {
     const ledger = createPlanningDemoLedger(1_767_200_000_000);
     ledger.groups.find((group) => group.id === "dashboard")!.agent_thread_id = null;

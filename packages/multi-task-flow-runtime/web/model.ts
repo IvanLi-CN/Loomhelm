@@ -14,6 +14,11 @@ export type GroupAtom = AtomicTask & {
   lifecycle_stage: "workspace_ready" | "pr_created" | "pr_merged" | "closed" | null;
 };
 
+export type ContributionAtom = AtomicTask & {
+  task_id: string;
+  task_title: string;
+};
+
 export type CoordinationExecution = {
   state: "unknown" | "idle" | "running" | "waiting" | "blocked";
   reason: string | null;
@@ -136,6 +141,7 @@ export type Group = {
   runtime_readiness?: ReadinessSummary;
   atoms?: GroupAtom[];
   planned_atoms?: GroupAtom[];
+  contribution_atoms?: ContributionAtom[];
   lifecycle?: Partial<Record<GroupAtom["lifecycle_stage"] & string, string>>;
   lifecycle_completed_at?: Partial<Record<GroupAtom["lifecycle_stage"] & string, string | null>>;
   coordination_execution?: CoordinationExecution;

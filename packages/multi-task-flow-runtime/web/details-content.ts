@@ -167,7 +167,7 @@ export function createDetailContent(context: DetailContentContext) {
     summary.replaceChildren(text("div", title, "detail-title"), text("div", state, "detail-state"));
     return { container, restore: () => { container.scrollTop = top; } };
   }
-  const showTask = (task: Task): void => {
+  const showTask = (task: Task, focusedAtomId: string | null = null): void => {
     const data = context.getData();
     if (!data) return;
     const { container, restore } = begin("task", task.id, task.title, context.labelTask(task));
@@ -194,7 +194,7 @@ export function createDetailContent(context: DetailContentContext) {
         const source = data.tasks.flatMap((item) => item.atoms ?? item.planned_atoms ?? []).find((atom) => atom.id === edge.from_atom_id);
         return { name: source?.title ?? edge.from_atom_id, state: "", status: source?.status ?? "unknown", completedAt: source?.completed_at };
       });
-    }, null, { kind: "task", id: task.id }));
+    }, focusedAtomId, { kind: "task", id: task.id }));
     container.append(facts);
     field(facts, "前驱", renderDependencyTooltip(predecessors, predecessors.length ? `查看 ${predecessors.length} 项依赖` : "无依赖"));
     field(facts, "后继", renderDependencyTooltip(successors, successors.length ? `查看 ${successors.length} 项依赖` : "无依赖"));

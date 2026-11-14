@@ -62,7 +62,17 @@ export const milestoneNode = z.union([
   z.object({ kind: z.literal("milestone"), id, title: text, state: z.literal("planned"), scope: atomicScope, acceptance: z.array(milestoneCriterion) }).strict(),
 ]);
 
-export const atomicNode = z.union([atomicWorkNode, milestoneNode]);
+export const atomicBoundaryNode = z
+  .object({
+    kind: z.literal("boundary"),
+    id,
+    title: text,
+    boundary: z.enum(["start", "end"]),
+    state: z.enum(["planned", "completed"]),
+  })
+  .strict();
+
+export const atomicNode = z.union([atomicWorkNode, milestoneNode, atomicBoundaryNode]);
 export const atomicEdge = z
   .object({
     id,
@@ -91,6 +101,7 @@ export const deliveryUnitExternalFacts = z.discriminatedUnion("state", [
 ]);
 
 export type AtomicNode = z.infer<typeof atomicNode>;
+export type AtomicBoundaryNode = z.infer<typeof atomicBoundaryNode>;
 export type AtomicEdge = z.infer<typeof atomicEdge>;
 export type TaskPrBinding = z.infer<typeof taskPrBinding>;
 export type DeliveryUnitExternalFacts = z.infer<typeof deliveryUnitExternalFacts>;
@@ -191,6 +202,133 @@ export function validateAtomicGraph(nodes: readonly AtomicNode[], edges: readonl
   }
 }
 
+/**
+ * Materialize the contract-3 atomic projection for a newly initialized plan.
+ * Legacy atom definitions remain in the plan for compatibility, but they must
+ * not be the only source used by the contract-3 viewer or scheduler.
+ */
+export function canonicalizeContract3Plan(
+  rawPlan: any,
+  tasks: readonly { id: string; kind?: string; group_id: string }[] = [],
+): any {
+  const taskById = new Map(tasks.map((task) => [task.id, task]));
+  const currentNodes: any[] = Array.isArray(rawPlan.atomic_nodes) ? rawPlan.atomic_nodes : [];
+  const atomicNodes: any[] = currentNodes.length
+    ? currentNodes
+    : [
+        ...(Array.isArray(rawPlan.atoms) ? rawPlan.atoms : []).map((atom: any) => {
+          const task = taskById.get(atom.task_id);
+          const activityType = ["verification", "release", "deployment"].includes(task?.kind ?? "")
+            ? task?.kind
+            : "contribution";
+          return {
+            kind: "work",
+            id: atom.id,
+            title: atom.title,
+            purpose: atom.purpose,
+            output: atom.output,
+            acceptance: [],
+            activity_type: activityType,
+            state: "planned",
+            scope: { kind: "task", task_id: atom.task_id, delivery_unit_id: task?.group_id ?? "unassigned" },
+          };
+        }),
+        ...(Array.isArray(rawPlan.group_atoms) ? rawPlan.group_atoms : []).map((atom: any) => ({
+          kind: "work",
+          id: atom.id,
+          title: atom.title,
+          purpose: atom.purpose,
+          output: atom.output,
+          acceptance: [],
+          activity_type: "verification",
+          state: "planned",
+          scope: { kind: "delivery_unit", delivery_unit_id: atom.group_id },
+        })),
+      ];
+  const nodeIdForLegacyAtom = new Map<string, string>();
+  for (const atom of rawPlan.atoms ?? []) {
+    const matching = atomicNodes.find((node: any) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === atom.task_id);
+    nodeIdForLegacyAtom.set(atom.id, matching?.id ?? atom.id);
+    nodeIdForLegacyAtom.set(atom.task_id, matching?.id ?? atom.id);
+  }
+  for (const atom of rawPlan.group_atoms ?? []) {
+    const matching = atomicNodes.find((node: any) => node.scope?.kind === "delivery_unit" && node.scope.delivery_unit_id === atom.group_id && node.id === atom.id);
+    nodeIdForLegacyAtom.set(atom.id, matching?.id ?? atom.id);
+  }
+  const planNodeToAtomicNode = new Map<string, string>();
+  for (const node of rawPlan.nodes ?? []) {
+    const taskId = node.kind === "task" ? node.ref_id : null;
+    const atomicId = taskId ? nodeIdForLegacyAtom.get(taskId) : nodeIdForLegacyAtom.get(node.id);
+    if (atomicId) planNodeToAtomicNode.set(node.id, atomicId);
+  }
+  for (const node of atomicNodes) {
+    const scope = node.scope;
+    if (node.kind === "work" && scope?.kind === "task") {
+      for (const planNode of rawPlan.nodes ?? [])
+        if (planNode.kind === "task" && planNode.ref_id === scope.task_id) planNodeToAtomicNode.set(planNode.id, node.id);
+    }
+  }
+  const declaredEdges = Array.isArray(rawPlan.atomic_edges) ? rawPlan.atomic_edges : [];
+  const derivedEdges = (rawPlan.edges ?? []).flatMap((edge: any) => {
+    const from = planNodeToAtomicNode.get(edge.from_node_id);
+    const to = planNodeToAtomicNode.get(edge.to_node_id);
+    return from && to && from !== to
+      ? [{ id: `atomic-${edge.id}`, from_node_id: from, to_node_id: to, requires: { kind: "source_terminal_success" } }]
+      : [];
+  });
+  const lifecycleAtomsByGroup = new Map<string, string[]>();
+  for (const atom of rawPlan.group_atoms ?? []) {
+    const list = lifecycleAtomsByGroup.get(atom.group_id) ?? [];
+    list.push(atom.id);
+    lifecycleAtomsByGroup.set(atom.group_id, list);
+  }
+  for (const [groupId, atomIds] of lifecycleAtomsByGroup) {
+    for (let index = 1; index < atomIds.length; index++) {
+      const from = nodeIdForLegacyAtom.get(atomIds[index - 1]!);
+      const to = nodeIdForLegacyAtom.get(atomIds[index]!);
+      if (from && to) derivedEdges.push({ id: `atomic-lifecycle-${groupId}-${index}`, from_node_id: from, to_node_id: to, requires: { kind: "source_terminal_success" } });
+    }
+  }
+  const atomicEdges = (declaredEdges.length ? declaredEdges : derivedEdges).map((edge: any) => {
+    if ("from_node_id" in edge)
+      return {
+        id: edge.id,
+        from_node_id: nodeIdForLegacyAtom.get(edge.from_node_id) ?? edge.from_node_id,
+        to_node_id: nodeIdForLegacyAtom.get(edge.to_node_id) ?? edge.to_node_id,
+        requires: typeof edge.requires === "object" ? edge.requires : { kind: "source_terminal_success" },
+      };
+    return {
+      id: edge.id,
+      from_node_id: nodeIdForLegacyAtom.get(edge.from_atom_id) ?? edge.from_atom_id,
+      to_node_id: nodeIdForLegacyAtom.get(edge.to_atom_id) ?? edge.to_atom_id,
+      requires: { kind: "source_terminal_success" },
+    };
+  });
+  return { ...rawPlan, atomic_nodes: atomicNodes, atomic_edges: atomicEdges };
+}
+
+/** Materialize the canonical graph for a contract-3 ledger without inventing
+ * runtime facts. This is safe for maintenance because it only derives nodes
+ * and edges from the already persisted plan atoms. */
+export function canonicalizeContract3Ledger(raw: any): any {
+  const candidate = structuredClone(raw);
+  const tasks = Array.isArray(candidate.tasks) ? candidate.tasks : [];
+  candidate.plans = Array.isArray(candidate.plans)
+    ? candidate.plans.map((item: any) => canonicalizeContract3Plan(item, tasks))
+    : [];
+  const activePlanId = candidate.execution_plan_id ?? candidate.active_plan_id;
+  const activePlan = candidate.plans.find((item: any) => item.id === activePlanId) ?? candidate.plans[0];
+  if (activePlan) {
+    candidate.atomic_nodes = Array.isArray(candidate.atomic_nodes) && candidate.atomic_nodes.length
+      ? candidate.atomic_nodes
+      : activePlan.atomic_nodes;
+    candidate.atomic_edges = Array.isArray(candidate.atomic_edges) && candidate.atomic_edges.some((edge: any) => "from_node_id" in edge)
+      ? candidate.atomic_edges
+      : activePlan.atomic_edges;
+  }
+  return candidate;
+}
+
 export function evaluateMilestone(
   node: Extract<AtomicNode, { kind: "milestone" }>,
   incoming: readonly { satisfied: boolean; blocked?: boolean; evidence_refs?: string[] }[],
@@ -232,11 +370,11 @@ export function contract3MigrationCandidate(raw: any): any {
     .map((edge: any) => ({ id: edge.id, from_node_id: edge.from_atom_id, to_node_id: edge.to_atom_id, requires: { kind: "source_terminal_success" } }));
   candidate.contract_version = 3;
   candidate.groups = Array.isArray(candidate.groups) ? candidate.groups.map((group: any) => {
-    if (group.pr && typeof group.pr.state === "string") return group;
     if (group.parent_pr) {
       const state = group.state === "merged" ? "merged" : group.state === "closed" ? "closed" : "published";
       return { ...group, pr: state === "merged" ? { state, pr: group.parent_pr, parent_branch: group.parent_branch ?? "main", merge_sha: group.merge_sha ?? "0000000000000000000000000000000000000000" } : state === "closed" ? { state, pr: group.parent_pr, parent_branch: group.parent_branch ?? "main", closed_at: group.finished_at ?? new Date(0).toISOString(), closed_reason: "provider_closed" } : { state, pr: group.parent_pr, parent_branch: group.parent_branch ?? "main" } };
     }
+    if (group.pr && typeof group.pr.state === "string") return group;
     return { ...group, pr: { state: "unpublished" } };
   }) : candidate.groups;
   candidate.tasks = Array.isArray(candidate.tasks) ? candidate.tasks.map((task: any) => {
@@ -249,12 +387,5 @@ export function contract3MigrationCandidate(raw: any): any {
   }) : candidate.tasks;
   candidate.atomic_nodes = Array.isArray(raw?.atomic_nodes) && raw.atomic_nodes.length ? raw.atomic_nodes : legacyNodes;
   candidate.atomic_edges = Array.isArray(raw?.atomic_edges) && raw.atomic_edges.length ? raw.atomic_edges : canonicalEdges;
-  candidate.plans = Array.isArray(candidate.plans)
-    ? candidate.plans.map((plan: any) => ({
-        ...plan,
-        atomic_nodes: Array.isArray(plan.atomic_nodes) && plan.atomic_nodes.length ? plan.atomic_nodes : candidate.atomic_nodes,
-        atomic_edges: Array.isArray(plan.atomic_edges) && plan.atomic_edges.some((edge: any) => edge?.from_node_id) ? plan.atomic_edges : candidate.atomic_edges,
-      }))
-    : candidate.plans;
-  return candidate;
+  return canonicalizeContract3Ledger(candidate);
 }

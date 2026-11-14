@@ -28,7 +28,7 @@ bunx --bun @loomhelm/multi-task-flow@0.2.16 flow view --input - < view-request.j
 | - | - |
 | package | `@loomhelm/multi-task-flow@0.2.16` |
 | compatibility line | `compat-v1` |
-| Skill | `2.7.7` |
+| Skill | `2.7.8` |
 | ledger contract | `3` |
 | API | `1` |
 | frontend | `1` |

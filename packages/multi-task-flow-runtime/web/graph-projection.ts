@@ -23,12 +23,13 @@ export const GRAPH_SHAPES = {
 
 export const MAX_GRAPH_PATHS = 512;
 
-export type GraphNodeKind = "group" | "task" | "milestone" | "other";
+export type GraphNodeKind = "group" | "task" | "milestone" | "boundary" | "other";
 
 export type GraphProjectionNode = {
   id: string;
   parentId: string | null;
   nodeKind: GraphNodeKind;
+  boundary?: "start" | "end";
   sourceNodeId: string | null;
   refId: string | null;
   groupId: string | null;
@@ -75,10 +76,11 @@ export type GraphProjection = {
 
 export type AtomicGraphProjectionNode = {
   id: string;
-  kind: "work" | "milestone";
+  kind: "work" | "milestone" | "boundary";
   title: string;
   scope: string;
   status: string;
+  boundary?: "start" | "end";
   evidence: string[];
   blocker: string | null;
   acceptance_count: number;
@@ -92,6 +94,7 @@ export type AtomicGraphProjection = {
 export function projectAtomicGraph(nodes: readonly AtomicNode[], edges: readonly AtomicEdge[]): AtomicGraphProjection {
   return {
     nodes: nodes.map((node) => {
+      if (node.kind === "boundary") return { id: node.id, kind: "boundary", title: node.title, scope: "global", status: node.state, boundary: node.boundary, evidence: [], blocker: null, acceptance_count: 0 };
       if (node.kind === "milestone") return { id: node.id, kind: "milestone", title: node.title, scope: node.scope ? "milestone" : "design", status: node.state, evidence: [], blocker: null, acceptance_count: node.acceptance.length };
       const scope = !node.scope ? "design" : node.scope.kind === "task" ? `task:${node.scope.task_id} / delivery-unit:${node.scope.delivery_unit_id}` : `delivery-unit:${node.scope.delivery_unit_id}`;
       return { id: node.id, kind: "work", title: node.title, scope, status: node.state, evidence: node.result?.evidence_refs ?? node.runtime?.evidence_refs ?? [], blocker: node.blocker?.message ?? null, acceptance_count: node.acceptance.length };

@@ -22,6 +22,22 @@ describe("dashboard details content", () => {
     expect(document.querySelector(".detail-duration")?.textContent).toBe("未知");
     expect(duration(details.groupPreview(group))).toBe("未知");
   });
+  test("group details keep contribution atoms out of the lifecycle inspector", () => {
+    const group = {
+      id: "dashboard",
+      title: "展示",
+      state: "active",
+      parent_pr: { url: null },
+      atoms: [{ id: "group-atom-1", title: "创建父 PR", purpose: "", output: "", lifecycle_stage: "pr_created", status: "completed" }],
+      contribution_atoms: [{ id: "contribution-atom-1", title: "验证", task_id: "task", task_title: "贡献任务", status: "planned" }],
+    } as unknown as Group;
+    const task = { id: "task", title: "贡献任务", group_id: "dashboard", started_at: null, finished_at: null };
+    const view = { groups: [group], tasks: [task], actual_intervals: [] } as unknown as View;
+    const details = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "", time: () => "", safeExternal: () => null });
+    details.showGroup(group);
+    expect(document.querySelector("#details-content")?.textContent).toContain("创建父 PR");
+    expect(document.querySelector("#details-content")?.textContent).not.toContain("贡献任务原子");
+  });
   test("group details include the full Agent output at the end", () => {
     const group = { id: "core", title: "核心", state: "closed", agent_thread_id: "thread-group", parent_pr: { url: null }, latest_agent_output: { thread_id: "thread-group", agent_state: "idle", stale: false, state: "available", text: "交付单元已完成", turn_id: null, message_id: null, phase: null, message_status: null, observed_at: null } } as Group;
     const view = { groups: [group], tasks: [], actual_intervals: [] } as unknown as View;

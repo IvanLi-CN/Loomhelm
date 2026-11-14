@@ -187,7 +187,11 @@ function legacyLedger(ledger: Ledger): boolean {
   return ledger.source_schema_version === 1 && ledger.contract_version !== 2;
 }
 function deliveryUnitPr(owner: Ledger["groups"][number]): ExternalRef | null {
-  if (owner.pr && "state" in owner.pr) return "pr" in owner.pr ? owner.pr.pr : null;
+  if (owner.pr && "state" in owner.pr) {
+    if ("pr" in owner.pr && owner.pr.pr) return owner.pr.pr;
+    if (owner.pr.state === "unpublished" && owner.parent_pr) return owner.parent_pr;
+    return null;
+  }
   return owner.parent_pr;
 }
 function taskPrRef(task: Ledger["tasks"][number]): ExternalRef | null {
@@ -242,6 +246,8 @@ function requireContributionDispatchGate(
         ],
       },
     );
+  if (owner.delivery_unit_kind === "regular")
+    requireHandoffAcknowledged(ledger, owner);
 }
 function ensureSchedulable(ledger: Ledger, candidate: Plan): void {
   if (legacyLedger(ledger) || ledger.source_schema_version === 1) return;
@@ -933,6 +939,108 @@ export function ready(ledger: Ledger, taskId: string): boolean {
   if (!target) return false;
   const nodes = new Map(currentPlan.nodes.map((item) => [item.id, item]));
   return nodeSatisfied(ledger, target, nodes, currentPlan.edges, new Set());
+}
+
+function deliveryUnitPrMerged(group: Ledger["groups"][number]): boolean {
+  const canonicalPrState = group.pr && "state" in group.pr ? group.pr.state : null;
+  return Boolean(
+    group.state === "merged" &&
+      group.merge_sha &&
+      group.lifecycle.pr_merged === "passed" &&
+      (canonicalPrState === null || canonicalPrState === "merged"),
+  );
+}
+
+function requireHandoffAcknowledged(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+): void {
+  const dispatch = ledger.operations.find(
+    (item) =>
+      item.kind === "dispatch" &&
+      item.request.target_type === "group" &&
+      item.target_id === group.id &&
+      item.status === "succeeded",
+  );
+  const notificationId = dispatch?.request.handoff_notification_id;
+  const notice = notificationId
+    ? ledger.notifications.find((item) => item.id === notificationId)
+    : null;
+  requireCondition(
+    !!notice,
+    "HANDOFF_PENDING",
+    "Delivery-unit formal handoff has not been recorded",
+    4,
+  );
+  requireCondition(
+    notice!.delivery_status !== "unknown",
+    "RECONCILIATION_REQUIRED",
+    "Delivery-unit handoff delivery is unknown; reconcile it before execution",
+    5,
+  );
+  requireCondition(
+    notice!.status === "acknowledged",
+    "HANDOFF_PENDING",
+    "Delivery Agent must acknowledge the formal handoff before execution",
+    4,
+  );
+}
+
+/**
+ * A regular Delivery Agent may be created only when the execution graph has a
+ * ready task and every upstream delivery unit has completed its parent PR
+ * merge. The task dispatch gate alone cannot enforce this because group
+ * conversation creation happens before any task is selected.
+ */
+export function requireGroupDispatchGate(
+  ledger: Ledger,
+  target: Ledger["groups"][number],
+): void {
+  if (legacyLedger(ledger)) return;
+  const currentPlan = executionPlan(ledger);
+  const nodes = new Map(currentPlan.nodes.map((item) => [item.id, item]));
+  const taskNodes = currentPlan.nodes.filter(
+    (item) => item.kind === "task" && item.group_id === target.id && item.ref_id,
+  );
+  const upstreamGroupIds = new Set<string>();
+  for (const taskNode of taskNodes) {
+    for (const edge of currentPlan.edges.filter((item) => item.to_node_id === taskNode.id)) {
+      const source = nodes.get(edge.from_node_id);
+      if (source?.group_id && source.group_id !== target.id)
+        upstreamGroupIds.add(source.group_id);
+    }
+  }
+  const missingUpstream = [...upstreamGroupIds].filter((groupId) => {
+    const upstream = ledger.groups.find((item) => item.id === groupId);
+    return !upstream || !deliveryUnitPrMerged(upstream);
+  });
+  if (missingUpstream.length)
+    throw new ContractError(
+      "DELIVERY_GATE_PENDING",
+      "Regular delivery-unit conversation cannot be created before upstream delivery-unit PRs are merged",
+      4,
+      {
+        target_type: "group",
+        target_id: target.id,
+        missing: missingUpstream.map((groupId) => `upstream_pr_merged:${groupId}`),
+        recovery: ["complete the upstream delivery-unit PR merge lifecycle", "retry dispatch-group-claim"],
+      },
+    );
+  const readyTask = taskNodes.some((node) => {
+    const task = ledger.tasks.find((item) => item.id === node.ref_id);
+    return Boolean(
+      task &&
+        task.disposition === "active" &&
+        ["planned", "ready"].includes(task.state) &&
+        ready(ledger, task.id),
+    );
+  });
+  requireCondition(
+    readyTask,
+    "DEPENDENCIES_PENDING",
+    "Regular delivery-unit conversation cannot be created before one of its tasks is dependency-ready",
+    4,
+  );
 }
 
 function ownerOfTask(ledger: Ledger, request: Request, taskId: string): void {
@@ -1739,6 +1847,7 @@ export function execute(
         "Group already started or bound",
         4,
       );
+      requireGroupDispatchGate(ledger, target);
       requireCondition(
         !ledger.operations.some(
           (item) =>
@@ -1785,6 +1894,8 @@ export function execute(
         op.request.target_type === "group"
           ? find(ledger.groups, (item) => item.id === op.target_id, "Group")
           : null;
+      if (targetGroup && ledger.contract_version >= 3)
+        requireGroupDispatchGate(ledger, targetGroup);
       const evidence = object(payload.native_evidence ?? {});
       const observed = creationObservations(op, payload);
       if (outcome === "failed") requireCondition(Object.keys(observed).length === 0,
@@ -1795,7 +1906,9 @@ export function execute(
       if (op.request.execution_profile && outcome !== "unknown") {
         requireCondition(
           evidence.source === "multi-task-flow-cli" &&
-            ["thread/start", "codex exec"].includes(String(evidence.native_tool_name)) &&
+            (ledger.contract_version < 3
+              ? ["thread/start", "codex exec"].includes(String(evidence.native_tool_name))
+              : evidence.native_tool_name === "codex exec") &&
             evidence.operation_id === op.id &&
             evidence.native_request_id === op.request.native_request_id &&
             typeof op.request.native_request_id === "string" &&
@@ -1810,6 +1923,15 @@ export function execute(
       }
       if ((op.request.creation_parameters as any)?.transport === "codex-exec" && outcome !== "unknown")
         requireCondition(evidence.native_tool_name === "codex exec", "EVIDENCE_REQUIRED", "CLI dispatch requires real exec evidence", 5);
+      if (ledger.contract_version >= 3 && outcome !== "unknown")
+        requireCondition(
+          evidence.source === "multi-task-flow-cli" &&
+            evidence.native_tool_name === "codex exec" &&
+            object(op.request.creation_parameters ?? {}).transport === "codex-exec",
+          "EVIDENCE_REQUIRED",
+          "Contract-3 dispatches must be created through the multi-task-flow codex exec path",
+          5,
+        );
       if (evidence.native_tool_name === "codex exec" && outcome === "failed") requireCondition(!op.request.observed_thread_id &&
         !payload.thread_id && !evidence.thread_id && !evidence.workspace_path && !evidence.initial_head && !evidence.turn_completed &&
         evidence.process_started === false && evidence.resources_created === false,
@@ -1842,9 +1964,10 @@ export function execute(
           3,
         );
         requireCondition(
-          ["create_thread", "multi-task-flow-cli"].includes(
-            object(payload.native_evidence).source,
-          ),
+          ledger.contract_version >= 3
+            ? object(payload.native_evidence).source === "multi-task-flow-cli" &&
+              object(payload.native_evidence).native_tool_name === "codex exec"
+            : ["create_thread", "multi-task-flow-cli"].includes(object(payload.native_evidence).source),
           "EVIDENCE_REQUIRED",
           "Native creation evidence required",
           5,
@@ -2079,6 +2202,21 @@ export function execute(
         op.request.target_type === "group"
           ? find(ledger.groups, (item) => item.id === op.target_id, "Group")
           : find(ledger.tasks, (item) => item.id === op.target_id, "Task");
+      if (ledger.contract_version >= 3) {
+        if (op.request.target_type === "group")
+          requireGroupDispatchGate(ledger, dispatchTarget as Ledger["groups"][number]);
+        else if (isContributionKind((dispatchTarget as Ledger["tasks"][number]).kind))
+          requireContributionDispatchGate(
+            ledger,
+            find(ledger.groups, (item) => item.id === (dispatchTarget as Ledger["tasks"][number]).group_id, "Group"),
+          );
+        requireCondition(
+          object(payload.creation_parameters ?? {}).transport === "codex-exec",
+          "TRANSPORT_REQUIRED",
+          "Contract-3 dispatches must bind the multi-task-flow codex exec transport",
+          5,
+        );
+      }
       requireCondition(
         stable(op.request.execution_profile) ===
           stable(effectiveProfile(ledger, dispatchTarget)),
@@ -3319,6 +3457,11 @@ export function execute(
       if (state === "running" && cliDispatches.length) requireCondition(
         owner.lifecycle.workspace_ready === "passed" && !!cliDispatch?.request.development_baseline,
         "BASELINE_REQUIRED", "Record verified group workspace baseline before running", 4);
+      if (state === "running" && ledger.contract_version >= 3 && owner.delivery_unit_kind === "regular")
+      {
+        requireGroupDispatchGate(ledger, owner);
+        requireHandoffAcknowledged(ledger, owner);
+      }
       if (state === "running" && cliDispatch?.request.development_baseline && ledger.contract_version === 3)
         requireCondition(
           cliDispatch.request.development_baseline.sha === owner.current_sha,

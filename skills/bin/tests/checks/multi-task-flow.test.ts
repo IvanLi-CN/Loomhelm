@@ -112,6 +112,19 @@ test("multi-task-flow CLI documentation pins package and service identity", () =
   expect(packageAdr).not.toContain("bun x --bun --package @loomhelm/multi-task-flow");
 });
 
+test("multi-task-flow documents the coordinator-only native conversation boundary", () => {
+  const skill = readFileSync(
+    join(repositoryRoot, "skills/multi-task-flow/SKILL.md"),
+    "utf8",
+  );
+  expect(skill).toContain("Contract 3 下任何 Agent 都不得直接调用");
+  expect(skill).toContain("mcp__codex_app__create_thread");
+  expect(skill).toContain("conversation-create` 是唯一入口");
+  expect(skill).toContain("capability gap");
+  expect(skill).toContain("orphan thread / orchestration violation");
+  expect(skill).toContain("释放 claim 或容量");
+});
+
 test("multi-task-flow task-local direct delivery requires an open PR", () => {
   const temporary = mkdtempSync(join(tmpdir(), "checks-multi-task-terminal-"));
   try {
