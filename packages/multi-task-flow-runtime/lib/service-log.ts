@@ -20,6 +20,7 @@ export function serviceLog(
     | "stopping"
     | "startup_failed"
     | "lease_failed"
+    | "worker_diagnostic"
     | "maintenance_failed"
     | "maintenance_recovered",
   generation: string,

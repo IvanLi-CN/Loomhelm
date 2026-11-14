@@ -117,6 +117,30 @@ function time(value: string | null): string {
   return formatLocalTime(value);
 }
 let serviceSessionExpired = false;
+let workerDiagnostic: { diagnostic_id: string; run_id: string; stage: string; safe_summary?: string; retryable: boolean; reconnect_required: boolean } | null = null;
+let reconnectBlocked = false;
+function showWorkerDiagnostic(value: Partial<typeof workerDiagnostic> & { diagnostic_id?: string; run_id?: string; stage?: string; code?: string }): void {
+  workerDiagnostic = {
+    diagnostic_id: value.diagnostic_id ?? "unknown",
+    run_id: value.run_id ?? location.pathname.split("/")[2] ?? "unknown",
+    stage: value.stage ?? "request_dispatch",
+    safe_summary: value.safe_summary ?? "展示服务暂时不可用",
+    retryable: value.retryable ?? false,
+    reconnect_required: value.reconnect_required ?? true,
+  };
+  reconnectBlocked = true;
+  const card = $("worker-diagnostic");
+  $("worker-diagnostic-summary").textContent = `运行 ${workerDiagnostic.run_id} · 诊断 ${workerDiagnostic.diagnostic_id} · 阶段 ${workerDiagnostic.stage}：${workerDiagnostic.safe_summary}`;
+  card.hidden = false;
+  connection("stale");
+}
+async function reconnectViewer(): Promise<void> {
+  const target = location.pathname + location.search;
+  const response = await fetch(`/api/v1/reconnect?target=${encodeURIComponent(target)}`, { method: "POST" });
+  const result = await response.json().catch(() => ({})) as { login_url?: string };
+  if (!response.ok || !result.login_url) throw new Error("无法创建新的连接入口");
+  location.assign(result.login_url);
+}
 document.addEventListener("service-session", (event) => {
   serviceSessionExpired = Boolean((event as CustomEvent).detail?.expired);
   connection(serviceSessionExpired ? "stale" : ($("connection").dataset.state as "live" | "stale" | "connecting") || "connecting");
@@ -639,13 +663,18 @@ function renderAtomicGraph(): void {
 }
 function setTab(tab: DashboardTab, user = true): void { viewState = { ...viewState, tab, ...(tab === "atomic" ? { graphMode: "atomic" as const } : tab === "graph" ? { graphMode: "aggregate" as const } : {}) }; if (user) userChangedTab = true; syncUrl(); render(); }
 async function refresh(): Promise<void> {
+  if (reconnectBlocked) return;
   const serial = ++requestSerial;
   const outputEpoch = outputSnapshots.epoch;
   const requestedPlan = activePlan;
   try {
     const query = requestedPlan ? `?plan=${encodeURIComponent(requestedPlan)}` : ""; let response = await fetch(`api/view${query}`, { cache: "no-store" });
     if (response.status === 404 && requestedPlan) { if (serial !== requestSerial) return; activePlan = ""; viewState = { ...viewState, plan: null }; syncUrl(); response = await fetch("api/view", { cache: "no-store" }); }
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({})) as { code?: string; diagnostic_id?: string; run_id?: string; stage?: string; retryable?: boolean; reconnect_required?: boolean };
+      if (failure.code === "RUN_WORKER_UNAVAILABLE" || response.status === 401 || response.status === 409 || response.status === 503) showWorkerDiagnostic(failure);
+      throw new Error(`HTTP ${response.status}`);
+    }
     let result = await response.json() as ViewResponse;
     if (!viewState.plan && requestedPlan && result.active_plan_id !== requestedPlan) {
       if (serial !== requestSerial) return;
@@ -675,7 +704,7 @@ async function refresh(): Promise<void> {
       card?.scrollIntoView({ block: "center", inline: "center" });
       card?.querySelector<HTMLElement>(".task-card-select")?.focus({ preventScroll: true });
     }
-  } catch (error) { if (serial !== requestSerial) return; connection("stale"); if (!data) { $("load-error").hidden = false; $("load-error").textContent = `首次加载失败：${error instanceof Error ? error.message : "无法读取数据"}`; } }
+  } catch (error) { if (serial !== requestSerial) return; connection("stale"); if (!data && !workerDiagnostic) { $("load-error").hidden = false; $("load-error").textContent = `首次加载失败：${error instanceof Error ? error.message : "无法读取数据"}`; } }
 }
 async function loadTheme(): Promise<void> { const serial = ++themeRequestSerial; await themeWriteQueue; try { const response = await fetch("api/preferences", { cache: "no-store" }); if (!response.ok) return; const loaded = (await response.json() as { theme: Theme }).theme; if (serial === themeRequestSerial) applyTheme(loaded); } catch {} }
 function applyTheme(theme: Theme): void { document.documentElement.dataset.theme = theme; setMenuValue("theme", theme); }
@@ -700,9 +729,11 @@ installViewStateNavigation(window, { getSearch: () => window.location.search, ge
 window.addEventListener("keydown", (event) => { trapDetailsFocus(event); trapPlanInfoFocus(event); if (event.key === "Escape" && planInfoIsOpen()) { event.preventDefault(); closePlanInfo(); } else if (event.key === "Escape" && viewState.detail) closeDetails(); });
 window.addEventListener("resize", () => { setDetailsHeight(Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.4, false); refreshResponsiveDetails(); syncPlanInfoSurface(); if (data && viewState.tab === "graph" && graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")) graphController.render(filteredTasks(), viewState.group ? new Set([viewState.group]) : undefined); window.requestAnimationFrame(() => timelineController.redraw()); });
 anyHoverCapability.addEventListener("change", refreshResponsiveDetails); anyFinePointerCapability.addEventListener("change", refreshResponsiveDetails);
-const stream = new EventSource("api/events"); stream.addEventListener("open", () => { connected = true; connection("live"); void refresh(); }); stream.addEventListener("revision", () => void refresh()); stream.addEventListener("stale", () => { connected = false; connection("stale"); }); stream.addEventListener("heartbeat", (event) => { try { if (JSON.parse((event as MessageEvent).data).watching && !connected) { connected = true; void refresh(); } } catch { connection("stale"); } }); stream.addEventListener("error", () => { connected = false; connection("stale"); });
+const stream = new EventSource("api/events"); stream.addEventListener("open", () => { if (reconnectBlocked) return; connected = true; connection("live"); void refresh(); }); stream.addEventListener("revision", () => void refresh()); stream.addEventListener("stale", () => { connected = false; connection("stale"); }); stream.addEventListener("heartbeat", (event) => { try { if (!reconnectBlocked && JSON.parse((event as MessageEvent).data).watching && !connected) { connected = true; void refresh(); } } catch { connection("stale"); } }); stream.addEventListener("error", () => { connected = false; stream.close(); if (!reconnectBlocked) connection("stale"); });
 hoverBridge = createHoverPreviewBridge($("hover-preview"), dismissHoverPreview);
-window.setInterval(refreshCardDurations, 60_000); window.setInterval(() => { if (!connected) void refresh(); }, 5_000);
+window.setInterval(refreshCardDurations, 60_000); window.setInterval(() => { if (!connected && !reconnectBlocked) void refresh(); }, 5_000);
+$("worker-diagnostic-copy").addEventListener("click", async () => { if (!workerDiagnostic) return; await navigator.clipboard?.writeText(JSON.stringify(workerDiagnostic)); });
+$("worker-diagnostic-reconnect").addEventListener("click", () => { reconnectBlocked = false; void reconnectViewer().catch((error) => showWorkerDiagnostic({ ...workerDiagnostic, safe_summary: error instanceof Error ? error.message : "无法重新连接" })); });
 connection("connecting"); void loadTheme(); void refresh();
 
 stream.addEventListener("agent-output", event => {

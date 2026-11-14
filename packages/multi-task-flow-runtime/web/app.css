@@ -804,3 +804,6 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .task-context-menu button[aria-disabled=true] { color: var(--muted); cursor: default; }
 .task-context-menu small { font-size: 11px; }
 .task-copy-feedback { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 10001; padding: 10px 16px; background: var(--raised); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 20px #0003; }
+.worker-diagnostic { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+.worker-diagnostic strong { color:var(--negative); }
+.worker-diagnostic span { flex:1 1 280px; overflow-wrap:anywhere; }

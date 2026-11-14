@@ -14,6 +14,26 @@ Loomhelm 的后端服务，负责 API、持久化、权限、任务状态和远�
 
 运行在浏览器或 PWA 容器中的 Loomhelm 用户界面，负责用户交互和服务端访问。
 
+### Viewer daemon
+
+运行在 Host 上的本地 viewer 守护进程，负责 loopback HTTP 入口、鉴权、浏览器会话、租约和 run 路由。
+
+### Viewer gateway
+
+Viewer daemon 中接收浏览器请求并按 run 转发的网关边界；它不取代 Ledger，也不承担业务事实写入。
+
+### Run worker
+
+为单个 Run 和确定的 viewer/ledger 兼容身份提供页面、资源和只读投影的隔离运行单元；worker 的失败不等同于 Viewer daemon 停止。
+
+### Worker diagnostic
+
+描述一次 Run worker 生命周期失败的结构化诊断事实，至少包含 Run、worker 身份、失败阶段、稳定错误码、时间、重启计数和恢复状态。
+
+### Browser reconnect
+
+浏览器标签页在 Viewer daemon 重启、worker 重建或会话失效后，使用新的登录会话回到原 Run 的受控恢复动作。
+
 ## 相关对象
 
 ### Codex
