@@ -152,25 +152,15 @@ describe("orchestrate init", () => {
     }
   });
 
-  test("defaults a new delivery unit to its independent five-step atom plan", async () => {
+  test("rejects a delivery unit whose preset lifecycle relations were not declared by the Agent", async () => {
     const root = temporaryRoot();
     const input = structuredClone(initialInput);
     input.payload.initial_plan.group_atoms = [];
     input.payload.groups = input.payload.groups.map((group: any) => ({ ...group, atoms: [] }));
     const result = await runInit(root, input);
-    expect(result.output).toMatchObject({ ok: true, code: "CREATED" });
-    expect(result.exitCode).toBe(0);
-    const ledger = JSON.parse(readFileSync(join(root, "runs", input.run_id, "ledger.json"), "utf8"));
-
-    expect(ledger.plans[0].group_atoms).toHaveLength(5);
-    expect(ledger.groups[0].atoms.map((atom: any) => atom.title)).toEqual([
-      "准备父分支",
-      "创建父 PR",
-      "验收集成结果",
-      "合并父 PR",
-      "收口",
-    ]);
-    expect(ledger.groups[0].atoms.every((atom: any) => atom.status === "planned")).toBe(true);
+    expect(result.output).toMatchObject({ ok: false, code: "ATOMIC_GRAPH_INCOMPLETE" });
+    expect(result.exitCode).toBe(2);
+    expect(existsSync(join(root, "runs", input.run_id))).toBe(false);
   });
 
   test("accepts one main-owned bootstrap unit and rejects invalid bootstrap topology", async () => {

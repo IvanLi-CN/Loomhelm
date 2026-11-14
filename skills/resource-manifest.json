@@ -7187,7 +7187,7 @@
     {
       "path": "skills/multi-task-flow/lib/schema.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/schema.ts",
-      "installedSha256": "9722cd47df7435c1584484737a2993909a5967beab440ac34512a11f0134a138"
+      "installedSha256": "864eddffd536ded84f35be53b9aed5cd760ac19fa551c4d3d3000e532b567047"
     },
     {
       "path": "skills/multi-task-flow/lib/server-contract.ts",
@@ -7461,7 +7461,7 @@
     {
       "path": "skills/multi-task-flow/tests/orchestrate.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/orchestrate.test.ts",
-      "installedSha256": "b8ab5ce0d1464a45b9bd6d4a4ea5532513e7fc52d63d4b3f5303578c1222d299"
+      "installedSha256": "f147b10b4dc1af20e3ab40101b610bbb97c172b129823e840f8fe85bb7ba8be7"
     },
     {
       "path": "skills/multi-task-flow/tests/output-events.test.ts",
@@ -8762,12 +8762,12 @@
     {
       "path": "skills/multi-task-flow/lib/atomic-orchestration.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/atomic-orchestration.ts",
-      "installedSha256": "9b91d6a4188da5779f98f77f1d5206ab31188782636905d40e4c11800c3671bc"
+      "installedSha256": "1e1ffdcae18fa25789e99b29c0440257ef149c467604f4c429905200d391dca7"
     },
     {
       "path": "skills/multi-task-flow/tests/atomic-orchestration-schema.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/atomic-orchestration-schema.test.ts",
-      "installedSha256": "555ff24344448c454eadb1930ffb6b0f3ffadd54fcb2c90799870021492046d3"
+      "installedSha256": "416410b1d9fc65132677a57c010c0e730d4668eca78655cdf0a83b2121a3f0e8"
     },
     {
       "path": "skills/multi-task-flow/tests/task-kind.test.ts",

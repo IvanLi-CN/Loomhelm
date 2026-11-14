@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { atomicNode, canonicalizeContract3Ledger, canonicalizeContract3Plan, contract3MigrationCandidate, deriveBusinessStatus, evaluateMilestone, taskPrBinding, validateAtomicGraph, validateContributionStart } from "../lib/atomic-orchestration";
+import { atomicNode, canonicalizeContract3Ledger, canonicalizeContract3Plan, contract3MigrationCandidate, deriveBusinessStatus, evaluateMilestone, taskPrBinding, validateAtomicGraph, validateContributionStart, validateDeliveryUnitLifecycleEdges } from "../lib/atomic-orchestration";
 
 const ref = { provider: "github", repository: "org/repo", id: "pr-1", url: "https://github.com/org/repo/pull/1" };
 
@@ -147,7 +147,30 @@ test("derives atomic dependencies from the legacy task graph when no atom edges 
   expect(() => validateAtomicGraph(plan.atomic_nodes, plan.atomic_edges)).not.toThrow();
 });
 
-test("derives delivery-unit lifecycle order when legacy group atoms have no edges", () => {
+test("does not invent delivery-unit lifecycle edges when explicit atomic edges also exist", () => {
+  const plan = canonicalizeContract3Plan({
+    nodes: [],
+    edges: [],
+    atoms: [{ id: "task-atom", task_id: "task-1", title: "贡献实现", purpose: "", output: "" }],
+    group_atoms: [
+      { id: "group-prepare", group_id: "group-1", title: "准备父分支", purpose: "", output: "", lifecycle_stage: "workspace_ready" },
+      { id: "group-pr", group_id: "group-1", title: "创建父 PR", purpose: "", output: "", lifecycle_stage: "pr_created" },
+      { id: "group-verify", group_id: "group-1", title: "验收集成结果", purpose: "", output: "", lifecycle_stage: null },
+    ],
+    atomic_edges: [{ id: "explicit", from_atom_id: "task-atom", to_atom_id: "group-prepare" }],
+  }, [{ id: "task-1", group_id: "group-1", kind: "contribution" }]);
+
+  expect(plan.atomic_edges.map((edge: { from_node_id: string; to_node_id: string }) => `${edge.from_node_id}->${edge.to_node_id}`)).toEqual(["task-atom->group-prepare"]);
+});
+
+test("requires an Agent-declared path across the five preset delivery-unit lifecycle atoms", () => {
+  const atoms = ["prepare-parent", "create-pr", "verify-integration", "merge-pr", "closeout"].map((suffix) => ({ id: `group-1-${suffix}`, group_id: "group-1" }));
+  expect(() => validateDeliveryUnitLifecycleEdges(atoms, [{ from_node_id: atoms[0]!.id, to_node_id: atoms[1]!.id }])).toThrow("Agent-declared dependency path");
+  const edges = atoms.slice(1).map((atom, index) => ({ from_node_id: atoms[index]!.id, to_node_id: atom.id }));
+  expect(() => validateDeliveryUnitLifecycleEdges(atoms, edges)).not.toThrow();
+});
+
+test("does not derive delivery-unit lifecycle order when legacy group atoms have no edges", () => {
   const plan = canonicalizeContract3Plan({
     atoms: [],
     group_atoms: [
@@ -158,10 +181,7 @@ test("derives delivery-unit lifecycle order when legacy group atoms have no edge
     atomic_edges: [],
   });
 
-  expect(plan.atomic_edges).toEqual([
-    { id: "atomic-lifecycle-du-1-1", from_node_id: "group-prepare", to_node_id: "group-pr", requires: { kind: "source_terminal_success" } },
-    { id: "atomic-lifecycle-du-1-2", from_node_id: "group-pr", to_node_id: "group-merge", requires: { kind: "source_terminal_success" } },
-  ]);
+  expect(plan.atomic_edges).toEqual([]);
   expect(() => validateAtomicGraph(plan.atomic_nodes, plan.atomic_edges)).not.toThrow();
 });
 

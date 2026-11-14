@@ -287,20 +287,11 @@ export function canonicalizeContract3Plan(
       ? [{ id: `atomic-${edge.id}`, from_node_id: from, to_node_id: to, requires: { kind: "source_terminal_success" } }]
       : [];
   });
-  const lifecycleAtomsByGroup = new Map<string, string[]>();
-  for (const atom of rawPlan.group_atoms ?? []) {
-    const list = lifecycleAtomsByGroup.get(atom.group_id) ?? [];
-    list.push(atom.id);
-    lifecycleAtomsByGroup.set(atom.group_id, list);
-  }
-  for (const [groupId, atomIds] of lifecycleAtomsByGroup) {
-    for (let index = 1; index < atomIds.length; index++) {
-      const from = nodeIdForLegacyAtom.get(atomIds[index - 1]!);
-      const to = nodeIdForLegacyAtom.get(atomIds[index]!);
-      if (from && to) derivedEdges.push({ id: `atomic-lifecycle-${groupId}-${index}`, from_node_id: from, to_node_id: to, requires: { kind: "source_terminal_success" } });
-    }
-  }
-  const atomicEdges = (declaredEdges.length ? declaredEdges : derivedEdges).map((edge: any) => {
+  const edgeCandidates = [...declaredEdges, ...(declaredEdges.length ? [] : derivedEdges)];
+  const atomicEdges = edgeCandidates.filter((edge: any, index: number, all: any[]) => {
+    const key = `${edge.from_node_id ?? edge.from_atom_id}->${edge.to_node_id ?? edge.to_atom_id}`;
+    return all.findIndex((candidate: any) => `${candidate.from_node_id ?? candidate.from_atom_id}->${candidate.to_node_id ?? candidate.to_atom_id}` === key) === index;
+  }).map((edge: any) => {
     if ("from_node_id" in edge)
       return {
         id: edge.id,
@@ -316,6 +307,44 @@ export function canonicalizeContract3Plan(
     };
   });
   return { ...rawPlan, atomic_nodes: atomicNodes, atomic_edges: atomicEdges };
+}
+
+const deliveryUnitLifecycleSuffixes = ["prepare-parent", "create-pr", "verify-integration", "merge-pr", "closeout"] as const;
+
+/** Require Agent-declared delivery-unit lifecycle ordering without inventing edges. */
+export function validateDeliveryUnitLifecycleEdges(groupAtoms: readonly any[], edges: readonly any[]): void {
+  const groups = new Map<string, any[]>();
+  for (const atom of groupAtoms) {
+    const list = groups.get(atom.group_id) ?? [];
+    list.push(atom);
+    groups.set(atom.group_id, list);
+  }
+  for (const [groupId, atoms] of groups) {
+    const bySuffix = new Map(deliveryUnitLifecycleSuffixes.map((suffix) => [suffix, atoms.find((atom) => atom.id.endsWith(`-${suffix}`))]));
+    if (!deliveryUnitLifecycleSuffixes.some((suffix) => bySuffix.get(suffix))) continue;
+    for (const suffix of deliveryUnitLifecycleSuffixes) if (!bySuffix.get(suffix)) throw new Error(`Delivery unit ${groupId} has an incomplete preset lifecycle atom set`);
+    const outgoing = new Map<string, string[]>();
+    for (const edge of edges) {
+      const from = edge.from_node_id ?? edge.from_atom_id;
+      const to = edge.to_node_id ?? edge.to_atom_id;
+      if (typeof from === "string" && typeof to === "string") outgoing.set(from, [...(outgoing.get(from) ?? []), to]);
+    }
+    const reachable = (from: string, target: string): boolean => {
+      const seen = new Set<string>();
+      const visit = (node: string): boolean => {
+        if (node === target) return true;
+        if (seen.has(node)) return false;
+        seen.add(node);
+        return (outgoing.get(node) ?? []).some(visit);
+      };
+      return visit(from);
+    };
+    for (let index = 1; index < deliveryUnitLifecycleSuffixes.length; index++) {
+      const from = bySuffix.get(deliveryUnitLifecycleSuffixes[index - 1])!.id;
+      const to = bySuffix.get(deliveryUnitLifecycleSuffixes[index])!.id;
+      if (!reachable(from, to)) throw new Error(`Delivery unit ${groupId} lifecycle requires an Agent-declared dependency path from ${from} to ${to}`);
+    }
+  }
 }
 
 /** Materialize the canonical graph for a contract-3 ledger without inventing
