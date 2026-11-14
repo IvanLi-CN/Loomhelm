@@ -39,11 +39,15 @@ export function launchctl(args: string[], allowFailure = false) {
 }
 export function writeLaunchdDefinition(state: ServiceState): string {
   const config = state.config();
-  const executable = join(state.paths.releases, config.current_build, "viewer");
+  const packageBacked = Boolean(config.package_name && config.package_version);
+  const executable = process.execPath;
+  const argumentsXml = packageBacked
+    ? `<string>${escape(executable)}</string><string>x</string><string>--bun</string><string>--package</string><string>${escape(`${config.package_name}@${config.package_version}`)}</string><string>multi-task-flow</string><string>service</string><string>daemon</string>`
+    : `<string>${escape(join(state.paths.releases, config.current_build, "viewer"))}</string><string>daemon</string>`;
   const environment = state.paths.isolated
     ? `<key>MULTI_TASK_FLOW_PROFILE</key><string>test</string><key>MULTI_TASK_FLOW_ROOT</key><string>${escape(state.paths.root)}</string>`
     : "";
-  const plist = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>${escape(state.paths.label)}</string><key>ProgramArguments</key><array><string>${escape(executable)}</string><string>daemon</string></array><key>EnvironmentVariables</key><dict>${environment}<key>PATH</key><string>${escape(process.env.PATH ?? "")}</string></dict><key>RunAtLoad</key><false/><key>KeepAlive</key><false/><key>ProcessType</key><string>Interactive</string><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>`;
+  const plist = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>${escape(state.paths.label)}</string><key>ProgramArguments</key><array>${argumentsXml}</array><key>EnvironmentVariables</key><dict>${environment}<key>PATH</key><string>${escape(process.env.PATH ?? "")}</string></dict><key>RunAtLoad</key><false/><key>KeepAlive</key><false/><key>ProcessType</key><string>Interactive</string><key>StandardOutPath</key><string>${escape(join(state.paths.logs, "daemon.stdout.log"))}</string><key>StandardErrorPath</key><string>${escape(join(state.paths.logs, "daemon.stderr.log"))}</string></dict></plist>`;
   const path = join(state.paths.config, "viewer.plist");
   writeAtomic(path, plist);
   return path;

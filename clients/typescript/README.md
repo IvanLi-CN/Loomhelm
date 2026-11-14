@@ -127,7 +127,7 @@ bun --no-install src/cli.ts flow view --input - < view-request.json
 
 `workflow local-verify MANIFEST_JSON_PATH` 和 `LocalValidation` 仅承载可复用的局部验证，输出 `locally-validated`；不证明完整工程工作流、PR 就绪或发布完成。旧 `workflow verify` 明确报兼容错误。正式交付必须按迁入的工程 Skills 执行授权、审查、CI 和停靠合同。
 
-本地编排网页保留鉴权、loopback、PID/generation、端口租约和 macOS 按需 launchd 管理。升级代码不授权替换现有 viewer、抢占端口或写入真实旧运行；使用独立测试 scope 验证。更旧账本仍遵守原只读/维护边界，不能一概声明兼容可写。
+本地编排网页保留鉴权、loopback、PID/generation、端口租约和 macOS 按需 launchd 管理。package-backed service 由同一个 npm package 提供 one-shot CLI 与 daemon 两种模式，launchd 通过 Bun `x` 固定 exact SemVer 启动 `service daemon`；service root 只保存配置、账本、日志、租约和 plist。
 
 viewer 新包采用 v2 清单，覆盖启动 shell、TS、依赖及网页的逐文件摘要；固定 Bun 直接运行 TS。旧 v1 包仅可诊断，不能静默用于启动或升级。本次不安装、启动或替换现有用户服务。
 
@@ -148,19 +148,18 @@ viewer 新包采用 v2 清单，覆盖启动 shell、TS、依赖及网页的逐�
 viewer service 由单一 loopback gateway 管理，实际 worker 通过 owner-only Unix socket 受控；直接 ledger CLI 不经过 viewer HTTP，也不能借 viewer 路由绕过 ledger owner、revision 或 command identity。以下命令均通过已发布 npm 包的 `service` 子命令执行，输入必须是一个 JSON 对象并通过 stdin 传入：`multi-task-flow service <command> --input -`。
 
 ```sh
+multi-task-flow service install --input - < install.json
 multi-task-flow service status --input - < status.json
 multi-task-flow service doctor --input - < empty.json
 multi-task-flow service ensure --input - < ensure.json
-multi-task-flow service compatibility-check --input - < published-bundle.json
-multi-task-flow service upgrade --input - < published-bundle.json
-multi-task-flow service rollback --input - < rollback.json
+multi-task-flow service upgrade --input - < upgrade.json
 ```
 
 `published-bundle.json` 必须引用由受保护 Skill Runtime release workflow 生成并校验的、与当前平台匹配的 v2 bundle；用户侧不运行 `build-service.ts`，也不把 npm CLI 或 Skill source 目录作为 viewer。`ensure` 的 actor 至少包含 `{ "run_id": "<run-id>", "thread_id": "<thread-id>", "api_version": 1 }`；它会核对安装 manifest、generation、PID、port 和 health identity，并在旧实例停止后重新建立租约。`status` 或 `doctor` 先确认安装、运行阶段和当前 build；启动失败时保留 runtime 状态并检查配置 user service 的 launchd 记录，不删除 data 或 release 目录。
 
 agent lease 默认 60 分钟，browser lease 默认 5 分钟；浏览器页面应每 60 秒续租。所有租约过期后服务进入 stopping，账本和发布目录保留，下一次 `ensure` 负责恢复；不要通过删除 runtime、抢占端口或手工杀死不属于当前 generation/PID 的进程来“修复”。`credential-rotate` 或 `credential-revoke` 会撤销 browser sessions，之后必须重新获取一次性登录票据；`login` 返回的 URL 只使用一次且 60 秒过期。
 
-升级顺序是 `status`/`doctor`、`compatibility-check`、`upgrade`、health 验证；回退使用 `compatibility-check` 的 `{ "rollback": true }` 报告后再执行 `rollback`。候选不可读、custom view 不兼容、generation/PID 不匹配或旧 reader 也无法安全读取时必须停在 preflight；不得强制切换、自动反向迁移或盲目重试未知发布结果。
+升级顺序是 `status`/`doctor`、固定版本 `upgrade`、health 验证；package-backed service 不把旧 bundle 作为 rollback 目标，回退必须显式选择另一个 exact package version。旧 bundle 文件保留但不参与启动、迁移或回滚；identity、package resolution、generation/PID、health 或旧 reader 失败时必须停在 preflight，不得强制切换或盲目重试未知发布结果。
 
 历史账本的合同迁移使用 `ledger-maintenance-check` 和 `ledger-maintenance-apply`，不是 `import`/`migrate` 别名。check 先产生 source/target contract、owner、revision、ledger digest、pending operations 和 operation digest；apply 必须携带原 owner thread、expected revision、expected ledger SHA-256、operation digest、maintenance identity、approval reference、reason 和 `writers_paused: true`，并保留完整 backup。迁移只允许机械补齐合同 envelope，不补造 baseline、event、owner 或业务策略。
 

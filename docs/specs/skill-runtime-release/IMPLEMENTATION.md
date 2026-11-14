@@ -5,6 +5,7 @@
 ## Current Status
 
 - Implementation: 独立 package projection、Bun CLI、gateway/worker 服务边界、兼容检查、机械维护迁移、schema v3 consumer-install projection、path-byte digest、registry reconcile receipt 和 release failure sidecar 已在源码中实现并有针对性测试覆盖。
+- Service lifecycle: package-backed one-shot CLI/daemon identity、Bun `x` launchd plist、legacy takeover fencing 和 cached daemon update hints 已在源码中实现；旧 bundle 仍仅作为保留文件，不再作为 package daemon 的生产代码来源。
 - Lifecycle: active
 - Publication status: 本仓库没有独立 npm publication、受保护 main merge、immutable tag 或用户服务升级的实际 receipt；源码实现和本地候选验证不能替代这些外部事实。
 - Catalog note: 本主题由 `client-skills`、ADR 0021、0026 和 0028 的既有合同拆出独立包、viewer 服务和可恢复发布边界，当前 owner-facing 入口还包括 `clients/typescript/README.md`、`skills/multi-task-flow/SKILL.md` 和 `.github/workflows/README.md`。
@@ -27,6 +28,7 @@
 | `REQ-SRR-012` | publish workflow 只上传同一 candidate tarball，先保存候选 receipt，再记录 canonical digest、raw integrity 和 candidate identity；processing、known 409、timeout 或 unknown publish outcome 不重复上传或重建；registry tarball 验证失败写入 `identity-mismatch` receipt。 | 实际 npm registry 发布与未知结果恢复仍未发生。 |
 | `REQ-SRR-013` | workflow 和 `release.py` 支持 `multi-task-flow-vX.Y.Z` immutable tag、exact-visible 后的 `compat-vN`/`latest`/可选 `stable` 单调 promotion、缺失 dist-tag 作为空当前值、逐个 read-back、receipt 的 `published/completed` 状态和 resume 入口；现有 `0.2.7` 只读对账成功后跳过 tag/dist-tag 写入。 | 真实 tag、dist-tag 和中断恢复 receipt 仍需 owner-approved workflow。 |
 | `REQ-SRR-014` | SPEC/IMPLEMENTATION/HISTORY、ADR 0029/0030、客户端 README、现有 Skill viewer 说明和 workflow README 覆盖 consumer install、`path-byte-v2`、legacy reconciliation、registry recovery、verify 阶段独立 release identity artifact、failure sidecar、`published/completed` 语义和发布操作；客户端直发入口被移除并 fail closed。 | npm publication、用户服务升级和 owner/provider 凭据仍是明确的外部前置，不在文档提交中伪造完成。 |
+| `REQ-SRR-015` | ADR 0032、`service-maintenance.ts`、`service-launchd.ts`、`service-lifecycle.ts` 和 `service-update.ts` 实现 exact package identity、Bun `x` daemon、旧 bundle takeover、compatibility line fencing 和 daemon update cache。 | 真实用户 profile 的 upgrade 与受保护 npm publication 仍属于本计划外的外部 receipt。 |
 
 ## Verification Commands
 

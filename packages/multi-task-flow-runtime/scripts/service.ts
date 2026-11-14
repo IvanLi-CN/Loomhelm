@@ -13,12 +13,13 @@ import { ServiceState } from "../lib/service-state";
 import { ServiceAuth } from "../lib/service-auth";
 import { ensureService, runDaemon, serviceStatus } from "../lib/service-lifecycle";
 import { agentLease } from "../lib/service-http";
-import { installRelease, switchRelease } from "../lib/service-maintenance";
+import { installRelease, switchRelease, installPackageRelease, upgradePackageRelease } from "../lib/service-maintenance";
 import { importRun } from "../lib/service-import";
 import { ContractError, requireCondition } from "../lib/errors";
 import { requireApi, ledgerContract } from "../lib/service-contract";
 import { buildView } from "../lib/view";
 import { validateLedger } from "../lib/schema";
+import { cachedDaemonUpdate, triggerDaemonUpdateCheck } from "../lib/service-update";
 
 const actor = z
   .object({
@@ -29,6 +30,7 @@ const actor = z
   .strict();
 const empty = z.object({}).strict();
 const source = z.object({ source: z.string().startsWith("/") }).strict();
+const packageVersion = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/) }).strict();
 
 export async function serviceCommand(
   command: string,
@@ -36,26 +38,29 @@ export async function serviceCommand(
   state = new ServiceState(servicePaths()),
 ): Promise<unknown> {
   if (command === "install") {
-    const parsed = source
-      .extend({ registry_dir: z.string().startsWith("/").optional() })
-      .parse(input);
+    const parsed = z.union([
+      source.extend({ registry_dir: z.string().startsWith("/").optional() }),
+      packageVersion.extend({ registry_dir: z.string().startsWith("/").optional() }),
+    ]).parse(input);
+    if ("version" in parsed) return installPackageRelease(state, parsed.version, parsed.registry_dir);
     return installRelease(state, parsed.source, parsed.registry_dir);
   }
   if (command === "compatibility-check") {
     const parsed = z
       .union([source, z.object({ rollback: z.literal(true) }).strict()])
       .parse(input);
-    return compatibilityReport(state, selectedRelease(state, parsed), parsed.source);
+    return compatibilityReport(state, selectedRelease(state, parsed), "source" in parsed ? parsed.source : undefined);
   }
   if (command === "ledger-maintenance-check")
     return maintenanceCheck(state, input);
   if (command === "ledger-maintenance-apply")
     return maintenanceApply(state, input);
   if (command === "upgrade") {
-    const parsed = source
-      .extend({ write_downgrade_approval: downgradeApproval.optional() })
-      .strict()
-      .parse(input);
+    const parsed = z.union([
+      source.extend({ write_downgrade_approval: downgradeApproval.optional() }),
+      packageVersion.extend({ write_downgrade_approval: downgradeApproval.optional() }),
+    ]).parse(input);
+    if ("version" in parsed) return upgradePackageRelease(state, parsed.version);
     return switchRelease(
       state,
       parsed.source,
@@ -69,6 +74,8 @@ export async function serviceCommand(
       .object({ write_downgrade_approval: downgradeApproval.optional() })
       .strict()
       .parse(input);
+    if (existsSync(join(state.paths.config, "service.json")) && state.config().package_name)
+      throw new ContractError("PACKAGE_ROLLBACK_UNSUPPORTED", "Package-backed daemon rollback requires an explicit exact package upgrade");
     return switchRelease(
       state,
       "",
@@ -84,7 +91,12 @@ export async function serviceCommand(
       .parse(input);
     return importRun(state, parsed.source_root, parsed.run_id);
   }
-  if (command === "ensure") return ensureService(state, actor.parse(input));
+  if (command === "ensure") {
+    const result = await ensureService(state, actor.parse(input));
+    triggerDaemonUpdateCheck(state);
+    const daemonUpdate = cachedDaemonUpdate(state);
+    return daemonUpdate ? { ...result, daemon_update: daemonUpdate } : result;
+  }
   if (command === "renew" || command === "release") {
     const parsed = actor.parse(input);
     requireApi(parsed.api_version);
@@ -106,11 +118,13 @@ export async function serviceCommand(
     if (!existsSync(join(state.paths.config, "service.json")))
       return { installed: false, running: false, root: state.paths.root };
     try {
+      triggerDaemonUpdateCheck(state);
       return {
         installed: true,
         running: true,
         ...(await serviceStatus(state)),
         leases: state.runtime().leases,
+        ...(cachedDaemonUpdate(state) ? { daemon_update: cachedDaemonUpdate(state) } : {}),
       };
     } catch {
       return {
@@ -130,6 +144,7 @@ export async function serviceCommand(
       .strict()
       .parse(input);
     await serviceStatus(state);
+    const daemonUpdate = cachedDaemonUpdate(state);
     const target = parsed.run_id ? `/runs/${parsed.run_id}/` : "/";
     const ticket = new ServiceAuth(state).ticket(target);
     const loginUrl = new URL(
@@ -141,6 +156,7 @@ export async function serviceCommand(
       login_url: loginUrl.toString(),
       expires_in_seconds: 60,
       single_use: true,
+      ...(daemonUpdate ? { daemon_update: daemonUpdate } : {}),
     };
   }
   if (command === "credential-rotate" || command === "credential-revoke") {

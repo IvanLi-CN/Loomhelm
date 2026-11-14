@@ -26,6 +26,12 @@
 
 `Agent lease` 与 `browser lease` 是互相独立的运行租约；租约失效只影响其拥有的观察或执行会话，不得删除账本或影响其他 run。
 
+`one-shot CLI` 是 package 提供的单次命令执行模式；`daemon service` 是同一 package 通过 launchd 按需启动的长驻 Dashboard 模式；二者共享精确 package identity。
+
+`service identity` 是 package name、exact package version、compatibility line、Skill version、source SHA、artifact build ID 和 service contract 的持久身份；`service root` 只保存配置、账本、日志、租约和 launchd 定义等可变状态。
+
+`daemon update` 是只提示 daemon 新版本的旁路结果；它不改变主命令结果，也不等同于自动升级。
+
 ## Goals and Non-goals
 
 目标是让安装者可以在没有源代码 checkout、全局 Skill 源包或父仓库依赖的情况下运行完整 Skill 工具链，并让每一次发布、读取、升级和恢复都能按精确身份重放。
@@ -190,6 +196,20 @@ registry exact identity 只有在 exact-visible 且 tarball/raw integrity 对账
 
 - covers: `VER-SRR-025`, `VER-SRR-026`
 
+### REQ-SRR-015：Package-backed daemon lifecycle
+
+安装和升级 MUST 接受固定 package name 的 exact SemVer，并校验 package artifact identity 后原子写入 service identity；launchd MUST 通过 Bun `x` 启动该 exact package 的 `service daemon`，不得复制新的 service bundle 作为生产代码来源。
+
+package-backed daemon MUST 只使用 package 自带 Skill/runtime/viewer 资源和消费者安装的 production dependencies；服务启动只需将自报 identity 与持久 identity 对账，identity 不一致、package resolution 失败或 health 失败 MUST fail closed，并保留用户数据。
+
+显式 upgrade MUST 停止旧 daemon、保留 data/runs/port 状态、覆盖配置和 plist，并忽略旧 `releases/`；旧 bundle MUST NOT 作为新版本兼容、迁移或回滚目标。
+
+在同一 compatibility line 内，CLI 与 daemon 的 package SemVer 差异 MUST 不单独造成 `INVALID_RELEASE`；API、viewer、service contract 或数据能力不兼容时 MUST 拒绝。
+
+`status`、`doctor`、`ensure` MAY 触发有界且去重的 registry update check，`login` MUST 只消费缓存；只有确认 daemon 有更新时才可输出 `daemon_update`，检查失败、无更新或未完成不得影响主命令或显示“没有更新”。
+
+- covers: `VER-SRR-027`, `VER-SRR-028`, `VER-SRR-029`, `VER-SRR-030`
+
 ## Verification
 
 ### VER-SRR-001
@@ -348,6 +368,30 @@ registry exact identity 只有在 exact-visible 且 tarball/raw integrity 对账
 - covers: `REQ-SRR-014`
 - Pass condition: 日志足以按 package/version/line/merge/build/tag/digest/release/PID/generation/run/lease 对账，且不泄露凭据或敏感内容。
 
+### VER-SRR-027
+
+- Method: 在隔离 service profile 中用 exact package version 生成 launchd plist，检查 Bun `x` 参数、package identity、RunAtLoad 和 KeepAlive，并通过 daemon status 读取运行身份。
+- covers: `REQ-SRR-015`
+- Pass condition: plist 只指向 exact package 的 `service daemon`，daemon 自报 identity 与持久配置一致，旧 bundle 路径不被使用。
+
+### VER-SRR-028
+
+- Method: 对已存在 legacy bundle 的 profile 执行 package upgrade failure、health failure 和成功接管矩阵，比较 data/runs、port、plist、runtime 和 releases 文件。
+- covers: `REQ-SRR-015`
+- Pass condition: 旧 bundle 不参与启动、迁移或回滚，数据和端口状态保留，失败时不声称恢复成功且不删除用户数据。
+
+### VER-SRR-029
+
+- Method: 使用同一 `compat-vN` 的不同 package/Skill versions 与不兼容 API、viewer、service contract 和 ledger contract 执行 CLI/daemon status、doctor、ensure、login 矩阵。
+- covers: `REQ-SRR-015`
+- Pass condition: 同一兼容线的 SemVer 差异不会单独产生 `INVALID_RELEASE`，不兼容合同 fail closed。
+
+### VER-SRR-030
+
+- Method: 预置 daemon update cache，模拟 compatible dist-tag、latest dist-tag、无更新、网络失败、超时、并发检查和登录消费路径。
+- covers: `REQ-SRR-015`
+- Pass condition: 只有确认 daemon 更新时输出 `daemon_update`，兼容线和 latest 不同时同时显示；失败、无更新和进行中检查不影响原命令结果。
+
 ## Related ADRs
 
 - [Bun 直接运行客户端与 Skills](../../adr/0021-bun-source-runtime.md)
@@ -356,6 +400,7 @@ registry exact identity 只有在 exact-visible 且 tarball/raw integrity 对账
 - [Multi-task Flow version propagation and safe migration](../../adr/0028-multi-task-flow-version-propagation-and-safe-migration.md)
 - [Skill runtime release and service boundary](../../adr/0029-skill-runtime-release-and-service-boundary.md)
 - [Skill runtime registry reconciliation and consumer dependencies](../../adr/0030-skill-runtime-registry-reconciliation-and-consumer-dependencies.md)
+- [npm package-backed Dashboard daemon](../../adr/0032-package-backed-dashboard-daemon.md)
 
 ## References
 

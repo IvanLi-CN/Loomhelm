@@ -1,6 +1,13 @@
 import { SkillsRuntime } from '../toolkit.ts';
 
 export async function runServiceCommand(args: string[]): Promise<void> {
+  if (args.length === 1 && args[0] === 'daemon') {
+    const result = await new SkillsRuntime().run('skills/multi-task-flow/scripts/service.ts', ['daemon']);
+    process.stdout.write(result.stdout);
+    process.stderr.write(result.stderr);
+    process.exitCode = result.code ?? 1;
+    return;
+  }
   if (args[0] === 'help' || !args.length) {
     console.log('service COMMAND --input -');
     return;

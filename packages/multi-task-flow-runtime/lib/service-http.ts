@@ -213,7 +213,7 @@ export async function startSharedViewer(
   const auth = new ServiceAuth(state);
   const fallbackViewer = (() => {
     let previous: string | null = null;
-    try { if (!sourceRevision && !demoHooks) previous = state.config().previous_build; } catch {}
+    try { if (!sourceRevision && !demoHooks && !state.config().package_name) previous = state.config().previous_build; } catch {}
     if (!previous || previous === manifest.build_id) return null;
     try {
       const root = join(state.paths.releases, previous);
@@ -386,8 +386,12 @@ export async function startSharedViewer(
             ok: true,
             build_id: manifest.build_id,
             source_sha: manifest.source_sha,
+            package_name: state.config().package_name,
+            package_version: state.config().package_version,
+            compatibility_line: state.config().compatibility_line,
+            skill_version: state.config().skill_version ?? manifest.skill_version,
+            service_contract: state.config().service_contract ?? String(manifest.service_version),
             skill_id: manifest.skill_id,
-            skill_version: manifest.skill_version,
             ledger_contract: manifest.ledger_contract,
             viewer_contract: manifest.viewer_contract,
             compatibility,

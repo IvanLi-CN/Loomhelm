@@ -2,7 +2,7 @@ import type { ConnectObserver } from "../lib/conversation-output";
 import { Runtime } from "../../../skills/bin/modules/core/runtime";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { tryLockFile } from "../../../skills/bin/modules/core/security_file";
 import { withExclusiveLockAsync } from "../../../skills/bin/modules/flow/storage";
 import {
@@ -13,13 +13,48 @@ import {
 import { ServiceState } from "../lib/service-state";
 import { ServiceAuth } from "../lib/service-auth";
 import { startSharedViewer, agentLease } from "../lib/service-http";
-import { requireApi } from "../lib/service-contract";
+import { requireApi, type ReleaseManifest } from "../lib/service-contract";
 import { startUserService } from "../lib/service-launchd";
 import { verifyRelease, requireSourceRelease } from "../lib/service-release";
 import { requireCondition, ContractError } from "../lib/errors";
 import { serviceLog } from "../lib/service-log";
 
 export const SERVICE_STARTUP_TIMEOUT_MS = 60_000;
+const packageManifest = (config: ReturnType<ServiceState["config"]>): ReleaseManifest => ({
+  schema_version: 2,
+  build_id: config.current_build,
+  source_sha: config.source_sha ?? "0".repeat(40),
+  skill_id: "multi-task-flow",
+  skill_version: config.skill_version ?? "0.0.0",
+  ledger_contract: 3,
+  viewer_contract: 5,
+  service_version: config.service_contract ?? config.package_version ?? "0.0.0",
+  platform: `${process.platform}-${process.arch}` as ReleaseManifest["platform"],
+  api_versions: [1],
+  frontend_contracts: [1],
+  readable: ["schema-2/contract-1", "schema-2/contract-2", "schema-2/contract-3"],
+  writable: ["schema-2/contract-2", "schema-2/contract-3"],
+  files: {},
+});
+function verifyPackageIdentity(config: ReturnType<ServiceState["config"]>): void {
+  const root = process.env.LOOMHELM_TOOLKIT_ROOT;
+  requireCondition(root, "PACKAGE_IDENTITY_UNAVAILABLE", "Package toolkit identity is unavailable");
+  let artifact: { packageName?: string; packageVersion?: string; compatibilityLine?: string; skillVersion?: string; sourceSha?: string; buildId?: string; identity?: { contracts?: { service?: string } } };
+  try { artifact = JSON.parse(readFileSync(join(root, "artifact-manifest.json"), "utf8")); }
+  catch { throw new ContractError("PACKAGE_IDENTITY_UNAVAILABLE", "Package artifact identity cannot be read"); }
+  requireCondition(
+    artifact.packageName === config.package_name &&
+      artifact.packageVersion === config.package_version &&
+      artifact.compatibilityLine === config.compatibility_line &&
+      artifact.skillVersion === config.skill_version &&
+      artifact.sourceSha === config.source_sha &&
+      artifact.buildId === config.artifact_build_id &&
+      artifact.buildId === config.current_build &&
+      artifact.identity?.contracts?.service === config.service_contract,
+    "SERVICE_IDENTITY_MISMATCH",
+    "Package artifact identity does not match service configuration",
+  );
+}
 export async function waitForServiceHealth<T>(check: () => Promise<T>, timeoutMs = SERVICE_STARTUP_TIMEOUT_MS): Promise<T> {
   requireCondition(Number.isFinite(timeoutMs) && timeoutMs > 0, "INVALID_TIMEOUT", "Startup timeout must be finite and positive");
   const deadline = performance.now() + timeoutMs;
@@ -57,6 +92,11 @@ export async function serviceStatus(state: ServiceState) {
     generation: string;
     pid: number;
     port: number;
+    package_name?: string;
+    package_version?: string;
+    compatibility_line?: string;
+    skill_version?: string;
+    service_contract?: string;
   };
   const runtime = state.runtime();
   requireCondition(
@@ -68,6 +108,9 @@ export async function serviceStatus(state: ServiceState) {
     "INSTANCE_MISMATCH",
     "Viewer health identity mismatch",
   );
+  const configIdentity = [config.package_name, config.package_version].filter(Boolean).join("@");
+  const actualIdentity = [result.package_name, result.package_version].filter(Boolean).join("@");
+  requireCondition(!configIdentity || configIdentity === actualIdentity, "SERVICE_IDENTITY_MISMATCH", "Running daemon package identity mismatch");
   return result;
 }
 export async function ensureService(
@@ -82,19 +125,19 @@ export async function ensureService(
     "Viewer is not installed; use explicit service install maintenance",
   );
   state.initialize();
-  const { discoverCandidate, switchRelease } = await import("../lib/service-maintenance");
-  const candidate = discoverCandidate(state);
-  if (candidate) {
-    await switchRelease(state, join(state.paths.candidates, candidate.build_id));
+  if (!state.config().package_name) {
+    const { discoverCandidate, switchRelease } = await import("../lib/service-maintenance");
+    const candidate = discoverCandidate(state);
+    if (candidate) await switchRelease(state, join(state.paths.candidates, candidate.build_id));
   }
   return withExclusiveLockAsync(
     join(state.paths.state, "startup.lock"),
     async () => {
       const config = state.config();
-      const manifest = verifyRelease(
-        join(state.paths.releases, config.current_build),
-      );
-      requireSourceRelease(manifest);
+      const manifest = config.package_name && config.package_version
+        ? packageManifest(config)
+        : verifyRelease(join(state.paths.releases, config.current_build));
+      if (!config.package_name) requireSourceRelease(manifest);
       requireCondition(
         manifest.api_versions.includes(input.api_version),
         "INCOMPATIBLE_API",
@@ -168,12 +211,13 @@ export async function runDaemon(
   );
   state.initialize();
   const config = state.config();
-  const manifest =
-    source?.manifest ??
-    verifyRelease(join(state.paths.releases, config.current_build));
+  const packageBacked = Boolean(config.package_name && config.package_version);
+  if (packageBacked) verifyPackageIdentity(config);
+  const manifest = source?.manifest ??
+    (packageBacked ? packageManifest(config) : verifyRelease(join(state.paths.releases, config.current_build)));
   // Isolated live-source previews use metadata, not an installed release package.
   // Installed services must still reject legacy executable bundles.
-  if (!source) requireSourceRelease(manifest);
+  if (!source && !packageBacked) requireSourceRelease(manifest);
   const lifetime = tryLockFile(join(state.paths.state, "instance.lock"));
   requireCondition(
     lifetime,
@@ -280,7 +324,9 @@ export async function runDaemon(
           state,
           manifest,
           source?.assetsDir ??
-            join(state.paths.releases, config.current_build, "skills/multi-task-flow/dist"),
+            (packageBacked
+              ? join(process.env.LOOMHELM_TOOLKIT_ROOT ?? "", "skills/multi-task-flow/dist")
+              : join(state.paths.releases, config.current_build, "skills/multi-task-flow/dist")),
           config.port,
           source?.revision,
           source?.name,

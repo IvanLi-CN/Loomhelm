@@ -75,6 +75,14 @@ export const configSchema = z
       .min(1000)
       .max(24 * 60 * 60_000)
       .default(AGENT_TTL_MS),
+    package_name: z.string().optional(),
+    package_version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).optional(),
+    package_integrity: z.string().startsWith("sha512-").optional(),
+    compatibility_line: z.string().regex(/^compat-v\d+$/).optional(),
+    skill_version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).optional(),
+    service_contract: z.string().min(1).optional(),
+    source_sha: z.string().regex(/^[a-f0-9]{40}$/).optional(),
+    artifact_build_id: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   })
   .strict();
 export type ServiceConfig = z.infer<typeof configSchema>;
