@@ -44,7 +44,7 @@ function facts(overrides: Partial<AlignmentFacts> = {}): AlignmentFacts {
 
 test("base alignment implementation stays inside its owning Skill", () => {
   const manifest = JSON.parse(
-    readFileSync(join(import.meta.dir, "../../source-manifest.json"), "utf8"),
+    readFileSync(join(import.meta.dir, "../../resource-manifest.json"), "utf8"),
   ) as { files: Array<{ path: string }> };
   const paths = manifest.files.map((file) => file.path);
   expect(paths).toContain(

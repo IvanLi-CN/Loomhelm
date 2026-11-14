@@ -1,6 +1,6 @@
 #!/usr/bin/env -S bun --no-install
 import { readFileSync, writeFileSync } from 'node:fs';
-const manifest = JSON.parse(readFileSync('skills/source-manifest.json', 'utf8'));
+const manifest = JSON.parse(readFileSync('skills/resource-manifest.json', 'utf8'));
 const files = manifest.files;
 const dependencyConditions = {
   'git-sync': 'topic branch synchronization or detached-HEAD alignment',
@@ -40,7 +40,7 @@ const hostRequirements = name => {
 };
 const entries = manifest.skills.map(name => {
   const resources = files.filter(file => file.path.startsWith(`skills/${name}/`));
-  const text = resources.filter(file => file.path.endsWith('.md')).map(file => readFileSync(file.path, 'utf8')).join('\n');
+  const text = resources.filter(file => file.path.endsWith('.md')).map(file => readFileSync(file.sourcePath ?? file.path, 'utf8')).join('\n');
   const referenced = [...new Set([...text.matchAll(/\$([a-z][a-z0-9]*(?:-[a-z0-9]+)+)/g)].map(match => match[1]))];
   return { name, entry: `skills/${name}/SKILL.md`, files: resources.length,
     internalSkills: referenced.filter(ref => manifest.skills.includes(ref) && ref !== name).sort(),
@@ -51,4 +51,4 @@ const entries = manifest.skills.map(name => {
     scripts: resources.filter(file => /\/scripts\/.+/.test(file.path)).map(file => file.path),
   };
 });
-writeFileSync('skills/catalog.json', JSON.stringify({ schemaVersion: 1, sourceCommit: manifest.commit, entries }, null, 2) + '\n');
+writeFileSync('skills/catalog.json', JSON.stringify({ schemaVersion: 1, entries }, null, 2) + '\n');

@@ -5,7 +5,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, r
 import { dirname, resolve, sep } from 'node:path';
 const root = resolve(import.meta.dirname, '../../..');
 const target = resolve(root, 'clients/typescript/toolkit');
-const manifest = JSON.parse(readFileSync(resolve(root, 'skills/source-manifest.json'), 'utf8'));
+const manifest = JSON.parse(readFileSync(resolve(root, 'skills/resource-manifest.json'), 'utf8'));
 const packageMetadata = JSON.parse(readFileSync(resolve(root, 'clients/typescript/package.json'), 'utf8'));
 const packageConfig = packageMetadata.loomhelm;
 const requireDependencies = process.argv.includes('--require-dependencies');
@@ -106,7 +106,7 @@ function copyPackageManifest(): void {
   const files = manifest.files.filter(file => !packageOmissionPaths.has(file.path));
   const additions = (manifest.additions ?? []).filter(file => !packageOmissionPaths.has(file.path));
   const packageManifest = { ...manifest, files, additions, packageOmissions };
-  writeGenerated('skills/source-manifest.json', Buffer.from(JSON.stringify(packageManifest, null, 2) + '\n'));
+  writeGenerated('skills/resource-manifest.json', Buffer.from(JSON.stringify(packageManifest, null, 2) + '\n'));
 }
 for (const file of [...manifest.files, ...(manifest.additions ?? [])]) if (!packageOmissionPaths.has(file.path)) copy(file.path, file.installedSha256, false, file.sourcePath ?? file.path);
 copyPackageManifest();
@@ -133,6 +133,6 @@ writeFileSync(resolve(target, 'package.json'), generatedPackage);
 const finalInventory = [...outputs.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
 const buildId = createHash('sha256').update(JSON.stringify({ ...packageIdentityBase, files: finalInventory })).digest('hex');
 const identity = { ...packageIdentityBase, buildId };
-const artifact = { schemaVersion: 3, packageName: packageMetadata.name, packageVersion: buildVersion, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion, sourceCommit: manifest.commit, sourceSha, mergeSha: packageIdentityBase.mergeSha, candidateSha: sourceSha, dirty, runtime: 'bun@1.4.4', identity, buildId, tarballDigest, gitTag, canonicalDigestAlgorithm: 'path-byte-v2', dependenciesBundled: false, dependencies: requiredDependencies, omittedResources: packageOmissions, files: finalInventory };
+const artifact = { schemaVersion: 3, packageName: packageMetadata.name, packageVersion: buildVersion, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion, sourceCommit: sourceSha, sourceSha, mergeSha: packageIdentityBase.mergeSha, candidateSha: sourceSha, dirty, runtime: 'bun@1.4.4', identity, buildId, tarballDigest, gitTag, canonicalDigestAlgorithm: 'path-byte-v2', dependenciesBundled: false, dependencies: requiredDependencies, omittedResources: packageOmissions, files: finalInventory };
 writeFileSync(resolve(target, 'artifact-manifest.json'), JSON.stringify(artifact, null, 2) + '\n');
 console.log(JSON.stringify({ artifact: target, package: packageMetadata.name, version: buildVersion, compatibilityLine: packageConfig.compatibilityLine, runtime: 'bun@1.4.4', resources: finalInventory.length, dependenciesBundled: false, dependencies: requiredDependencies, source: sourceSha, merge: packageIdentityBase.mergeSha, buildId, dirty }));

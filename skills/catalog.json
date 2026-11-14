@@ -1,6 +1,5 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "505961771a0d2496155d23132a8c0bd8beac0a24",
   "entries": [
     {
       "name": "cn-ecommerce-data-collection",
@@ -473,12 +472,12 @@
       ],
       "platform": "macOS launchd for installed viewer; POSIX ledger/HTTP on macOS/Linux",
       "scripts": [
+        "skills/multi-task-flow/scripts/preview-source.ts",
         "skills/multi-task-flow/scripts/build-service.ts",
         "skills/multi-task-flow/scripts/build.ts",
         "skills/multi-task-flow/scripts/demo-static.ts",
         "skills/multi-task-flow/scripts/diagnose-candidate-sandbox.ts",
         "skills/multi-task-flow/scripts/orchestrate.ts",
-        "skills/multi-task-flow/scripts/preview-source.ts",
         "skills/multi-task-flow/scripts/service.ts",
         "skills/multi-task-flow/scripts/verify-service-browser.ts",
         "skills/multi-task-flow/scripts/verify-service-native.ts"

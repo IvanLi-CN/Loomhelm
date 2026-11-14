@@ -9,8 +9,8 @@ import { pathToFileURL } from 'node:url';
 // alone does not establish that its executable dependency closure was installed.
 export function checkSkillsInstallation(root, { probe = false } = {}) {
   root = resolve(root);
-  const inventory = resolve(root, 'skills/source-manifest.json');
-  if (!existsSync(inventory)) return { ok: false, code: 'SKILLS_INVENTORY_MISSING', root, missing: ['skills/source-manifest.json'] };
+  const inventory = resolve(root, 'skills/resource-manifest.json');
+  if (!existsSync(inventory)) return { ok: false, code: 'SKILLS_INVENTORY_MISSING', root, missing: ['skills/resource-manifest.json'] };
   const manifest = JSON.parse(readFileSync(inventory, 'utf8'));
   const localPath = resource => {
     const target = resolve(root, resource.path);

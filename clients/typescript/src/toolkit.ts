@@ -8,8 +8,8 @@ import { runProcess, type ProcessOptions, type ProcessResult } from './runtime/p
 import { identityDigest, validatePackageIdentity, type CanonicalDigestAlgorithm, type PackageIdentity } from './release.ts';
 
 export interface SkillCapabilityReport { name: string; ready: boolean; readinessScope: 'all-declared-scenarios'; resourcesValid: boolean; dependencies: { skill: string; kind: 'skill' | 'command' | 'host'; strength: string; condition: string; available: boolean; code: string }[]; platform: string; arch: string; nativeSupported: boolean; source: string }
-export interface ToolkitResource { path: string; source?: string; sourceSha256?: string; installedSha256?: string }
-export interface ToolkitManifest { schemaVersion: 1; commit: string; skills: string[]; files: ToolkitResource[]; additions?: ToolkitResource[] }
+export interface ToolkitResource { path: string; sourcePath?: string; installedSha256?: string }
+export interface ToolkitManifest { schemaVersion: 1; skills: string[]; files: ToolkitResource[]; additions?: ToolkitResource[] }
 export interface ToolkitOmittedResource { path: string; reason: string }
 export interface ToolkitArtifactFile { path: string; sha256: string }
 export interface ToolkitDependency { name: string; version: string; mode?: 'consumer-install' | 'bundled'; path?: string; entry?: string }
@@ -52,8 +52,8 @@ function isSafePackageName(name: string): boolean {
 export class SkillsRuntime {
   constructor(readonly root = fileURLToPath(new URL('../toolkit/', import.meta.url))) {}
   async manifest(): Promise<ToolkitManifest> {
-    const value = JSON.parse(await readFile(resolve(this.root, 'skills/source-manifest.json'), 'utf8')) as ToolkitManifest;
-    if (value.schemaVersion !== 1 || typeof value.commit !== 'string' || !Array.isArray(value.skills) || value.skills.length !== 29 || new Set(value.skills).size !== 29 || !Array.isArray(value.files)) throw new Error('Invalid toolkit resource manifest');
+    const value = JSON.parse(await readFile(resolve(this.root, 'skills/resource-manifest.json'), 'utf8')) as ToolkitManifest;
+    if (value.schemaVersion !== 1 || !Array.isArray(value.skills) || value.skills.length !== 29 || new Set(value.skills).size !== 29 || !Array.isArray(value.files)) throw new Error('Invalid toolkit resource manifest');
     return value;
   }
   async artifact(): Promise<ToolkitArtifactManifest> {
@@ -212,7 +212,7 @@ export class SkillsRuntime {
     }
     await this.validateArtifact();
     const nativeSupported = (process.platform === 'darwin' && process.arch === 'arm64') || (process.platform === 'linux' && process.arch === 'x64');
-    return { name, ready: nativeSupported && dependencies.every(dependency => dependency.available), readinessScope: 'all-declared-scenarios', resourcesValid: true, dependencies, platform: process.platform, arch: process.arch, nativeSupported, source: manifest.commit };
+    return { name, ready: nativeSupported && dependencies.every(dependency => dependency.available), readinessScope: 'all-declared-scenarios', resourcesValid: true, dependencies, platform: process.platform, arch: process.arch, nativeSupported, source: 'local-resource-manifest' };
   }
   async run(script: string, args: readonly string[], options: ProcessOptions = {}): Promise<ProcessResult> {
     const manifest = await this.manifest();
