@@ -205,7 +205,6 @@ Agent 空闲、对话连接、最新输出和观察器断开等信息属于独�
 
 如果被恢复的 DeliveryUnit 已经成为其他任务或交付单元的依赖源，失效的 merge capability MUST 阻止新的下游派发，并在 projection 中列出受影响的 dependency path。已经成功执行的下游 operation 不得自动回滚；其 `succeeded`、`failed` 或 `unknown` 结果必须通过各自 operation 的 reconcile contract 处理。
 
-
 ## 4. 审查要点
 
 - 正常流程先审查每个对象自己的状态机，再审查对象之间通过事实、里程碑和门禁形成的依赖关系。
