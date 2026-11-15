@@ -7187,7 +7187,7 @@
     {
       "path": "skills/multi-task-flow/lib/schema.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/schema.ts",
-      "installedSha256": "158752c26941be449e8c18bfd3e5ed4ae1b020664a83277e19c208fe32d72f28"
+      "installedSha256": "c33fd9dc8b941fc8aa0f7ba49a56658dfe51fc0e03fce1f8db01a69dc3248c3a"
     },
     {
       "path": "skills/multi-task-flow/lib/server-contract.ts",
