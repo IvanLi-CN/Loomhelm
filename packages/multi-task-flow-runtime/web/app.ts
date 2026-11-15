@@ -55,13 +55,7 @@ import {
   selectedObjectFocusSelector,
 } from "./interaction-policy";
 import { STATE_LABELS, taskKindLabel } from "./labels";
-import {
-  deriveConnectionStatus,
-  type Task,
-  type Theme,
-  type View,
-  type ViewResponse,
-} from "./model";
+import type { Task, Theme, View, ViewResponse } from "./model";
 import { installViewStateNavigation } from "./navigation";
 import { type DisplayPhase, defaultTabForPhase, derivePhase } from "./phase";
 import type { ProfileCapabilities, ProfileTarget } from "./profile-editor";
@@ -214,7 +208,7 @@ let hydrated = false;
 let missingLinkedTask: string | null = null;
 let userChangedTab = hasValidTabParam(window.location.search);
 let lastFocus: HTMLElement | null = null;
-let lastScrollTop: number | null = null;
+let _lastScrollTop: number | null = null;
 let focusDetailsOnNextRender = false;
 let keyboardSelection = false;
 let hoverBridge: HoverPreviewBridge | null = null;
@@ -1136,7 +1130,7 @@ function selectGroup(id: string, atomId: string | null = null): void {
   hideHoverPreview();
   hoverBridge?.resetTargets();
   lastFocus = document.activeElement as HTMLElement;
-  lastScrollTop = window.scrollY;
+  _lastScrollTop = window.scrollY;
   selectedGroup = id;
   selectedTask = null;
   selectedMilestone = null;
@@ -1165,7 +1159,7 @@ function selectTask(id: string, atomId: string | null = null): void {
   hideHoverPreview();
   hoverBridge?.resetTargets();
   lastFocus = document.activeElement as HTMLElement;
-  lastScrollTop = window.scrollY;
+  _lastScrollTop = window.scrollY;
   selectedTask = id;
   selectedGroup = null;
   selectedMilestone = null;
@@ -1368,6 +1362,7 @@ function render(): void {
   setMenuValue("state-filter", viewState.state);
   setMenuValue("kind-filter", viewState.kind);
   $("graph-tools").hidden = !["graph", "atomic"].includes(viewState.tab);
+  $("atomic-view-tools").hidden = viewState.tab !== "atomic";
   $("timeline-tools").hidden = !["planned", "actual"].includes(viewState.tab);
   applyStateToControls();
   renderSummary();
@@ -1717,8 +1712,8 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     const options = [
       ...option
-        .closest<HTMLElement>("[role=listbox]")!
-        .querySelectorAll<HTMLButtonElement>("[role=option]"),
+        .closest<HTMLElement>("[role=listbox]")
+        ?.querySelectorAll<HTMLButtonElement>("[role=option]"),
     ];
     const index = options.indexOf(option);
     options[
@@ -1840,7 +1835,7 @@ stream.addEventListener("error", () => {
   connected = false;
   connection("stale");
   void fetch(
-    "api/diagnostics/worker?run_id=" + encodeURIComponent(location.pathname.split("/")[2] ?? ""),
+    `api/diagnostics/worker?run_id=${encodeURIComponent(location.pathname.split("/")[2] ?? "")}`,
   )
     .then((response) => (response.ok ? response.json() : null))
     .then((value) => {

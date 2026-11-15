@@ -17,7 +17,7 @@ import {
   type GraphProjectionEdge,
   nodeTitle,
 } from "./graph-projection";
-import { dependencyLabel, groupExecutionVisualState, stateLabel, taskKindLabel } from "./labels";
+import { dependencyLabel, groupExecutionVisualState, taskKindLabel } from "./labels";
 import { conversationUrl } from "./links";
 import type { AtomicTask, Group, Task, View } from "./model";
 import { renderGroupPreview, renderTaskPreview } from "./preview-content";
@@ -79,7 +79,7 @@ function requirementsValue(path: string | null, kind: "task" | "group", id: stri
   );
 }
 
-function emptyOutput(): HTMLElement {
+function _emptyOutput(): HTMLElement {
   const value = text("span", "", "detail-empty-output");
   value.dataset.emptyLabel = "尚无 Agent 输出";
   value.setAttribute("aria-label", "尚无 Agent 输出");
@@ -153,6 +153,20 @@ function atomList(
       item.dataset.contextParentId = parent.id;
     }
     item.tabIndex = 0;
+    if (parent) {
+      const emit = (action: "hover" | "leave" | "click") =>
+        item.dispatchEvent(
+          new CustomEvent("loomhelm:atomic-details", {
+            bubbles: true,
+            detail: { atomId: atom.id, parentKind: parent.kind, parentId: parent.id, action },
+          }),
+        );
+      item.addEventListener("mouseenter", () => emit("hover"));
+      item.addEventListener("mouseleave", () => emit("leave"));
+      item.addEventListener("focus", () => emit("hover"));
+      item.addEventListener("blur", () => emit("leave"));
+      item.addEventListener("click", () => emit("click"));
+    }
     if (atom.id === focusedAtomId) {
       item.dataset.focused = "true";
       item.setAttribute("aria-current", "true");
@@ -414,7 +428,7 @@ export function createDetailContent(context: DetailContentContext) {
       atomList(
         taskAtoms,
         (index) => {
-          const id = taskAtoms![index]!.id;
+          const id = taskAtoms?.[index]?.id;
           return atomicIncomingEdges(data, id).map((edge) => {
             const source =
               taskAtoms?.find((atom) => atom.id === edge.from_node_id) ??
