@@ -28,6 +28,7 @@ import { verifyRelease } from "../lib/service-release";
 import { parseViewerRoute } from "../scripts/viewer-gateway";
 import { viewerWorkerSocketPath } from "../scripts/viewer-socket";
 import { createUnixViewerWorker, dataVersionOf, workerKeyOf } from "../scripts/viewer-worker";
+import { startUnixViewerWorkerServer } from "../scripts/viewer-socket";
 import { createWorkerGeneration, ViewerWorkerPool } from "../scripts/viewer-runtime";
 import { WorkerDiagnosticStore, workerDiagnosticFromError, type WorkerDiagnosticStage } from "./worker-diagnostics";
 import { serviceLog } from "./service-log";
@@ -296,6 +297,23 @@ export async function startSharedViewer(
         return run.handle(request, { timeout(req, timeout) { timeoutServer?.timeout(req, timeout); } }, normalizedPath);
       });
       const selected = workerBuilds.get(workerKey) ?? { build_id: manifest.build_id, package_version: serviceConfig.package_version ?? manifest.service_version };
+      // Synthetic observers are an explicit test/preview seam. Keep the same
+      // Unix-socket contract while retaining the injected observer in-process;
+      // production workers never receive demoHooks and always use a child PID.
+      if (typeof demoHooks === "function" || (demoHooks && typeof demoHooks === "object")) {
+        const server = await startUnixViewerWorkerServer({
+          socketPath,
+          workerKey,
+          generation,
+          handle: async (request, context) => {
+            const route = parseViewerRoute(new URL(request.url));
+            if (!route || route.runId !== context.runId) throw new Error("viewer worker route identity mismatch");
+            const normalizedPath = new URL(request.url).pathname.startsWith("/api/v1/") && !route.path.startsWith("/api/") ? "/api" + route.path : route.path;
+            return getRun(context.runId).handle(request, { timeout(req, timeout) { timeoutServer?.timeout(req, timeout); } }, normalizedPath);
+          },
+        });
+        return createUnixViewerWorker({ socketPath, workerKey, generation, stop: server.stop });
+      }
       const childCommand = selected.build_id === manifest.build_id
         ? [process.execPath, new URL("../scripts/viewer-worker-process.ts", import.meta.url).pathname]
         : [process.execPath, "x", "--bun", "--package", `@loomhelm/multi-task-flow@${selected.package_version}`, "multi-task-flow", "worker-process"];
