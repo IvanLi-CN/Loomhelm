@@ -121,6 +121,8 @@ bun --no-install src/cli.ts flow view --input - < view-request.json
 
 `flow COMMAND --input -` 原样承接 Multi-task Flow 请求、JSON 输出和退出码，账本仍为 schema_version=2 / contract_version=2。生产 socket 优先级为 `--socket` / 配置 `codexAppServerSocket`、`LOOMHELM_CODEX_APP_SERVER_SOCKET`、`CODEX_APP_SERVER_SOCKET`、原 Codex 默认路径。普通 fresh dispatch 与活跃运行的 conversation-create 具有不同授权和回执合同，不能互相冒充。
 
+Contract 3 的创建结果如果因为超时、进程终止或连接中断进入 `unknown`，必须使用 `flow creation-reconcile --input -` 对同一个 Flow Ledger operation 进行显式恢复。该命令查询已知 Codex thread 和初始化证据，成功后原子写回 operation；它不创建新 thread，也不使用独立 `codex reconcile` 的 stateDir。
+
 `skills check` 的 `readinessScope=all-declared-scenarios` 表示保守检查该 Skill 声明的全部条件性场景，不代表每项依赖对每次操作都适用；每项报告保留适用条件。报告覆盖外部 Skill、PATH 中的专项命令、原生宿主能力和已验证的平台组合。命令存在不证明登录、授权或操作成功；原生能力只能由调用方的真实宿主工具清单通过 SDK 的第三参数声明，CLI 不猜测，缺少声明返回 `HOST_CAPABILITY_UNVERIFIED` 和退出码 3。实际专项操作仍须执行源合同的场景门禁与授权检查；该报告不安装工具、不探测外部业务或执行副作用。
 
 旧 `flow schedule/start/finish/recover` 以及数组式 init 返回 `FLOW_LEGACY_ARGUMENTS_UNSUPPORTED`。旧 `orchestration.json`、`tasks.json`、`dispatch.json` 保留原处，不自动转换或删除。旧 `TaskGraph` / `TaskOrchestrator` 已移除。核心本地任务执行、幂等收据和显式 Codex 子进程派发继续作为独立底层能力存在。
