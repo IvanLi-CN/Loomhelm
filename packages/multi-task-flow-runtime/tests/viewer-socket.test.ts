@@ -46,15 +46,44 @@ test("Unix worker transport preserves streaming responses and immutable identity
   expect(lstatSync(socketPath).mode & 0o077).toBe(0);
 
   const worker = createUnixViewerWorker({ socketPath, workerKey, generation });
+  let timeoutValue: number | undefined;
+  const response = await worker.handle(
+    new Request("http://viewer.test/runs/demo/events"),
+    { timeout(_request: Request, timeout: number) { timeoutValue = timeout; } },
+    "/api/events",
+    { runId: "demo", workerKey, generation },
+  );
+  expect(timeoutValue).toBe(0);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toContain("text/event-stream");
+  expect(await response.text()).toBe("event: one\n\nevent: two\n\n");
+});
+
+test("client cancellation closes a stream without surfacing a worker failure", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "viewer-socket-")));
+  roots.push(root);
+  const workerKey = "schema-2/contract-2@release-a";
+  const generation = createWorkerGeneration();
+  const socketPath = viewerWorkerSocketPath(root, workerKey, generation);
+  const server = await startUnixViewerWorkerServer({
+    socketPath,
+    workerKey,
+    generation,
+    handle: () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("event: one\\n\\n"));
+      },
+    }), { headers: { "content-type": "text/event-stream" } }),
+  });
+  servers.push(server);
+  const worker = createUnixViewerWorker({ socketPath, workerKey, generation });
   const response = await worker.handle(
     new Request("http://viewer.test/runs/demo/events"),
     undefined,
     "/api/events",
     { runId: "demo", workerKey, generation },
   );
-  expect(response.status).toBe(200);
-  expect(response.headers.get("content-type")).toContain("text/event-stream");
-  expect(await response.text()).toBe("event: one\n\nevent: two\n\n");
+  await expect(response.body?.cancel("client closed")).resolves.toBeUndefined();
 });
 
 test("Unix worker transport rejects stale generations before connecting", async () => {
