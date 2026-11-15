@@ -844,8 +844,10 @@ function factSatisfied(
 ): boolean {
   const latest = latestFact(ledger, subjectId, kind);
   if (latest?.status !== "passed" || !latest.sha) return false;
-  if (kind === "pr_merged" && ledger.groups.some((item) => item.id === subjectId))
-    return deliveryUnitPrMergedFromLedger(ledger, ledger.groups.find((item) => item.id === subjectId)!);
+  if (kind === "pr_merged" && ledger.groups.some((item) => item.id === subjectId)) {
+    const group = ledger.groups.find((item) => item.id === subjectId)!;
+    return ledger.contract_version < 3 ? deliveryUnitPrMerged(group) : deliveryUnitPrMergedFromLedger(ledger, group);
+  }
   const task = ledger.tasks.find((item) => item.id === subjectId);
   if (!task) {
     const expectedSha = subjectSha(ledger, subjectId);
