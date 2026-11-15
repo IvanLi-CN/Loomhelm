@@ -162,7 +162,7 @@ function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): bo
   const targets = nodes.filter(
     (node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId,
   );
-  if (!targets.length) return true;
+  if (!targets.length) return !(task?.atoms.length && nodes.length);
   if (!edges.length && task?.atoms.length !== 1) return false;
   const taskNodes = nodes.filter(
     (node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId,
