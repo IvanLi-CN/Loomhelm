@@ -14,23 +14,23 @@ type AtomicCardData = { title: string; kind: string; state: string; scope: strin
 
 function kindGlyph(kind: AtomicCardData["nodeKind"], boundary: AtomicCardData["boundary"], role: AtomicCardData["atomRole"]): React.ReactNode {
   const path = role === "branch"
-    ? "M7 20V7m0 0 5-4m-5 4 5 4M7 13h7m0 0 3-3m-3 3 3 3"
+    ? "M6 3v12a3 3 0 1 0 3 3M18 3v6a3 3 0 1 1-3 3H9"
     : role === "pr-create"
-      ? "M5 4h10l4 4v12H5z M15 4v5h5 M8 14h8 M8 17h5"
+      ? "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z M14 2v6h6 M8 13h8 M8 17h5"
       : role === "pr-merge"
-        ? "M7 5v14m0-7h10m0 0-3-3m3 3-3 3 M17 5v4"
+        ? "M6 3v6a3 3 0 0 0 3 3h6a3 3 0 1 1 3 3v6 M18 3v6"
         : role === "closeout"
-          ? "M5 12l4 4L19 6 M12 3a9 9 0 1 1 0 18a9 9 0 1 1 0-18"
+          ? "M20 6 9 17l-5-5 M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20Z"
           : kind === "group"
             ? "M12 3 20 7 12 11 4 7 12 3Z M4 12 12 16 20 12 M4 17 12 21 20 17"
             : kind === "milestone"
               ? "M12 3 21 12 12 21 3 12 12 3Z M12 8.5v7 M8.5 12h7"
               : kind === "boundary"
-                ? (boundary === "start" ? "M12 3a9 9 0 1 1 0 18a9 9 0 1 1 0-18 M10 8l6 4-6 4Z" : "M5 5h14v14H5Z M9 9l6 6 M15 9l-6 6")
+              ? (boundary === "start" ? "M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20Z M10 8l6 4-6 4Z" : "M5 5h14v14H5Z M9 9l6 6 M15 9l-6 6")
                 : role === "verification"
                   ? "M12 3l2.2 5.2L20 10l-5.8 1.8L12 17l-2.2-5.2L4 10l5.8-1.8L12 3Z M12 17v4"
-                  : "M7 3.5h7l3 3V20.5H7a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 7 3.5Z M14 3.5v4h4 M8.5 12h6 M8.5 15.5h6";
-  return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d={path} /></svg>;
+                  : "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z M14 2v5h5 M8 13h8 M8 17h5";
+  return <svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" aria-hidden="true" focusable="false"><path d={path} /></svg>;
 }
 
 const AtomicCard = memo(function AtomicCard({ data }: NodeProps) {
@@ -241,7 +241,7 @@ export function createAtomicGraphController(context: GraphContext) {
       pending = false;
       container.style.height = `${Math.max(420, result.height + 80)}px`;
       update?.();
-      requestAnimationFrame(() => { if (serial !== generation) return; instance?.setViewport({ x: Math.max(24, (container.clientWidth - result.width) / 2), y: Math.max(24, (container.clientHeight - result.height) / 2), zoom: 1 }); context.setZoom(1); highlightAccessibleSelection(projection, context); });
+      requestAnimationFrame(() => { if (serial !== generation) return; instance?.setViewport({ x: Math.max(40, (container.clientWidth - result.width) / 2), y: Math.max(32, (container.clientHeight - result.height) / 2), zoom: 1 }); context.setZoom(1); highlightAccessibleSelection(projection, context); });
     }).catch(() => { if (serial !== generation) return; pending = false; update?.(); });
   }
 
