@@ -6,6 +6,7 @@ import {
 } from "../lib/service-compatibility";
 import { maintenanceCheck, maintenanceApply } from "../lib/ledger-maintenance";
 import { writeFileSync, existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
 import { servicePaths } from "../lib/service-paths";
@@ -13,13 +14,14 @@ import { ServiceState } from "../lib/service-state";
 import { ServiceAuth } from "../lib/service-auth";
 import { ensureService, runDaemon, serviceStatus } from "../lib/service-lifecycle";
 import { agentLease } from "../lib/service-http";
-import { installRelease, switchRelease, installPackageRelease, upgradePackageRelease } from "../lib/service-maintenance";
+import { installRelease, switchRelease, installPackageRelease, upgradePackageRelease, resolvePackageTarget } from "../lib/service-maintenance";
 import { importRun } from "../lib/service-import";
 import { ContractError, requireCondition } from "../lib/errors";
 import { requireApi, ledgerContract } from "../lib/service-contract";
 import { buildView } from "../lib/view";
 import { validateLedger } from "../lib/schema";
 import { cachedDaemonUpdate, triggerDaemonUpdateCheck } from "../lib/service-update";
+import { ensureViewerBinding, writeViewerBinding } from "../lib/viewer-binding";
 
 const actor = z
   .object({
@@ -31,6 +33,7 @@ const actor = z
 const empty = z.object({}).strict();
 const source = z.object({ source: z.string().startsWith("/") }).strict();
 const packageVersion = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/) }).strict();
+const upgradeRequest = z.object({ target: z.string().min(1), mode: z.enum(["normal", "dry-run", "rollback"]) }).strict();
 
 export async function serviceCommand(
   command: string,
@@ -44,6 +47,35 @@ export async function serviceCommand(
     ]).parse(input);
     if ("version" in parsed) return installPackageRelease(state, parsed.version, parsed.registry_dir);
     return installRelease(state, parsed.source, parsed.registry_dir);
+  }
+  if (command === "gateway-upgrade") {
+    const parsed = upgradeRequest.parse(input);
+    const identity = resolvePackageTarget(parsed.target);
+    if (parsed.mode === "dry-run") return { surface: "gateway", changed: false, target: identity.version, requested: parsed.target, dry_run: true };
+    return upgradePackageRelease(state, identity.version);
+  }
+  if (command === "orchestration-upgrade") {
+    const parsed = z.object({ run_id: z.string(), target: z.string().min(1), mode: z.enum(["normal", "dry-run", "rollback"]) }).strict().parse(input);
+    const identity = resolvePackageTarget(parsed.target);
+    const current = ensureViewerBinding(state, parsed.run_id);
+    if (parsed.mode === "dry-run") return { surface: "orchestration", run_id: parsed.run_id, changed: false, current, target: identity.version, requested: parsed.target, dry_run: true };
+    const next = writeViewerBinding(state, {
+      schema_version: 1,
+      run_id: parsed.run_id,
+      package_name: identity.package_name,
+      package_version: identity.version,
+      build_id: identity.build_id,
+      source_sha: identity.source_sha,
+      compatibility_line: identity.compatibility_line,
+      ledger_contract: identity.contracts.ledger,
+      api_contract: identity.contracts.api,
+      frontend_contract: identity.contracts.frontend,
+      viewer_contract: identity.contracts.viewer,
+      revision: current.revision,
+      request_id: `orchestration-upgrade-${randomUUID()}`,
+      updated_at: new Date().toISOString(),
+    });
+    return { surface: "orchestration", run_id: parsed.run_id, changed: next.build_id !== current.build_id, current: next, daemon_refresh: "best-effort" };
   }
   if (command === "compatibility-check") {
     const parsed = z

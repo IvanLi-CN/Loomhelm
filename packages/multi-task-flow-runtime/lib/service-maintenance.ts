@@ -80,6 +80,17 @@ export function resolvePackageIdentity(version: string): PackageIdentity {
   return identity;
 }
 
+export function resolvePackageTarget(target: string): PackageIdentity {
+  if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(target)) return resolvePackageIdentity(target);
+  const result = Runtime.spawnSync([process.execPath, "pm", "view", `${PACKAGE_NAME}@${target}`, "version", "--json"], { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+  requireCondition(result.exitCode === 0, "PACKAGE_RESOLUTION_FAILED", "Unable to resolve the requested package tag");
+  let version: unknown;
+  try { version = JSON.parse(result.stdout.toString("utf8")); } catch { version = undefined; }
+  const resolved = Array.isArray(version) ? version[0] : version;
+  requireCondition(typeof resolved === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(resolved), "PACKAGE_RESOLUTION_FAILED", "Package tag did not resolve to an exact SemVer");
+  return resolvePackageIdentity(resolved);
+}
+
 function packageConfig(old: ServiceConfig | null, identity: PackageIdentity, registryDir: string): ServiceConfig {
   return {
     schema_version: 1,

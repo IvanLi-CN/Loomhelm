@@ -6,7 +6,7 @@ Accepted for the package-backed Multi-task Flow viewer; implementation and relea
 
 ## Context
 
-Run dashboard requests cross a Viewer gateway and a run-scoped worker connected through a private Unix socket. A worker startup or connection failure can leave the daemon running while the affected run returns a timeout, empty response or generic `SERVICE_ERROR`. The browser can also retain an expired session or a stale error page after daemon restart, making recovery appear to be a viewer outage.
+Run dashboard requests cross the Stable Gateway and a Per-Run Versioned Worker defined by [ADR 0034](0034-stable-gateway-versioned-workers.md), with the daemon acting as their supervisor. A worker startup or connection failure can leave the gateway available while the affected run returns a timeout, empty response or generic `SERVICE_ERROR`. The browser can also retain an expired session or a stale error page after gateway or daemon restart, making recovery appear to be a viewer outage.
 
 ## Decision
 
