@@ -7122,7 +7122,7 @@
     {
       "path": "skills/multi-task-flow/lib/engine.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/engine.ts",
-      "installedSha256": "a9a52913db778dcb2f76bd74ebee482fd665646837d6bc720a781a6f5876af1d"
+      "installedSha256": "9bc41e2766fa95d21d4b779403deacdcd58cfd6d69021f0db7d1f346e359a6be"
     },
     {
       "path": "skills/multi-task-flow/lib/errors.ts",
@@ -7317,7 +7317,7 @@
     {
       "path": "skills/multi-task-flow/lib/view.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/view.ts",
-      "installedSha256": "13b981453dd18d954c17e4e4d4ab0ef9b36ecd0ac51a16ca7df4973dcd4f335f"
+      "installedSha256": "0bfe46ea73b8de62d75fea494a75ffe6aa5213beb0b32e4edfa100f28093d52d"
     },
     {
       "path": "skills/multi-task-flow/package.json",
@@ -7421,7 +7421,7 @@
     {
       "path": "skills/multi-task-flow/tests/engine.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/engine.test.ts",
-      "installedSha256": "fa7c1ebb91376e8ec59d8c21734c35dbf7ff447f941295b65ba0ee0153301a8f"
+      "installedSha256": "464313c4c8103e769249095aa5c408c236710b108c0f8adff9eb92b9ec791d19"
     },
     {
       "path": "skills/multi-task-flow/tests/graph-projection.test.ts",
@@ -7601,7 +7601,7 @@
     {
       "path": "skills/multi-task-flow/tests/view.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/view.test.ts",
-      "installedSha256": "b95c4ef11bcb3511fddebbdb6a1181ae8272e002ca84d3f9ff5403d5370d86a8"
+      "installedSha256": "386d113d4948c7ef23eb7f10fbce4ad20b6c05fd8e43571056b1d7a4e2059407"
     },
     {
       "path": "skills/multi-task-flow/web/agent-output.ts",
@@ -7636,7 +7636,7 @@
     {
       "path": "skills/multi-task-flow/web/details-content.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/details-content.ts",
-      "installedSha256": "827683bb2277e82f2006d5598b9206caf48ecd70d8506752cabd5343ed23e43a"
+      "installedSha256": "edf2b88f8f27941d1aac4222b95023a1344d383b35d329cdaad50b238a2dac79"
     },
     {
       "path": "skills/multi-task-flow/web/execution-range.ts",
@@ -7691,7 +7691,7 @@
     {
       "path": "skills/multi-task-flow/web/model.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/model.ts",
-      "installedSha256": "562075ae387fb5a8a8108d2c369b3f5c6e427839b4448fc57b522c6e30ec75f4"
+      "installedSha256": "610f4ec0ad7add807ecb53a8ae3002bc78bb18ca307a860f5bdb109b18844e3d"
     },
     {
       "path": "skills/multi-task-flow/web/navigation.ts",
