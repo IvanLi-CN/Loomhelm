@@ -7541,7 +7541,7 @@
     {
       "path": "skills/multi-task-flow/tests/ui/details-content.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/ui/details-content.test.ts",
-      "installedSha256": "d539df2b09cca342308888d0f38c85d9bef6741ce7a99f369f971aa93630bb44"
+      "installedSha256": "16726fc649b7563e8d1816e2efec9603e4f6fce9bdd23da5216e2de05726eddb"
     },
     {
       "path": "skills/multi-task-flow/tests/ui/group-progress.test.ts",
@@ -7636,7 +7636,7 @@
     {
       "path": "skills/multi-task-flow/web/details-content.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/details-content.ts",
-      "installedSha256": "198939985ee72ba3cf16b1372e9a68b39fa853da788213310061b75c0c00e852"
+      "installedSha256": "827683bb2277e82f2006d5598b9206caf48ecd70d8506752cabd5343ed23e43a"
     },
     {
       "path": "skills/multi-task-flow/web/execution-range.ts",
