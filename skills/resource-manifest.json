@@ -6967,7 +6967,7 @@
     {
       "path": "skills/multi-task-flow/bun.lock",
       "sourcePath": "packages/multi-task-flow-runtime/bun.lock",
-      "installedSha256": "55d9a995fce5c98cf6df4623cee9e68f026d95b3fd5b81a11b8fc8ff77a96c64"
+      "installedSha256": "319a33fe2618f92bbcc35c51ab7d043961c81dbbe621b9300540e2017b0075fa"
     },
     {
       "path": "skills/multi-task-flow/data/.gitignore",
