@@ -71,7 +71,7 @@ Use this contract for shared Step 5, `$flow-continue`, and the workflow PR publi
 - `merge+cleanup`: `合并并收尾 / 推进到合并并收尾 / merge and cleanup`; must merge, then cleanup. Cleanup includes deleting PR worktrees when safe.
 - Generic `继续 / 收尾` inherits the current stop condition; latest explicit plain `合并` resolves to `merge-only`.
 - Once the current stop condition is `merge-only` or `merge+cleanup` and the run has entered the shared Step 5 merge path, same-PR in-scope writable convergence is authorized by default:
-  - included: reviewer-feedback repair, CI/blocker repair, freshness `merge_state=BEHIND`, conflict `merge_state=DIRTY` / `mergeable=CONFLICTING`, missing required Tier 3/4 review proof, and compatibility repairs directly forced by those live facts;
+  - included: reviewer-feedback repair, CI/blocker repair, freshness `merge_state=BEHIND`, conflict `merge_state=DIRTY` / `mergeable=CONFLICTING`, missing required Tier 3/4 review proof, and compatibility repairs directly forced by those live facts, but only inside the current Scope Envelope and Repair Manifest;
   - excluded: scope expansion, `same-PR reopen`, permissions/risk blockers, and `convergence drag blocker`;
   - `merge-ready` does not carry this writable-convergence default by itself.
 
@@ -82,7 +82,7 @@ Use this contract for shared Step 5, `$flow-continue`, and the workflow PR publi
 
 ## 9. Convergence Stop-Loss
 
-- Apply the diagnosis and disposition in `review-proof-short-contract.md`; carried `PR收敛修复轮次` is the same cumulative `repair_batches_used`. Batch count alone does not block authorized in-scope repair. Design-returning findings follow the review contract.
+- Apply the diagnosis, Scope Envelope, Repair Manifest, and disposition in `review-proof-short-contract.md`; carried `PR收敛修复轮次` is the same cumulative `repair_batches_used`. A batch count never expands the envelope. Near three batches, a recurring root cause, or any unproven path mapping is a `convergence-drag blocker`; stop same-PR writes and recommend a follow-up PR or a newly approved envelope. Design-returning and Scope-Returning findings follow the review contract.
 
 ## 10. Output Coherence
 
