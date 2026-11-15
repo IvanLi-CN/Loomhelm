@@ -7222,7 +7222,7 @@
     {
       "path": "skills/multi-task-flow/lib/service-http.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/service-http.ts",
-      "installedSha256": "7940dfd8e6466eacbbe6c5440ee8444de7efae8f487234f5e226439c4132cd86"
+      "installedSha256": "a053f6cd03702d401793de313c044fc62125d19410b329387c53472ecf1b1f0c"
     },
     {
       "path": "skills/multi-task-flow/lib/service-import-recovery.ts",
@@ -7356,7 +7356,7 @@
     {
       "path": "skills/multi-task-flow/scripts/service.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/service.ts",
-      "installedSha256": "70ac295d827865883c1eaef110d6433972662e7da2c6b2854f8c594f48bf0e47"
+      "installedSha256": "82a25ffb19df0bd6d605c2210620a0e93576385dc6f9390aa22ba52d83f03a59"
     },
     {
       "path": "skills/multi-task-flow/scripts/verify-service-browser.ts",

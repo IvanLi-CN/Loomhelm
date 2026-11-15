@@ -19,6 +19,7 @@ import { ContractError, requireCondition } from "../lib/errors";
 import { requireApi, ledgerContract } from "../lib/service-contract";
 import { buildView } from "../lib/view";
 import { validateLedger } from "../lib/schema";
+import { verifyRelease } from "../lib/service-release";
 import { cachedDaemonUpdate, triggerDaemonUpdateCheck } from "../lib/service-update";
 import { ensureViewerBinding, writeViewerBinding } from "../lib/viewer-binding";
 
@@ -33,6 +34,10 @@ const empty = z.object({}).strict();
 const source = z.object({ source: z.string().startsWith("/") }).strict();
 const packageVersion = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/) }).strict();
 const upgradeRequest = z.object({ target: z.string().min(1), mode: z.enum(["normal", "dry-run", "rollback"]) }).strict();
+function requireVerifiedRollback(state: ServiceState, buildId: string): void {
+  requireCondition(existsSync(join(state.paths.releases, buildId, "manifest.json")), "ROLLBACK_TARGET_UNVERIFIED", "Rollback target is not a locally verified release");
+  verifyRelease(join(state.paths.releases, buildId));
+}
 
 export async function serviceCommand(
   command: string,
@@ -52,6 +57,7 @@ export async function serviceCommand(
     triggerDaemonUpdateCheck(state);
     const identity = resolvePackageTarget(parsed.target);
     if (parsed.mode === "dry-run") return { surface: "gateway", changed: false, target: identity.version, requested: parsed.target, dry_run: true };
+    if (parsed.mode === "rollback") requireVerifiedRollback(state, identity.build_id);
     return upgradePackageReleaseAndStart(state, identity.version);
   }
   if (command === "orchestration-upgrade") {
@@ -63,6 +69,7 @@ export async function serviceCommand(
     requireCondition(identity.contracts.ledger === current.ledger_contract && identity.contracts.api === current.api_contract && identity.contracts.frontend === current.frontend_contract && identity.contracts.viewer === current.viewer_contract, "INCOMPATIBLE_RELEASE", "Target package contracts do not match the run binding");
     if (parsed.mode === "dry-run") return { surface: "orchestration", run_id: parsed.run_id, changed: false, current, target: identity.version, requested: parsed.target, dry_run: true };
     if (identity.build_id === current.build_id) return { surface: "orchestration", run_id: parsed.run_id, changed: false, current, daemon_refresh: "best-effort" };
+    if (parsed.mode === "rollback") requireVerifiedRollback(state, identity.build_id);
     const next = writeViewerBinding(state, {
       schema_version: 1,
       run_id: parsed.run_id,
