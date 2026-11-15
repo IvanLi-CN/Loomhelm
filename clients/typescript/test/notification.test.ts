@@ -5,16 +5,16 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { SkillsRuntime } from '../src/index.ts';
-import { LedgerStore } from '../toolkit/skills/multi-task-flow/lib/store.ts';
-import { apply } from '../toolkit/skills/multi-task-flow/lib/engine.ts';
-import { deliverClaimedNotification, reconcileNotification } from '../toolkit/skills/multi-task-flow/lib/notification-delivery.ts';
+import { LedgerStore } from '../resources/skills/multi-task-flow/lib/store.ts';
+import { apply } from '../resources/skills/multi-task-flow/lib/engine.ts';
+import { deliverClaimedNotification, reconcileNotification } from '../resources/skills/multi-task-flow/lib/notification-delivery.ts';
 
 const accepted = { outcome: 'sent', provider_receipt: { provider: 'codex-app-server', evidence_ref: 'fixture:accepted', message_id: 'fixture-turn' } };
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'loomhelm-notification-')));
   try {
     const runtime = new SkillsRuntime();
-    const input = await readFile(join(runtime.root, 'skills/multi-task-flow/examples/ledger-initialization/initial.json'), 'utf8');
+    const input = await readFile(join(import.meta.dir, '../../../packages/multi-task-flow-runtime/examples/ledger-initialization/initial.json'), 'utf8');
     const result = await runtime.run('skills/multi-task-flow/scripts/orchestrate.ts', ['init', '--input', '-'], { input, env: { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: join(root, 'seed') } });
     assert.equal(result.code, 0, result.stdout + result.stderr);
     const ledger = JSON.parse(await readFile(join(root, 'seed/runs/example-run/ledger.json'), 'utf8'));

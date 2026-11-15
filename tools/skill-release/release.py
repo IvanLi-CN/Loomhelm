@@ -511,7 +511,7 @@ def canonical_tarball_digest(tarball: Path) -> str:
     files = archive_files(tarball)
     digest = hashlib.sha256()
     for path in _path_byte_sorted(files):
-        if path == "toolkit/artifact-manifest.json":
+        if path in {"artifact-manifest.json", "toolkit/artifact-manifest.json", "resources/artifact-manifest.json"}:
             continue
         digest.update(path.encode("utf-8"))
         digest.update(b"\0")
@@ -588,9 +588,10 @@ def validate_tarball(
     Version(package_version)
     if expected_version is not None and package_version != expected_version:
         raise ReleaseError("tarball package version does not match the release request")
-    if "toolkit/artifact-manifest.json" not in files:
-        raise ReleaseError("tarball does not contain toolkit/artifact-manifest.json")
-    artifact = _read_json_bytes(files["toolkit/artifact-manifest.json"], "artifact manifest")
+    artifact_path = next((candidate for candidate in ("resources/artifact-manifest.json", "toolkit/artifact-manifest.json", "artifact-manifest.json") if candidate in files), None)
+    if artifact_path not in files:
+        raise ReleaseError("tarball does not contain an artifact manifest")
+    artifact = _read_json_bytes(files[artifact_path], "artifact manifest")
     schema_version = artifact.get("schemaVersion")
     if schema_version not in (2, 3) or artifact.get("runtime") != "bun@1.4.4":
         raise ReleaseError("artifact manifest has an unsupported schema or runtime")
@@ -606,9 +607,9 @@ def validate_tarball(
         raise ReleaseError("schema v2 artifacts must use the legacy verifier")
     toolkit_package: Mapping[str, Any] = {}
     if schema_version == 3:
-        if "toolkit/package.json" not in files:
-            raise ReleaseError("tarball does not contain toolkit/package.json")
-        toolkit_package = _read_json_bytes(files["toolkit/package.json"], "toolkit package.json")
+        if "resources/package.json" not in files:
+            raise ReleaseError("tarball does not contain resources/package.json")
+        toolkit_package = _read_json_bytes(files["resources/package.json"], "toolkit package.json")
         if toolkit_package.get("name") != PACKAGE_NAME or toolkit_package.get("version") != package_version:
             raise ReleaseError("toolkit package metadata does not match the package root")
     identity = _require_object(artifact.get("identity"), "artifact.identity")
@@ -680,7 +681,7 @@ def validate_tarball(
         if toolkit_dependencies != expected_dependencies:
             raise ReleaseError("toolkit package dependencies do not match the artifact manifest")
         for path in files:
-            if path.startswith("toolkit/") and path.rsplit("/", 1)[-1] in {".gitignore", ".npmignore"}:
+            if path.startswith("resources/") and path.rsplit("/", 1)[-1] in {".gitignore", ".npmignore"}:
                 raise ReleaseError("npm ignored files must not be present in the toolkit archive: " + path)
     elif artifact.get("dependenciesBundled") is not True:
         raise ReleaseError("schema v2 artifacts must declare bundled dependencies")
@@ -696,14 +697,14 @@ def validate_tarball(
         if path in inventory_paths or not SHA256.fullmatch(digest):
             raise ReleaseError("artifact resource inventory is invalid")
         inventory_paths.add(path)
-        resource = f"toolkit/{path}"
+        resource = f"resources/skills/{path}" if schema_version == 3 else f"toolkit/{path}"
         if resource not in files or hashlib.sha256(files[resource]).hexdigest() != digest:
             raise ReleaseError(f"artifact resource digest mismatch: {path}")
-    toolkit_inventory = {f"toolkit/{path}" for path in inventory_paths}
-    toolkit_metadata = {"toolkit/package.json", "toolkit/artifact-manifest.json"}
+    toolkit_inventory = {(f"resources/skills/{path}" if schema_version == 3 else f"toolkit/{path}") for path in inventory_paths}
+    toolkit_metadata = {"resources/package.json", "resources/artifact-manifest.json"} if schema_version == 3 else {"toolkit/package.json", "toolkit/artifact-manifest.json"}
     unlisted_toolkit_files = sorted(
         path for path in files
-        if path.startswith("toolkit/") and path not in toolkit_inventory and path not in toolkit_metadata
+        if (path.startswith("resources/") if schema_version == 3 else path.startswith("toolkit/")) and path not in toolkit_inventory and path not in toolkit_metadata
     )
     if unlisted_toolkit_files:
         raise ReleaseError("toolkit contains files absent from the artifact inventory: " + ", ".join(unlisted_toolkit_files[:10]))
@@ -724,7 +725,7 @@ def validate_tarball(
             if omission_path in omission_paths:
                 raise ReleaseError("artifact package omissions contain duplicates")
             omission_paths.add(omission_path)
-            if omission_path.startswith("skills/") and f"toolkit/{omission_path}" in files:
+            if omission_path.startswith("skills/") and f"resources/{omission_path}" in files:
                 raise ReleaseError("npm-omitted resource is present in the toolkit archive: " + omission_path)
         if "package.json" not in omission_paths or "artifact-manifest.json" not in omission_paths:
             raise ReleaseError("schema v3 artifacts must classify generated toolkit metadata as omitted resources")
