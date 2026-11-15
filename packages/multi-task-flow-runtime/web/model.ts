@@ -152,6 +152,7 @@ export type Group = {
   execution_profile_rule?: string | null;
   delivery_agent_readiness?: "bound" | "unbound" | "not_applicable" | "unknown";
   dispatch_readiness?: "ready" | "blocked" | "unknown";
+  pr_merged_availability?: "available" | "unavailable";
   dispatch_diagnostics?: { code: string; message: string }[];
 };
 

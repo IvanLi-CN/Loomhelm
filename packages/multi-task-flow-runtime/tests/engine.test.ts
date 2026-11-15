@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { apply, ready, requireGroupDispatchGate, type Request } from "../lib/engine";
+import { apply, deliveryUnitPrMerged, ready, requireGroupDispatchGate, type Request } from "../lib/engine";
 import {
   validateLedger,
   taskExecutionPolicyIssues,
@@ -212,6 +212,24 @@ test("contract-3 group dispatch waits for upstream delivery-unit PR merge", () =
   });
   plan.edges.push({ id: "upstream-a", from_node_id: "upstream-node", to_node_id: "node-a", requires: "completed" });
   expect(() => requireGroupDispatchGate(ledger, ledger.groups[0]!)).toThrow("upstream delivery-unit PRs");
+});
+
+test.each(["merged", "closed"] as const)("%s preserves upstream PR merge eligibility", (state) => {
+  expect(deliveryUnitPrMerged({
+    state,
+    merge_sha: merge,
+    lifecycle: { pr_merged: "passed" },
+    pr: { state: "merged", pr: { provider: "github", repository: "example/repo", id: "1", url: "https://github.com/example/repo/pull/1" }, parent_branch: "main", merge_sha: merge },
+  } as any)).toBe(true);
+});
+
+test("closed upstream with a provider-closed PR is not dispatchable", () => {
+  expect(deliveryUnitPrMerged({
+    state: "closed",
+    merge_sha: merge,
+    lifecycle: { pr_merged: "passed" },
+    pr: { state: "closed", pr: { provider: "github", repository: "example/repo", id: "1", url: "https://github.com/example/repo/pull/1" }, parent_branch: "main" },
+  } as any)).toBe(false);
 });
 
 test("contract-3 group dispatch binds only the multi-task-flow codex exec transport", () => {

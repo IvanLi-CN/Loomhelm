@@ -963,10 +963,10 @@ export function ready(ledger: Ledger, taskId: string): boolean {
   return nodeSatisfied(ledger, target, nodes, currentPlan.edges, new Set()) && atomicDependenciesReady(ledger, currentPlan, taskId);
 }
 
-function deliveryUnitPrMerged(group: Ledger["groups"][number]): boolean {
+export function deliveryUnitPrMerged(group: Ledger["groups"][number]): boolean {
   const canonicalPrState = group.pr && "state" in group.pr ? group.pr.state : null;
   return Boolean(
-    group.state === "merged" &&
+    ["merged", "closed"].includes(group.state) &&
       group.merge_sha &&
       group.lifecycle.pr_merged === "passed" &&
       (canonicalPrState === null || canonicalPrState === "merged"),

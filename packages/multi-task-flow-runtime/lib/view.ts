@@ -17,7 +17,7 @@ import {
   type Ledger,
   type Plan,
 } from "../lib/schema";
-import { ready } from "../lib/engine";
+import { deliveryUnitPrMerged, ready } from "../lib/engine";
 import {
   deriveExecutionPhase,
   reasonRequired,
@@ -1148,6 +1148,7 @@ export function buildView(
     semantic_context: localSemanticProjection(ledger, "dashboard_view"),
     groups: atomProjection.groups.map((item) => ({
       ...item,
+      pr_merged_availability: deliveryUnitPrMerged(item) ? "available" : "unavailable",
       derived_status: deriveBusinessStatus(canonicalAtomicNodes, { kind: "delivery_unit", delivery_unit_id: item.id }, milestoneEvaluations),
       ...(() => {
         const gateDiagnostics = deliveryGateDiagnostics(ledger, item);
