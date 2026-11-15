@@ -12,7 +12,7 @@ class TypeScriptSmokeTests(unittest.TestCase):
     def test_accepts_current_consumer_install_artifact(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / 'toolkit').mkdir()
+            (root / 'resources').mkdir()
             validate_ts_manifest(
                 root,
                 {
@@ -31,11 +31,11 @@ class TypeScriptSmokeTests(unittest.TestCase):
                 self.record,
             )
 
-    def test_rejects_current_artifact_with_toolkit_node_modules(self):
+    def test_rejects_current_artifact_with_resources_node_modules(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / 'toolkit/node_modules/zod').mkdir(parents=True)
-            with self.assertRaisesRegex(ReleaseError, 'toolkit node_modules'):
+            (root / 'resources/node_modules/zod').mkdir(parents=True)
+            with self.assertRaisesRegex(ReleaseError, 'resources node_modules'):
                 validate_ts_manifest(
                     root,
                     {
