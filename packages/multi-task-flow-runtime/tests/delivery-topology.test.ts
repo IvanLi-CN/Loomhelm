@@ -6,8 +6,10 @@ const task = (id: string, group_id: string, policy: "shared_delivery_unit" | "ch
   group_id,
   kind: "contribution" as const,
   disposition: "active" as const,
-  execution_owner: policy === "shared_delivery_unit" ? "delivery_agent" as const : "task_agent" as const,
-  conversation_policy: policy === "shared_delivery_unit" ? "delivery_owned" as const : "task_agent" as const,
+  execution_owner:
+    policy === "shared_delivery_unit" ? ("delivery_agent" as const) : ("task_agent" as const),
+  conversation_policy:
+    policy === "shared_delivery_unit" ? ("delivery_owned" as const) : ("task_agent" as const),
   delivery_policy: policy,
 });
 
@@ -21,7 +23,12 @@ test("derives multi-task topology without allowing shared policies", () => {
   const tasks = [task("task-a", "du-a", "child_pr"), task("task-b", "du-a", "child_pr")];
   expect(deliveryTopologyForGroup(tasks as any, "du-a")).toBe("multi_task_integration");
   expect(() => validateDeliveryTopologies(tasks as any, true)).not.toThrow();
-  expect(() => validateDeliveryTopologies([task("task-a", "du-a", "shared_delivery_unit"), task("task-b", "du-a", "child_pr")] as any, true)).toThrow("multi-task delivery unit");
+  expect(() =>
+    validateDeliveryTopologies(
+      [task("task-a", "du-a", "shared_delivery_unit"), task("task-b", "du-a", "child_pr")] as any,
+      true,
+    ),
+  ).toThrow("multi-task delivery unit");
 });
 
 test("does not count verification tasks when deriving topology", () => {

@@ -37,7 +37,14 @@ export const STATE_LABELS: Record<string, string> = {
   active: "进行中",
 };
 
-export type StateIconName = "tree-palm" | "loader-circle" | "hourglass" | "circle-alert" | "circle-check" | "circle-dot" | "circle-dashed";
+export type StateIconName =
+  | "tree-palm"
+  | "loader-circle"
+  | "hourglass"
+  | "circle-alert"
+  | "circle-check"
+  | "circle-dot"
+  | "circle-dashed";
 
 export function stateIconName(state: string, ready = false): StateIconName {
   const normalized = ready && state === "planned" ? "ready" : state;
@@ -65,7 +72,9 @@ export function stateLabel(state: string, ready = false): string {
 
 export function groupExecutionVisualState(groupState: string, executionState?: string): string {
   if (groupState === "closed") return groupState;
-  if (executionState === "running" || executionState === "waiting" || executionState === "blocked") return executionState;
-  if (groupState === "active" && (executionState === "unknown" || executionState === "idle")) return executionState;
+  if (executionState === "running" || executionState === "waiting" || executionState === "blocked")
+    return executionState;
+  if (groupState === "active" && (executionState === "unknown" || executionState === "idle"))
+    return executionState;
   return groupState;
 }

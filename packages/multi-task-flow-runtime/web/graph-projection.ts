@@ -1,8 +1,13 @@
-import type { Node, Task, View } from "./model";
-import { stateIconName, stateLabel, type StateIconName } from "./labels";
 import type { AtomicEdge, AtomicNode } from "../lib/atomic-orchestration";
+import { type StateIconName, stateIconName, stateLabel } from "./labels";
+import type { Node, Task, View } from "./model";
 
-export const HIDDEN_BOUNDARY_KINDS = new Set(["main_start", "main_end", "group_start", "group_end"]);
+export const HIDDEN_BOUNDARY_KINDS = new Set([
+  "main_start",
+  "main_end",
+  "group_start",
+  "group_end",
+]);
 
 export const GRAPH_LABEL_LIMITS = {
   group: { lines: 2, columns: 14 },
@@ -93,15 +98,57 @@ export type AtomicGraphProjection = {
   edges: { id: string; source: string; target: string; requires: string }[];
 };
 
-export function projectAtomicGraph(nodes: readonly AtomicNode[], edges: readonly AtomicEdge[]): AtomicGraphProjection {
+export function projectAtomicGraph(
+  nodes: readonly AtomicNode[],
+  edges: readonly AtomicEdge[],
+): AtomicGraphProjection {
   return {
     nodes: nodes.map((node) => {
-      if (node.kind === "boundary") return { id: node.id, kind: "boundary", title: node.title, scope: "global", status: node.state, boundary: node.boundary, evidence: [], blocker: null, acceptance_count: 0 };
-      if (node.kind === "milestone") return { id: node.id, kind: "milestone", title: node.title, scope: node.scope ? "milestone" : "design", status: node.state, evidence: [], blocker: null, acceptance_count: node.acceptance.length };
-      const scope = !node.scope ? "design" : node.scope.kind === "task" ? `task:${node.scope.task_id} / delivery-unit:${node.scope.delivery_unit_id}` : `delivery-unit:${node.scope.delivery_unit_id}`;
-      return { id: node.id, kind: "work", title: node.title, scope, status: node.state, evidence: node.result?.evidence_refs ?? node.runtime?.evidence_refs ?? [], blocker: node.blocker?.message ?? null, acceptance_count: node.acceptance.length };
+      if (node.kind === "boundary")
+        return {
+          id: node.id,
+          kind: "boundary",
+          title: node.title,
+          scope: "global",
+          status: node.state,
+          boundary: node.boundary,
+          evidence: [],
+          blocker: null,
+          acceptance_count: 0,
+        };
+      if (node.kind === "milestone")
+        return {
+          id: node.id,
+          kind: "milestone",
+          title: node.title,
+          scope: node.scope ? "milestone" : "design",
+          status: node.state,
+          evidence: [],
+          blocker: null,
+          acceptance_count: node.acceptance.length,
+        };
+      const scope = !node.scope
+        ? "design"
+        : node.scope.kind === "task"
+          ? `task:${node.scope.task_id} / delivery-unit:${node.scope.delivery_unit_id}`
+          : `delivery-unit:${node.scope.delivery_unit_id}`;
+      return {
+        id: node.id,
+        kind: "work",
+        title: node.title,
+        scope,
+        status: node.state,
+        evidence: node.result?.evidence_refs ?? node.runtime?.evidence_refs ?? [],
+        blocker: node.blocker?.message ?? null,
+        acceptance_count: node.acceptance.length,
+      };
     }),
-    edges: edges.map((edge) => ({ id: edge.id, source: edge.from_node_id, target: edge.to_node_id, requires: edge.requires.kind })),
+    edges: edges.map((edge) => ({
+      id: edge.id,
+      source: edge.from_node_id,
+      target: edge.to_node_id,
+      requires: edge.requires.kind,
+    })),
   };
 }
 
@@ -113,16 +160,19 @@ export function fitGraphLabel(value: string, limit: { lines: number; columns: nu
   const clipped = characters.length > capacity;
   const visible = characters.slice(0, clipped ? Math.max(0, capacity - 1) : capacity);
   const lines: string[] = [];
-  for (let index = 0; index < visible.length; index += limit.columns) lines.push(visible.slice(index, index + limit.columns).join(""));
+  for (let index = 0; index < visible.length; index += limit.columns)
+    lines.push(visible.slice(index, index + limit.columns).join(""));
   if (clipped) {
     if (!lines.length) lines.push("…");
-    else lines[lines.length - 1] = `${lines[lines.length - 1]!.slice(0, Math.max(0, limit.columns - 1))}…`;
+    else
+      lines[lines.length - 1] =
+        `${lines[lines.length - 1]!.slice(0, Math.max(0, limit.columns - 1))}…`;
   }
   return lines.join("\n");
 }
 
 function taskForNode(node: Node, tasks: Map<string, Task>): Task | null {
-  return node.ref_id ? tasks.get(node.ref_id) ?? null : null;
+  return node.ref_id ? (tasks.get(node.ref_id) ?? null) : null;
 }
 
 function canonicalTaskKind(kind: string | null): string | null {
@@ -147,7 +197,13 @@ function projectionNodeKind(node: Node): GraphNodeKind {
 }
 
 function labelLimit(kind: GraphNodeKind): { lines: number; columns: number } {
-  return kind === "group" ? GRAPH_LABEL_LIMITS.group : kind === "task" ? GRAPH_LABEL_LIMITS.task : kind === "milestone" ? GRAPH_LABEL_LIMITS.milestone : GRAPH_LABEL_LIMITS.other;
+  return kind === "group"
+    ? GRAPH_LABEL_LIMITS.group
+    : kind === "task"
+      ? GRAPH_LABEL_LIMITS.task
+      : kind === "milestone"
+        ? GRAPH_LABEL_LIMITS.milestone
+        : GRAPH_LABEL_LIMITS.other;
 }
 
 function displayEdgeKey(source: string, target: string): string {
@@ -155,14 +211,25 @@ function displayEdgeKey(source: string, target: string): string {
 }
 
 function pathKey(path: GraphDependencyPath): string {
-  return JSON.stringify([path.requires, path.sourceEdgeIds, path.boundaryNodeIds, path.truncated ?? false]);
+  return JSON.stringify([
+    path.requires,
+    path.sourceEdgeIds,
+    path.boundaryNodeIds,
+    path.truncated ?? false,
+  ]);
 }
 
-function appendPath(path: GraphDependencyPath, edge: View["edges"][number], boundaryNodeId?: string): GraphDependencyPath {
+function appendPath(
+  path: GraphDependencyPath,
+  edge: View["edges"][number],
+  boundaryNodeId?: string,
+): GraphDependencyPath {
   return {
     requires: edge.requires ? [...path.requires, edge.requires] : [...path.requires],
     sourceEdgeIds: [...path.sourceEdgeIds, edge.id],
-    boundaryNodeIds: boundaryNodeId ? [...path.boundaryNodeIds, boundaryNodeId] : [...path.boundaryNodeIds],
+    boundaryNodeIds: boundaryNodeId
+      ? [...path.boundaryNodeIds, boundaryNodeId]
+      : [...path.boundaryNodeIds],
   };
 }
 
@@ -225,16 +292,31 @@ function walkHiddenPaths(
         }
         emitted += 1;
         advanced = true;
-        onVisible(visibleTargetId, appendPath(current.path, edge, visibleTargetId === edge.to_node_id ? undefined : edge.to_node_id));
+        onVisible(
+          visibleTargetId,
+          appendPath(
+            current.path,
+            edge,
+            visibleTargetId === edge.to_node_id ? undefined : edge.to_node_id,
+          ),
+        );
         continue;
       }
       const hiddenTarget = nodeById.get(edge.to_node_id);
-      if (!hiddenTarget || !HIDDEN_BOUNDARY_KINDS.has(hiddenTarget.kind) || current.visited.has(edge.to_node_id)) {
+      if (
+        !hiddenTarget ||
+        !HIDDEN_BOUNDARY_KINDS.has(hiddenTarget.kind) ||
+        current.visited.has(edge.to_node_id)
+      ) {
         blocked = true;
         continue;
       }
       advanced = true;
-      queue.push({ nodeId: edge.to_node_id, path: appendPath(current.path, edge, edge.to_node_id), visited: new Set([...current.visited, edge.to_node_id]) });
+      queue.push({
+        nodeId: edge.to_node_id,
+        path: appendPath(current.path, edge, edge.to_node_id),
+        visited: new Set([...current.visited, edge.to_node_id]),
+      });
     }
     if (overflow) break;
     if (!advanced && !blocked && current.path.boundaryNodeIds.length) onTerminal(current.path);
@@ -242,7 +324,13 @@ function walkHiddenPaths(
   return overflow;
 }
 
-function findVisibleWitnesses(initial: WalkState, outgoing: Map<string, View["edges"]>, visibleNodeIds: Set<string>, nodeById: Map<string, Node>, boundaryEndpointIds: ReadonlyMap<string, string> = new Map()): Map<string, GraphDependencyPath> {
+function findVisibleWitnesses(
+  initial: WalkState,
+  outgoing: Map<string, View["edges"]>,
+  visibleNodeIds: Set<string>,
+  nodeById: Map<string, Node>,
+  boundaryEndpointIds: ReadonlyMap<string, string> = new Map(),
+): Map<string, GraphDependencyPath> {
   const queue: WalkState[] = [initial];
   const visited = new Set(initial.visited);
   const witnesses = new Map<string, GraphDependencyPath>();
@@ -256,19 +344,43 @@ function findVisibleWitnesses(initial: WalkState, outgoing: Map<string, View["ed
         ? edge.to_node_id
         : boundaryEndpointIds.get(edge.to_node_id);
       if (visibleTargetId !== undefined) {
-        if (visibleTargetId !== initial.nodeId && !witnesses.has(visibleTargetId)) witnesses.set(visibleTargetId, appendPath(current.path, edge, visibleTargetId === edge.to_node_id ? undefined : edge.to_node_id));
+        if (visibleTargetId !== initial.nodeId && !witnesses.has(visibleTargetId))
+          witnesses.set(
+            visibleTargetId,
+            appendPath(
+              current.path,
+              edge,
+              visibleTargetId === edge.to_node_id ? undefined : edge.to_node_id,
+            ),
+          );
         continue;
       }
       const hiddenTarget = nodeById.get(edge.to_node_id);
-      if (!hiddenTarget || !HIDDEN_BOUNDARY_KINDS.has(hiddenTarget.kind) || visited.has(edge.to_node_id)) continue;
+      if (
+        !hiddenTarget ||
+        !HIDDEN_BOUNDARY_KINDS.has(hiddenTarget.kind) ||
+        visited.has(edge.to_node_id)
+      )
+        continue;
       visited.add(edge.to_node_id);
-      if (queue.length < MAX_GRAPH_PATHS) queue.push({ nodeId: edge.to_node_id, path: appendPath(current.path, edge, edge.to_node_id), visited: new Set([edge.to_node_id]) });
+      if (queue.length < MAX_GRAPH_PATHS)
+        queue.push({
+          nodeId: edge.to_node_id,
+          path: appendPath(current.path, edge, edge.to_node_id),
+          visited: new Set([edge.to_node_id]),
+        });
     }
   }
   return witnesses;
 }
 
-function findTerminalWitnesses(initial: WalkState, outgoing: Map<string, View["edges"]>, visibleNodeIds: Set<string>, nodeById: Map<string, Node>, boundaryEndpointIds: ReadonlyMap<string, string> = new Map()): GraphDependencyPath[] {
+function findTerminalWitnesses(
+  initial: WalkState,
+  outgoing: Map<string, View["edges"]>,
+  visibleNodeIds: Set<string>,
+  nodeById: Map<string, Node>,
+  boundaryEndpointIds: ReadonlyMap<string, string> = new Map(),
+): GraphDependencyPath[] {
   const queue: WalkState[] = [initial];
   const visited = new Set(initial.visited);
   const terminals: GraphDependencyPath[] = [];
@@ -284,22 +396,44 @@ function findTerminalWitnesses(initial: WalkState, outgoing: Map<string, View["e
         continue;
       }
       const hiddenTarget = nodeById.get(edge.to_node_id);
-      if (!hiddenTarget || !HIDDEN_BOUNDARY_KINDS.has(hiddenTarget.kind) || visited.has(edge.to_node_id)) {
+      if (
+        !hiddenTarget ||
+        !HIDDEN_BOUNDARY_KINDS.has(hiddenTarget.kind) ||
+        visited.has(edge.to_node_id)
+      ) {
         blocked = true;
         continue;
       }
       advanced = true;
       visited.add(edge.to_node_id);
-      if (queue.length < MAX_GRAPH_PATHS) queue.push({ nodeId: edge.to_node_id, path: appendPath(current.path, edge, edge.to_node_id), visited: new Set([edge.to_node_id]) });
+      if (queue.length < MAX_GRAPH_PATHS)
+        queue.push({
+          nodeId: edge.to_node_id,
+          path: appendPath(current.path, edge, edge.to_node_id),
+          visited: new Set([edge.to_node_id]),
+        });
     }
     if (!advanced && !blocked && current.path.boundaryNodeIds.length) terminals.push(current.path);
   }
   return terminals;
 }
 
-function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeIds: Set<string>, nodeById: Map<string, Node>, tasks: Map<string, Task>, usedIds: Set<string>, options: DisplayDependencyOptions = {}): { edges: GraphProjectionEdge[]; boundaryDependencies: GraphBoundaryDependency[]; warnings: string[] } {
+function makeDisplayDependencies(
+  view: View,
+  visibleNodes: Node[],
+  visibleNodeIds: Set<string>,
+  nodeById: Map<string, Node>,
+  tasks: Map<string, Task>,
+  usedIds: Set<string>,
+  options: DisplayDependencyOptions = {},
+): {
+  edges: GraphProjectionEdge[];
+  boundaryDependencies: GraphBoundaryDependency[];
+  warnings: string[];
+} {
   const outgoing = new Map<string, View["edges"]>();
-  for (const edge of view.edges) outgoing.set(edge.from_node_id, [...(outgoing.get(edge.from_node_id) ?? []), edge]);
+  for (const edge of view.edges)
+    outgoing.set(edge.from_node_id, [...(outgoing.get(edge.from_node_id) ?? []), edge]);
   for (const [sourceId, edges] of options.syntheticOutgoing ?? []) outgoing.set(sourceId, edges);
   const collapsed = new Map<string, GraphProjectionEdge>();
   const edgeIds = new Map<string, string>();
@@ -310,7 +444,11 @@ function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeId
     if (!warnings.includes(message)) warnings.push(message);
   };
 
-  const addBoundary = (direction: "incoming" | "outgoing", nodeId: string, path: GraphDependencyPath): void => {
+  const addBoundary = (
+    direction: "incoming" | "outgoing",
+    nodeId: string,
+    path: GraphDependencyPath,
+  ): void => {
     const key = `${direction}\u0000${nodeId}`;
     const previous = boundary.get(key);
     if (previous) addPath(previous.paths, path);
@@ -319,25 +457,38 @@ function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeId
 
   for (const source of visibleNodes) {
     const syntheticBoundaryStart = options.syntheticBoundaryStarts?.get(source.id);
-    const initial: WalkState = { nodeId: source.id, path: { requires: [], sourceEdgeIds: [], boundaryNodeIds: syntheticBoundaryStart ? [syntheticBoundaryStart] : [] }, visited: new Set([source.id]) };
+    const initial: WalkState = {
+      nodeId: source.id,
+      path: {
+        requires: [],
+        sourceEdgeIds: [],
+        boundaryNodeIds: syntheticBoundaryStart ? [syntheticBoundaryStart] : [],
+      },
+      visited: new Set([source.id]),
+    };
     const pathBudget = { value: 0 };
     const addVisiblePath = (targetId: string, path: GraphDependencyPath): void => {
       const target = nodeById.get(targetId);
       if (!target) return;
       const sourceGroup = currentGroupId(source, taskForNode(source, tasks));
       const targetGroup = currentGroupId(target, taskForNode(target, tasks));
-      const crossGroup: "yes" | "no" = sourceGroup && targetGroup && sourceGroup !== targetGroup ? "yes" : "no";
+      const crossGroup: "yes" | "no" =
+        sourceGroup && targetGroup && sourceGroup !== targetGroup ? "yes" : "no";
       const key = displayEdgeKey(source.id, targetId);
       const previous = collapsed.get(key);
       if (previous?.paths.some((item) => pathKey(item) === pathKey(path))) return;
       if (pathBudget.value >= MAX_GRAPH_PATHS) return;
       let id = edgeIds.get(key);
       if (!id) {
-        id = uniqueId(`display-edge:${encodeURIComponent(source.id)}:${encodeURIComponent(targetId)}`, usedIds);
+        id = uniqueId(
+          `display-edge:${encodeURIComponent(source.id)}:${encodeURIComponent(targetId)}`,
+          usedIds,
+        );
         edgeIds.set(key, id);
       }
       if (previous) addPath(previous.paths, path);
-      else collapsed.set(key, { id, source: source.id, target: targetId, paths: [path], crossGroup });
+      else
+        collapsed.set(key, { id, source: source.id, target: targetId, paths: [path], crossGroup });
       pathBudget.value += 1;
     };
     const addOutgoingPath = (path: GraphDependencyPath): void => {
@@ -360,20 +511,46 @@ function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeId
     );
     if (overflow) {
       warn(`节点 ${source.id}`);
-      for (const [targetId, path] of findVisibleWitnesses(initial, outgoing, visibleNodeIds, nodeById, options.boundaryEndpointIds)) {
+      for (const [targetId, path] of findVisibleWitnesses(
+        initial,
+        outgoing,
+        visibleNodeIds,
+        nodeById,
+        options.boundaryEndpointIds,
+      )) {
         const edge = collapsed.get(displayEdgeKey(source.id, targetId));
-        if (!edge?.paths.some((item) => item.truncated)) addVisiblePath(targetId, { ...path, truncated: true });
+        if (!edge?.paths.some((item) => item.truncated))
+          addVisiblePath(targetId, { ...path, truncated: true });
       }
-      for (const path of findTerminalWitnesses(initial, outgoing, visibleNodeIds, nodeById, options.boundaryEndpointIds)) addOutgoingPath({ ...path, truncated: true });
+      for (const path of findTerminalWitnesses(
+        initial,
+        outgoing,
+        visibleNodeIds,
+        nodeById,
+        options.boundaryEndpointIds,
+      ))
+        addOutgoingPath({ ...path, truncated: true });
     }
   }
 
-  const hiddenNodeIds = new Set(view.nodes.filter((node) => HIDDEN_BOUNDARY_KINDS.has(node.kind)).map((node) => node.id));
+  const hiddenNodeIds = new Set(
+    view.nodes.filter((node) => HIDDEN_BOUNDARY_KINDS.has(node.kind)).map((node) => node.id),
+  );
   const incoming = new Map<string, View["edges"]>();
-  for (const edge of view.edges) incoming.set(edge.to_node_id, [...(incoming.get(edge.to_node_id) ?? []), edge]);
-  const roots = [...hiddenNodeIds].filter((nodeId) => !(incoming.get(nodeId) ?? []).some((edge) => hiddenNodeIds.has(edge.from_node_id) || visibleNodeIds.has(edge.from_node_id)));
+  for (const edge of view.edges)
+    incoming.set(edge.to_node_id, [...(incoming.get(edge.to_node_id) ?? []), edge]);
+  const roots = [...hiddenNodeIds].filter(
+    (nodeId) =>
+      !(incoming.get(nodeId) ?? []).some(
+        (edge) => hiddenNodeIds.has(edge.from_node_id) || visibleNodeIds.has(edge.from_node_id),
+      ),
+  );
   for (const root of roots) {
-    const initial: WalkState = { nodeId: root, path: { requires: [], sourceEdgeIds: [], boundaryNodeIds: [root] }, visited: new Set([root]) };
+    const initial: WalkState = {
+      nodeId: root,
+      path: { requires: [], sourceEdgeIds: [], boundaryNodeIds: [root] },
+      visited: new Set([root]),
+    };
     const pathBudget = { value: 0 };
     const addIncomingPath = (targetId: string, path: GraphDependencyPath): void => {
       const key = `incoming\u0000${targetId}`;
@@ -395,9 +572,16 @@ function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeId
     );
     if (overflow) {
       warn(`计划入口 ${root}`);
-      for (const [targetId, path] of findVisibleWitnesses(initial, outgoing, visibleNodeIds, nodeById, options.boundaryEndpointIds)) {
+      for (const [targetId, path] of findVisibleWitnesses(
+        initial,
+        outgoing,
+        visibleNodeIds,
+        nodeById,
+        options.boundaryEndpointIds,
+      )) {
         const dependency = boundary.get(`incoming\u0000${targetId}`);
-        if (!dependency?.paths.some((item) => item.truncated)) addIncomingPath(targetId, { ...path, truncated: true });
+        if (!dependency?.paths.some((item) => item.truncated))
+          addIncomingPath(targetId, { ...path, truncated: true });
       }
     }
   }
@@ -405,38 +589,53 @@ function makeDisplayDependencies(view: View, visibleNodes: Node[], visibleNodeId
   return { edges: [...collapsed.values()], boundaryDependencies: [...boundary.values()], warnings };
 }
 
-export function buildGraphProjection(view: View, visibleTaskIds?: ReadonlySet<string>, visibleGroupIds?: ReadonlySet<string>): GraphProjection {
+export function buildGraphProjection(
+  view: View,
+  visibleTaskIds?: ReadonlySet<string>,
+  visibleGroupIds?: ReadonlySet<string>,
+): GraphProjection {
   const taskById = new Map(view.tasks.map((task) => [task.id, task]));
   const nodeById = new Map(view.nodes.map((node) => [node.id, node]));
   const includedTasks = visibleTaskIds ?? new Set(view.tasks.map((task) => task.id));
-  const visibleNodes = view.nodes.filter((node) => !HIDDEN_BOUNDARY_KINDS.has(node.kind) && (node.kind !== "task" || (!!node.ref_id && includedTasks.has(node.ref_id))));
+  const visibleNodes = view.nodes.filter(
+    (node) =>
+      !HIDDEN_BOUNDARY_KINDS.has(node.kind) &&
+      (node.kind !== "task" || (!!node.ref_id && includedTasks.has(node.ref_id))),
+  );
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
-  const groupIds = new Set(visibleNodes.map((node) => currentGroupId(node, taskForNode(node, taskById))).filter((id): id is string => !!id));
+  const groupIds = new Set(
+    visibleNodes
+      .map((node) => currentGroupId(node, taskForNode(node, taskById)))
+      .filter((id): id is string => !!id),
+  );
   if (visibleGroupIds) for (const groupId of visibleGroupIds) groupIds.add(groupId);
-  else if (visibleTaskIds === undefined || view.tasks.every((task) => includedTasks.has(task.id))) for (const group of view.groups) groupIds.add(group.id);
+  else if (visibleTaskIds === undefined || view.tasks.every((task) => includedTasks.has(task.id)))
+    for (const group of view.groups) groupIds.add(group.id);
   const usedNodeIds = new Set(visibleNodes.map((node) => node.id));
   const groupNodeIds = new Map<string, string>();
 
-  const groupNodes: GraphProjectionNode[] = view.groups.filter((group) => groupIds.has(group.id)).map((group) => {
-    const id = uniqueId(`group:${group.id}`, usedNodeIds);
-    groupNodeIds.set(group.id, id);
-    return {
-      id,
-      parentId: null,
-      nodeKind: "group",
-      sourceNodeId: null,
-      refId: group.id,
-      groupId: group.id,
-      plannedGroupId: group.id,
-      taskKind: null,
-      state: group.state,
-      stateLabel: stateLabel(group.state),
-      stateIcon: stateIconName(group.state),
-      title: group.title,
-      graphLabel: fitGraphLabel(group.title, labelLimit("group")),
-      fullLabel: group.title,
-    };
-  });
+  const groupNodes: GraphProjectionNode[] = view.groups
+    .filter((group) => groupIds.has(group.id))
+    .map((group) => {
+      const id = uniqueId(`group:${group.id}`, usedNodeIds);
+      groupNodeIds.set(group.id, id);
+      return {
+        id,
+        parentId: null,
+        nodeKind: "group",
+        sourceNodeId: null,
+        refId: group.id,
+        groupId: group.id,
+        plannedGroupId: group.id,
+        taskKind: null,
+        state: group.state,
+        stateLabel: stateLabel(group.state),
+        stateIcon: stateIconName(group.state),
+        title: group.title,
+        graphLabel: fitGraphLabel(group.title, labelLimit("group")),
+        fullLabel: group.title,
+      };
+    });
 
   const graphNodes: GraphProjectionNode[] = visibleNodes.map((node) => {
     const task = taskForNode(node, taskById);
@@ -468,20 +667,48 @@ export function buildGraphProjection(view: View, visibleTaskIds?: ReadonlySet<st
   const boundaryEndpointIds = new Map<string, string>();
   for (const group of view.groups) {
     const groupNodeId = groupNodeIds.get(group.id);
-    if (!groupNodeId || visibleNodes.some((node) => currentGroupId(node, taskForNode(node, taskById)) === group.id)) continue;
-    const boundaries = view.nodes.filter((node) => HIDDEN_BOUNDARY_KINDS.has(node.kind) && currentGroupId(node, taskForNode(node, taskById)) === group.id);
+    if (
+      !groupNodeId ||
+      visibleNodes.some((node) => currentGroupId(node, taskForNode(node, taskById)) === group.id)
+    )
+      continue;
+    const boundaries = view.nodes.filter(
+      (node) =>
+        HIDDEN_BOUNDARY_KINDS.has(node.kind) &&
+        currentGroupId(node, taskForNode(node, taskById)) === group.id,
+    );
     for (const boundary of boundaries) boundaryEndpointIds.set(boundary.id, groupNodeId);
-    const exit = boundaries.find((node) => node.kind === "group_end") ?? boundaries.find((node) => node.kind === "group_start");
+    const exit =
+      boundaries.find((node) => node.kind === "group_end") ??
+      boundaries.find((node) => node.kind === "group_start");
     if (!exit) continue;
-    const source: Node = { id: groupNodeId, kind: "milestone", ref_id: null, group_id: group.id, planned_group_id: group.id, label: group.title };
+    const source: Node = {
+      id: groupNodeId,
+      kind: "milestone",
+      ref_id: null,
+      group_id: group.id,
+      planned_group_id: group.id,
+      label: group.title,
+    };
     syntheticSources.push(source);
     nodeById.set(source.id, source);
-    syntheticOutgoing.set(source.id, view.edges.filter((edge) => edge.from_node_id === exit.id));
+    syntheticOutgoing.set(
+      source.id,
+      view.edges.filter((edge) => edge.from_node_id === exit.id),
+    );
     syntheticBoundaryStarts.set(source.id, exit.id);
   }
   const dependencyNodes = [...visibleNodes, ...syntheticSources];
   const dependencyNodeIds = new Set(dependencyNodes.map((node) => node.id));
-  const dependencies = makeDisplayDependencies(view, dependencyNodes, dependencyNodeIds, nodeById, taskById, new Set(nodes.map((node) => node.id)), { boundaryEndpointIds, syntheticOutgoing, syntheticBoundaryStarts });
+  const dependencies = makeDisplayDependencies(
+    view,
+    dependencyNodes,
+    dependencyNodeIds,
+    nodeById,
+    taskById,
+    new Set(nodes.map((node) => node.id)),
+    { boundaryEndpointIds, syntheticOutgoing, syntheticBoundaryStarts },
+  );
   const displayBoundaryIds = new Map<string, string>();
   const displayBoundaries: GraphProjectionNode[] = [];
   const boundaryEdges: GraphProjectionEdge[] = [];
@@ -518,15 +745,33 @@ export function buildGraphProjection(view: View, visibleTaskIds?: ReadonlySet<st
       const boundaryId = boundaryNodeId(sourceBoundary);
       const source = dependency.direction === "incoming" ? boundaryId : dependency.nodeId;
       const target = dependency.direction === "incoming" ? dependency.nodeId : boundaryId;
-      const edgeId = uniqueId(`display-edge:${encodeURIComponent(source)}:${encodeURIComponent(target)}`, usedNodeIds);
-      const sourceNode = nodes.find((node) => node.id === source) ?? displayBoundaries.find((node) => node.id === source);
-      const targetNode = nodes.find((node) => node.id === target) ?? displayBoundaries.find((node) => node.id === target);
+      const edgeId = uniqueId(
+        `display-edge:${encodeURIComponent(source)}:${encodeURIComponent(target)}`,
+        usedNodeIds,
+      );
+      const sourceNode =
+        nodes.find((node) => node.id === source) ??
+        displayBoundaries.find((node) => node.id === source);
+      const targetNode =
+        nodes.find((node) => node.id === target) ??
+        displayBoundaries.find((node) => node.id === target);
       const sourceGroup = sourceNode?.groupId ?? null;
       const targetGroup = targetNode?.groupId ?? null;
-      boundaryEdges.push({ id: edgeId, source, target, paths: paths.filter((path) => path.boundaryNodeIds.includes(sourceBoundary)), crossGroup: sourceGroup && targetGroup && sourceGroup !== targetGroup ? "yes" : "no" });
+      boundaryEdges.push({
+        id: edgeId,
+        source,
+        target,
+        paths: paths.filter((path) => path.boundaryNodeIds.includes(sourceBoundary)),
+        crossGroup: sourceGroup && targetGroup && sourceGroup !== targetGroup ? "yes" : "no",
+      });
     }
   }
-  return { nodes: [...nodes, ...displayBoundaries], edges: [...dependencies.edges, ...boundaryEdges], boundaryDependencies: dependencies.boundaryDependencies, warnings: dependencies.warnings };
+  return {
+    nodes: [...nodes, ...displayBoundaries],
+    edges: [...dependencies.edges, ...boundaryEdges],
+    boundaryDependencies: dependencies.boundaryDependencies,
+    warnings: dependencies.warnings,
+  };
 }
 
 export function nodeTitle(projection: GraphProjection, nodeId: string): string {

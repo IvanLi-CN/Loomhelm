@@ -26,13 +26,7 @@ function temporaryRoot(): string {
 
 async function runInit(root: string, input: unknown) {
   const child = Bun.spawn(
-    [
-      process.execPath,
-      join(import.meta.dir, "../scripts/orchestrate.ts"),
-      "init",
-      "--input",
-      "-",
-    ],
+    [process.execPath, join(import.meta.dir, "../scripts/orchestrate.ts"), "init", "--input", "-"],
     {
       env: { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: root },
       stdin: "pipe",
@@ -58,13 +52,7 @@ async function runInit(root: string, input: unknown) {
 
 async function runCommand(root: string, command: string, input: unknown) {
   const child = Bun.spawn(
-    [
-      process.execPath,
-      join(import.meta.dir, "../scripts/orchestrate.ts"),
-      command,
-      "--input",
-      "-",
-    ],
+    [process.execPath, join(import.meta.dir, "../scripts/orchestrate.ts"), command, "--input", "-"],
     {
       env: { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: root },
       stdin: "pipe",
@@ -89,8 +77,7 @@ async function runCommand(root: string, command: string, input: unknown) {
 }
 
 afterEach(() => {
-  for (const root of createdRoots.splice(0))
-    rmSync(root, { recursive: true, force: true });
+  for (const root of createdRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 describe("orchestrate init", () => {
   test("creates an unbound revision-zero ledger without task conversations", async () => {
@@ -114,14 +101,11 @@ describe("orchestrate init", () => {
     expect(ledger.resources).toEqual([]);
     expect(
       ledger.groups.every(
-        (group: any) =>
-          group.agent_thread_id === null && group.state === "planned",
+        (group: any) => group.agent_thread_id === null && group.state === "planned",
       ),
     ).toBe(true);
     expect(
-      ledger.tasks.every(
-        (task: any) => task.thread_id === null && task.state === "planned",
-      ),
+      ledger.tasks.every((task: any) => task.thread_id === null && task.state === "planned"),
     ).toBe(true);
   });
 
@@ -133,7 +117,9 @@ describe("orchestrate init", () => {
     const result = await runInit(root, input);
 
     expect(result.exitCode).toBe(0);
-    const ledger = JSON.parse(readFileSync(join(root, "runs", input.run_id, "ledger.json"), "utf8"));
+    const ledger = JSON.parse(
+      readFileSync(join(root, "runs", input.run_id, "ledger.json"), "utf8"),
+    );
     expect(ledger.groups[0].requirements_path).toBe("requirements/group-core.md");
     expect(ledger.tasks[0].requirements_path).toBe("requirements/task-core.md");
   });
@@ -187,12 +173,20 @@ describe("orchestrate init", () => {
     valid.payload.groups[0].owner_kind = "main";
     expect((await runInit(temporaryRoot(), valid)).exitCode).toBe(0);
     const cases = [
-      (input: any) => { input.payload.groups.push(structuredClone(input.payload.groups[0])); input.payload.groups[1].id = "group-bootstrap-2"; },
-      (input: any) => { input.payload.groups[0].owner_kind = "group"; },
-      (input: any) => { input.payload.groups[0].agent_thread_id = "group-thread"; },
+      (input: any) => {
+        input.payload.groups.push(structuredClone(input.payload.groups[0]));
+        input.payload.groups[1].id = "group-bootstrap-2";
+      },
+      (input: any) => {
+        input.payload.groups[0].owner_kind = "group";
+      },
+      (input: any) => {
+        input.payload.groups[0].agent_thread_id = "group-thread";
+      },
     ];
     for (const mutate of cases) {
-      const input = structuredClone(valid); mutate(input);
+      const input = structuredClone(valid);
+      mutate(input);
       const result = await runInit(temporaryRoot(), input);
       expect(result.exitCode).not.toBe(0);
       expect(result.output.ok).toBe(false);
@@ -238,8 +232,7 @@ describe("orchestrate init", () => {
         ok: false,
         code: "INVALID_INITIAL_STATE",
         revision: null,
-        message:
-          "Initial groups and tasks must be unbound and planned with planned atoms",
+        message: "Initial groups and tasks must be unbound and planned with planned atoms",
       });
       expect(existsSync(join(root, "runs", input.run_id))).toBe(false);
     }
@@ -329,9 +322,9 @@ describe("orchestrate init", () => {
     store.update((ledger) => {
       ledger.revision = 1;
     });
-    expect(
-      JSON.parse(readFileSync(ledgerPath, "utf8")).plans[0],
-    ).not.toHaveProperty("dev_plan_handoff");
+    expect(JSON.parse(readFileSync(ledgerPath, "utf8")).plans[0]).not.toHaveProperty(
+      "dev_plan_handoff",
+    );
   });
 
   test("reads schema v1 as an unknown lifecycle view without rewriting the legacy ledger", async () => {
@@ -396,13 +389,9 @@ describe("orchestrate init", () => {
     });
     expect(view.tasks[0].lifecycle.pr_created).toBe("unknown");
     expect(view.tasks[0].pr.id).toBe("legacy-pr");
+    expect(view.facts.find((fact: any) => fact.id === "legacy-merge")?.status).toBe("passed");
     expect(
-      view.facts.find((fact: any) => fact.id === "legacy-merge")?.status,
-    ).toBe("passed");
-    expect(
-      view.operations.find(
-        (operation: any) => operation.id === "legacy-merge-op",
-      )?.status,
+      view.operations.find((operation: any) => operation.id === "legacy-merge-op")?.status,
     ).toBe("succeeded");
     expect(() =>
       store.update((ledger) => {
@@ -525,9 +514,7 @@ describe("orchestrate init", () => {
     expect(() => validateLedger(postCutLifecycle)).not.toThrow();
     const forgedOperationSha = structuredClone(ledger);
     forgedOperationSha.operations[0].expected_sha = "b".repeat(40);
-    expect(() => validateLedger(forgedOperationSha)).toThrow(
-      "cut_applied event",
-    );
+    expect(() => validateLedger(forgedOperationSha)).toThrow("cut_applied event");
     const forged = structuredClone(ledger);
     forged.operations[0].target_id = "group-2";
     expect(() => validateLedger(forged)).toThrow("cut_applied event");
@@ -562,46 +549,29 @@ describe("orchestrate init", () => {
     forgedBoundary.groups[0].cut_sha = null;
     expect(() => validateLedger(forgedBoundary)).toThrow("cut_applied event");
     const forgedEvidence = structuredClone(ledger);
-    delete forgedEvidence.events.find(
-      (event: any) => event.type === "cut_applied",
-    )!.data.cut_evidence;
-    expect(() => validateLedger(forgedEvidence)).toThrow(
-      "verified provider evidence",
-    );
+    delete forgedEvidence.events.find((event: any) => event.type === "cut_applied")!.data
+      .cut_evidence;
+    expect(() => validateLedger(forgedEvidence)).toThrow("verified provider evidence");
     const forgedClaim = structuredClone(ledger);
-    forgedClaim.events = forgedClaim.events.filter(
-      (event: any) => event.type !== "cut_claimed",
-    );
+    forgedClaim.events = forgedClaim.events.filter((event: any) => event.type !== "cut_claimed");
     expect(() => validateLedger(forgedClaim)).toThrow("matching cut claim");
     const forgedSnapshot = structuredClone(ledger);
     forgedSnapshot.events.find(
       (event: any) => event.type === "cut_applied",
     )!.data.old_group_snapshot.title = "forged";
-    expect(() => validateLedger(forgedSnapshot)).toThrow(
-      "old group boundary snapshot",
-    );
+    expect(() => validateLedger(forgedSnapshot)).toThrow("old group boundary snapshot");
     const forgedTaskState = structuredClone(ledger);
     forgedTaskState.events
       .find((event: any) => event.type === "cut_applied")!
-      .data.task_snapshots.find((task: any) => task.id === "task-1").state =
-      "running";
-    expect(() => validateLedger(forgedTaskState)).toThrow(
-      "task boundary snapshot",
-    );
+      .data.task_snapshots.find((task: any) => task.id === "task-1").state = "running";
+    expect(() => validateLedger(forgedTaskState)).toThrow("task boundary snapshot");
     const forgedTaskBoundary = structuredClone(ledger);
-    delete forgedTaskBoundary.events.find(
-      (event: any) => event.type === "cut_applied",
-    )!.data.task_snapshots;
-    expect(() => validateLedger(forgedTaskBoundary)).toThrow(
-      "task boundary snapshots",
-    );
+    delete forgedTaskBoundary.events.find((event: any) => event.type === "cut_applied")!.data
+      .task_snapshots;
+    expect(() => validateLedger(forgedTaskBoundary)).toThrow("task boundary snapshots");
     const duplicateEvent = structuredClone(ledger);
     duplicateEvent.events.push({
-      ...structuredClone(
-        duplicateEvent.events.find(
-          (event: any) => event.type === "cut_applied",
-        )!,
-      ),
+      ...structuredClone(duplicateEvent.events.find((event: any) => event.type === "cut_applied")!),
       id: "event-cut-duplicate",
     });
     expect(() => validateLedger(duplicateEvent)).toThrow("cut_applied event");
@@ -621,9 +591,8 @@ describe("orchestrate init", () => {
     const input = structuredClone(initialInput);
     input.payload.tasks[0].id = "task.a";
     input.payload.initial_plan.atoms[0].task_id = "task.a";
-    input.payload.initial_plan.nodes.find(
-      (node: any) => node.ref_id === "task-1",
-    ).ref_id = "task.a";
+    input.payload.initial_plan.nodes.find((node: any) => node.ref_id === "task-1").ref_id =
+      "task.a";
 
     const result = await runInit(root, input);
     const ledger = JSON.parse(
@@ -635,7 +604,10 @@ describe("orchestrate init", () => {
   });
 
   test("documents init as an explicit mutation boundary", () => {
-    const skill = readFileSync(join(import.meta.dir, "../../../skills/multi-task-flow/SKILL.md"), "utf8");
+    const skill = readFileSync(
+      join(import.meta.dir, "../../../skills/multi-task-flow/SKILL.md"),
+      "utf8",
+    );
     const design = readFileSync(
       join(
         import.meta.dir,
@@ -665,7 +637,9 @@ describe("orchestrate group-base-reconcile", () => {
     };
     const input = structuredClone(initialInput);
     input.run_id = "cli-reconcile-run";
-    input.payload.groups[0].atoms = input.payload.initial_plan.group_atoms.filter((atom: any) => atom.group_id === input.payload.groups[0].id).map(({ group_id, ...atom }: any) => ({ ...atom, status: "planned" }));
+    input.payload.groups[0].atoms = input.payload.initial_plan.group_atoms
+      .filter((atom: any) => atom.group_id === input.payload.groups[0].id)
+      .map(({ group_id, ...atom }: any) => ({ ...atom, status: "planned" }));
     input.payload.groups[0] = {
       ...input.payload.groups[0],
       agent_thread_id: "group-thread",
@@ -734,9 +708,7 @@ describe("orchestrate group-base-reconcile", () => {
       revision: 1,
       result: { current_sha: newSha },
     });
-    const saved = JSON.parse(
-      readFileSync(join(root, "runs", input.run_id, "ledger.json"), "utf8"),
-    );
+    const saved = JSON.parse(readFileSync(join(root, "runs", input.run_id, "ledger.json"), "utf8"));
     expect(saved.groups[0].current_sha).toBe(newSha);
     expect(saved.events.at(-1)).toMatchObject({
       type: "group_base_reconciled",

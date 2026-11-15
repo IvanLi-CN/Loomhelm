@@ -8,7 +8,9 @@ describe("dashboard display phase", () => {
   });
 
   test("becomes execution monotonically when any task has started", () => {
-    expect(derivePhase([{ started_at: null }, { started_at: "2026-01-01T00:00:00.000Z" }])).toBe("execution");
+    expect(derivePhase([{ started_at: null }, { started_at: "2026-01-01T00:00:00.000Z" }])).toBe(
+      "execution",
+    );
     expect(defaultTabForPhase("execution")).toBe("actual");
   });
 });

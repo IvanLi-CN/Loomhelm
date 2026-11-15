@@ -1,10 +1,7 @@
 import { z } from "zod";
-import { requireCondition } from "../lib/errors";
 import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
-import {
-  taskExecutionPolicyDeclarationGaps,
-  validateTaskExecutionPolicies,
-} from "../lib/schema";
+import { requireCondition } from "../lib/errors";
+import { taskExecutionPolicyDeclarationGaps, validateTaskExecutionPolicies } from "../lib/schema";
 
 export const API_VERSION = 1;
 export const FRONTEND_CONTRACT = 1;
@@ -29,32 +26,33 @@ export const releaseManifestSchema = z
     build_id: z.string().regex(/^[a-f0-9]{64}$/),
     source_sha: z.string().regex(/^[a-f0-9]{40}$/),
     skill_id: z.string().default(SKILL_ID),
-    skill_version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).default(SKILL_VERSION),
+    skill_version: z
+      .string()
+      .regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)
+      .default(SKILL_VERSION),
     ledger_contract: z.number().int().positive().default(2),
     viewer_contract: z.number().int().positive().default(VIEWER_CONTRACT),
     service_version: z.string().min(1),
-    platform: z.enum([
-      "darwin-arm64",
-      "darwin-x64",
-      "linux-x64",
-      "linux-arm64",
-    ]),
+    platform: z.enum(["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64"]),
     api_versions: z.array(z.number().int().positive()).min(1),
     frontend_contracts: z.array(z.number().int().positive()).min(1),
     readable: z.array(z.string()).min(1),
     writable: z.array(z.string()).min(1),
     readable_releases: z.array(z.string().min(1)).optional(),
-    migration_guides: z.array(z.object({
-      id: z.string().min(1),
-      path: z.string().min(1),
-      sha256: z.string().regex(/^[a-f0-9]{64}$/),
-      required_for: z.array(z.string().min(1)).min(1),
-      operation: z.string().min(1),
-    }).strict()).optional(),
-    files: z.record(
-      z.string().min(1),
-      z.string().regex(/^[a-f0-9]{64}$/),
-    ),
+    migration_guides: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            path: z.string().min(1),
+            sha256: z.string().regex(/^[a-f0-9]{64}$/),
+            required_for: z.array(z.string().min(1)).min(1),
+            operation: z.string().min(1),
+          })
+          .strict(),
+      )
+      .optional(),
+    files: z.record(z.string().min(1), z.string().regex(/^[a-f0-9]{64}$/)),
   })
   .strict();
 export type ReleaseManifest = z.infer<typeof releaseManifestSchema>;
@@ -76,22 +74,50 @@ export const configSchema = z
       .max(24 * 60 * 60_000)
       .default(AGENT_TTL_MS),
     package_name: z.string().optional(),
-    package_version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).optional(),
+    package_version: z
+      .string()
+      .regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)
+      .optional(),
     package_integrity: z.string().startsWith("sha512-").optional(),
-    compatibility_line: z.string().regex(/^compat-v\d+$/).optional(),
-    skill_version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).optional(),
+    compatibility_line: z
+      .string()
+      .regex(/^compat-v\d+$/)
+      .optional(),
+    skill_version: z
+      .string()
+      .regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)
+      .optional(),
     service_contract: z.string().min(1).optional(),
     ledger_contract: z.number().int().positive().optional(),
     api_contract: z.number().int().positive().optional(),
     frontend_contract: z.number().int().positive().optional(),
     viewer_contract: z.number().int().positive().optional(),
-    source_sha: z.string().regex(/^[a-f0-9]{40}$/).optional(),
-    artifact_build_id: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    source_sha: z
+      .string()
+      .regex(/^[a-f0-9]{40}$/)
+      .optional(),
+    artifact_build_id: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
   })
   .strict();
 export type ServiceConfig = z.infer<typeof configSchema>;
 
-export function packageReleaseManifest(config: Pick<ServiceConfig, "current_build" | "source_sha" | "skill_version" | "service_contract" | "package_version" | "ledger_contract" | "api_contract" | "frontend_contract" | "viewer_contract">): ReleaseManifest {
+export function packageReleaseManifest(
+  config: Pick<
+    ServiceConfig,
+    | "current_build"
+    | "source_sha"
+    | "skill_version"
+    | "service_contract"
+    | "package_version"
+    | "ledger_contract"
+    | "api_contract"
+    | "frontend_contract"
+    | "viewer_contract"
+  >,
+): ReleaseManifest {
   return {
     schema_version: 2,
     build_id: config.current_build,
@@ -114,18 +140,12 @@ export function ledgerContract(value: unknown): string {
   const ledger = value as Record<string, unknown> | null;
   return (
     `schema-${ledger?.schema_version}/` +
-    (ledger?.contract_version === undefined
-      ? "legacy"
-      : `contract-${ledger.contract_version}`)
+    (ledger?.contract_version === undefined ? "legacy" : `contract-${ledger.contract_version}`)
   );
 }
 
-export function requireLedgerCompatibility(
-  value: unknown,
-  mode: "read" | "write" = "read",
-): void {
-  const supported =
-    mode === "read" ? compatibility.readable : compatibility.writable;
+export function requireLedgerCompatibility(value: unknown, mode: "read" | "write" = "read"): void {
+  const supported = mode === "read" ? compatibility.readable : compatibility.writable;
   requireCondition(
     supported.includes(ledgerContract(value)),
     "INCOMPATIBLE_LEDGER",

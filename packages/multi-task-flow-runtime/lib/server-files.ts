@@ -1,6 +1,7 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
-  constants,
   closeSync,
+  constants,
   existsSync,
   fstatSync,
   lstatSync,
@@ -8,17 +9,9 @@ import {
   readFileSync,
   realpathSync,
 } from "node:fs";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-} from "node:path";
-import { createHash, timingSafeEqual } from "node:crypto";
-import { LedgerStore } from "../lib/store";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { validateLedger } from "../lib/schema";
+import type { LedgerStore } from "../lib/store";
 
 export function safeCompare(left: string, right: string): boolean {
   const a = createHash("sha256").update(left).digest();
@@ -26,10 +19,7 @@ export function safeCompare(left: string, right: string): boolean {
   return timingSafeEqual(a, b);
 }
 
-export async function readBodyWithinLimit(
-  request: Request,
-  limit: number,
-): Promise<string | null> {
+export async function readBodyWithinLimit(request: Request, limit: number): Promise<string | null> {
   if (!request.body) return "";
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -61,10 +51,7 @@ export async function readBodyWithinLimit(
 export function readSafeFile(path: string): Uint8Array | null {
   let descriptor: number | null = null;
   try {
-    descriptor = openSync(
-      path,
-      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-    );
+    descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     if (!fstatSync(descriptor).isFile()) return null;
     return readFileSync(descriptor);
   } catch {
@@ -74,10 +61,7 @@ export function readSafeFile(path: string): Uint8Array | null {
   }
 }
 
-export function readRegisteredDocument(
-  store: LedgerStore,
-  documentId: string,
-): string | null {
+export function readRegisteredDocument(store: LedgerStore, documentId: string): string | null {
   const ledger = validateLedger(store.read());
   const match = /^(task|group)-([A-Za-z0-9_-]{1,128})$/.exec(documentId);
   if (!match) return null;
@@ -91,22 +75,16 @@ export function readRegisteredDocument(
   const canonicalRoot = realpathSync(docRoot);
   const requested = resolve(store.runPath, target.requirements_path);
   const requestedRelative = relative(docRoot, requested);
-  if (requestedRelative.startsWith("..") || isAbsolute(requestedRelative))
-    return null;
+  if (requestedRelative.startsWith("..") || isAbsolute(requestedRelative)) return null;
   if (!requested.endsWith(".md") || !existsSync(requested)) return null;
   const canonicalParent = realpathSync(dirname(requested));
   const canonical = join(canonicalParent, basename(requested));
   const canonicalRelative = relative(canonicalRoot, canonical);
-  if (canonicalRelative.startsWith("..") || isAbsolute(canonicalRelative))
-    return null;
-  if (lstatSync(canonical).isSymbolicLink() || !lstatSync(canonical).isFile())
-    return null;
+  if (canonicalRelative.startsWith("..") || isAbsolute(canonicalRelative)) return null;
+  if (lstatSync(canonical).isSymbolicLink() || !lstatSync(canonical).isFile()) return null;
   let descriptor: number | null = null;
   try {
-    descriptor = openSync(
-      canonical,
-      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-    );
+    descriptor = openSync(canonical, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     if (!fstatSync(descriptor).isFile()) return null;
     return readFileSync(descriptor, "utf8");
   } catch {

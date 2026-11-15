@@ -19,7 +19,10 @@ describe("Codex socket framing", () => {
     expect(framePayload(frame)?.payload).toEqual(bytes);
   });
   test("rejects oversized input before buffering the declared payload", () => {
-    const frame = Buffer.alloc(10); frame[0] = 0x81; frame[1] = 127; frame.writeBigUInt64BE(65n * 1024n * 1024n, 2);
+    const frame = Buffer.alloc(10);
+    frame[0] = 0x81;
+    frame[1] = 127;
+    frame.writeBigUInt64BE(65n * 1024n * 1024n, 2);
     expect(() => framePayload(frame)).toThrow("limit");
   });
 });

@@ -12,16 +12,24 @@ function fixture() {
   return { trigger, tooltip, outside };
 }
 function pointer(target: HTMLElement, type: string, x = 0, y = 0, pointerType = "touch") {
-  target.dispatchEvent(new window.PointerEvent(type, { bubbles: true, pointerType, clientX: x, clientY: y }));
+  target.dispatchEvent(
+    new window.PointerEvent(type, { bubbles: true, pointerType, clientX: x, clientY: y }),
+  );
 }
-beforeEach(() => { document.body.replaceChildren(); });
+beforeEach(() => {
+  document.body.replaceChildren();
+});
 
 test("focus opens immediately; Escape closes only the tooltip and outside click closes it", () => {
   const { trigger, tooltip, outside } = fixture();
   trigger.focus();
   expect(tooltip.hidden).toBe(false);
   expect(trigger.getAttribute("aria-describedby")).toBe(tooltip.id);
-  const escape = new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  const escape = new window.KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
   trigger.dispatchEvent(escape);
   expect(escape.defaultPrevented).toBe(true);
   expect(tooltip.hidden).toBe(true);
@@ -89,9 +97,11 @@ test("long press opens after 500ms; movement and release cancel pending presses"
   expect(tooltip.hidden).toBe(true);
 });
 
-
 test("project text tooltips preserve control IDs and cover disabled and dynamically replaced controls", async () => {
-  const button = document.createElement("button"); button.id = "zoom-in"; button.className = "icon-button"; button.dataset.tooltip = "放大";
+  const button = document.createElement("button");
+  button.id = "zoom-in";
+  button.className = "icon-button";
+  button.dataset.tooltip = "放大";
   document.body.append(button);
   const dispose = installTextTooltips();
   try {
@@ -102,13 +112,20 @@ test("project text tooltips preserve control IDs and cover disabled and dynamica
     button.dataset.tooltip = "更新后的说明";
     await pause(10);
     expect(document.querySelector(".control-tooltip.is-open")?.textContent).toBe("更新后的说明");
-    const disabled = document.createElement("button"); disabled.disabled = true; disabled.className = "icon-button"; disabled.dataset.tooltip = "PR 尚未创建";
-    button.replaceWith(disabled); await pause(10);
+    const disabled = document.createElement("button");
+    disabled.disabled = true;
+    disabled.className = "icon-button";
+    disabled.dataset.tooltip = "PR 尚未创建";
+    button.replaceWith(disabled);
+    await pause(10);
     expect(document.querySelectorAll(".control-tooltip").length).toBe(1);
-    pointer(disabled, "pointerenter", 0, 0, "mouse"); await pause(280);
+    pointer(disabled, "pointerenter", 0, 0, "mouse");
+    await pause(280);
     expect(document.querySelector(".control-tooltip.is-open")?.textContent).toBe("PR 尚未创建");
     expect(document.querySelector("[title]")).toBeNull();
-  } finally { dispose(); }
+  } finally {
+    dispose();
+  }
 });
 
 test("ordinary control tooltips do not change an owning aria-expanded state", async () => {
@@ -125,15 +142,20 @@ test("ordinary control tooltips do not change an owning aria-expanded state", as
     pointer(outside, "pointerdown", 0, 0, "mouse");
     await pause(10);
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
-  } finally { dispose(); }
+  } finally {
+    dispose();
+  }
 });
 
-
 test("plain text never gains a tooltip even if it carries a legacy hint", async () => {
-  const output = document.createElement("p"); output.dataset.tooltip = "Agent answer";
-  const title = document.createElement("span"); title.dataset.tooltip = "Task title";
-  const progress = document.createElement("span"); progress.dataset.tooltip = "1/2";
-  const selection = document.createElement("button"); selection.dataset.tooltip = "Select task";
+  const output = document.createElement("p");
+  output.dataset.tooltip = "Agent answer";
+  const title = document.createElement("span");
+  title.dataset.tooltip = "Task title";
+  const progress = document.createElement("span");
+  progress.dataset.tooltip = "1/2";
+  const selection = document.createElement("button");
+  selection.dataset.tooltip = "Select task";
   document.body.append(output, title, progress, selection);
   const dispose = installTextTooltips();
   try {
@@ -144,11 +166,14 @@ test("plain text never gains a tooltip even if it carries a legacy hint", async 
       expect(node.hasAttribute("aria-describedby")).toBe(false);
       expect(node.classList.contains("dependency-tooltip-anchor")).toBe(false);
     }
-  } finally { dispose(); }
+  } finally {
+    dispose();
+  }
 });
 
 test("keeps the explicit brand mark hint", () => {
-  document.body.innerHTML = '<a class="brand-mark" data-tooltip="全部编排运行" aria-label="全部编排运行"></a>';
+  document.body.innerHTML =
+    '<a class="brand-mark" data-tooltip="全部编排运行" aria-label="全部编排运行"></a>';
   const dispose = installTextTooltips();
 
   expect(document.querySelector(".control-tooltip")?.textContent).toBe("全部编排运行");
@@ -175,5 +200,7 @@ test("cleans up a control when its tooltip eligibility is removed", async () => 
     button.classList.remove("icon-button");
     await pause(10);
     expect(document.querySelector(".control-tooltip")).toBeNull();
-  } finally { dispose(); }
+  } finally {
+    dispose();
+  }
 });

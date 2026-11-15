@@ -1,8 +1,12 @@
 import { stateIconName, stateLabel } from "./labels";
-import { renderTimestamp } from "./timestamp";
 import type { PlanState, ReadinessBlocker, View } from "./model";
+import { renderTimestamp } from "./timestamp";
 
-export function renderStatusRow(item: { name: string; status: string; completedAt?: string | null | undefined }): HTMLElement {
+export function renderStatusRow(item: {
+  name: string;
+  status: string;
+  completedAt?: string | null | undefined;
+}): HTMLElement {
   const row = document.createElement("div");
   row.className = "status-row";
   const status = document.createElement("span");
@@ -40,19 +44,22 @@ function blockerText(blocker: ReadinessBlocker): string {
 }
 
 export function planStateRows(planState?: PlanState): PlanStatusRow[] {
-  const proposal = planState?.proposal ?? (planState?.completeness
-    ? { status: planState.completeness.status, issues: planState.completeness.issues }
-    : { status: "unknown" as const, issues: [] });
+  const proposal =
+    planState?.proposal ??
+    (planState?.completeness
+      ? { status: planState.completeness.status, issues: planState.completeness.issues }
+      : { status: "unknown" as const, issues: [] });
   const approval = planState?.approval ?? {
-    status: planState?.approval_pending === false ? "approved" as const : "unknown" as const,
+    status: planState?.approval_pending === false ? ("approved" as const) : ("unknown" as const),
     approval_id: null,
   };
   const scheduling = planState?.scheduling ?? {
-    status: planState?.scheduling_eligible === true
-      ? "eligible" as const
-      : planState?.scheduling_eligible === false
-        ? "blocked" as const
-        : "unknown" as const,
+    status:
+      planState?.scheduling_eligible === true
+        ? ("eligible" as const)
+        : planState?.scheduling_eligible === false
+          ? ("blocked" as const)
+          : ("unknown" as const),
     blockers: [],
   };
   const runtime = planState?.runtime_readiness ?? { status: "unknown" as const, blockers: [] };
@@ -61,43 +68,67 @@ export function planStateRows(planState?: PlanState): PlanStatusRow[] {
       key: "proposal",
       label: "提案完整性",
       status: proposal.status,
-      value: proposal.status === "complete" ? "Complete" : proposal.status === "blocked" ? "Blocked" : "Unknown",
-      blockers: proposal.issues.map((issue) => ({ code: issue.code, group_id: null, message: issue.message, resource: null })),
+      value:
+        proposal.status === "complete"
+          ? "Complete"
+          : proposal.status === "blocked"
+            ? "Blocked"
+            : "Unknown",
+      blockers: proposal.issues.map((issue) => ({
+        code: issue.code,
+        group_id: null,
+        message: issue.message,
+        resource: null,
+      })),
     },
     {
       key: "approval",
       label: "Owner approval",
       status: approval.status,
-      value: approval.status === "approved" ? "Approved" : approval.status === "not_approved" ? "Not approved" : "Unknown",
+      value:
+        approval.status === "approved"
+          ? "Approved"
+          : approval.status === "not_approved"
+            ? "Not approved"
+            : "Unknown",
       blockers: [],
     },
     {
       key: "scheduling",
       label: "Scheduling",
       status: scheduling.status,
-      value: scheduling.status === "eligible" ? "Schedulable" : scheduling.status === "blocked" ? "Not schedulable" : "Unknown",
+      value:
+        scheduling.status === "eligible"
+          ? "Schedulable"
+          : scheduling.status === "blocked"
+            ? "Not schedulable"
+            : "Unknown",
       blockers: scheduling.blockers,
     },
     {
       key: "runtime",
       label: "Runtime readiness",
       status: runtime.status,
-      value: runtime.status === "ready" ? "Ready" : runtime.status === "blocked" ? "Blocked" : "Unknown",
+      value:
+        runtime.status === "ready" ? "Ready" : runtime.status === "blocked" ? "Blocked" : "Unknown",
       blockers: runtime.blockers,
     },
   ];
 }
 
 export function planStateIssueRows(planState?: PlanState): PlanStatusRow[] {
-  return planStateRows(planState).filter((item) => item.key === "approval"
-    ? item.status !== "approved"
-    : item.status === "blocked" || item.status === "unknown");
+  return planStateRows(planState).filter((item) =>
+    item.key === "approval"
+      ? item.status !== "approved"
+      : item.status === "blocked" || item.status === "unknown",
+  );
 }
 
 export function planStateSeverity(planState?: PlanState): PlanStateSeverity {
   if (!planState) return "ok";
   const issues = planStateIssueRows(planState);
-  if (issues.some((item) => item.status === "blocked" || item.status === "not_approved")) return "blocked";
+  if (issues.some((item) => item.status === "blocked" || item.status === "not_approved"))
+    return "blocked";
   return issues.length ? "unknown" : "ok";
 }
 
@@ -158,7 +189,11 @@ function phaseLabel(phase: View["execution_phase"]): string {
 }
 
 function lifecycleLabel(lifecycle: string | undefined): string {
-  return lifecycle === "approved" ? "已批准" : lifecycle === "draft" ? "草稿" : lifecycle ?? "未知";
+  return lifecycle === "approved"
+    ? "已批准"
+    : lifecycle === "draft"
+      ? "草稿"
+      : (lifecycle ?? "未知");
 }
 
 function issueEntries(planState?: PlanState): { key: string; message: string }[] {
@@ -167,13 +202,15 @@ function issueEntries(planState?: PlanState): { key: string; message: string }[]
     if (row.key === "approval" && row.status !== "approved") {
       entries.push({
         key: "approval",
-        message: row.status === "unknown"
-          ? "Owner approval 状态未知。"
-          : "Owner approval 尚未完成。",
+        message:
+          row.status === "unknown" ? "Owner approval 状态未知。" : "Owner approval 尚未完成。",
       });
     }
     for (const blocker of row.blockers) {
-      entries.push({ key: `${blocker.code}:${blocker.group_id ?? ""}`, message: blockerText(blocker) });
+      entries.push({
+        key: `${blocker.code}:${blocker.group_id ?? ""}`,
+        message: blockerText(blocker),
+      });
     }
     if (!row.blockers.length && row.key !== "approval") {
       entries.push({ key: row.key, message: `${row.label}：${row.value}` });
@@ -182,12 +219,21 @@ function issueEntries(planState?: PlanState): { key: string; message: string }[]
   return [...new Map(entries.map((entry) => [entry.key, entry])).values()];
 }
 
-export function renderPlanInfoContent(container: HTMLElement, view: Pick<View, "orchestration" | "groups" | "tasks" | "selected_plan_id" | "execution_phase" | "plan_state">): void {
+export function renderPlanInfoContent(
+  container: HTMLElement,
+  view: Pick<
+    View,
+    "orchestration" | "groups" | "tasks" | "selected_plan_id" | "execution_phase" | "plan_state"
+  >,
+): void {
   container.replaceChildren();
   const planState = view.plan_state;
   const overview = infoSection("这次编排");
   overview.append(
-    infoField("项目", `${view.orchestration.repository.owner} / ${view.orchestration.repository.name}`),
+    infoField(
+      "项目",
+      `${view.orchestration.repository.owner} / ${view.orchestration.repository.name}`,
+    ),
     infoField("版本", view.selected_plan_id || planState?.active_plan_id || "未知"),
     infoField("阶段", phaseLabel(view.execution_phase)),
     infoField("生命周期", lifecycleLabel(planState?.lifecycle)),

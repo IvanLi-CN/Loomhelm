@@ -1,24 +1,24 @@
-import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { ContractError, requireCondition } from "../lib/errors";
 import {
+  type DirectoryIdentity,
   readRegularNoFollow,
   syncDirectoryNoFollow,
   writeAtomicNoFollow,
   writeExclusiveNoFollow,
-  type DirectoryIdentity,
 } from "@loomhelm/runtime-core/modules/visual/secure_io";
+import { contract3MigrationCandidate } from "../lib/atomic-orchestration";
+import { versionEnvelope } from "../lib/contract";
+import { ContractError, requireCondition } from "../lib/errors";
 import {
+  type Ledger,
   TASK_EXECUTION_POLICY_FIELDS,
   taskExecutionPolicyDeclarationGaps,
   validateLedger,
   validateTaskExecutionPolicies,
-  type Ledger,
 } from "../lib/schema";
 import { requireLedgerCompatibility } from "../lib/service-contract";
-import { versionEnvelope } from "../lib/contract";
-import { contract3MigrationCandidate } from "../lib/atomic-orchestration";
 
 export type LedgerMigrationRequest = {
   run_id: string;
@@ -130,11 +130,7 @@ function validateMigrationBackupContent(content: string): void {
   try {
     validateLedger(JSON.parse(content));
   } catch {
-    throw new ContractError(
-      "MIGRATION_CONFLICT",
-      "Migration backup is invalid",
-      3,
-    );
+    throw new ContractError("MIGRATION_CONFLICT", "Migration backup is invalid", 3);
   }
 }
 
@@ -145,10 +141,7 @@ export function verifyMigrationBackup(
   expectedSourceDigest?: string,
   requireSourceDigest = false,
 ): void {
-  const expectedBackup = migrationBackupName(
-    requestIdentity.command,
-    requestIdentity.request_id,
-  );
+  const expectedBackup = migrationBackupName(requestIdentity.command, requestIdentity.request_id);
   requireCondition(
     backup === expectedBackup,
     "MIGRATION_CONFLICT",
@@ -156,12 +149,7 @@ export function verifyMigrationBackup(
     3,
   );
   const backupPath = join(context.runPath, expectedBackup);
-  requireCondition(
-    existsSync(backupPath),
-    "MIGRATION_CONFLICT",
-    "Migration backup is missing",
-    3,
-  );
+  requireCondition(existsSync(backupPath), "MIGRATION_CONFLICT", "Migration backup is missing", 3);
   const backupContent = readRegularNoFollow(
     backupPath,
     context.rootPath,
@@ -238,11 +226,7 @@ export function migrateLocked(
   context: LockedLedgerMigrationContext,
   request: LedgerMigrationRequest,
 ): unknown {
-  requireCondition(
-    migrationIdPattern.test(request.request_id),
-    "INVALID_ID",
-    "Invalid identifier",
-  );
+  requireCondition(migrationIdPattern.test(request.request_id), "INVALID_ID", "Invalid identifier");
   const oldContent = readRegularNoFollow(
     context.ledgerPath,
     context.rootPath,
@@ -276,9 +260,7 @@ export function migrateLocked(
   );
   const historicalPolicyGaps = taskExecutionPolicyDeclarationGaps(raw);
   requireCondition(
-    !(raw?.schema_version === 2 &&
-      raw?.contract_version === 2 &&
-      historicalPolicyGaps.length > 0),
+    !(raw?.schema_version === 2 && raw?.contract_version === 2 && historicalPolicyGaps.length > 0),
     "HISTORICAL_LEDGER_READ_ONLY",
     "schema2/contract2 ledger with incomplete task execution policies requires explicit maintenance",
     4,
@@ -304,18 +286,56 @@ export function migrateLocked(
     const current = validateLedger(raw);
     const prior = current.requests.find((item) => item.request_id === request.request_id);
     if (prior) {
-      verifyMigrationBackup(context, (prior.result as any).backup, { request_id: request.request_id, command: "migrate", canonical_input: request.canonical_input }, (prior.result as any).source_ledger_sha256, true);
-      return { ok: true, code: "REPLAYED", revision: prior.committed_revision, result: prior.result };
+      verifyMigrationBackup(
+        context,
+        (prior.result as any).backup,
+        {
+          request_id: request.request_id,
+          command: "migrate",
+          canonical_input: request.canonical_input,
+        },
+        (prior.result as any).source_ledger_sha256,
+        true,
+      );
+      return {
+        ok: true,
+        code: "REPLAYED",
+        revision: prior.committed_revision,
+        result: prior.result,
+      };
     }
-    requireCondition(current.revision === request.expected_revision, "REVISION_CONFLICT", "Ledger version changed", 3);
+    requireCondition(
+      current.revision === request.expected_revision,
+      "REVISION_CONFLICT",
+      "Ledger version changed",
+      3,
+    );
     const candidate = contract3MigrationCandidate(raw);
     candidate.revision += 1;
     candidate.updated_at = new Date().toISOString();
     const backup = migrationBackupName("migrate", request.request_id);
-    const result = { run_id: request.run_id, source_schema_version: 2, schema_version: 2, contract_version: 3, revision: candidate.revision, backup, source_ledger_sha256: migrationContentDigest(oldContent) };
-    candidate.requests.push({ request_id: request.request_id, command: "migrate", canonical_input: request.canonical_input, result, committed_revision: candidate.revision });
+    const result = {
+      run_id: request.run_id,
+      source_schema_version: 2,
+      schema_version: 2,
+      contract_version: 3,
+      revision: candidate.revision,
+      backup,
+      source_ledger_sha256: migrationContentDigest(oldContent),
+    };
+    candidate.requests.push({
+      request_id: request.request_id,
+      command: "migrate",
+      canonical_input: request.canonical_input,
+      result,
+      committed_revision: candidate.revision,
+    });
     validateLedger(candidate);
-    commitMigration(context, oldContent, candidate, backup, { request_id: request.request_id, command: "migrate", canonical_input: request.canonical_input });
+    commitMigration(context, oldContent, candidate, backup, {
+      request_id: request.request_id,
+      command: "migrate",
+      canonical_input: request.canonical_input,
+    });
     return { ok: true, code: "APPLIED", revision: candidate.revision, result };
   }
   // Schema-1 ledgers predate the contract discriminator. Treat them as the
@@ -342,13 +362,10 @@ export function migrateLocked(
       5,
     );
   }
-  const prior = current.requests.find(
-    (item) => item.request_id === request.request_id,
-  );
+  const prior = current.requests.find((item) => item.request_id === request.request_id);
   if (prior) {
     requireCondition(
-      prior.command === "migrate" &&
-        prior.canonical_input === request.canonical_input,
+      prior.command === "migrate" && prior.canonical_input === request.canonical_input,
       "ID_CONFLICT",
       "Request ID has different content",
       3,
@@ -376,8 +393,7 @@ export function migrateLocked(
   }
   requireCondition(
     raw?.schema_version === 1 ||
-      (raw?.schema_version === 2 &&
-        (raw?.contract_version === 1 || retiredReviews > 0)),
+      (raw?.schema_version === 2 && (raw?.contract_version === 1 || retiredReviews > 0)),
     "UNSUPPORTED_SCHEMA",
     "Only legacy and contract-1 ledgers can be explicitly migrated",
     4,
@@ -433,8 +449,7 @@ export function contractMigrationCandidate(
   const historicalPolicyGaps = taskExecutionPolicyDeclarationGaps(raw);
   const legacyContract =
     raw?.schema_version === 1 ||
-    (raw?.schema_version === 2 &&
-      (raw?.contract_version === 1 || retiredReviews > 0));
+    (raw?.schema_version === 2 && (raw?.contract_version === 1 || retiredReviews > 0));
   const historicalPolicyMigration =
     options.allowHistoricalTaskExecutionPolicies === true &&
     raw?.schema_version === 2 &&
@@ -481,8 +496,7 @@ export function contractMigrationCandidate(
   const current = validateLedger(candidateInput);
   const candidate = structuredClone(current);
   candidate.schema_version = 2;
-  candidate.source_schema_version =
-    raw.schema_version === 1 ? 1 : current.source_schema_version;
+  candidate.source_schema_version = raw.schema_version === 1 ? 1 : current.source_schema_version;
   candidate.contract_version = 2;
   candidate.version = versionEnvelope;
   // Lifecycle stages absent from v1 remain unknown. Migration does not turn
@@ -495,9 +509,7 @@ export function contractMigrationCandidate(
   );
   const rawTasks = Array.isArray(raw.tasks) ? raw.tasks : [];
   candidate.tasks = candidate.tasks.map((task, index) =>
-    rawTasks[index]?.lifecycle
-      ? task
-      : { ...task, lifecycle: structuredClone(unknownLifecycle) },
+    rawTasks[index]?.lifecycle ? task : { ...task, lifecycle: structuredClone(unknownLifecycle) },
   );
   validateTaskExecutionPolicies(candidate.tasks);
   return validateLedger(candidate);
@@ -558,46 +570,21 @@ export function commitMigration(
       3,
     );
     if (existsSync(identityPath))
-      requireMatchingMigrationRequestIdentity(
-        context,
-        identityPath,
-        requestIdentity,
-        sourceDigest,
-      );
+      requireMatchingMigrationRequestIdentity(context, identityPath, requestIdentity, sourceDigest);
     else {
-      writeExclusiveNoFollow(
-        identityPath,
-        identityContent,
-        context.rootPath,
-        context.runIdentity,
-      );
+      writeExclusiveNoFollow(identityPath, identityContent, context.rootPath, context.runIdentity);
       syncDirectoryNoFollow(context.runPath, context.rootPath, context.runIdentity);
       context.onStage?.("migration_backup_identity_recovered");
     }
   } else {
     if (existsSync(identityPath))
-      requireMatchingMigrationRequestIdentity(
-        context,
-        identityPath,
-        requestIdentity,
-        sourceDigest,
-      );
+      requireMatchingMigrationRequestIdentity(context, identityPath, requestIdentity, sourceDigest);
     else {
-      writeExclusiveNoFollow(
-        identityPath,
-        identityContent,
-        context.rootPath,
-        context.runIdentity,
-      );
+      writeExclusiveNoFollow(identityPath, identityContent, context.rootPath, context.runIdentity);
       syncDirectoryNoFollow(context.runPath, context.rootPath, context.runIdentity);
     }
     context.onStage?.("migration_backup_identity_committed");
-    writeExclusiveNoFollow(
-      backupPath,
-      oldContent,
-      context.rootPath,
-      context.runIdentity,
-    );
+    writeExclusiveNoFollow(backupPath, oldContent, context.rootPath, context.runIdentity);
   }
   syncDirectoryNoFollow(context.runPath, context.rootPath, context.runIdentity);
   context.onStage?.("migration_backup_committed");

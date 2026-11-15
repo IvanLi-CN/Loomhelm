@@ -1,8 +1,8 @@
 import {
-  constants,
   closeSync,
-  fchmodSync,
+  constants,
   existsSync,
+  fchmodSync,
   lstatSync,
   openSync,
   readFileSync,
@@ -25,9 +25,7 @@ export type Preferences = { schema_version: 1; theme: Theme };
 const fallback: Preferences = { schema_version: 1, theme: "system" };
 
 function validTheme(value: unknown): value is Theme {
-  return (
-    typeof value === "string" && (themes as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && (themes as readonly string[]).includes(value);
 }
 function parsePreferences(raw: string): Preferences | null {
   try {
@@ -47,11 +45,7 @@ export class GlobalPreferencesStore {
   readonly lockPath: string;
 
   constructor(readonly root: string) {
-    requireCondition(
-      isAbsolute(root),
-      "INVALID_ROOT",
-      "Data root must be absolute",
-    );
+    requireCondition(isAbsolute(root), "INVALID_ROOT", "Data root must be absolute");
     ensureDirectory(root);
     const locks = join(root, "locks");
     ensureDirectory(locks);
@@ -61,20 +55,12 @@ export class GlobalPreferencesStore {
       try {
         const fd = openSync(
           this.lockPath,
-          constants.O_WRONLY |
-            constants.O_CREAT |
-            constants.O_EXCL |
-            constants.O_NOFOLLOW,
+          constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
           0o600,
         );
         closeSync(fd);
       } catch (error) {
-        if (!(
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          error.code === "EEXIST"
-        ))
+        if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST"))
           throw error;
       }
     }
@@ -91,8 +77,7 @@ export class GlobalPreferencesStore {
     );
     try {
       requireCondition(
-        lstatSync(this.lockPath).isFile() &&
-          realpathSync(this.lockPath) === resolve(this.lockPath),
+        lstatSync(this.lockPath).isFile() && realpathSync(this.lockPath) === resolve(this.lockPath),
         "UNSAFE_PATH",
         "Preference lock must be a regular file without symlinks",
       );

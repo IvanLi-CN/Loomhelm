@@ -1,6 +1,7 @@
 import type { JsonRecord, observeCodex } from "../lib/codex-agent-api";
 import { record as object } from "../lib/codex-socket";
 import type { AgentOutput } from "../web/agent-output";
+
 type ReadConnection = Pick<Awaited<ReturnType<typeof observeCodex>>, "request">;
 
 export function messageSentAt(value: unknown): string | null {
@@ -10,10 +11,7 @@ export function messageSentAt(value: unknown): string | null {
 }
 
 /** Normalize only public assistant text, never tool/reasoning/user items. */
-export function messageOutput(
-  thread: string,
-  envelope: JsonRecord,
-): AgentOutput | null {
+export function messageOutput(thread: string, envelope: JsonRecord): AgentOutput | null {
   const item = object(envelope.item);
   if (
     !item ||
@@ -32,8 +30,7 @@ export function messageOutput(
     message_id: item.id,
     phase: typeof item.phase === "string" ? item.phase : null,
     message_status:
-      typeof envelope.completedAtMs === "number" &&
-      Number.isFinite(envelope.completedAtMs)
+      typeof envelope.completedAtMs === "number" && Number.isFinite(envelope.completedAtMs)
         ? "completed"
         : "in_progress",
     observed_at: new Date().toISOString(),
@@ -42,9 +39,7 @@ export function messageOutput(
 }
 const unsupported = (error: unknown) =>
   error instanceof Error &&
-  /method not found|unknown (?:method|variant)|unsupported method/i.test(
-    error.message,
-  );
+  /method not found|unknown (?:method|variant)|unsupported method/i.test(error.message);
 
 export async function latestConversationOutput(
   thread: string,
@@ -71,8 +66,7 @@ export async function latestConversationOutput(
       }
       throw error;
     }
-    if (!Array.isArray(result.data))
-      throw new Error("Unsupported conversation page");
+    if (!Array.isArray(result.data)) throw new Error("Unsupported conversation page");
     for (const row of result.data) {
       const envelope = object(row);
       if (!envelope) continue;
@@ -80,15 +74,13 @@ export async function latestConversationOutput(
         const output = messageOutput(thread, envelope);
         if (output) return output;
       } else {
-        if (!Array.isArray(envelope.items))
-          throw new Error("Full turn items unavailable");
+        if (!Array.isArray(envelope.items)) throw new Error("Full turn items unavailable");
         for (const item of [...envelope.items].reverse()) {
           const output = messageOutput(thread, { turnId: envelope.id, item });
           if (output)
             return {
               ...output,
-              message_status:
-                envelope.status === "inProgress" ? "in_progress" : "completed",
+              message_status: envelope.status === "inProgress" ? "in_progress" : "completed",
             };
         }
       }

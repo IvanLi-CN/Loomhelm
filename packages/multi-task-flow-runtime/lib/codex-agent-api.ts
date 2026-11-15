@@ -1,16 +1,16 @@
-import type { ProfileCapabilities } from "../lib/execution-profile";
 import { randomUUID } from "node:crypto";
 import type { Socket } from "node:net";
-import { websocketFrame as controlFrame } from "../lib/codex-socket";
 import {
-  record,
-  socketPath,
   connectSocket,
-  rpc,
-  startTurnAndWait,
   framePayload,
   parseRpc,
+  record,
+  rpc,
+  socketPath,
+  startTurnAndWait,
 } from "../lib/codex-rpc";
+import { websocketFrame as controlFrame } from "../lib/codex-socket";
+import type { ProfileCapabilities } from "../lib/execution-profile";
 export type CodexDeliveryOutcome = "sent" | "failed" | "unknown";
 export type CodexDeliveryResult = {
   outcome: CodexDeliveryOutcome;
@@ -50,11 +50,16 @@ async function listedCodexThread(threadId: string, archived: boolean): Promise<b
     const seen = new Set<unknown>();
     let id = 2;
     do {
-      const page = await rpc(socket, buffer, id++, "thread/list", { archived, limit: 100, ...(cursor ? { cursor } : {}) });
-      if (page.error) throw new Error(String(record(page.error)?.message ?? "Archive lookup failed"));
+      const page = await rpc(socket, buffer, id++, "thread/list", {
+        archived,
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (page.error)
+        throw new Error(String(record(page.error)?.message ?? "Archive lookup failed"));
       const result = record(page.result);
       if (!Array.isArray(result?.data)) throw new Error("Invalid archived thread listing");
-      if (result.data.some(item => record(item)?.id === threadId)) return true;
+      if (result.data.some((item) => record(item)?.id === threadId)) return true;
       cursor = result.nextCursor;
       if (cursor && seen.has(cursor)) throw new Error("Repeated archived listing cursor");
       seen.add(cursor);
@@ -62,47 +67,83 @@ async function listedCodexThread(threadId: string, archived: boolean): Promise<b
     return false;
   });
 }
-async function withCodexArchiveConnection<T>(action: (socket: Socket, buffer: { value: Buffer }) => Promise<T>): Promise<T> {
+async function withCodexArchiveConnection<T>(
+  action: (socket: Socket, buffer: { value: Buffer }) => Promise<T>,
+): Promise<T> {
   const path = socketPath();
   if (!path) throw new Error("Codex app-server control socket is unavailable");
   const connected = await connectSocket(path);
   try {
     const buffer = { value: connected.buffer };
-    const initialized = await rpc(connected.socket, buffer, 1, "initialize", { clientInfo: { name: "multi-task-flow", version: "1" }, capabilities: {} });
-    if (initialized.error) throw new Error(String(record(initialized.error)?.message ?? "Codex initialization failed"));
+    const initialized = await rpc(connected.socket, buffer, 1, "initialize", {
+      clientInfo: { name: "multi-task-flow", version: "1" },
+      capabilities: {},
+    });
+    if (initialized.error)
+      throw new Error(String(record(initialized.error)?.message ?? "Codex initialization failed"));
     return await action(connected.socket, buffer);
-  } finally { connected.socket.destroy(); }
+  } finally {
+    connected.socket.destroy();
+  }
 }
-export async function archiveCodexThread(threadId: string, operationId = randomUUID()): Promise<CodexArchiveResult> {
+export async function archiveCodexThread(
+  threadId: string,
+  operationId = randomUUID(),
+): Promise<CodexArchiveResult> {
   const evidence = `codex-app-server:${operationId}`;
   let submitted = false;
   try {
     return await withCodexArchiveConnection(async (socket, buffer) => {
       const read = await rpc(socket, buffer, 2, "thread/read", { threadId, includeTurns: false });
       if (read.error || record(record(record(read.result)?.thread)?.status)?.type !== "idle")
-        return { outcome: "deferred", evidence_ref: evidence, error: "Conversation is not confirmed idle; archive deferred" };
+        return {
+          outcome: "deferred",
+          evidence_ref: evidence,
+          error: "Conversation is not confirmed idle; archive deferred",
+        };
       submitted = true;
       const archived = await rpc(socket, buffer, 3, "thread/archive", { threadId });
-      if (archived.error) return { outcome: "failed", evidence_ref: evidence, error: String(record(archived.error)?.message ?? "Archive rejected") };
+      if (archived.error)
+        return {
+          outcome: "failed",
+          evidence_ref: evidence,
+          error: String(record(archived.error)?.message ?? "Archive rejected"),
+        };
       return { outcome: "succeeded", evidence_ref: evidence };
     });
   } catch (error) {
-    return { outcome: submitted ? "unknown" : "failed", evidence_ref: `${evidence}:error`, error: (error instanceof Error ? error.message : String(error)).slice(0, 500) };
+    return {
+      outcome: submitted ? "unknown" : "failed",
+      evidence_ref: `${evidence}:error`,
+      error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+    };
   }
 }
 
-export async function unarchiveCodexThread(threadId: string, operationId = randomUUID()): Promise<CodexArchiveResult> {
+export async function unarchiveCodexThread(
+  threadId: string,
+  operationId = randomUUID(),
+): Promise<CodexArchiveResult> {
   const evidence = `codex-app-server:${operationId}`;
   let submitted = false;
   try {
     return await withCodexArchiveConnection(async (socket, buffer) => {
       submitted = true;
       const result = await rpc(socket, buffer, 2, "thread/unarchive", { threadId });
-      if (result.error) return { outcome: "failed", evidence_ref: evidence, error: String(record(result.error)?.message ?? "Unarchive rejected") };
+      if (result.error)
+        return {
+          outcome: "failed",
+          evidence_ref: evidence,
+          error: String(record(result.error)?.message ?? "Unarchive rejected"),
+        };
       return { outcome: "succeeded", evidence_ref: evidence };
     });
   } catch (error) {
-    return { outcome: submitted ? "unknown" : "failed", evidence_ref: `${evidence}:error`, error: String(error).slice(0, 500) };
+    return {
+      outcome: submitted ? "unknown" : "failed",
+      evidence_ref: `${evidence}:error`,
+      error: String(error).slice(0, 500),
+    };
   }
 }
 
@@ -135,10 +176,7 @@ export async function sendCodexMessage(input: {
     });
     if (initialized.error)
       throw new Error(
-        String(
-          record(initialized.error)?.message ??
-            "Codex app-server initialization failed",
-        ),
+        String(record(initialized.error)?.message ?? "Codex app-server initialization failed"),
       );
     // Subscriptions are connection-local. A completed bootstrap may already
     // have been unloaded when its next notification opens a new connection.
@@ -149,7 +187,9 @@ export async function sendCodexMessage(input: {
       excludeTurns: true,
     });
     if (resumed.error)
-      throw new Error(String(record(resumed.error)?.message ?? "Codex app-server rejected thread/resume"));
+      throw new Error(
+        String(record(resumed.error)?.message ?? "Codex app-server rejected thread/resume"),
+      );
     mayHaveDelivered = true;
     const started = await rpc(socket, buffer, 3, "turn/start", {
       threadId: input.recipient_thread_id,
@@ -159,14 +199,12 @@ export async function sendCodexMessage(input: {
     if (started.error) {
       mayHaveDelivered = false;
       throw new Error(
-        String(
-          record(started.error)?.message ??
-            "Codex app-server rejected turn/start",
-        ),
+        String(record(started.error)?.message ?? "Codex app-server rejected turn/start"),
       );
     }
     const turn = record(record(started.result)?.turn);
-    if (typeof turn?.id !== "string") throw new Error("Codex app-server omitted accepted turn identity");
+    if (typeof turn?.id !== "string")
+      throw new Error("Codex app-server omitted accepted turn identity");
     // Publish acceptance promptly so the recipient can acknowledge the ledger
     // notification during its turn. Keep this host-owned process subscribed
     // until the exact turn terminates: disconnecting on acceptance interrupts
@@ -196,8 +234,18 @@ export async function sendCodexMessage(input: {
   }
 }
 
-function retainAcceptedTurn(socket: Socket, buffer: { value: Buffer }, threadId: string, turnId: string): void {
-  const close = () => { socket.off("data", consume); socket.off("error", close); socket.off("close", close); socket.destroy(); };
+function retainAcceptedTurn(
+  socket: Socket,
+  buffer: { value: Buffer },
+  threadId: string,
+  turnId: string,
+): void {
+  const close = () => {
+    socket.off("data", consume);
+    socket.off("error", close);
+    socket.off("close", close);
+    socket.destroy();
+  };
   const consume = (chunk: Buffer) => {
     try {
       buffer.value = Buffer.concat([buffer.value, chunk]);
@@ -205,13 +253,28 @@ function retainAcceptedTurn(socket: Socket, buffer: { value: Buffer }, threadId:
         const frame = framePayload(buffer.value);
         if (!frame) return;
         buffer.value = buffer.value.subarray(frame.consumed);
-        if (frame.opcode === 8) { close(); return; }
-        if (frame.opcode === 9) { socket.write(controlFrame(frame.payload, 10)); continue; }
+        if (frame.opcode === 8) {
+          close();
+          return;
+        }
+        if (frame.opcode === 9) {
+          socket.write(controlFrame(frame.payload, 10));
+          continue;
+        }
         const message = parseRpc(frame.payload);
         const params = record(message?.params);
-        if (message?.method === "turn/completed" && params?.threadId === threadId && record(params.turn)?.id === turnId) { close(); return; }
+        if (
+          message?.method === "turn/completed" &&
+          params?.threadId === threadId &&
+          record(params.turn)?.id === turnId
+        ) {
+          close();
+          return;
+        }
       }
-    } catch { close(); }
+    } catch {
+      close();
+    }
   };
   socket.on("data", consume);
   socket.once("error", close);
@@ -250,8 +313,7 @@ export async function createCodexThread(input: {
       clientInfo: { name: "multi-task-flow", version: "1" },
       capabilities: {},
     });
-    if (initialized.error)
-      throw new Error("Codex app-server initialization failed");
+    if (initialized.error) throw new Error("Codex app-server initialization failed");
     creationRequested = true;
     const started = await rpc(socket, buffer, nativeRequestId, "thread/start", {
       cwd: process.cwd(),
@@ -262,9 +324,7 @@ export async function createCodexThread(input: {
     });
     if (started.error) {
       explicitlyRejected = true;
-      throw new Error(
-        String(record(started.error)?.message ?? "thread/start rejected"),
-      );
+      throw new Error(String(record(started.error)?.message ?? "thread/start rejected"));
     }
     const result = record(started.result);
     const thread = record(result?.thread);
@@ -281,9 +341,7 @@ export async function createCodexThread(input: {
       name: input.title,
     });
     if (named.error)
-      throw new Error(
-        String(record(named.error)?.message ?? "thread/name/set rejected"),
-      );
+      throw new Error(String(record(named.error)?.message ?? "thread/name/set rejected"));
     const actualModel =
       typeof result?.model === "string"
         ? result.model
@@ -362,20 +420,12 @@ export async function readCodexCapabilities(): Promise<ProfileCapabilities> {
         cursor,
       });
       if (response.error)
-        throw new Error(
-          String(
-            record(response.error)?.message ?? "Model catalog unavailable",
-          ),
-        );
+        throw new Error(String(record(response.error)?.message ?? "Model catalog unavailable"));
       const result = record(response.result);
-      if (!Array.isArray(result?.data))
-        throw new Error("Invalid model catalog");
+      if (!Array.isArray(result?.data)) throw new Error("Invalid model catalog");
       for (const raw of result.data) {
         const item = record(raw);
-        if (
-          typeof item?.model !== "string" ||
-          !Array.isArray(item.supportedReasoningEfforts)
-        )
+        if (typeof item?.model !== "string" || !Array.isArray(item.supportedReasoningEfforts))
           continue;
         capabilities.push({
           model: item.model,
@@ -386,8 +436,7 @@ export async function readCodexCapabilities(): Promise<ProfileCapabilities> {
           ),
         });
       }
-      cursor =
-        typeof result?.nextCursor === "string" ? result.nextCursor : null;
+      cursor = typeof result?.nextCursor === "string" ? result.nextCursor : null;
     } while (cursor);
     return capabilities;
   } finally {

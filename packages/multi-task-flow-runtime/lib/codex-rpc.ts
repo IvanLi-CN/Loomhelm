@@ -1,8 +1,9 @@
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { createConnection, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { randomBytes, createHash } from "node:crypto";
-import { createConnection, type Socket } from "node:net";
+
 type JsonRecord = Record<string, unknown>;
 export function record(value: unknown): JsonRecord | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -10,19 +11,17 @@ export function record(value: unknown): JsonRecord | null {
     : null;
 }
 export function socketPath(): string | null {
-  const configured = (process.env.LOOMHELM_CODEX_APP_SERVER_SOCKET ?? process.env.CODEX_APP_SERVER_SOCKET)?.trim();
+  const configured = (
+    process.env.LOOMHELM_CODEX_APP_SERVER_SOCKET ?? process.env.CODEX_APP_SERVER_SOCKET
+  )?.trim();
   if (configured) return configured;
   const root = process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
   const candidate = join(root, "app-server-control", "app-server-control.sock");
   return existsSync(candidate) ? candidate : null;
 }
 export function timeoutMs(): number {
-  const value = Number(
-    process.env.MULTI_TASK_FLOW_CODEX_AGENT_TIMEOUT_MS ?? 30_000,
-  );
-  return Number.isFinite(value) && value >= 1_000 && value <= 300_000
-    ? value
-    : 30_000;
+  const value = Number(process.env.MULTI_TASK_FLOW_CODEX_AGENT_TIMEOUT_MS ?? 30_000);
+  return Number.isFinite(value) && value >= 1_000 && value <= 300_000 ? value : 30_000;
 }
 export function websocketFrame(text: string): Buffer {
   const payload = Buffer.from(text, "utf8");
@@ -60,8 +59,7 @@ export function framePayload(
   } else if (code === 127) {
     if (buffer.length < 10) return null;
     const n = buffer.readBigUInt64BE(2);
-    if (n > BigInt(Number.MAX_SAFE_INTEGER))
-      throw new Error("WebSocket frame is too large");
+    if (n > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("WebSocket frame is too large");
     length = Number(n);
     offset = 10;
   }
@@ -83,9 +81,7 @@ export function parseRpc(value: Buffer): JsonRecord | null {
   }
 }
 
-export async function connectSocket(
-  path: string,
-): Promise<{ socket: Socket; buffer: Buffer }> {
+export async function connectSocket(path: string): Promise<{ socket: Socket; buffer: Buffer }> {
   const socket = createConnection(path);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(
@@ -120,9 +116,7 @@ export async function connectSocket(
         .digest("base64");
       if (
         !response.startsWith("HTTP/1.1 101") ||
-        !response
-          .toLowerCase()
-          .includes(`sec-websocket-accept: ${expected.toLowerCase()}`)
+        !response.toLowerCase().includes(`sec-websocket-accept: ${expected.toLowerCase()}`)
       ) {
         reject(new Error("Codex app-server WebSocket handshake was rejected"));
         return;
@@ -143,13 +137,10 @@ export async function rpc(
   method: string,
   params: JsonRecord,
 ): Promise<JsonRecord> {
-  socket.write(
-    websocketFrame(JSON.stringify({ jsonrpc: "2.0", id, method, params })),
-  );
+  socket.write(websocketFrame(JSON.stringify({ jsonrpc: "2.0", id, method, params })));
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
-      () =>
-        reject(new Error(`Codex app-server timed out waiting for ${method}`)),
+      () => reject(new Error(`Codex app-server timed out waiting for ${method}`)),
       timeoutMs(),
     );
     const onData = (chunk: Buffer) => {
@@ -196,9 +187,7 @@ export async function startTurnAndWait(
   return new Promise((resolve, reject) => {
     const deadline = setTimeout(() => {
       socket.off("data", onData);
-      reject(
-        new Error("Codex app-server timed out waiting for turn completion"),
-      );
+      reject(new Error("Codex app-server timed out waiting for turn completion"));
     }, timeoutMs());
     let response: JsonRecord | undefined;
     let completed = false;
@@ -227,11 +216,7 @@ export async function startTurnAndWait(
           if (message.error) {
             clearTimeout(deadline);
             socket.off("data", onData);
-            reject(
-              new Error(
-                String(record(message.error)?.message ?? "turn/start rejected"),
-              ),
-            );
+            reject(new Error(String(record(message.error)?.message ?? "turn/start rejected")));
             return;
           }
           finish();

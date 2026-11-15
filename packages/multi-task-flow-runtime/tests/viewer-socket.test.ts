@@ -2,12 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import { lstatSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  startUnixViewerWorkerServer,
-  viewerWorkerSocketPath,
-} from "../scripts/viewer-socket";
-import { createUnixViewerWorker } from "../scripts/viewer-worker";
 import { createWorkerGeneration } from "../scripts/viewer-runtime";
+import { startUnixViewerWorkerServer, viewerWorkerSocketPath } from "../scripts/viewer-socket";
+import { createUnixViewerWorker } from "../scripts/viewer-worker";
 
 const roots: string[] = [];
 const servers: Array<{ stop(): Promise<void> }> = [];
@@ -49,7 +46,11 @@ test("Unix worker transport preserves streaming responses and immutable identity
   let timeoutValue: number | undefined;
   const response = await worker.handle(
     new Request("http://viewer.test/runs/demo/events"),
-    { timeout(_request: Request, timeout: number) { timeoutValue = timeout; } },
+    {
+      timeout(_request: Request, timeout: number) {
+        timeoutValue = timeout;
+      },
+    },
     "/api/events",
     { runId: "demo", workerKey, generation },
   );
@@ -69,11 +70,15 @@ test("client cancellation closes a stream without surfacing a worker failure", a
     socketPath,
     workerKey,
     generation,
-    handle: () => new Response(new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("event: one\\n\\n"));
-      },
-    }), { headers: { "content-type": "text/event-stream" } }),
+    handle: () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("event: one\\n\\n"));
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
   });
   servers.push(server);
   const worker = createUnixViewerWorker({ socketPath, workerKey, generation });
@@ -105,12 +110,11 @@ test("Unix worker transport rejects stale generations before connecting", async 
     generation,
   });
   await expect(
-    worker.handle(
-      new Request("http://viewer.test/runs/demo/"),
-      undefined,
-      "/",
-      { runId: "demo", workerKey, generation: createWorkerGeneration() },
-    ),
+    worker.handle(new Request("http://viewer.test/runs/demo/"), undefined, "/", {
+      runId: "demo",
+      workerKey,
+      generation: createWorkerGeneration(),
+    }),
   ).rejects.toThrow("generation mismatch");
 });
 

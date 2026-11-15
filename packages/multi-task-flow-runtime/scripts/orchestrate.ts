@@ -1,43 +1,47 @@
-import { desktopHandoff } from "../lib/desktop-handoff";
-import { createCliThread, reconcileCliThread, verifyRepositoryIdentity } from "../lib/codex-cli-create";
-import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
-import { sweepConversationArchives } from "../lib/conversation-archive";
+import { randomUUID } from "node:crypto";
 import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
+import { ZodError, z } from "zod";
+import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
+import { readCodexCapabilities } from "../lib/codex-agent-api";
+import {
+  createCliThread,
+  reconcileCliThread,
+  verifyRepositoryIdentity,
+} from "../lib/codex-cli-create";
+import { versionEnvelope } from "../lib/contract";
+import { sweepConversationArchives } from "../lib/conversation-archive";
+import { desktopHandoff } from "../lib/desktop-handoff";
+import { actorSchema, apply, requestSchema } from "../lib/engine";
+import { ContractError } from "../lib/errors";
 import {
   effectiveProfile,
   materializeRecommendation,
   validateProfileCapability,
 } from "../lib/execution-profile";
+import { prepareNativeNotification, reconcileNotification } from "../lib/notification-delivery";
 import { mutateExecutionProfile } from "../lib/profile-mutation";
-import { z, ZodError } from "zod";
-import { randomUUID } from "node:crypto";
-import { ContractError } from "../lib/errors";
-import { apply, actorSchema, requestSchema } from "../lib/engine";
-import { readCodexCapabilities } from "../lib/codex-agent-api";
 import {
+  DEFAULT_EXECUTION_PROFILE,
+  defaultGroupAtoms,
+  executionProfile,
   group,
   id,
+  isContributionKind,
+  type Ledger,
   ledgerSchema,
   plan,
   task,
-  type Ledger,
   validateInitialRuntimeState,
-  validateNewTaskKinds,
   validateLedger,
+  validateNewTaskKinds,
   validatePlan,
   validateSchedulablePlan,
   validateTaskExecutionPolicies,
-  isContributionKind,
-  defaultGroupAtoms,
-  executionProfile,
-  DEFAULT_EXECUTION_PROFILE,
 } from "../lib/schema";
-import { defaultRoot, LedgerStore } from "../lib/store";
-import { prepareNativeNotification, reconcileNotification } from "../lib/notification-delivery";
-import { migrationCanonicalInput } from "../lib/store-migration";
-import { versionEnvelope } from "../lib/contract";
-import { buildView } from "../lib/view";
 import { checkViewerCompatibility, renewViewerUsage } from "../lib/service-usage";
+import { defaultRoot, LedgerStore } from "../lib/store";
+import { migrationCanonicalInput } from "../lib/store-migration";
+import { buildView } from "../lib/view";
 
 const initialRequest = z
   .object({
@@ -74,7 +78,8 @@ function record(value: unknown): JsonRecord | null {
 
 function notificationRequestOf(value: unknown): JsonRecord | null {
   const result = record(record(value)?.result);
-  const request = record(result?.notification_request) ?? record(result?.readiness_notification_request);
+  const request =
+    record(result?.notification_request) ?? record(result?.readiness_notification_request);
   if (
     typeof request?.notification_id !== "string" ||
     typeof request?.event_id !== "string" ||
@@ -93,10 +98,17 @@ function notificationPrompt(
 ): string {
   const event = ledger.events.find((item) => item.id === eventId);
   const payload = record(input.payload);
-  const dispatch = ledger.operations.find(op => op.request.handoff_notification_id === notificationId);
+  const dispatch = ledger.operations.find(
+    (op) => op.request.handoff_notification_id === notificationId,
+  );
   if (dispatch) {
-    const handoff = desktopHandoff(ledger, dispatch.id, String(record(dispatch.request.creation_parameters)?.prompt));
-    if (handoff) return `${handoff.formal_prompt}\n\nnotification_id: ${notificationId}\n处理后由当前收件会话 notification-ack 确认；发送接受不等于开工。`;
+    const handoff = desktopHandoff(
+      ledger,
+      dispatch.id,
+      String(record(dispatch.request.creation_parameters)?.prompt),
+    );
+    if (handoff)
+      return `${handoff.formal_prompt}\n\nnotification_id: ${notificationId}\n处理后由当前收件会话 notification-ack 确认；发送接受不等于开工。`;
   }
   const lines = [
     "multi-task-flow notification",
@@ -122,11 +134,8 @@ function notificationPrompt(
     else if (Array.isArray(value) && value.length > 0) lines.push(`${key}: ${value.join(", ")}`);
   }
   const reason = record(event?.data)?.reason;
-  if (typeof reason === "string" && reason.length > 0)
-    lines.push(`reason: ${reason}`);
-  lines.push(
-    "请处理这条通知；完成处理后，只能由当前收件会话调用 notification-ack 写入确认。",
-  );
+  if (typeof reason === "string" && reason.length > 0) lines.push(`reason: ${reason}`);
+  lines.push("请处理这条通知；完成处理后，只能由当前收件会话调用 notification-ack 写入确认。");
   return lines.join("\n");
 }
 
@@ -139,57 +148,34 @@ async function deliverNotification(
 ): Promise<unknown> {
   const ledger = validateLedger(store.read());
   const notificationId = String(request.notification_id);
-  const notice = ledger.notifications.find(
-    (item) => item.id === notificationId,
-  );
+  const notice = ledger.notifications.find((item) => item.id === notificationId);
   if (!notice) throw new ContractError("NOT_FOUND", "Notification not found");
-  const prompt = notificationPrompt(
-    parsed.run_id,
-    notice.id,
-    notice.event_id,
-    ledger,
-    input,
-  );
+  const prompt = notificationPrompt(parsed.run_id, notice.id, notice.event_id, ledger, input);
   return prepareNativeNotification(store, parsed, notice.id, prompt, direct);
 }
 
 try {
   const command = process.argv[2];
   if (!command || process.argv[3] !== "--input" || process.argv[4] !== "-")
-    throw new ContractError(
-      "INVALID_ARGUMENTS",
-      "Usage: orchestrate.ts <command> --input -",
-    );
+    throw new ContractError("INVALID_ARGUMENTS", "Usage: orchestrate.ts <command> --input -");
   const input = JSON.parse(await Runtime.stdin.text());
   const root = process.env.TASK_ORCHESTRATION_DATA_ROOT ?? defaultRoot();
   checkViewerCompatibility(root);
   if (command === "init") {
     const parsed = initialRequest.parse(input);
     if (parsed.actor.role !== "main")
-      throw new ContractError(
-        "FORBIDDEN",
-        "Only the main conversation may initialize a run",
-        3,
-      );
+      throw new ContractError("FORBIDDEN", "Only the main conversation may initialize a run", 3);
     const requestedPlan = parsed.payload.initial_plan;
     if (requestedPlan.approval_id !== null)
-      throw new ContractError(
-        "INVALID_PLAN",
-        "Initial plan must be unapproved",
-      );
-    const configuredGroupIds = new Set(
-      requestedPlan.group_atoms.map((atom) => atom.group_id),
-    );
+      throw new ContractError("INVALID_PLAN", "Initial plan must be unapproved");
+    const configuredGroupIds = new Set(requestedPlan.group_atoms.map((atom) => atom.group_id));
     const planGroupIds = new Set(
       requestedPlan.nodes
         .map((node) => node.group_id)
         .filter((groupId): groupId is string => groupId !== null),
     );
     if (!parsed.payload.groups.every((item) => planGroupIds.has(item.id)))
-      throw new ContractError(
-        "ORPHAN_GROUP",
-        "Runtime group is not present in the active plan",
-      );
+      throw new ContractError("ORPHAN_GROUP", "Runtime group is not present in the active plan");
     const initialPlanDraft =
       configuredGroupIds.size === parsed.payload.groups.length
         ? requestedPlan
@@ -200,30 +186,30 @@ try {
               ...parsed.payload.groups
                 .filter((item) => !configuredGroupIds.has(item.id))
                 .flatMap((item) =>
-                  defaultGroupAtoms(item.id).map(
-                    ({ status: _status, ...atom }) => ({
-                      ...atom,
-                      group_id: item.id,
-                    }),
-                  ),
+                  defaultGroupAtoms(item.id).map(({ status: _status, ...atom }) => ({
+                    ...atom,
+                    group_id: item.id,
+                  })),
                 ),
             ],
           };
-    const initialPlan = canonicalizeContract3Plan(
-      initialPlanDraft,
-      parsed.payload.tasks,
-    );
+    const initialPlan = canonicalizeContract3Plan(initialPlanDraft, parsed.payload.tasks);
     validatePlan(initialPlan);
     validateSchedulablePlan(initialPlan);
     validateInitialRuntimeState(parsed.payload.groups, parsed.payload.tasks);
     validateNewTaskKinds(parsed.payload.tasks);
     validateTaskExecutionPolicies(parsed.payload.tasks, true);
     const groups = parsed.payload.groups.map((group) => {
-      const canonicalPr = group.pr && "state" in group.pr
-        ? group.pr
-        : group.pr
-          ? { state: "published" as const, pr: group.pr, parent_branch: group.parent_branch ?? "main" }
-          : { state: "unpublished" as const };
+      const canonicalPr =
+        group.pr && "state" in group.pr
+          ? group.pr
+          : group.pr
+            ? {
+                state: "published" as const,
+                pr: group.pr,
+                parent_branch: group.parent_branch ?? "main",
+              }
+            : { state: "unpublished" as const };
       const plannedAtoms = initialPlan.group_atoms
         .filter((atom: any) => atom.group_id === group.id)
         .map((atom: any) => ({
@@ -261,8 +247,7 @@ try {
       },
       config: {
         ...parsed.payload.config,
-        execution_profile:
-          parsed.payload.config.execution_profile ?? DEFAULT_EXECUTION_PROFILE,
+        execution_profile: parsed.payload.config.execution_profile ?? DEFAULT_EXECUTION_PROFILE,
       },
       plans: [initialPlan],
       atomic_nodes: initialPlan.atomic_nodes,
@@ -282,8 +267,7 @@ try {
       updated_at: timestamp,
     });
     for (const target of [...ledger.groups, ...ledger.tasks])
-      if (!target.execution_profile_source)
-        materializeRecommendation(ledger, target);
+      if (!target.execution_profile_source) materializeRecommendation(ledger, target);
     new LedgerStore(root, parsed.run_id).create(ledger);
     console.log(
       JSON.stringify({
@@ -304,11 +288,7 @@ try {
     const parsed = requestSchema.parse(input);
     console.log(
       JSON.stringify(
-        await mutateExecutionProfile(
-          new LedgerStore(root, parsed.run_id),
-          command,
-          parsed,
-        ),
+        await mutateExecutionProfile(new LedgerStore(root, parsed.run_id), command, parsed),
       ),
     );
   } else if (command === "migrate") {
@@ -318,17 +298,12 @@ try {
       canonical_input: migrationCanonicalInput(parsed.run_id, parsed.actor),
     });
     console.log(JSON.stringify(result));
-  } else if (
-    command === "notification-reconcile" &&
-    input.request_id === undefined
-  ) {
+  } else if (command === "notification-reconcile" && input.request_id === undefined) {
     const parsed = z
       .object({
         run_id: id,
         actor: actorSchema,
-        status: z
-          .enum(["pending", "sent", "failed", "unknown", "acknowledged"])
-          .optional(),
+        status: z.enum(["pending", "sent", "failed", "unknown", "acknowledged"]).optional(),
       })
       .strict()
       .parse(input);
@@ -338,16 +313,10 @@ try {
       (parsed.actor.role === "main"
         ? parsed.actor.thread_id === ledger.control.owner_thread_id
         : parsed.actor.role === "group"
-          ? ledger.groups.some(
-              (g) => g.agent_thread_id === parsed.actor.thread_id,
-            )
+          ? ledger.groups.some((g) => g.agent_thread_id === parsed.actor.thread_id)
           : ledger.tasks.some((t) => t.thread_id === parsed.actor.thread_id));
     if (!allowed)
-      throw new ContractError(
-        "ACTOR_MISMATCH",
-        "Conversation is not bound to the run",
-        3,
-      );
+      throw new ContractError("ACTOR_MISMATCH", "Conversation is not bound to the run", 3);
     const notifications = parsed.status
       ? ledger.notifications.filter((item) => item.status === parsed.status)
       : ledger.notifications;
@@ -361,51 +330,108 @@ try {
           pending: ledger.notifications.filter((item) =>
             ["pending", "failed", "unknown"].includes(item.status),
           ).length,
-          unacknowledged: ledger.notifications.filter(
-            (item) => item.status === "sent",
-          ).length,
+          unacknowledged: ledger.notifications.filter((item) => item.status === "sent").length,
         },
       }),
     );
-  } else if ((command === "notification-send" || command === "notification-prepare")) {
+  } else if (command === "notification-send" || command === "notification-prepare") {
     const parsed = requestSchema.parse(input);
-    const payload = z
-      .object({ notification_id: id })
-      .strict()
-      .parse(parsed.payload);
+    const payload = z.object({ notification_id: id }).strict().parse(parsed.payload);
     const store = new LedgerStore(root, parsed.run_id);
     const delivery = record(await deliverNotification(store, parsed, input, payload, true));
-    console.log(JSON.stringify({
-      ok: true, code: delivery?.replayed ? "REPLAYED" : "APPLIED",
-      revision: delivery?.revision, result: delivery,
-    }));
+    console.log(
+      JSON.stringify({
+        ok: true,
+        code: delivery?.replayed ? "REPLAYED" : "APPLIED",
+        revision: delivery?.revision,
+        result: delivery,
+      }),
+    );
   } else if (command === "creation-reconcile") {
     const parsed = requestSchema.parse(input);
     const payload = z.object({ operation_id: id }).strict().parse(parsed.payload);
     const store = new LedgerStore(root, parsed.run_id);
     const ledger = validateLedger(store.read());
     if (parsed.actor.role !== "main" || parsed.actor.thread_id !== ledger.control.owner_thread_id)
-      throw new ContractError("ACTOR_MISMATCH", "Creation reconciliation must be run by the bound main thread");
-    const operation = ledger.operations.find(item => item.id === payload.operation_id && item.kind === "dispatch");
+      throw new ContractError(
+        "ACTOR_MISMATCH",
+        "Creation reconciliation must be run by the bound main thread",
+      );
+    const operation = ledger.operations.find(
+      (item) => item.id === payload.operation_id && item.kind === "dispatch",
+    );
     if (!operation) throw new ContractError("NOT_FOUND", "Dispatch operation not found");
-    if (operation.status !== "unknown") throw new ContractError("OPERATION_TERMINAL", "Dispatch is not awaiting creation reconciliation");
-    if (!operation.request.native_request_id) throw new ContractError("NATIVE_REQUEST_CONFLICT", "Dispatch has no bound native request");
+    if (operation.status !== "unknown")
+      throw new ContractError(
+        "OPERATION_TERMINAL",
+        "Dispatch is not awaiting creation reconciliation",
+      );
+    if (!operation.request.native_request_id)
+      throw new ContractError("NATIVE_REQUEST_CONFLICT", "Dispatch has no bound native request");
     const creation = record(operation.request.creation_result);
     const evidence = record(creation?.native_evidence);
-    const threadId = operation.request.observed_thread_id ?? (typeof creation?.thread_id === "string" ? creation.thread_id : undefined) ?? (typeof evidence?.thread_id === "string" ? evidence.thread_id : undefined);
+    const threadId =
+      operation.request.observed_thread_id ??
+      (typeof creation?.thread_id === "string" ? creation.thread_id : undefined) ??
+      (typeof evidence?.thread_id === "string" ? evidence.thread_id : undefined);
     if (!threadId) {
-      console.log(JSON.stringify({ ok: true, code: "UNKNOWN", revision: ledger.revision, result: { operation_id: operation.id, outcome: "unknown", reason: "No observed thread identity" } }));
+      console.log(
+        JSON.stringify({
+          ok: true,
+          code: "UNKNOWN",
+          revision: ledger.revision,
+          result: {
+            operation_id: operation.id,
+            outcome: "unknown",
+            reason: "No observed thread identity",
+          },
+        }),
+      );
       process.exit(0);
     }
-    const target = operation.request.target_type === "group" ? ledger.groups.find(item => item.id === operation.target_id) : ledger.tasks.find(item => item.id === operation.target_id);
+    const target =
+      operation.request.target_type === "group"
+        ? ledger.groups.find((item) => item.id === operation.target_id)
+        : ledger.tasks.find((item) => item.id === operation.target_id);
     if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
     const parameters = record(operation.request.creation_parameters);
     const profile = executionProfile.parse(operation.request.execution_profile);
-    const reconciliation = await reconcileCliThread({ thread_id: threadId, model: profile.model, thinking: profile.thinking, source_cwd: String(parameters?.cwd ?? process.cwd()) });
-    const result = store.update(raw => apply(raw, "dispatch-resolve", { ...parsed, payload: { operation_id: operation.id, outcome: "succeeded", thread_id: threadId, native_evidence: { source: "multi-task-flow-reconcile", native_tool_name: "codex exec", operation_id: operation.id, native_request_id: operation.request.native_request_id, model: profile.model, thinking: profile.thinking, ...reconciliation } } }));
+    const reconciliation = await reconcileCliThread({
+      thread_id: threadId,
+      model: profile.model,
+      thinking: profile.thinking,
+      source_cwd: String(parameters?.cwd ?? process.cwd()),
+    });
+    const result = store.update((raw) =>
+      apply(raw, "dispatch-resolve", {
+        ...parsed,
+        payload: {
+          operation_id: operation.id,
+          outcome: "succeeded",
+          thread_id: threadId,
+          native_evidence: {
+            source: "multi-task-flow-reconcile",
+            native_tool_name: "codex exec",
+            operation_id: operation.id,
+            native_request_id: operation.request.native_request_id,
+            model: profile.model,
+            thinking: profile.thinking,
+            ...reconciliation,
+          },
+        },
+      }),
+    );
     const notification = notificationRequestOf(result);
-    const delivery = notification ? record(await deliverNotification(store, parsed, input, notification)) : null;
-    console.log(JSON.stringify({ ...record(result), revision: validateLedger(store.read()).revision, ...(delivery ? { notification_delivery: delivery } : {}) }));
+    const delivery = notification
+      ? record(await deliverNotification(store, parsed, input, notification))
+      : null;
+    console.log(
+      JSON.stringify({
+        ...record(result),
+        revision: validateLedger(store.read()).revision,
+        ...(delivery ? { notification_delivery: delivery } : {}),
+      }),
+    );
   } else if (command === "conversation-create") {
     const parsed = requestSchema.parse(input);
     const payload = z
@@ -421,14 +447,12 @@ try {
     const operation = ledger.operations.find(
       (item) => item.id === payload.operation_id && item.kind === "dispatch",
     );
-    if (!operation)
-      throw new ContractError("NOT_FOUND", "Dispatch operation not found");
+    if (!operation) throw new ContractError("NOT_FOUND", "Dispatch operation not found");
     const target =
       operation.request.target_type === "group"
         ? ledger.groups.find((item) => item.id === operation.target_id)
         : ledger.tasks.find((item) => item.id === operation.target_id);
-    if (!target)
-      throw new ContractError("NOT_FOUND", "Dispatch target not found");
+    if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
     const profile = executionProfile.parse(operation.request.execution_profile);
     const creationParameters = {
       title: payload.title,
@@ -437,11 +461,7 @@ try {
       execution_profile: profile,
       transport: "codex-exec",
     };
-    if (
-      ledger.requests.some(
-        (item) => item.request_id === `${parsed.request_id}-bind`,
-      )
-    ) {
+    if (ledger.requests.some((item) => item.request_id === `${parsed.request_id}-bind`)) {
       store.update((raw) =>
         apply(raw, "dispatch-bind-request", {
           ...parsed,
@@ -458,9 +478,13 @@ try {
           ok: true,
           code: "REPLAYED",
           revision: ledger.revision,
-          handoff: { ...desktopHandoff(ledger, operation.id, payload.prompt), should_send: false,
+          handoff: {
+            ...desktopHandoff(ledger, operation.id, payload.prompt),
+            should_send: false,
             notification_id: operation.request.handoff_notification_id ?? null,
-            next_action: "Inspect notification; pending requires notification-prepare, unknown requires reconciliation; never resend a replay" },
+            next_action:
+              "Inspect notification; pending requires notification-prepare, unknown requires reconciliation; never resend a replay",
+          },
           result: operation.request.creation_result ?? {
             operation_id: operation.id,
             outcome: "unknown",
@@ -471,10 +495,7 @@ try {
       process.exit(0);
     }
     validateProfileCapability(profile, await readCodexCapabilities());
-    if (
-      JSON.stringify(profile) !==
-      JSON.stringify(effectiveProfile(ledger, target))
-    )
+    if (JSON.stringify(profile) !== JSON.stringify(effectiveProfile(ledger, target)))
       throw new ContractError("PROFILE_CONFLICT", "Claim profile changed");
     try {
       verifyRepositoryIdentity(creationParameters.cwd, ledger.repository);
@@ -510,10 +531,18 @@ try {
       repository: ledger.repository,
       onThreadStarted: (threadId) => {
         const current = validateLedger(store.read());
-        store.update(raw => apply(raw, "dispatch-progress", {
-          ...parsed, request_id: `${parsed.request_id}-thread`, expected_revision: current.revision,
-          payload: { operation_id: payload.operation_id, native_request_id: nativeRequestId, thread_id: threadId },
-        }));
+        store.update((raw) =>
+          apply(raw, "dispatch-progress", {
+            ...parsed,
+            request_id: `${parsed.request_id}-thread`,
+            expected_revision: current.revision,
+            payload: {
+              operation_id: payload.operation_id,
+              native_request_id: nativeRequestId,
+              thread_id: threadId,
+            },
+          }),
+        );
       },
       ...profile,
     });
@@ -543,10 +572,22 @@ try {
       }),
     );
     const notification = notificationRequestOf(result);
-    const delivery = notification ? record(await deliverNotification(store, parsed, input, notification)) : null;
-    console.log(JSON.stringify({ ...record(result), revision: validateLedger(store.read()).revision, handoff: creation.outcome === "succeeded" ? {
-      ...desktopHandoff(validateLedger(store.read()), operation.id, payload.prompt), ...delivery,
-    } : null }));
+    const delivery = notification
+      ? record(await deliverNotification(store, parsed, input, notification))
+      : null;
+    console.log(
+      JSON.stringify({
+        ...record(result),
+        revision: validateLedger(store.read()).revision,
+        handoff:
+          creation.outcome === "succeeded"
+            ? {
+                ...desktopHandoff(validateLedger(store.read()), operation.id, payload.prompt),
+                ...delivery,
+              }
+            : null,
+      }),
+    );
   } else if (command === "show" || command === "view") {
     const parsed = z
       .object({
@@ -554,15 +595,7 @@ try {
         actor: actorSchema,
         plan_id: id.optional(),
         section: z
-          .enum([
-            "summary",
-            "plan",
-            "tasks",
-            "operations",
-            "notifications",
-            "task-context",
-            "full",
-          ])
+          .enum(["summary", "plan", "tasks", "operations", "notifications", "task-context", "full"])
           .optional(),
         task_id: id.optional(),
       })
@@ -574,28 +607,41 @@ try {
       (parsed.actor.role === "main"
         ? parsed.actor.thread_id === ledger.control.owner_thread_id
         : parsed.actor.role === "group"
-          ? ledger.groups.some(
-              (g) => g.agent_thread_id === parsed.actor.thread_id,
-            )
+          ? ledger.groups.some((g) => g.agent_thread_id === parsed.actor.thread_id)
           : ledger.tasks.some((t) => t.thread_id === parsed.actor.thread_id));
     if (!allowed)
-      throw new ContractError(
-        "ACTOR_MISMATCH",
-        "Conversation is not bound to the run",
-        3,
-      );
+      throw new ContractError("ACTOR_MISMATCH", "Conversation is not bound to the run", 3);
     const section = parsed.section ?? "full";
     if (section === "task-context" && !parsed.task_id)
       throw new ContractError("INVALID_INPUT", "task-context requires task_id", 2);
-    const contextTask = parsed.task_id ? ledger.tasks.find(item => item.id === parsed.task_id) : null;
-    if (section === "task-context" && (!contextTask || contextTask.thread_id !== parsed.actor.thread_id))
-      throw new ContractError("ACTOR_MISMATCH", "Task context is limited to the bound task conversation", 3);
-    const contextPlan = ledger.plans.find(item => item.id === ledger.execution_plan_id);
-    const contextNode = contextPlan?.nodes.find(item => item.kind === "task" && item.ref_id === parsed.task_id);
-    const contextEdges = contextPlan?.edges.filter(edge => edge.from_node_id === contextNode?.id || edge.to_node_id === contextNode?.id) ?? [];
-    const contextAtomicNodes = (contextPlan?.atomic_nodes ?? ledger.atomic_nodes).filter(node =>
-      node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === parsed.task_id ||
-      node.kind === "milestone" && node.scope?.kind === "task" && node.scope.task_id === parsed.task_id,
+    const contextTask = parsed.task_id
+      ? ledger.tasks.find((item) => item.id === parsed.task_id)
+      : null;
+    if (
+      section === "task-context" &&
+      (!contextTask || contextTask.thread_id !== parsed.actor.thread_id)
+    )
+      throw new ContractError(
+        "ACTOR_MISMATCH",
+        "Task context is limited to the bound task conversation",
+        3,
+      );
+    const contextPlan = ledger.plans.find((item) => item.id === ledger.execution_plan_id);
+    const contextNode = contextPlan?.nodes.find(
+      (item) => item.kind === "task" && item.ref_id === parsed.task_id,
+    );
+    const contextEdges =
+      contextPlan?.edges.filter(
+        (edge) => edge.from_node_id === contextNode?.id || edge.to_node_id === contextNode?.id,
+      ) ?? [];
+    const contextAtomicNodes = (contextPlan?.atomic_nodes ?? ledger.atomic_nodes).filter(
+      (node) =>
+        (node.kind === "work" &&
+          node.scope?.kind === "task" &&
+          node.scope.task_id === parsed.task_id) ||
+        (node.kind === "milestone" &&
+          node.scope?.kind === "task" &&
+          node.scope.task_id === parsed.task_id),
     );
     const sections = {
       summary: {
@@ -609,12 +655,25 @@ try {
       notifications: ledger.notifications,
       "task-context": {
         task: contextTask,
-        delivery_unit: contextTask ? ledger.groups.find(item => item.id === contextTask.group_id) : null,
+        delivery_unit: contextTask
+          ? ledger.groups.find((item) => item.id === contextTask.group_id)
+          : null,
         plan_node: contextNode ?? null,
         dependency_edges: contextEdges,
         atomic_nodes: contextAtomicNodes,
-        atomic_edges: (contextPlan?.atomic_edges ?? ledger.atomic_edges).filter(edge => contextAtomicNodes.some(node => node.id === edge.from_node_id || node.id === edge.to_node_id)),
-        resources: contextTask ? ledger.resources.filter(resource => resource.target === contextTask.id || resource.target === contextTask.thread_id || resource.target === contextTask.branch) : [],
+        atomic_edges: (contextPlan?.atomic_edges ?? ledger.atomic_edges).filter((edge) =>
+          contextAtomicNodes.some(
+            (node) => node.id === edge.from_node_id || node.id === edge.to_node_id,
+          ),
+        ),
+        resources: contextTask
+          ? ledger.resources.filter(
+              (resource) =>
+                resource.target === contextTask.id ||
+                resource.target === contextTask.thread_id ||
+                resource.target === contextTask.branch,
+            )
+          : [],
         ready: parsed.task_id ? ready(ledger, parsed.task_id) : false,
       },
       full: ledger,
@@ -624,10 +683,7 @@ try {
         ok: true,
         code: "OK",
         revision: ledger.revision,
-        result:
-          command === "view"
-            ? buildView(ledger, parsed.plan_id)
-            : sections[section],
+        result: command === "view" ? buildView(ledger, parsed.plan_id) : sections[section],
       }),
     );
   } else {
@@ -643,11 +699,12 @@ try {
         "Contract-3 dispatch binding and resolution must run inside conversation-create; direct native thread creation is not an accepted flow",
         5,
       );
-    const result = record(command === "notification-reconcile"
-      ? reconcileNotification(store, parsed)
-      : store.update((raw) => apply(raw, command, parsed)));
-    if (!result)
-      throw new ContractError("INVALID_RESULT", "Invalid command result");
+    const result = record(
+      command === "notification-reconcile"
+        ? reconcileNotification(store, parsed)
+        : store.update((raw) => apply(raw, command, parsed)),
+    );
+    if (!result) throw new ContractError("INVALID_RESULT", "Invalid command result");
     const request = notificationRequestOf(result);
     const delivered =
       request && result.code === "APPLIED"
@@ -666,7 +723,15 @@ try {
       );
     }
   }
-  if (["task-update", "notification-ack", "notification-reconcile", "merge-resolve", "task-migrate"].includes(command)) {
+  if (
+    [
+      "task-update",
+      "notification-ack",
+      "notification-reconcile",
+      "merge-resolve",
+      "task-migrate",
+    ].includes(command)
+  ) {
     await sweepConversationArchives(new LedgerStore(root, input.run_id)).catch(() => {});
   }
   try {
@@ -675,8 +740,7 @@ try {
     console.error(
       JSON.stringify({
         warning: "VIEWER_RENEWAL_FAILED",
-        message:
-          "Ledger operation completed but viewer lease renewal failed; use service ensure",
+        message: "Ledger operation completed but viewer lease renewal failed; use service ensure",
       }),
     );
   }
@@ -693,8 +757,6 @@ try {
     exitCode = 2;
     message = error.message;
   }
-  console.log(
-    JSON.stringify({ ok: false, code, revision: null, message, details: {} }),
-  );
+  console.log(JSON.stringify({ ok: false, code, revision: null, message, details: {} }));
   process.exitCode = exitCode;
 }

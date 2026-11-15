@@ -9,15 +9,54 @@ beforeEach(() => {
 
 describe("dashboard details content", () => {
   test("group details and previews use only group execution times", () => {
-    const group = { id: "core", title: "核心", state: "closed", agent_thread_id: null, parent_pr: { url: null }, started_at: "2026-01-01T10:00:00Z", finished_at: "2026-01-01T10:30:00Z" } as Group;
-    const view = { groups: [group], tasks: [{ id: "task", title: "贡献任务", group_id: "core", started_at: "2026-01-01T00:00:00Z", finished_at: "2026-01-01T08:00:00Z" }], actual_intervals: [{ task_id: "task", group_id: "core", start: "2026-01-01T00:00:00Z", end: "2026-01-01T08:00:00Z" }] } as unknown as View;
-    const details = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "", time: () => "", safeExternal: () => null });
-    const duration = (preview: HTMLElement) => [...preview.querySelectorAll(".hover-preview-row")].find(row => row.querySelector(".hover-preview-label")?.textContent === "持续时间")?.querySelector(".hover-preview-value")?.textContent;
+    const group = {
+      id: "core",
+      title: "核心",
+      state: "closed",
+      agent_thread_id: null,
+      parent_pr: { url: null },
+      started_at: "2026-01-01T10:00:00Z",
+      finished_at: "2026-01-01T10:30:00Z",
+    } as Group;
+    const view = {
+      groups: [group],
+      tasks: [
+        {
+          id: "task",
+          title: "贡献任务",
+          group_id: "core",
+          started_at: "2026-01-01T00:00:00Z",
+          finished_at: "2026-01-01T08:00:00Z",
+        },
+      ],
+      actual_intervals: [
+        {
+          task_id: "task",
+          group_id: "core",
+          start: "2026-01-01T00:00:00Z",
+          end: "2026-01-01T08:00:00Z",
+        },
+      ],
+    } as unknown as View;
+    const details = createDetailContent({
+      getData: () => view,
+      labels: {},
+      labelTask: () => "",
+      time: () => "",
+      safeExternal: () => null,
+    });
+    const duration = (preview: HTMLElement) =>
+      [...preview.querySelectorAll(".hover-preview-row")]
+        .find((row) => row.querySelector(".hover-preview-label")?.textContent === "持续时间")
+        ?.querySelector(".hover-preview-value")?.textContent;
     details.showGroup(group);
     expect(document.querySelector(".detail-duration")?.textContent).toBe("30分");
-    expect(document.querySelector("#details-content")?.textContent).toContain("历史执行任务贡献任务");
+    expect(document.querySelector("#details-content")?.textContent).toContain(
+      "历史执行任务贡献任务",
+    );
     expect(duration(details.groupPreview(group))).toBe("30分");
-    group.started_at = null; group.finished_at = null;
+    group.started_at = null;
+    group.finished_at = null;
     details.showGroup(group);
     expect(document.querySelector(".detail-duration")?.textContent).toBe("未知");
     expect(duration(details.groupPreview(group))).toBe("未知");
@@ -28,24 +67,85 @@ describe("dashboard details content", () => {
       title: "展示",
       state: "active",
       parent_pr: { url: null },
-      atoms: [{ id: "group-atom-1", title: "创建父 PR", purpose: "", output: "", lifecycle_stage: "pr_created", status: "completed" }],
-      contribution_atoms: [{ id: "contribution-atom-1", title: "验证", task_id: "task", task_title: "贡献任务", status: "planned" }],
+      atoms: [
+        {
+          id: "group-atom-1",
+          title: "创建父 PR",
+          purpose: "",
+          output: "",
+          lifecycle_stage: "pr_created",
+          status: "completed",
+        },
+      ],
+      contribution_atoms: [
+        {
+          id: "contribution-atom-1",
+          title: "验证",
+          task_id: "task",
+          task_title: "贡献任务",
+          status: "planned",
+        },
+      ],
     } as unknown as Group;
-    const task = { id: "task", title: "贡献任务", group_id: "dashboard", started_at: null, finished_at: null };
+    const task = {
+      id: "task",
+      title: "贡献任务",
+      group_id: "dashboard",
+      started_at: null,
+      finished_at: null,
+    };
     const view = { groups: [group], tasks: [task], actual_intervals: [] } as unknown as View;
-    const details = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "", time: () => "", safeExternal: () => null });
+    const details = createDetailContent({
+      getData: () => view,
+      labels: {},
+      labelTask: () => "",
+      time: () => "",
+      safeExternal: () => null,
+    });
     details.showGroup(group);
     expect(document.querySelector("#details-content")?.textContent).toContain("创建父 PR");
     expect(document.querySelector("#details-content")?.textContent).not.toContain("贡献任务原子");
   });
   test("milestone selection renders the group inspector and focuses its atomic task", () => {
-    const group = { id: "g-bootstrap", title: "Bootstrap", state: "active", parent_pr: { url: null }, atoms: [{ id: "group-atom-merge", title: "合并父 PR", purpose: "", output: "", lifecycle_stage: "pr_merged", status: "planned" }] } as unknown as Group;
+    const group = {
+      id: "g-bootstrap",
+      title: "Bootstrap",
+      state: "active",
+      parent_pr: { url: null },
+      atoms: [
+        {
+          id: "group-atom-merge",
+          title: "合并父 PR",
+          purpose: "",
+          output: "",
+          lifecycle_stage: "pr_merged",
+          status: "planned",
+        },
+      ],
+    } as unknown as Group;
     const view = {
       groups: [group],
       tasks: [],
-      nodes: [{ id: "milestone-accepted", kind: "milestone", ref_id: null, group_id: "g-bootstrap", planned_group_id: "g-bootstrap", label: "g-bootstrap 交付单元验收" }],
+      nodes: [
+        {
+          id: "milestone-accepted",
+          kind: "milestone",
+          ref_id: null,
+          group_id: "g-bootstrap",
+          planned_group_id: "g-bootstrap",
+          label: "g-bootstrap 交付单元验收",
+        },
+      ],
       edges: [],
-      atomic_nodes: [{ kind: "milestone", id: "milestone-accepted", title: "g-bootstrap 交付单元验收", state: "planned", scope: { kind: "delivery_unit", delivery_unit_id: "g-bootstrap" } }],
+      atomic_nodes: [
+        {
+          kind: "milestone",
+          id: "milestone-accepted",
+          title: "g-bootstrap 交付单元验收",
+          state: "planned",
+          scope: { kind: "delivery_unit", delivery_unit_id: "g-bootstrap" },
+        },
+      ],
       atomic_edges: [],
       canonical_atomic_edges: [],
       actual_milestones: [],
@@ -56,61 +156,204 @@ describe("dashboard details content", () => {
       warnings: [],
       orchestration: { execution_profile: null },
     } as unknown as View;
-    const details = createDetailContent({ getData: () => view, labels: { planned: "计划中" }, labelTask: () => "", time: () => "", safeExternal: () => null });
+    const details = createDetailContent({
+      getData: () => view,
+      labels: { planned: "计划中" },
+      labelTask: () => "",
+      time: () => "",
+      safeExternal: () => null,
+    });
     details.showMilestone("milestone-accepted", group, "group-atom-merge");
     const content = document.querySelector("#details-content")?.textContent ?? "";
     expect(document.querySelector("#details-content")?.dataset.detailKind).toBe("group");
     expect(document.querySelector("#details-summary")?.textContent).toContain("Bootstrap");
     expect(content).toContain("交付协调者");
     expect(content).toContain("合并父 PR");
-    expect(document.querySelector('[data-context-id="group-atom-merge"]')?.dataset.focused).toBe("true");
+    expect(document.querySelector('[data-context-id="group-atom-merge"]')?.dataset.focused).toBe(
+      "true",
+    );
   });
   test("milestone selection includes the selected milestone in the atomic task list", () => {
-    const group = { id: "g-bootstrap", title: "Bootstrap", state: "active", parent_pr: { url: null }, atoms: [{ id: "group-atom-merge", title: "合并父 PR", purpose: "", output: "", lifecycle_stage: "pr_merged", status: "planned" }] } as unknown as Group;
+    const group = {
+      id: "g-bootstrap",
+      title: "Bootstrap",
+      state: "active",
+      parent_pr: { url: null },
+      atoms: [
+        {
+          id: "group-atom-merge",
+          title: "合并父 PR",
+          purpose: "",
+          output: "",
+          lifecycle_stage: "pr_merged",
+          status: "planned",
+        },
+      ],
+    } as unknown as Group;
     const view = {
-      groups: [group], tasks: [],
-      nodes: [{ id: "milestone-accepted", kind: "milestone", ref_id: null, group_id: "g-bootstrap", planned_group_id: "g-bootstrap", label: "g-bootstrap 交付单元验收" }],
-      atomic_nodes: [{ kind: "milestone", id: "milestone-accepted", title: "g-bootstrap 交付单元验收", state: "planned", scope: { kind: "delivery_unit", delivery_unit_id: "g-bootstrap" } }],
-      atomic_edges: [], actual_milestones: [], actual_intervals: [], follow_prs: [], plans: [], warnings: [], orchestration: { execution_profile: null },
+      groups: [group],
+      tasks: [],
+      nodes: [
+        {
+          id: "milestone-accepted",
+          kind: "milestone",
+          ref_id: null,
+          group_id: "g-bootstrap",
+          planned_group_id: "g-bootstrap",
+          label: "g-bootstrap 交付单元验收",
+        },
+      ],
+      atomic_nodes: [
+        {
+          kind: "milestone",
+          id: "milestone-accepted",
+          title: "g-bootstrap 交付单元验收",
+          state: "planned",
+          scope: { kind: "delivery_unit", delivery_unit_id: "g-bootstrap" },
+        },
+      ],
+      atomic_edges: [],
+      actual_milestones: [],
+      actual_intervals: [],
+      follow_prs: [],
+      plans: [],
+      warnings: [],
+      orchestration: { execution_profile: null },
     } as unknown as View;
-    const details = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "", time: () => "", safeExternal: () => null });
+    const details = createDetailContent({
+      getData: () => view,
+      labels: {},
+      labelTask: () => "",
+      time: () => "",
+      safeExternal: () => null,
+    });
     details.showMilestone("milestone-accepted", group);
     const item = document.querySelector('[data-context-id="milestone-accepted"]');
     expect(item?.textContent).toContain("g-bootstrap 交付单元验收");
     expect(item?.dataset.focused).toBe("true");
   });
   test("orders lifecycle atoms and milestones from canonical dependencies", () => {
-    const group = { id: "g-bootstrap", title: "Bootstrap", state: "active", parent_pr: { url: null }, atoms: [] } as unknown as Group;
-    const atom = (id: string, title: string) => ({ kind: id === "milestone" ? "milestone" : "work", id, title, state: "planned", scope: { kind: "delivery_unit", delivery_unit_id: "g-bootstrap" }, acceptance: [] });
+    const group = {
+      id: "g-bootstrap",
+      title: "Bootstrap",
+      state: "active",
+      parent_pr: { url: null },
+      atoms: [],
+    } as unknown as Group;
+    const atom = (id: string, title: string) => ({
+      kind: id === "milestone" ? "milestone" : "work",
+      id,
+      title,
+      state: "planned",
+      scope: { kind: "delivery_unit", delivery_unit_id: "g-bootstrap" },
+      acceptance: [],
+    });
     const view = {
-      groups: [group], tasks: [], actual_intervals: [], actual_milestones: [], follow_prs: [], plans: [], warnings: [],
-      atomic_nodes: [atom("prepare", "准备父分支"), atom("verify", "验收收集结果"), atom("milestone", "交付单元验收"), atom("merge", "合并父 PR"), atom("close", "收口")],
+      groups: [group],
+      tasks: [],
+      actual_intervals: [],
+      actual_milestones: [],
+      follow_prs: [],
+      plans: [],
+      warnings: [],
+      atomic_nodes: [
+        atom("prepare", "准备父分支"),
+        atom("verify", "验收收集结果"),
+        atom("milestone", "交付单元验收"),
+        atom("merge", "合并父 PR"),
+        atom("close", "收口"),
+      ],
       canonical_atomic_edges: [
-        { id: "prepare-verify", from_node_id: "prepare", to_node_id: "verify", requires: { kind: "source_terminal_success" } },
-        { id: "verify-milestone", from_node_id: "verify", to_node_id: "milestone", requires: { kind: "source_terminal_success" } },
-        { id: "milestone-merge", from_node_id: "milestone", to_node_id: "merge", requires: { kind: "source_terminal_success" } },
-        { id: "merge-close", from_node_id: "merge", to_node_id: "close", requires: { kind: "source_terminal_success" } },
+        {
+          id: "prepare-verify",
+          from_node_id: "prepare",
+          to_node_id: "verify",
+          requires: { kind: "source_terminal_success" },
+        },
+        {
+          id: "verify-milestone",
+          from_node_id: "verify",
+          to_node_id: "milestone",
+          requires: { kind: "source_terminal_success" },
+        },
+        {
+          id: "milestone-merge",
+          from_node_id: "milestone",
+          to_node_id: "merge",
+          requires: { kind: "source_terminal_success" },
+        },
+        {
+          id: "merge-close",
+          from_node_id: "merge",
+          to_node_id: "close",
+          requires: { kind: "source_terminal_success" },
+        },
       ],
     } as unknown as View;
-    const details = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "", time: () => "", safeExternal: () => null });
+    const details = createDetailContent({
+      getData: () => view,
+      labels: {},
+      labelTask: () => "",
+      time: () => "",
+      safeExternal: () => null,
+    });
     details.showGroup(group);
-    const items = [...document.querySelectorAll("#details-content .atom-list > li")].map((item) => item.textContent?.replace(/^[^\p{L}\p{N}]*/u, "").trim());
+    const items = [...document.querySelectorAll("#details-content .atom-list > li")].map((item) =>
+      item.textContent?.replace(/^[^\p{L}\p{N}]*/u, "").trim(),
+    );
     expect(items).toEqual(["准备父分支", "验收收集结果", "交付单元验收", "合并父 PR", "收口"]);
     expect(document.querySelector('[data-current="true"]')).toBeNull();
   });
   test("group details include the full Agent output at the end", () => {
-    const group = { id: "core", title: "核心", state: "closed", agent_thread_id: "thread-group", parent_pr: { url: null }, latest_agent_output: { thread_id: "thread-group", agent_state: "idle", stale: false, state: "available", text: "交付单元已完成", turn_id: null, message_id: null, phase: null, message_status: null, observed_at: null } } as Group;
+    const group = {
+      id: "core",
+      title: "核心",
+      state: "closed",
+      agent_thread_id: "thread-group",
+      parent_pr: { url: null },
+      latest_agent_output: {
+        thread_id: "thread-group",
+        agent_state: "idle",
+        stale: false,
+        state: "available",
+        text: "交付单元已完成",
+        turn_id: null,
+        message_id: null,
+        phase: null,
+        message_status: null,
+        observed_at: null,
+      },
+    } as Group;
     const view = { groups: [group], tasks: [], actual_intervals: [] } as unknown as View;
-    const details = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "", time: () => "", safeExternal: () => null });
+    const details = createDetailContent({
+      getData: () => view,
+      labels: {},
+      labelTask: () => "",
+      time: () => "",
+      safeExternal: () => null,
+    });
     details.showGroup(group);
-    const labels = [...document.querySelectorAll("#details-content .detail-label")].map((node) => node.textContent);
+    const labels = [...document.querySelectorAll("#details-content .detail-label")].map(
+      (node) => node.textContent,
+    );
     expect(labels.at(-1)).toBe("Agent 输出");
     expect(document.querySelector(".detail-agent-output")?.textContent).toContain("交付单元已完成");
   });
   test("keeps the summary outside the scroll body and preserves only the same object's reading position", () => {
-    const group = { id: "same", title: "交付单元", state: "closed", parent_pr: { url: null } } as Group;
+    const group = {
+      id: "same",
+      title: "交付单元",
+      state: "closed",
+      parent_pr: { url: null },
+    } as Group;
     const view = { groups: [group], tasks: [], actual_intervals: [] } as unknown as View;
-    const details = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "", time: () => "", safeExternal: () => null });
+    const details = createDetailContent({
+      getData: () => view,
+      labels: {},
+      labelTask: () => "",
+      time: () => "",
+      safeExternal: () => null,
+    });
     const body = document.getElementById("details-content")!;
     details.showGroup(group);
     expect(body.querySelector(".detail-title")).toBeNull();
@@ -154,19 +397,41 @@ describe("dashboard details content", () => {
       approval: { status: "approved", approval_id: "owner-approval" },
       scheduling: {
         status: "blocked",
-        blockers: [{ code: "COORDINATOR_NOT_BOUND", group_id: "group", message: "普通交付单元尚未绑定交付协调者。", resource: { kind: "conversation", status: "not_created", target_id: "group" } }],
+        blockers: [
+          {
+            code: "COORDINATOR_NOT_BOUND",
+            group_id: "group",
+            message: "普通交付单元尚未绑定交付协调者。",
+            resource: { kind: "conversation", status: "not_created", target_id: "group" },
+          },
+        ],
       },
       runtime_readiness: {
         status: "blocked",
-        blockers: [{ code: "COORDINATOR_NOT_BOUND", group_id: "group", message: "普通交付单元尚未绑定交付协调者。", resource: { kind: "conversation", status: "not_created", target_id: "group" } }],
+        blockers: [
+          {
+            code: "COORDINATOR_NOT_BOUND",
+            group_id: "group",
+            message: "普通交付单元尚未绑定交付协调者。",
+            resource: { kind: "conversation", status: "not_created", target_id: "group" },
+          },
+        ],
       },
     });
 
     expect(container.querySelectorAll("[data-plan-state-key]")).toHaveLength(4);
-    expect(container.querySelector('[data-plan-state-key="proposal"]')?.textContent).toContain("Complete");
-    expect(container.querySelector('[data-plan-state-key="approval"]')?.textContent).toContain("Approved");
-    expect(container.querySelector('[data-plan-state-key="scheduling"]')?.textContent).toContain("Not schedulable");
-    expect(container.querySelector('[data-plan-state-key="runtime"]')?.textContent).toContain("尚未创建");
+    expect(container.querySelector('[data-plan-state-key="proposal"]')?.textContent).toContain(
+      "Complete",
+    );
+    expect(container.querySelector('[data-plan-state-key="approval"]')?.textContent).toContain(
+      "Approved",
+    );
+    expect(container.querySelector('[data-plan-state-key="scheduling"]')?.textContent).toContain(
+      "Not schedulable",
+    );
+    expect(container.querySelector('[data-plan-state-key="runtime"]')?.textContent).toContain(
+      "尚未创建",
+    );
   });
 
   test("hides healthy status space and keeps the same facts available in plan info", () => {
@@ -185,7 +450,15 @@ describe("dashboard details content", () => {
     document.body.append(state, info);
     renderPlanState(state, healthy);
     renderPlanInfoContent(info, {
-      orchestration: { id: "run", repository: { owner: "example", name: "repo", host: "github.com" }, revision: 4, updated_at: "2026-01-01T00:00:00Z", display_timezone: "UTC", max_running_tasks: 1, conversation_links_verified: true },
+      orchestration: {
+        id: "run",
+        repository: { owner: "example", name: "repo", host: "github.com" },
+        revision: 4,
+        updated_at: "2026-01-01T00:00:00Z",
+        display_timezone: "UTC",
+        max_running_tasks: 1,
+        conversation_links_verified: true,
+      },
       groups: [],
       tasks: [],
       selected_plan_id: "plan",
@@ -208,13 +481,58 @@ describe("dashboard details content", () => {
       approval_pending: false,
       proposal: { status: "complete" as const, issues: [] },
       approval: { status: "approved" as const, approval_id: "owner-approval" },
-      scheduling: { status: "blocked" as const, blockers: [{ code: "COORDINATOR_NOT_BOUND", group_id: "group", message: "普通交付单元尚未绑定交付协调者。", resource: { kind: "conversation" as const, status: "not_created" as const, target_id: "group" } }] },
-      runtime_readiness: { status: "blocked" as const, blockers: [{ code: "COORDINATOR_NOT_BOUND", group_id: "group", message: "普通交付单元尚未绑定交付协调者。", resource: { kind: "conversation" as const, status: "not_created" as const, target_id: "group" } }] },
+      scheduling: {
+        status: "blocked" as const,
+        blockers: [
+          {
+            code: "COORDINATOR_NOT_BOUND",
+            group_id: "group",
+            message: "普通交付单元尚未绑定交付协调者。",
+            resource: {
+              kind: "conversation" as const,
+              status: "not_created" as const,
+              target_id: "group",
+            },
+          },
+        ],
+      },
+      runtime_readiness: {
+        status: "blocked" as const,
+        blockers: [
+          {
+            code: "COORDINATOR_NOT_BOUND",
+            group_id: "group",
+            message: "普通交付单元尚未绑定交付协调者。",
+            resource: {
+              kind: "conversation" as const,
+              status: "not_created" as const,
+              target_id: "group",
+            },
+          },
+        ],
+      },
     };
     const info = document.createElement("section");
     renderPlanInfoContent(info, {
-      orchestration: { id: "run", repository: { owner: "example", name: "repo", host: "github.com" }, revision: 4, updated_at: "2026-01-01T00:00:00Z", display_timezone: "UTC", max_running_tasks: 1, conversation_links_verified: true },
-      groups: [{ id: "group", title: "交付单元", state: "running", agent_thread_id: null, parent_pr: { url: null }, requirements_path: null }],
+      orchestration: {
+        id: "run",
+        repository: { owner: "example", name: "repo", host: "github.com" },
+        revision: 4,
+        updated_at: "2026-01-01T00:00:00Z",
+        display_timezone: "UTC",
+        max_running_tasks: 1,
+        conversation_links_verified: true,
+      },
+      groups: [
+        {
+          id: "group",
+          title: "交付单元",
+          state: "running",
+          agent_thread_id: null,
+          parent_pr: { url: null },
+          requirements_path: null,
+        },
+      ],
       tasks: [],
       selected_plan_id: "plan",
       execution_phase: "planning",
@@ -239,7 +557,15 @@ describe("dashboard details content", () => {
     };
     const info = document.createElement("section");
     renderPlanInfoContent(info, {
-      orchestration: { id: "run", repository: { owner: "example", name: "repo", host: "github.com" }, revision: 4, updated_at: "2026-01-01T00:00:00Z", display_timezone: "UTC", max_running_tasks: 1, conversation_links_verified: true },
+      orchestration: {
+        id: "run",
+        repository: { owner: "example", name: "repo", host: "github.com" },
+        revision: 4,
+        updated_at: "2026-01-01T00:00:00Z",
+        display_timezone: "UTC",
+        max_running_tasks: 1,
+        conversation_links_verified: true,
+      },
       groups: [],
       tasks: [],
       selected_plan_id: "plan",
@@ -254,15 +580,75 @@ describe("dashboard details content", () => {
 
   test("removes empty-state layout from a selected task", () => {
     const view = {
-      orchestration: { id: "run", repository: { owner: "example", name: "repo", host: "github.com" }, revision: 1, updated_at: "2026-01-01T00:00:00.000Z", display_timezone: "UTC", max_running_tasks: 1, conversation_links_verified: true },
-      groups: [{ id: "core", title: "核心", state: "running", agent_thread_id: null, parent_pr: { url: null }, requirements_path: null }],
-      tasks: [{ id: "task", title: "任务", group_id: "core", kind: "contribution", state: "running", is_ready: false, blocker: null, thread_id: null, pr: { url: null }, requirements_path: null, started_at: "2026-01-01T00:00:00.000Z", finished_at: null, latest_output: null }],
-      plans: [], selected_plan_id: "", follow_prs: [],
-      nodes: [
-        { id: "parent-merge", kind: "milestone", ref_id: "core", group_id: "core", planned_group_id: "core", label: "父 PR 合并" },
-        { id: "task-node", kind: "task", ref_id: "task", group_id: "core", planned_group_id: "core", label: "任务" },
+      orchestration: {
+        id: "run",
+        repository: { owner: "example", name: "repo", host: "github.com" },
+        revision: 1,
+        updated_at: "2026-01-01T00:00:00.000Z",
+        display_timezone: "UTC",
+        max_running_tasks: 1,
+        conversation_links_verified: true,
+      },
+      groups: [
+        {
+          id: "core",
+          title: "核心",
+          state: "running",
+          agent_thread_id: null,
+          parent_pr: { url: null },
+          requirements_path: null,
+        },
       ],
-      edges: [{ id: "edge-merge-task", from_node_id: "parent-merge", to_node_id: "task-node", requires: "merged" }], planned_intervals: [], actual_intervals: [], actual_milestones: [], warnings: [],
+      tasks: [
+        {
+          id: "task",
+          title: "任务",
+          group_id: "core",
+          kind: "contribution",
+          state: "running",
+          is_ready: false,
+          blocker: null,
+          thread_id: null,
+          pr: { url: null },
+          requirements_path: null,
+          started_at: "2026-01-01T00:00:00.000Z",
+          finished_at: null,
+          latest_output: null,
+        },
+      ],
+      plans: [],
+      selected_plan_id: "",
+      follow_prs: [],
+      nodes: [
+        {
+          id: "parent-merge",
+          kind: "milestone",
+          ref_id: "core",
+          group_id: "core",
+          planned_group_id: "core",
+          label: "父 PR 合并",
+        },
+        {
+          id: "task-node",
+          kind: "task",
+          ref_id: "task",
+          group_id: "core",
+          planned_group_id: "core",
+          label: "任务",
+        },
+      ],
+      edges: [
+        {
+          id: "edge-merge-task",
+          from_node_id: "parent-merge",
+          to_node_id: "task-node",
+          requires: "merged",
+        },
+      ],
+      planned_intervals: [],
+      actual_intervals: [],
+      actual_milestones: [],
+      warnings: [],
     };
     const details = createDetailContent({
       getData: () => view,
@@ -272,7 +658,17 @@ describe("dashboard details content", () => {
       safeExternal: () => null,
     });
 
-    const profileDetails = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "任务", time: () => "未知", safeExternal: () => null, profileContext: () => ({ capabilities: [{ model: "gpt-6.1-sol", thinking: ["medium", "high"] }], update: async () => {} }) });
+    const profileDetails = createDetailContent({
+      getData: () => view,
+      labels: {},
+      labelTask: () => "任务",
+      time: () => "未知",
+      safeExternal: () => null,
+      profileContext: () => ({
+        capabilities: [{ model: "gpt-6.1-sol", thinking: ["medium", "high"] }],
+        update: async () => {},
+      }),
+    });
     profileDetails.showTask(view.tasks[0]!);
     expect(document.querySelectorAll(".execution-profile-editor")).toHaveLength(1);
     expect(document.querySelector('select[aria-label="运行默认模型"]')).toBeNull();
@@ -297,15 +693,55 @@ describe("dashboard details content", () => {
     expect(body.scrollTop).toBe(0);
 
     let retries = 0;
-    Object.assign(view.tasks[0]!, { state: "agent_idle", thread_id: "thread-task", conversation_resource: { id: "conversation-task", kind: "conversation", target: "thread-task", status: "archive_failed", evidence_ref: "archive-error", error: "archive refused", last_attempt_at: "2026-01-01T00:00:00.000Z", operation_id: "archive-1" } });
-    const archiveDetails = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "执行中", time: () => "未知", safeExternal: () => null, groupRange: () => ({ start: null, end: null }), archiveConversation: () => { retries++; } });
-    Object.assign(view.tasks[0]!, { latest_agent_output: { observed_at: "2026-01-01T00:00:00Z", turn_id: "older-public-turn", runtime_turn_id: "latest-runtime-turn", agent_state: "idle", state: "empty", stale: false } });
+    Object.assign(view.tasks[0]!, {
+      state: "agent_idle",
+      thread_id: "thread-task",
+      conversation_resource: {
+        id: "conversation-task",
+        kind: "conversation",
+        target: "thread-task",
+        status: "archive_failed",
+        evidence_ref: "archive-error",
+        error: "archive refused",
+        last_attempt_at: "2026-01-01T00:00:00.000Z",
+        operation_id: "archive-1",
+      },
+    });
+    const archiveDetails = createDetailContent({
+      getData: () => view,
+      labels: {},
+      labelTask: () => "执行中",
+      time: () => "未知",
+      safeExternal: () => null,
+      groupRange: () => ({ start: null, end: null }),
+      archiveConversation: () => {
+        retries++;
+      },
+    });
+    Object.assign(view.tasks[0]!, {
+      latest_agent_output: {
+        observed_at: "2026-01-01T00:00:00Z",
+        turn_id: "older-public-turn",
+        runtime_turn_id: "latest-runtime-turn",
+        agent_state: "idle",
+        state: "empty",
+        stale: false,
+      },
+    });
     archiveDetails.showTask(view.tasks[0]!);
-    expect(document.getElementById("details-content")?.textContent).toContain("观察 Turnlatest-runtime-turn");
-    expect(document.getElementById("details-content")?.textContent).not.toContain("older-public-turn");
+    expect(document.getElementById("details-content")?.textContent).toContain(
+      "观察 Turnlatest-runtime-turn",
+    );
+    expect(document.getElementById("details-content")?.textContent).not.toContain(
+      "older-public-turn",
+    );
     expect(document.getElementById("details-content")?.textContent).toContain("archive refused");
     expect(document.querySelector(".archive-action")).toBeNull();
-    Object.assign(view.tasks[0]!, { state: "closed", conversation_archive: { eligible: true, reason: null }, latest_agent_output: { thread_id: "thread-task", agent_state: "idle", stale: false } });
+    Object.assign(view.tasks[0]!, {
+      state: "closed",
+      conversation_archive: { eligible: true, reason: null },
+      latest_agent_output: { thread_id: "thread-task", agent_state: "idle", stale: false },
+    });
     archiveDetails.showTask(view.tasks[0]!);
     (document.querySelector(".archive-action") as HTMLButtonElement).click();
     expect(retries).toBe(1);
@@ -313,54 +749,171 @@ describe("dashboard details content", () => {
     expect(conversation.querySelector("a")?.textContent).toBe("打开对话");
     expect(conversation.querySelector(".archive-action")?.textContent).toBe("重试归档");
     for (const label of ["对话归档", "归档说明", "归档操作", "最近归档尝试", "归档证据"])
-      expect([...document.querySelectorAll(".detail-label")].some(node => node.textContent === label)).toBe(false);
+      expect(
+        [...document.querySelectorAll(".detail-label")].some((node) => node.textContent === label),
+      ).toBe(false);
     Object.assign(view.tasks[0]!, { conversation_resource: null });
     archiveDetails.showTask(view.tasks[0]!);
-    expect(document.querySelector(".detail-conversation .archive-action")?.textContent).toBe("归档");
+    expect(document.querySelector(".detail-conversation .archive-action")?.textContent).toBe(
+      "归档",
+    );
     expect(document.querySelector(".detail-conversation-notice")).toBeNull();
-    expect(document.getElementById("details-content")?.textContent).not.toContain("对话归档尚未完成");
-
+    expect(document.getElementById("details-content")?.textContent).not.toContain(
+      "对话归档尚未完成",
+    );
   });
 
   test("always shows task and delivery-unit requirement document status", () => {
-    const group = { id: "core", title: "核心", state: "running", agent_thread_id: null, parent_pr: { url: null }, requirements_path: null } as Group;
-    const task = { id: "task", title: "任务", group_id: "core", kind: "contribution", state: "running", is_ready: false, blocker: null, thread_id: null, pr: { url: null }, requirements_path: null, started_at: null, finished_at: null } as unknown as View["tasks"][number];
-    const view = { groups: [group], tasks: [task], actual_intervals: [], nodes: [], edges: [], follow_prs: [] } as unknown as View;
-    const details = createDetailContent({ getData: () => view, labels: {}, labelTask: () => "执行中", time: () => "未知", safeExternal: () => null });
+    const group = {
+      id: "core",
+      title: "核心",
+      state: "running",
+      agent_thread_id: null,
+      parent_pr: { url: null },
+      requirements_path: null,
+    } as Group;
+    const task = {
+      id: "task",
+      title: "任务",
+      group_id: "core",
+      kind: "contribution",
+      state: "running",
+      is_ready: false,
+      blocker: null,
+      thread_id: null,
+      pr: { url: null },
+      requirements_path: null,
+      started_at: null,
+      finished_at: null,
+    } as unknown as View["tasks"][number];
+    const view = {
+      groups: [group],
+      tasks: [task],
+      actual_intervals: [],
+      nodes: [],
+      edges: [],
+      follow_prs: [],
+    } as unknown as View;
+    const details = createDetailContent({
+      getData: () => view,
+      labels: {},
+      labelTask: () => "执行中",
+      time: () => "未知",
+      safeExternal: () => null,
+    });
 
     details.showTask(task);
-    expect([...document.querySelectorAll(".detail-label")].some((node) => node.textContent === "任务要求")).toBe(true);
+    expect(
+      [...document.querySelectorAll(".detail-label")].some(
+        (node) => node.textContent === "任务要求",
+      ),
+    ).toBe(true);
     expect(document.getElementById("details-content")?.textContent).toContain("未配置任务文档");
 
     details.showGroup(group);
-    expect([...document.querySelectorAll(".detail-label")].some((node) => node.textContent === "交付单元要求")).toBe(true);
+    expect(
+      [...document.querySelectorAll(".detail-label")].some(
+        (node) => node.textContent === "交付单元要求",
+      ),
+    ).toBe(true);
     expect(document.getElementById("details-content")?.textContent).toContain("未配置交付单元文档");
 
     task.requirements_path = "requirements/task.md";
     group.requirements_path = "requirements/group.md";
     details.showTask(task);
-    expect(document.querySelector(".detail-value a")?.getAttribute("href")).toBe("api/document/task-task");
+    expect(document.querySelector(".detail-value a")?.getAttribute("href")).toBe(
+      "api/document/task-task",
+    );
     details.showGroup(group);
-    expect(document.querySelector(".detail-value a")?.getAttribute("href")).toBe("api/document/group-core");
+    expect(document.querySelector(".detail-value a")?.getAttribute("href")).toBe(
+      "api/document/group-core",
+    );
   });
 
   test("renders path provenance and hidden plan boundaries without flattening conditions", () => {
     const view = {
-      orchestration: { id: "run", repository: { owner: "example", name: "repo", host: "github.com" }, revision: 1, updated_at: "2026-01-01T00:00:00.000Z", display_timezone: "UTC", max_running_tasks: 1, conversation_links_verified: true },
-      groups: [{ id: "core", title: "核心", state: "running", agent_thread_id: null, parent_pr: { url: null }, requirements_path: null }],
-      tasks: [{ id: "task", title: "任务", group_id: "core", kind: "contribution", state: "running", is_ready: false, blocker: null, thread_id: null, pr: { url: null }, requirements_path: null, started_at: null, finished_at: null, latest_output: null }],
-      plans: [], selected_plan_id: "", follow_prs: [],
+      orchestration: {
+        id: "run",
+        repository: { owner: "example", name: "repo", host: "github.com" },
+        revision: 1,
+        updated_at: "2026-01-01T00:00:00.000Z",
+        display_timezone: "UTC",
+        max_running_tasks: 1,
+        conversation_links_verified: true,
+      },
+      groups: [
+        {
+          id: "core",
+          title: "核心",
+          state: "running",
+          agent_thread_id: null,
+          parent_pr: { url: null },
+          requirements_path: null,
+        },
+      ],
+      tasks: [
+        {
+          id: "task",
+          title: "任务",
+          group_id: "core",
+          kind: "contribution",
+          state: "running",
+          is_ready: false,
+          blocker: null,
+          thread_id: null,
+          pr: { url: null },
+          requirements_path: null,
+          started_at: null,
+          finished_at: null,
+          latest_output: null,
+        },
+      ],
+      plans: [],
+      selected_plan_id: "",
+      follow_prs: [],
       nodes: [
-        { id: "entry", kind: "main_start", ref_id: null, group_id: null, planned_group_id: null, label: "主任务开始" },
-        { id: "task-node", kind: "task", ref_id: "task", group_id: "core", planned_group_id: "core", label: "任务" },
-        { id: "hidden-a", kind: "group_start", ref_id: "core", group_id: "core", planned_group_id: "core", label: "组开始" },
-        { id: "hidden-b", kind: "group_start", ref_id: "core", group_id: "core", planned_group_id: "core", label: "另一个组开始" },
+        {
+          id: "entry",
+          kind: "main_start",
+          ref_id: null,
+          group_id: null,
+          planned_group_id: null,
+          label: "主任务开始",
+        },
+        {
+          id: "task-node",
+          kind: "task",
+          ref_id: "task",
+          group_id: "core",
+          planned_group_id: "core",
+          label: "任务",
+        },
+        {
+          id: "hidden-a",
+          kind: "group_start",
+          ref_id: "core",
+          group_id: "core",
+          planned_group_id: "core",
+          label: "组开始",
+        },
+        {
+          id: "hidden-b",
+          kind: "group_start",
+          ref_id: "core",
+          group_id: "core",
+          planned_group_id: "core",
+          label: "另一个组开始",
+        },
       ],
       edges: [
         { id: "entry-task", from_node_id: "entry", to_node_id: "task-node", requires: "completed" },
         { id: "a-task", from_node_id: "hidden-a", to_node_id: "task-node", requires: "integrated" },
         { id: "b-task", from_node_id: "hidden-b", to_node_id: "task-node", requires: "merged" },
-      ], planned_intervals: [], actual_intervals: [], actual_milestones: [], warnings: [],
+      ],
+      planned_intervals: [],
+      actual_intervals: [],
+      actual_milestones: [],
+      warnings: [],
     };
     const details = createDetailContent({
       getData: () => view,
@@ -381,7 +934,9 @@ describe("dashboard details content", () => {
     expect(content).toContain("a-task");
     expect(content).toContain("b-task");
     const trigger = document.querySelector<HTMLButtonElement>(".dependency-tooltip-trigger");
-    const tooltip = trigger ? document.getElementById(trigger.getAttribute("aria-describedby") ?? "") : null;
+    const tooltip = trigger
+      ? document.getElementById(trigger.getAttribute("aria-describedby") ?? "")
+      : null;
     expect(trigger?.textContent).toBe("查看 3 项依赖");
     expect(tooltip?.getAttribute("role")).toBe("tooltip");
     expect(tooltip?.textContent).toContain("开始");
