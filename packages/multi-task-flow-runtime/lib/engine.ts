@@ -157,7 +157,10 @@ function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): bo
   const nodes = (plan.atomic_nodes ?? []) as any[];
   const edges = (plan.atomic_edges ?? []).filter((edge: any) => "from_node_id" in edge) as any[];
   const task = ledger.tasks.find((candidate) => candidate.id === taskId);
-  if (!nodes.length && !edges.length) return true;
+  if (!nodes.length && !edges.length)
+    return !(
+      ledger.contract_version === 3 && task?.atoms.some((atom) => atom.status !== "completed")
+    );
   if (!nodes.length) return false;
   const targets = nodes.filter(
     (node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId,

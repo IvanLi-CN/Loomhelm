@@ -831,6 +831,12 @@ test("task readiness starts at the first executable atomic work", () => {
     );
   expect(ready(missingCanonicalTargets, "a")).toBe(false);
 
+  const missingCanonicalGraph = readyAtomicFixture();
+  missingCanonicalGraph.contract_version = 3;
+  missingCanonicalGraph.plans[0]!.atomic_nodes = [];
+  missingCanonicalGraph.plans[0]!.atomic_edges = [];
+  expect(ready(missingCanonicalGraph, "a")).toBe(false);
+
   const danglingEdge = readyAtomicFixture();
   danglingEdge.plans[0]!.atomic_edges[0]!.from_node_id = "missing-node";
   expect(ready(danglingEdge, "a")).toBe(false);
