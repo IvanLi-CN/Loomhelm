@@ -7222,7 +7222,7 @@
     {
       "path": "skills/multi-task-flow/lib/service-http.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/service-http.ts",
-      "installedSha256": "9454091bd0adce5acfb7058bc3af779075285515a0ebcfca64fa6e355790b922"
+      "installedSha256": "e09e3c1ba2ec17e85a6dcb6570bb2a80774f622528fc5fd970549a7377d8e1a6"
     },
     {
       "path": "skills/multi-task-flow/lib/service-import-recovery.ts",
@@ -7501,7 +7501,7 @@
     {
       "path": "skills/multi-task-flow/tests/shared-service.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/shared-service.test.ts",
-      "installedSha256": "2b6ccee8eceaf8190218297bc71b34cb3b342681303e2f55dbed31514a2db120"
+      "installedSha256": "9dbcbf6f83a84fbcfd1a2e68be3529dab3816d3f15f71882f50a7526a1b5f35a"
     },
     {
       "path": "skills/multi-task-flow/tests/source-preview.test.ts",
@@ -8797,7 +8797,7 @@
     {
       "path": "skills/multi-task-flow/scripts/viewer-worker-process.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/viewer-worker-process.ts",
-      "installedSha256": "7d1b69088d7f72c430fa8c9614abfd27a7346c14dedcca97cef7ce15b99ef3c4"
+      "installedSha256": "3f8c5f4ac23051ec362500775638632cbabe7cd95b2b3ef289f4e72dfd905ede"
     }
   ]
 }

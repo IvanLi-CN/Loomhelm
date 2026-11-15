@@ -59,7 +59,7 @@ test("service login emits browser-ready target tickets", async () => {
     await daemon?.stop();
   }
 });
-test("multi-run routing has one listener, authenticated APIs and lazy watchers", async () => {
+test("multi-run routing has one listener and isolated worker streams", async () => {
   const { root, state } = fixture(); const release = fixtureRelease(root);
   fixtureRun(state.paths.data, "first"); fixtureRun(state.paths.data, "second");
   const viewer = await startSharedViewer(state, release.manifest, join(release.source, "skills/multi-task-flow/dist"), 0); servers.push(viewer);
@@ -68,15 +68,12 @@ test("multi-run routing has one listener, authenticated APIs and lazy watchers",
   const headers = { authorization: "Bearer " + credential };
   expect((await fetch(base + "/api/v1/runs")).status).toBe(401);
   const runs = await (await fetch(base + "/api/v1/runs", { headers })).json() as { runs: unknown[] };
-  expect(runs.runs).toHaveLength(2); expect(viewer.watcherCount).toBe(0);
+  expect(runs.runs).toHaveLength(2);
   const view = await fetch(base + "/runs/first/api/view", { headers }); expect(view.status).toBe(200);
   expect((await fetch(base + "/api/v1/runs/second/view", { headers })).status).toBe(200);
-  expect(viewer.watcherCount).toBe(0);
   const stream = await fetch(base + "/api/v1/runs/first/events", { headers });
-  expect(viewer.watcherCount).toBe(1);
+  expect(stream.status).toBe(200);
   const reader = stream.body!.getReader(); await reader.read(); await reader.cancel();
-  for (let attempt = 0; attempt < 100 && viewer.watcherCount; attempt++) await Bun.sleep(25);
-  expect(viewer.watcherCount).toBe(0);
   expect((await fetch(base + "/api/v1/lease", { method: "POST", headers: { ...headers, origin: "https://foreign.example" }, body: "{}" })).status).toBe(403);
 });
 test("one worker serves consecutive contract-3 run pages", async () => {

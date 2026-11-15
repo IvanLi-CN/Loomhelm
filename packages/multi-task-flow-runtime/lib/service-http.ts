@@ -300,7 +300,7 @@ export async function startSharedViewer(
         ? [process.execPath, new URL("../scripts/viewer-worker-process.ts", import.meta.url).pathname]
         : [process.execPath, "x", "--bun", "--package", `@loomhelm/multi-task-flow@${selected.package_version}`, "multi-task-flow", "worker-process"];
       const child = Bun.spawn(childCommand, {
-        env: { ...process.env, MTF_WORKER_SOCKET: socketPath, MTF_WORKER_KEY: workerKey, MTF_WORKER_GENERATION: generation, MTF_WORKER_BRIDGE_URL: `http://127.0.0.1:${gatewayPort}/__internal/worker`, MTF_WORKER_BRIDGE_TOKEN: bridgeToken },
+        env: { ...process.env, MTF_WORKER_SOCKET: socketPath, MTF_WORKER_KEY: workerKey, MTF_WORKER_GENERATION: generation, MTF_WORKER_DATA_ROOT: state.paths.data, MTF_WORKER_PORT: String(gatewayPort) },
         stdout: "ignore", stderr: "ignore",
       });
       const deadline = Date.now() + 1_500;
@@ -507,6 +507,7 @@ export async function startSharedViewer(
         const ledger = new LedgerStore(state.paths.data, id).read();
         requireLedgerCompatibility(ledger);
         const binding = ensureViewerBinding(state, id, { package_name: serviceConfig.package_name ?? "@loomhelm/multi-task-flow", package_version: serviceConfig.package_version ?? manifest.service_version, build_id: manifest.build_id, source_sha: manifest.source_sha, compatibility_line: serviceConfig.compatibility_line ?? "compat-v1", ledger_contract: manifest.ledger_contract, api_contract: manifest.api_versions[0] ?? 1, frontend_contract: manifest.frontend_contracts[0] ?? 1, viewer_contract: manifest.viewer_contract });
+        getRun(id); // Gateway owns lifecycle observation; the selected Worker owns response rendering.
         const version = dataVersionOf(
           ledger,
           binding.viewer_contract,
