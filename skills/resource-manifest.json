@@ -7376,7 +7376,7 @@
     {
       "path": "skills/multi-task-flow/tests/browser/card-width-regression.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/browser/card-width-regression.ts",
-      "installedSha256": "c38e3b2978202c46a191fc83361e805b95d6cc7e68bc78b7427592e213b28eda"
+      "installedSha256": "f2773a2e802544f9c10e77093c2799350250beac4e2a1b9286891da8ae60a776"
     },
     {
       "path": "skills/multi-task-flow/tests/codex-desktop-follower.test.ts",
@@ -7566,7 +7566,7 @@
     {
       "path": "skills/multi-task-flow/tests/ui/responsive-width-contract.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/ui/responsive-width-contract.test.ts",
-      "installedSha256": "9b62ea644251461e4e07a5fd0d23b2a28de3d4c5a04c0f7f46ac717f56d2cce3"
+      "installedSha256": "46d6dafc97885ce492f47ec206f106e706b1c1fc6297b2cfeb863a634fbe98f6"
     },
     {
       "path": "skills/multi-task-flow/tests/ui/service-navigation.test.ts",
@@ -7611,7 +7611,7 @@
     {
       "path": "skills/multi-task-flow/web/app.css",
       "sourcePath": "packages/multi-task-flow-runtime/web/app.css",
-      "installedSha256": "06acd24220e29ded86f71b1d9495bd03dbe1b2403b9a47fb2d17b0f343c1c03d"
+      "installedSha256": "5aeeaaf95e27b6f6c964a009d2ae6efa62e012096ed2147a6df600e7cccd5dc4"
     },
     {
       "path": "skills/multi-task-flow/web/app.ts",
