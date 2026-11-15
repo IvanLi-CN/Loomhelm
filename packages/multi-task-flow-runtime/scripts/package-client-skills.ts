@@ -17,6 +17,7 @@ const sha1 = /^[a-f0-9]{40}$/;
 const sha256 = /^[a-f0-9]{64}$/;
 const packageOmissions = [
   { path: 'skills/multi-task-flow/.gitignore', reason: 'package-root .gitignore is omitted by npm-compatible package archives' },
+  { path: 'skills/multi-task-flow/data/.gitignore', reason: 'nested .gitignore is omitted by npm-compatible package archives' },
   { path: 'AGENTS.md', reason: 'repository instructions are package metadata, not a runtime Skill resource' },
   { path: 'package.json', reason: 'generated toolkit metadata is validated as package metadata, not a Skill resource' },
   { path: 'artifact-manifest.json', reason: 'the artifact manifest validates itself through identity and inventory checks' },
