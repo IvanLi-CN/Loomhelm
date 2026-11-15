@@ -804,6 +804,20 @@ test("task readiness starts at the first executable atomic work", () => {
   missingEdges.plans[0]!.atomic_edges = [];
   expect(ready(missingEdges, "a")).toBe(false);
 
+  const missingLaterAtom = readyAtomicFixture();
+  missingLaterAtom.tasks[0]!.atoms = missingLaterAtom.tasks[0]!.atoms.slice(0, -1);
+  expect(ready(missingLaterAtom, "a")).toBe(false);
+
+  const partialEdges = readyAtomicFixture();
+  partialEdges.plans[0]!.atomic_edges = partialEdges.plans[0]!.atomic_edges.slice(1);
+  expect(ready(partialEdges, "a")).toBe(false);
+
+  const conflictingState = readyAtomicFixture();
+  conflictingState.plans[0]!.atomic_nodes.find(
+    (node) => node.id === "task-a-prepare-branch",
+  )!.state = "completed";
+  expect(ready(conflictingState, "a")).toBe(false);
+
   ledger.tasks[0]!.atoms[0]!.status = "planned";
   ledger.tasks[0]!.thread_id = "task-a-thread";
   ledger.tasks[0]!.state = "running";

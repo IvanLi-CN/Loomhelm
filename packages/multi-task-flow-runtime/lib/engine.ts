@@ -162,20 +162,39 @@ function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): bo
   );
   if (!targets.length) return true;
   if (!edges.length) return false;
+  const task = ledger.tasks.find((candidate) => candidate.id === taskId);
+  const taskNodes = nodes.filter(
+    (node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId,
+  );
+  if (
+    !task ||
+    taskNodes.some((node) => {
+      const atom = task.atoms.find((candidate) => candidate.id === node.id);
+      return !atom || node.state !== atom.status;
+    })
+  )
+    return false;
+  if (
+    task.atoms.some((atom, index) => {
+      if (index === 0) return false;
+      const node = taskNodes.find((candidate) => candidate.id === atom.id);
+      return !node || !edges.some((edge) => edge.to_node_id === node.id);
+    })
+  )
+    return false;
   return targets.some((target) => {
     if (atomicNodeSatisfied(ledger, target)) return false;
-    const atom = ledger.tasks
-      .find((task) => task.id === taskId)
-      ?.atoms.find((candidate) => candidate.id === target.id);
+    const atom = task.atoms.find((candidate) => candidate.id === target.id);
     if (!atom || atom.status !== "planned") return false;
-    return edges
-      .filter((edge) => edge.to_node_id === target.id)
-      .every((edge) =>
-        atomicNodeSatisfied(
-          ledger,
-          nodes.find((node) => node.id === edge.from_node_id),
-        ),
-      );
+    const targetIndex = task.atoms.findIndex((candidate) => candidate.id === target.id);
+    const incoming = edges.filter((edge) => edge.to_node_id === target.id);
+    if (targetIndex > 0 && !incoming.length) return false;
+    return incoming.every((edge) =>
+      atomicNodeSatisfied(
+        ledger,
+        nodes.find((node) => node.id === edge.from_node_id),
+      ),
+    );
   });
 }
 function approved(ledger: Ledger): Plan {
