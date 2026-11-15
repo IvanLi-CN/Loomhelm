@@ -266,6 +266,7 @@ AtomicNode + AtomicEdge
 
 - [Multi-task Flow task execution and delivery boundaries](../../adr/0027-multi-task-flow-task-execution-and-delivery-boundaries.md)
 - [First delivery unit is bootstrap by default](../../adr/0031-first-delivery-unit-bootstrap-by-default.md)
+- [Multi-task Flow creation reconciliation and standalone Codex reconcile](../../adr/0034-multi-task-flow-creation-reconciliation.md)
 
 ## 9. 可行性与风险
 
@@ -276,3 +277,33 @@ AtomicNode + AtomicEdge
 不建议一次性重写历史账本。应先实现新 schema、只读迁移和三种视图验证，再对可机械转换的历史数据执行受控迁移；无法机械判断的历史语义必须等待显式计划修订。
 
 本设计锁定以下边界：AtomicNode + AtomicEdge 是唯一编排真相；Task 与 DeliveryUnit 是平级投影；里程碑以所有入边条件和所有显式验收条件的全量 AND 规则达成；空条件 planned milestone 无效；Task 和 DeliveryUnit 的业务状态由原子、里程碑和外部事实推导；Agent 运行观察单独记录；coordination 不再作为新任务类型或原子活动类型。
+
+## 14. Native creation reconciliation
+
+### REQ-DISPATCH-001
+
+Contract 3 的 Flow dispatch operation 在 `conversation-create` 超时、进程终止、连接中断、已观察 thread 或资源可能已创建时 MUST 保留 `unknown`、native request identity、claim、容量和已知 creation observations，并 MUST 通过显式的 `flow creation-reconcile` 入口恢复；不得自动重复创建、手工写入成功结果或使用普通 `codex reconcile` 替代。
+
+### REQ-DISPATCH-002
+
+创建对账 MUST 从同一 Flow Ledger operation 派生 native request identity，并使用当前 `expected_revision`、唯一 `request_id` 和绑定 main actor 执行原子写入；对账不得创建新的 native request，不得修改已冻结的创建参数。
+
+### REQ-DISPATCH-003
+
+对账只有在 Codex thread 身份、model/thinking、初始化 handshake、独立 worktree owner、initial HEAD 和清洁状态均有匹配外部证据时，才能把 operation 解析为 `succeeded`；证据不足、thread 仍在初始化或任何身份冲突 MUST 保持 `unknown`。
+
+### REQ-DISPATCH-004
+
+仅当外部证据明确证明创建进程未启动、没有资源创建且没有观察到 thread identity 时，operation 才能解析为 `failed` 并释放 claim；查询不到 thread、缺少退出码或普通错误文本不能单独证明失败。
+
+### REQ-DISPATCH-005
+
+创建对账成功后 MUST 复用 dispatch resolution 和 notification idempotency 合同，绑定目标 thread、记录 reconciliation evidence 并最多生成一次 handoff notification；重放相同 request identity MUST 不得重复创建 thread 或发送通知。
+
+### VER-DISPATCH-001
+
+- covers: `REQ-DISPATCH-001`, `REQ-DISPATCH-002`, `REQ-DISPATCH-003`, `REQ-DISPATCH-004`, `REQ-DISPATCH-005`
+- Method: runtime command、Codex app-server query、worktree evidence、engine mutation、revision fencing 和 notification tests。
+- Pass condition: unknown operation 可由已知 thread 的完整证据安全恢复；证据不足继续 unknown；明确 pre-creation failure 才能 failed；任何重放不会产生第二个 thread、第二个 operation 或第二条 handoff notification。
+
+创建对账是 Flow Ledger 的恢复动作，不是普通 Codex dispatch 的别名。`codex reconcile` 继续服务独立的 Codex dispatch journal；Flow runtime 必须通过 `flow creation-reconcile` 查询并更新正式运行账本。没有已知 thread identity 时，系统不得按标题、cwd、时间或相似度猜测资源；只有额外的、可验证的 native request 查询证据才能解除该限制。

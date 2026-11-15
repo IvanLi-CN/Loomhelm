@@ -1946,7 +1946,7 @@ export function execute(
         "TRANSPORT_REQUIRED", "Codex exec success requires bound native transport for baseline readiness", 5);
       if (op.request.execution_profile && outcome !== "unknown") {
         requireCondition(
-          evidence.source === "multi-task-flow-cli" &&
+          ["multi-task-flow-cli", "multi-task-flow-reconcile"].includes(String(evidence.source)) &&
             (ledger.contract_version < 3
               ? ["thread/start", "codex exec"].includes(String(evidence.native_tool_name))
               : evidence.native_tool_name === "codex exec") &&
@@ -1966,7 +1966,7 @@ export function execute(
         requireCondition(evidence.native_tool_name === "codex exec", "EVIDENCE_REQUIRED", "CLI dispatch requires real exec evidence", 5);
       if (ledger.contract_version >= 3 && outcome !== "unknown")
         requireCondition(
-          evidence.source === "multi-task-flow-cli" &&
+          ["multi-task-flow-cli", "multi-task-flow-reconcile"].includes(String(evidence.source)) &&
             evidence.native_tool_name === "codex exec" &&
             object(op.request.creation_parameters ?? {}).transport === "codex-exec",
           "EVIDENCE_REQUIRED",
@@ -1978,7 +1978,8 @@ export function execute(
         evidence.process_started === false && evidence.resources_created === false,
         "UNKNOWN_REQUIRES_RECONCILIATION", "Only proven pre-creation failure may release a CLI dispatch; observed identities require reconciliation", 5);
       if (evidence.native_tool_name === "codex exec" && outcome === "succeeded") {
-        requireCondition(evidence.exit_code === 0 && evidence.turn_completed === true &&
+        const reconciled = evidence.source === "multi-task-flow-reconcile";
+        requireCondition((reconciled || evidence.exit_code === 0) && evidence.turn_completed === true &&
           typeof evidence.workspace_path === "string" && evidence.workspace_path.length > 0 &&
           typeof evidence.initial_head === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(evidence.initial_head) &&
           op.request.observed_thread_id === payload.thread_id && evidence.thread_id === payload.thread_id,
@@ -2006,9 +2007,9 @@ export function execute(
         );
         requireCondition(
           ledger.contract_version >= 3
-            ? object(payload.native_evidence).source === "multi-task-flow-cli" &&
+            ? ["multi-task-flow-cli", "multi-task-flow-reconcile"].includes(String(object(payload.native_evidence).source)) &&
               object(payload.native_evidence).native_tool_name === "codex exec"
-            : ["create_thread", "multi-task-flow-cli"].includes(object(payload.native_evidence).source),
+            : ["create_thread", "multi-task-flow-cli", "multi-task-flow-reconcile"].includes(String(object(payload.native_evidence).source)),
           "EVIDENCE_REQUIRED",
           "Native creation evidence required",
           5,
