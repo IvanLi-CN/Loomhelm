@@ -158,8 +158,8 @@ test("does not invent delivery-unit lifecycle edges when explicit atomic edges a
   expect(plan.atomic_edges.map((edge: { from_node_id: string; to_node_id: string }) => `${edge.from_node_id}->${edge.to_node_id}`)).toEqual(["task-atom->group-prepare"]);
 });
 
-test("requires an Agent-declared path across the five preset delivery-unit lifecycle atoms", () => {
-  const atoms = ["prepare-parent", "create-pr", "verify-integration", "merge-pr", "closeout"].map((suffix) => ({ id: `group-1-${suffix}`, group_id: "group-1" }));
+test("requires an Agent-declared path across the four preset delivery-unit lifecycle atoms", () => {
+  const atoms = ["prepare-parent", "create-pr", "merge-pr", "closeout"].map((suffix) => ({ id: `group-1-${suffix}`, group_id: "group-1" }));
   expect(() => validateDeliveryUnitLifecycleEdges(atoms, [{ from_node_id: atoms[0]!.id, to_node_id: atoms[1]!.id }])).toThrow("Agent-declared dependency path");
   const edges = atoms.slice(1).map((atom, index) => ({ from_node_id: atoms[index]!.id, to_node_id: atom.id }));
   expect(() => validateDeliveryUnitLifecycleEdges(atoms, edges)).not.toThrow();

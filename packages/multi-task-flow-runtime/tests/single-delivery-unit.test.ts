@@ -33,7 +33,7 @@ test("snapshot aligns unit lifecycle, task prerequisites, timestamps and assista
   const view = buildView(ledger, undefined, outputs) as View;
   expect(view.warnings).toEqual([]);
   const group = ledger.groups[0]!;
-  expect(group.atoms.map(atom => atom.status)).toEqual(["completed", "completed", "planned", "planned", "planned"]);
+  expect(group.atoms.map(atom => atom.status)).toEqual(["completed", "completed", "planned", "planned"]);
   expect(group.lifecycle).toMatchObject({ workspace_ready: "passed", pr_created: "passed", pr_merged: "pending", closed: "pending" });
   expect(group.coordination_execution.state).toBe("waiting");
   expect(group.merge_sha).toBeNull();
