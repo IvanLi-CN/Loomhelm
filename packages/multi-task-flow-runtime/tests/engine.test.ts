@@ -1656,9 +1656,12 @@ describe("orchestration state", () => {
       },
     ];
     approve(ledger);
+    ledger.contract_version = 2;
+    ledger.source_schema_version = 1;
     expect(ready(ledger, "c")).toBe(false);
     ledger.groups[0].state = "merged";
     ledger.groups[0].merge_sha = merge;
+    ledger.groups[0].lifecycle.pr_merged = "passed";
     ledger.facts.push({
       id: "parent-merged",
       kind: "pr_merged",
