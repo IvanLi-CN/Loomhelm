@@ -47,6 +47,7 @@ ROOT_FILES = {
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PUBLISH_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/skill-release-publish.yml"
+RELEASE_SKILL = REPOSITORY_ROOT / ".agents/skills/loomhelm-release/SKILL.md"
 
 
 def git(root: Path, *args: str) -> str:
@@ -136,6 +137,15 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("resumeRetryUsed", workflow)
         self.assertIn("one guarded republish is allowed only after processing-timeout", workflow)
         self.assertIn("publish_candidate()", workflow)
+        self.assertIn("npm publish failed with an unclassified exit status", workflow)
+        self.assertIn("versions_state=", workflow)
+        self.assertIn("version index already contains the version", workflow)
+        self.assertIn("initial publish and one guarded republish", workflow)
+        self.assertIn("processing)", workflow)
+        self.assertIn("publish_attempted=false", workflow)
+        self.assertIn('[ "$publish_attempted" = true ]', workflow)
+        self.assertIn("Upload npm publish diagnostics", workflow)
+        self.assertIn("skill-release-diagnostics-${{ inputs.merge_sha }}-${{ github.run_attempt }}", workflow)
         self.assertIn("legacy-version-absent", workflow)
         self.assertIn("0.2.7 is legacy read-only reconciliation", workflow)
         self.assertIn("identity-mismatch", workflow)
@@ -160,6 +170,14 @@ class ReleasePolicyTests(unittest.TestCase):
             workflow.index("Publish exact package and reconcile registry identity"),
             workflow.index("Create or reconcile immutable release tag after exact identity"),
         )
+
+    def test_release_skill_describes_recovery_state_machine(self):
+        skill = RELEASE_SKILL.read_text(encoding="utf-8")
+        self.assertIn("version index", skill)
+        self.assertIn("Unknown npm publish errors fail immediately", skill)
+        self.assertIn("automatically performs one guarded republish", skill)
+        self.assertIn("resumeRetryUsed=true", skill)
+        self.assertIn("captured npm stdout/stderr", skill)
 
     def test_release_skill_requires_strict_version_progression(self):
         with tempfile.TemporaryDirectory() as directory:
