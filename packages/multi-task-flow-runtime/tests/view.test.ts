@@ -528,6 +528,35 @@ describe("timeline projections", () => {
   });
 });
 
+test("projects closed delivery-unit state separately from merged upstream capability", () => {
+  const ledger = withRuntimeEvidence(structuredClone(createPlanningDemoLedger(1_767_200_000_000)));
+  ledger.contract_version = 3;
+  ledger.source_schema_version = null;
+  const group = ledger.groups.find((item) => item.id === "dashboard")!;
+  group.state = "closed";
+  group.merge_sha = "c".repeat(40);
+  group.lifecycle.pr_merged = "passed";
+  group.pr = {
+    state: "merged",
+    pr: { provider: "github", repository: "example/repo", id: "1", url: "https://github.com/example/repo/pull/1" },
+    parent_branch: "main",
+    merge_sha: group.merge_sha,
+  };
+  ledger.facts.push({
+    id: "dashboard-merged",
+    kind: "pr_merged",
+    subject_id: group.id,
+    status: "passed",
+    source: "github",
+    observed_at: ledger.updated_at,
+    sha: group.merge_sha,
+    evidence_ref: "dashboard:merged",
+  });
+  const projected = (buildView(ledger) as any).groups.find((item: any) => item.id === group.id);
+  expect(projected.state).toBe("closed");
+  expect(projected.pr_merged_availability).toBe("available");
+});
+
 test("group timing uses its own events and output binding, never contribution intervals", () => {
   const ledger = createDemoLedger(1_767_200_000_000), group = ledger.groups[0]!;
   const find = () => buildView(ledger).groups.find(g => g.id === group.id)!;

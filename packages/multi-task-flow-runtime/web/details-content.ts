@@ -268,6 +268,7 @@ export function createDetailContent(context: DetailContentContext) {
     if (group.coordination_execution?.state === "blocked") field(facts, "协调阻塞", group.coordination_execution.reason ?? "未知原因");
     field(facts, "交付协调者", coordinatorValue(group));
     field(facts, "运行就绪", readinessValue(group));
+    field(facts, "上游合并能力", group.pr_merged_availability === "available" ? "可作为下游依赖" : "不可用");
     field(facts, "任务数", `${tasks.length} 个任务`);
     if (historicalTaskIds.length) field(facts, "历史执行任务", historicalTaskIds.map((id) => data.tasks.find((task) => task.id === id)?.title ?? id).join("、"));
     field(facts, "持续时间", durationValue(group.started_at ?? null, group.finished_at ?? null));
