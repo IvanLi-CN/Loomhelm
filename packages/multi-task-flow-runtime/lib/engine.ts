@@ -172,7 +172,7 @@ function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): bo
     task.atoms.some((atom) => !taskNodes.some((node) => node.id === atom.id)) ||
     taskNodes.some((node) => {
       const atom = task.atoms.find((candidate) => candidate.id === node.id);
-      return !atom || node.state !== atom.status;
+      return !atom || (node.state === "completed" && atom.status !== "completed");
     })
   )
     return false;
@@ -3464,10 +3464,6 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
         3,
       );
       atom.status = state;
-      for (const plan of ledger.plans) {
-        const node = plan.atomic_nodes?.find((item) => item.id === atom.id);
-        if (node) node.state = state;
-      }
       addEvent(ledger, request, "atom_updated", taskId, {
         task_id: taskId,
         atom_id: atom.id,
