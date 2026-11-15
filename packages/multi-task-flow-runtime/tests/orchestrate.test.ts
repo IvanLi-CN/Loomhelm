@@ -163,6 +163,24 @@ describe("orchestrate init", () => {
     expect(existsSync(join(root, "runs", input.run_id))).toBe(false);
   });
 
+  test("rejects a task whose preset lifecycle relations were not declared by the Agent", async () => {
+    const root = temporaryRoot();
+    const input = structuredClone(initialInput);
+    const atoms = ["prepare-branch", "create-pr", "merge-pr", "closeout"].map((suffix) => ({
+      id: `task-1-${suffix}`,
+      title: suffix,
+      task_id: "task-1",
+      purpose: suffix,
+      output: suffix,
+    }));
+    input.payload.tasks[0].atoms = atoms.map(({ task_id, purpose, output, ...atom }: any) => ({ ...atom, status: "planned" }));
+    input.payload.initial_plan.atoms = atoms;
+    const result = await runInit(root, input);
+    expect(result.output).toMatchObject({ ok: false, code: "ATOMIC_GRAPH_INCOMPLETE" });
+    expect(result.exitCode).toBe(2);
+    expect(existsSync(join(root, "runs", input.run_id))).toBe(false);
+  });
+
   test("accepts one main-owned bootstrap unit and rejects invalid bootstrap topology", async () => {
     const valid = structuredClone(initialInput);
     valid.payload.groups[0].delivery_unit_kind = "bootstrap";
