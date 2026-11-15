@@ -1,20 +1,11 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { z } from "zod";
-import {
-  ensureDirectory,
-  readRegular,
-  withExclusiveLock,
-  writeAtomic,
-} from "../lib/store";
-import {
-  configSchema,
-  BROWSER_TTL_MS,
-  type ServiceConfig,
-} from "../lib/service-contract";
-import { requireCondition } from "../lib/errors";
-import type { ServicePaths } from "../lib/service-paths";
 import { readRegularNoFollow } from "@loomhelm/runtime-core/modules/visual/secure_io";
+import { z } from "zod";
+import { requireCondition } from "../lib/errors";
+import { BROWSER_TTL_MS, configSchema, type ServiceConfig } from "../lib/service-contract";
+import type { ServicePaths } from "../lib/service-paths";
+import { ensureDirectory, readRegular, withExclusiveLock, writeAtomic } from "../lib/store";
 
 const leaseSchema = z
   .object({
@@ -57,9 +48,7 @@ export class ServiceState {
       ensureDirectory(path);
   }
   read<T>(path: string, schema: z.ZodType<T>): T {
-    return schema.parse(
-      JSON.parse(readRegularNoFollow(path, this.paths.root).toString("utf8")),
-    );
+    return schema.parse(JSON.parse(readRegularNoFollow(path, this.paths.root).toString("utf8")));
   }
   config(): ServiceConfig {
     return this.read(join(this.paths.config, "service.json"), configSchema);
@@ -81,19 +70,12 @@ export class ServiceState {
       const previous = JSON.stringify(state);
       const result = fn(state);
       const next = JSON.stringify(runtimeSchema.parse(state));
-      if (
-        next !== previous ||
-        !existsSync(join(this.paths.state, "runtime.json"))
-      )
+      if (next !== previous || !existsSync(join(this.paths.state, "runtime.json")))
         writeAtomic(join(this.paths.state, "runtime.json"), next + "\n");
       return result;
     });
   }
-  renew(
-    lease: Omit<UsageLease, "expires_at">,
-    ttl: number,
-    now = Date.now(),
-  ): UsageLease {
+  renew(lease: Omit<UsageLease, "expires_at">, ttl: number, now = Date.now()): UsageLease {
     requireCondition(
       Number.isFinite(ttl) && ttl > 0 && ttl <= 24 * 60 * 60_000,
       "INVALID_TTL",
@@ -106,9 +88,7 @@ export class ServiceState {
         "Viewer is stopping; call ensure again",
       );
       const current = { ...lease, expires_at: now + ttl };
-      state.leases = state.leases.filter(
-        (item) => item.expires_at > now && item.id !== lease.id,
-      );
+      state.leases = state.leases.filter((item) => item.expires_at > now && item.id !== lease.id);
       state.leases.push(current);
       return current;
     });

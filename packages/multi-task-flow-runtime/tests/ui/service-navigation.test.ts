@@ -11,11 +11,7 @@ test("navigation and compatibility warnings stay inside the dashboard", async ()
   dom.setInterval = (() => setTimeout(() => {}, 0)) as typeof dom.setInterval;
   dom.fetch = async (url) =>
     new dom.Response(
-      JSON.stringify(
-        url === "api/service"
-          ? { build_id: "candidate", warning: "兼容性提示" }
-          : {},
-      ),
+      JSON.stringify(url === "api/service" ? { build_id: "candidate", warning: "兼容性提示" } : {}),
       { status: 200 },
     );
   dom.eval(runClientScript);
@@ -25,9 +21,7 @@ test("navigation and compatibility warnings stay inside the dashboard", async ()
   expect(home?.getAttribute("href")).toBe("/");
   expect(home?.getAttribute("aria-label")).toBe("全部编排运行");
   expect(home?.getAttribute("aria-hidden")).toBeNull();
-  expect(dom.document.querySelector("main .notice")?.textContent).toBe(
-    "兼容性提示",
-  );
+  expect(dom.document.querySelector("main .notice")?.textContent).toBe("兼容性提示");
   expect(dom.document.body.textContent).not.toContain("service ensure");
   await dom.happyDOM.close();
 });
@@ -47,8 +41,6 @@ test("lease failures signal the dashboard without adding another banner", async 
   await new Promise((resolve) => setTimeout(resolve, 10));
   expect(expired).toBe(true);
   expect(dom.document.body.children.length).toBe(1);
-  expect(dom.document.querySelector("#connection-notice")?.textContent).toBe(
-    "快照提示",
-  );
+  expect(dom.document.querySelector("#connection-notice")?.textContent).toBe("快照提示");
   await dom.happyDOM.close();
 });

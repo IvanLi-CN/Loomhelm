@@ -1,20 +1,56 @@
 import { describe, expect, test } from "bun:test";
-import { apply, deliveryUnitPrMerged, ready, requireGroupDispatchGate, type Request } from "../lib/engine";
 import {
-  validateLedger,
-  taskExecutionPolicyIssues,
+  apply,
+  deliveryUnitPrMerged,
+  type Request,
+  ready,
+  requireGroupDispatchGate,
+} from "../lib/engine";
+import { deriveExecutionPhase } from "../lib/revisions";
+import {
   type Ledger,
   type Plan,
   type Task,
+  taskExecutionPolicyIssues,
+  validateLedger,
 } from "../lib/schema";
-import { deriveExecutionPhase } from "../lib/revisions";
 
 test("task execution policy rejects contradictory ownership and preserves legacy absence", () => {
-  expect(taskExecutionPolicyIssues({ execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "parent_pr" })).toEqual([]);
-  expect(taskExecutionPolicyIssues({ execution_owner: "delivery_agent", conversation_policy: "delivery_owned", delivery_policy: "child_pr" })).toHaveLength(1);
-  expect(taskExecutionPolicyIssues({ execution_owner: "task_agent", conversation_policy: "main_owned", delivery_policy: "parent_pr" })).toHaveLength(2);
-  expect(taskExecutionPolicyIssues({ execution_owner: null, conversation_policy: null, delivery_policy: null })).toEqual([]);
-  expect(taskExecutionPolicyIssues({ execution_owner: "main", conversation_policy: null, delivery_policy: null })[0]?.code).toBe("TASK_EXECUTION_POLICY_INCOMPLETE");
+  expect(
+    taskExecutionPolicyIssues({
+      execution_owner: "main",
+      conversation_policy: "main_owned",
+      delivery_policy: "parent_pr",
+    }),
+  ).toEqual([]);
+  expect(
+    taskExecutionPolicyIssues({
+      execution_owner: "delivery_agent",
+      conversation_policy: "delivery_owned",
+      delivery_policy: "child_pr",
+    }),
+  ).toHaveLength(1);
+  expect(
+    taskExecutionPolicyIssues({
+      execution_owner: "task_agent",
+      conversation_policy: "main_owned",
+      delivery_policy: "parent_pr",
+    }),
+  ).toHaveLength(2);
+  expect(
+    taskExecutionPolicyIssues({
+      execution_owner: null,
+      conversation_policy: null,
+      delivery_policy: null,
+    }),
+  ).toEqual([]);
+  expect(
+    taskExecutionPolicyIssues({
+      execution_owner: "main",
+      conversation_policy: null,
+      delivery_policy: null,
+    })[0]?.code,
+  ).toBe("TASK_EXECUTION_POLICY_INCOMPLETE");
 });
 
 const base = "a".repeat(40),
@@ -126,7 +162,11 @@ function fixture(): FixtureLedger {
       ownership: "bound",
       approval_id: null,
     },
-    config: { execution_profile: { model: "gpt-6.1-sol", thinking: "medium" }, max_running_tasks: 3, display_timezone: "Asia/Shanghai" },
+    config: {
+      execution_profile: { model: "gpt-6.1-sol", thinking: "medium" },
+      max_running_tasks: 3,
+      display_timezone: "Asia/Shanghai",
+    },
     plans: [initialPlan],
     active_plan_id: "plan",
     groups: [group],
@@ -153,11 +193,29 @@ function request(
   payload: Record<string, unknown>,
   actor: Request["actor"] = main,
 ): Request {
-  if (payload.outcome === "succeeded" && (payload.native_evidence as any)?.source === "create_thread") {
+  if (
+    payload.outcome === "succeeded" &&
+    (payload.native_evidence as any)?.source === "create_thread"
+  ) {
     const operation = ledger.operations.find((item) => item.id === payload.operation_id)!;
     const nativeId = `native-${operation.id}`;
-    if (!operation.request.native_request_id) apply(ledger, "dispatch-bind-request", { run_id: "run", actor: main, request_id: `bind-${operation.id}`, expected_revision: ledger.revision, payload: { operation_id: operation.id, native_request_id: nativeId } });
-    payload.native_evidence = { source: "multi-task-flow-cli", native_tool_name: "thread/start", operation_id: operation.id, native_request_id: nativeId, ...(operation.request.execution_profile as object), evidence_ref: "fixture://app-server", created_at: at };
+    if (!operation.request.native_request_id)
+      apply(ledger, "dispatch-bind-request", {
+        run_id: "run",
+        actor: main,
+        request_id: `bind-${operation.id}`,
+        expected_revision: ledger.revision,
+        payload: { operation_id: operation.id, native_request_id: nativeId },
+      });
+    payload.native_evidence = {
+      source: "multi-task-flow-cli",
+      native_tool_name: "thread/start",
+      operation_id: operation.id,
+      native_request_id: nativeId,
+      ...(operation.request.execution_profile as object),
+      evidence_ref: "fixture://app-server",
+      created_at: at,
+    };
   }
   return {
     run_id: "run",
@@ -178,21 +236,36 @@ function approve(ledger: ReturnType<typeof fixture>) {
       authorized_action_ids: [],
     }),
   );
-  apply(ledger, "protected-approve", request(ledger, "approve-parent", {
-    kind: "delivery_unit_merge",
-    target_id: "g",
-    approval_id: "parent-approved",
-  }));
+  apply(
+    ledger,
+    "protected-approve",
+    request(ledger, "approve-parent", {
+      kind: "delivery_unit_merge",
+      target_id: "g",
+      approval_id: "parent-approved",
+    }),
+  );
 }
 
 test("planned delivery units cannot record running execution", () => {
   const ledger = fixture();
   ledger.groups[0]!.state = "planned";
-  expect(() => apply(ledger, "group-execution-update", request(ledger, "planned-running", {
-    group_id: "g",
-    state: "running",
-    observed_at: at,
-  }, groupActor))).toThrow("Only active delivery units can record runtime execution");
+  expect(() =>
+    apply(
+      ledger,
+      "group-execution-update",
+      request(
+        ledger,
+        "planned-running",
+        {
+          group_id: "g",
+          state: "running",
+          observed_at: at,
+        },
+        groupActor,
+      ),
+    ),
+  ).toThrow("Only active delivery units can record runtime execution");
 });
 
 test("protected recovery is the only blocked-to-active path", () => {
@@ -201,19 +274,40 @@ test("protected recovery is the only blocked-to-active path", () => {
   ledger.groups[0]!.state = "blocked";
   const incoming = structuredClone(ledger.groups[0]!);
   incoming.state = "active";
-  expect(() => apply(ledger, "group-update", request(ledger, "illegal-reopen", { group: incoming }, groupActor))).toThrow("Group merge and closeout require verified operations");
-  apply(ledger, "protected-approve", request(ledger, "approve-recovery", {
-    kind: "delivery_unit_recovery",
-    target_id: "g",
-    approval_id: "recovery-approved",
-  }));
-  expect(apply(ledger, "group-reopen", request(ledger, "reopen", {
-    group_id: "g",
-    plan_id: "plan",
-    recovery_id: "recovery-approved",
-    reason: "provider facts reconciled",
-    evidence_refs: ["evidence://recovery"],
-  }, groupActor))).toMatchObject({ result: { group_id: "g", state: "active" } });
+  expect(() =>
+    apply(
+      ledger,
+      "group-update",
+      request(ledger, "illegal-reopen", { group: incoming }, groupActor),
+    ),
+  ).toThrow("Group merge and closeout require verified operations");
+  apply(
+    ledger,
+    "protected-approve",
+    request(ledger, "approve-recovery", {
+      kind: "delivery_unit_recovery",
+      target_id: "g",
+      approval_id: "recovery-approved",
+    }),
+  );
+  expect(
+    apply(
+      ledger,
+      "group-reopen",
+      request(
+        ledger,
+        "reopen",
+        {
+          group_id: "g",
+          plan_id: "plan",
+          recovery_id: "recovery-approved",
+          reason: "provider facts reconciled",
+          evidence_refs: ["evidence://recovery"],
+        },
+        groupActor,
+      ),
+    ),
+  ).toMatchObject({ result: { group_id: "g", state: "active" } });
 });
 
 test("closeout reconciliation invalidates or preserves the business state explicitly", () => {
@@ -228,23 +322,34 @@ test("closeout reconciliation invalidates or preserves the business state explic
     recorded_at: at,
     data: { state: "closed" },
   });
-  expect(apply(ledger, "group-closeout-reconcile", request(ledger, "reconcile-invalid", {
-    group_id: "g",
-    plan_id: "plan",
-    closeout_event_id: "closeout-event",
-    reconciliation_id: "reconcile-1",
-    outcome: "invalid",
-    reason: "merge evidence mismatch",
-    evidence_refs: ["evidence://provider"],
-    provider_observation: {
-      pr: { provider: "github", repository: "example/repo", id: "1", url: null },
-      provider_state: "closed",
-      merge_sha: null,
-      source: "github",
-      observed_at: at,
-      evidence_ref: "evidence://provider",
-    },
-  }, groupActor))).toMatchObject({ result: { outcome: "invalid", state: "blocked" } });
+  expect(
+    apply(
+      ledger,
+      "group-closeout-reconcile",
+      request(
+        ledger,
+        "reconcile-invalid",
+        {
+          group_id: "g",
+          plan_id: "plan",
+          closeout_event_id: "closeout-event",
+          reconciliation_id: "reconcile-1",
+          outcome: "invalid",
+          reason: "merge evidence mismatch",
+          evidence_refs: ["evidence://provider"],
+          provider_observation: {
+            pr: { provider: "github", repository: "example/repo", id: "1", url: null },
+            provider_state: "closed",
+            merge_sha: null,
+            source: "github",
+            observed_at: at,
+            evidence_ref: "evidence://provider",
+          },
+        },
+        groupActor,
+      ),
+    ),
+  ).toMatchObject({ result: { outcome: "invalid", state: "blocked" } });
   expect(ledger.groups[0]!.state).toBe("blocked");
 });
 
@@ -263,26 +368,56 @@ test("contract-3 group dispatch waits for upstream delivery-unit PR merge", () =
     estimate_basis: "fixture",
     estimate_confidence: "high",
   });
-  plan.edges.push({ id: "upstream-a", from_node_id: "upstream-node", to_node_id: "node-a", requires: "completed" });
-  expect(() => requireGroupDispatchGate(ledger, ledger.groups[0]!)).toThrow("upstream delivery-unit PRs");
+  plan.edges.push({
+    id: "upstream-a",
+    from_node_id: "upstream-node",
+    to_node_id: "node-a",
+    requires: "completed",
+  });
+  expect(() => requireGroupDispatchGate(ledger, ledger.groups[0]!)).toThrow(
+    "upstream delivery-unit PRs",
+  );
 });
 
 test.each(["merged", "closed"] as const)("%s preserves upstream PR merge eligibility", (state) => {
-  expect(deliveryUnitPrMerged({
-    state,
-    merge_sha: merge,
-    lifecycle: { pr_merged: "passed" },
-    pr: { state: "merged", pr: { provider: "github", repository: "example/repo", id: "1", url: "https://github.com/example/repo/pull/1" }, parent_branch: "main", merge_sha: merge },
-  } as any)).toBe(true);
+  expect(
+    deliveryUnitPrMerged({
+      state,
+      merge_sha: merge,
+      lifecycle: { pr_merged: "passed" },
+      pr: {
+        state: "merged",
+        pr: {
+          provider: "github",
+          repository: "example/repo",
+          id: "1",
+          url: "https://github.com/example/repo/pull/1",
+        },
+        parent_branch: "main",
+        merge_sha: merge,
+      },
+    } as any),
+  ).toBe(true);
 });
 
 test("closed upstream with a provider-closed PR is not dispatchable", () => {
-  expect(deliveryUnitPrMerged({
-    state: "closed",
-    merge_sha: merge,
-    lifecycle: { pr_merged: "passed" },
-    pr: { state: "closed", pr: { provider: "github", repository: "example/repo", id: "1", url: "https://github.com/example/repo/pull/1" }, parent_branch: "main" },
-  } as any)).toBe(false);
+  expect(
+    deliveryUnitPrMerged({
+      state: "closed",
+      merge_sha: merge,
+      lifecycle: { pr_merged: "passed" },
+      pr: {
+        state: "closed",
+        pr: {
+          provider: "github",
+          repository: "example/repo",
+          id: "1",
+          url: "https://github.com/example/repo/pull/1",
+        },
+        parent_branch: "main",
+      },
+    } as any),
+  ).toBe(false);
 });
 
 test("contract-3 group dispatch binds only the multi-task-flow codex exec transport", () => {
@@ -290,12 +425,23 @@ test("contract-3 group dispatch binds only the multi-task-flow codex exec transp
   approve(ledger);
   ledger.groups[0]!.state = "planned";
   ledger.groups[0]!.agent_thread_id = null;
-  apply(ledger, "dispatch-group-claim", request(ledger, "group-claim", { group_id: "g", operation_id: "group-op" }));
+  apply(
+    ledger,
+    "dispatch-group-claim",
+    request(ledger, "group-claim", { group_id: "g", operation_id: "group-op" }),
+  );
   ledger.contract_version = 3;
   ledger.source_schema_version = null;
-  expect(() => apply(ledger, "dispatch-bind-request", request(ledger, "missing-transport", {
-    operation_id: "group-op", native_request_id: "native-group",
-  }))).toThrow("codex exec transport");
+  expect(() =>
+    apply(
+      ledger,
+      "dispatch-bind-request",
+      request(ledger, "missing-transport", {
+        operation_id: "group-op",
+        native_request_id: "native-group",
+      }),
+    ),
+  ).toThrow("codex exec transport");
 });
 
 test("contract-3 execution waits for an acknowledged formal handoff", () => {
@@ -303,19 +449,42 @@ test("contract-3 execution waits for an acknowledged formal handoff", () => {
   approve(ledger);
   ledger.contract_version = 3;
   ledger.source_schema_version = null;
-  expect(() => apply(ledger, "group-execution-update", request(ledger, "group-start-without-handoff", {
-    group_id: "g",
-    state: "running",
-    reason: null,
-    waiting_for_task_ids: [],
-  }, groupActor))).toThrow("formal handoff");
+  expect(() =>
+    apply(
+      ledger,
+      "group-execution-update",
+      request(
+        ledger,
+        "group-start-without-handoff",
+        {
+          group_id: "g",
+          state: "running",
+          reason: null,
+          waiting_for_task_ids: [],
+        },
+        groupActor,
+      ),
+    ),
+  ).toThrow("formal handoff");
 });
 
 test("runtime observation persists the formal agent_idle task state and restores it", () => {
   const ledger = fixture();
   const task = ledger.tasks[1]!;
-  task.state = "running"; task.thread_id = "runtime-thread";
-  const observe = (runtime: string, requestId: string) => apply(ledger, "task-runtime-observe", request(ledger, requestId, {task_id: task.id, thread_id: task.thread_id, runtime, turn_id: "turn", observed_at: at}));
+  task.state = "running";
+  task.thread_id = "runtime-thread";
+  const observe = (runtime: string, requestId: string) =>
+    apply(
+      ledger,
+      "task-runtime-observe",
+      request(ledger, requestId, {
+        task_id: task.id,
+        thread_id: task.thread_id,
+        runtime,
+        turn_id: "turn",
+        observed_at: at,
+      }),
+    );
   observe("idle", "idle-1");
   expect(task.id).toBe(ledger.tasks[1]!.id);
   expect(ledger.tasks[1]!.state).toBe("agent_idle");
@@ -333,10 +502,30 @@ test("runtime observation persists the formal agent_idle task state and restores
 
 test("idle during startup still requires the first task-start fact", () => {
   const ledger = fixture();
-  ledger.tasks[1]!.state = "starting"; ledger.tasks[1]!.thread_id = "runtime-thread";
-  apply(ledger, "task-runtime-observe", request(ledger, "startup-idle", {turn_id: "startup-turn", task_id: "b", thread_id: "runtime-thread", runtime: "idle", observed_at: at}));
+  ledger.tasks[1]!.state = "starting";
+  ledger.tasks[1]!.thread_id = "runtime-thread";
+  apply(
+    ledger,
+    "task-runtime-observe",
+    request(ledger, "startup-idle", {
+      turn_id: "startup-turn",
+      task_id: "b",
+      thread_id: "runtime-thread",
+      runtime: "idle",
+      observed_at: at,
+    }),
+  );
   expect(ledger.tasks[1]!.agent_resume_state).toBe("starting");
-  apply(ledger, "task-update", request(ledger, "startup-running", {task_id: "b", state: "running", occurred_at: at}, {role: "task", thread_id: "runtime-thread"}));
+  apply(
+    ledger,
+    "task-update",
+    request(
+      ledger,
+      "startup-running",
+      { task_id: "b", state: "running", occurred_at: at },
+      { role: "task", thread_id: "runtime-thread" },
+    ),
+  );
   expect(ledger.tasks[1]!.started_at).toBe(at);
   expect(ledger.events.at(-1)?.type).toBe("task_started");
   expect(ledger.tasks[1]!.agent_resume_state).toBeUndefined();
@@ -347,17 +536,36 @@ test("bound main conversation can record a main-owned task and its atom", () => 
   ledger.plans[0]!.lifecycle = "approved";
   ledger.plans[0]!.approval_id = "approved";
   ledger.control.approval_id = "approved";
-  ledger.plans[0]!.atoms = [{ id: "atom-a", title: "a", task_id: "a", purpose: "fixture task", output: "fixture output" }];
+  ledger.plans[0]!.atoms = [
+    { id: "atom-a", title: "a", task_id: "a", purpose: "fixture task", output: "fixture output" },
+  ];
   const task = ledger.tasks[0]!;
   task.execution_owner = "main";
   task.conversation_policy = "main_owned";
   task.delivery_policy = "parent_pr";
   task.atoms = [{ id: "atom-a", title: "a", status: "planned" }];
-  apply(ledger, "task-update", request(ledger, "main-start", { task_id: task.id, state: "running", occurred_at: at }, main));
+  apply(
+    ledger,
+    "task-update",
+    request(ledger, "main-start", { task_id: task.id, state: "running", occurred_at: at }, main),
+  );
   expect(ledger.tasks[0]!.state).toBe("running");
   expect(ledger.tasks[0]!.started_at).toBe(at);
-  apply(ledger, "atom-update", request(ledger, "main-atom-start", { task_id: task.id, atom_id: "atom-a", state: "running" }, main));
-  apply(ledger, "atom-update", request(ledger, "main-atom", { task_id: task.id, atom_id: "atom-a", state: "completed" }, main));
+  apply(
+    ledger,
+    "atom-update",
+    request(
+      ledger,
+      "main-atom-start",
+      { task_id: task.id, atom_id: "atom-a", state: "running" },
+      main,
+    ),
+  );
+  apply(
+    ledger,
+    "atom-update",
+    request(ledger, "main-atom", { task_id: task.id, atom_id: "atom-a", state: "completed" }, main),
+  );
   expect(ledger.tasks[0]!.atoms[0]!.status).toBe("completed");
   expect(ledger.events.at(-1)?.type).toBe("atom_updated");
 });
@@ -368,22 +576,47 @@ test("terminal task creates a pending conversation archive resource", () => {
   task.kind = "verification";
   task.thread_id = "task-b-thread";
   task.state = "running";
-  apply(ledger, "task-update", request(ledger, "complete-b", {
-    task_id: task.id,
-    state: "completed",
-    evidence: "verification complete",
-    occurred_at: at,
-  }, { role: "task", thread_id: task.thread_id }));
-  expect(ledger.resources).toContainEqual(expect.objectContaining({ kind: "conversation", target: "task-b-thread", status: "pending" }));
+  apply(
+    ledger,
+    "task-update",
+    request(
+      ledger,
+      "complete-b",
+      {
+        task_id: task.id,
+        state: "completed",
+        evidence: "verification complete",
+        occurred_at: at,
+      },
+      { role: "task", thread_id: task.thread_id },
+    ),
+  );
+  expect(ledger.resources).toContainEqual(
+    expect.objectContaining({ kind: "conversation", target: "task-b-thread", status: "pending" }),
+  );
 });
 
 function v2Fixture() {
   const ledger: any = structuredClone(fixture());
   ledger.schema_version = 2;
   ledger.source_schema_version = null;
-  ledger.plans[0].atoms = ["a", "b", "c"].map((id) => ({ id: `atom-${id}`, title: id, task_id: id, purpose: "fixture task", output: "fixture output" }));
-  ledger.plans[0].nodes.forEach((node: any) => { if (node.kind === "task") { node.estimate_minutes = 30; node.estimate_basis = "fixture estimate"; node.estimate_confidence = "medium"; } });
-  ledger.tasks.forEach((task: any) => { task.atoms = [{ id: `atom-${task.id}`, title: task.id, status: "completed" }]; });
+  ledger.plans[0].atoms = ["a", "b", "c"].map((id) => ({
+    id: `atom-${id}`,
+    title: id,
+    task_id: id,
+    purpose: "fixture task",
+    output: "fixture output",
+  }));
+  ledger.plans[0].nodes.forEach((node: any) => {
+    if (node.kind === "task") {
+      node.estimate_minutes = 30;
+      node.estimate_basis = "fixture estimate";
+      node.estimate_confidence = "medium";
+    }
+  });
+  ledger.tasks.forEach((task: any) => {
+    task.atoms = [{ id: `atom-${task.id}`, title: task.id, status: "completed" }];
+  });
   ledger.groups[0].lifecycle = {
     workspace_ready: "unknown",
     pr_created: "unknown",
@@ -477,11 +710,15 @@ function approveV2(ledger: ReturnType<typeof v2Fixture>) {
       ],
     }),
   );
-  apply(ledger, "protected-approve", request(ledger, "approve-v2-parent", {
-    kind: "delivery_unit_merge",
-    target_id: "g",
-    approval_id: "parent-approved-v2",
-  }));
+  apply(
+    ledger,
+    "protected-approve",
+    request(ledger, "approve-v2-parent", {
+      kind: "delivery_unit_merge",
+      target_id: "g",
+      approval_id: "parent-approved-v2",
+    }),
+  );
 }
 
 function readyBootstrapFixture() {
@@ -489,15 +726,20 @@ function readyBootstrapFixture() {
   ledger.groups[0].delivery_unit_kind = "bootstrap";
   ledger.groups[0].owner_kind = "main";
   ledger.groups[0].agent_thread_id = null;
-  ledger.groups[0].atoms = [{
-    id: "workspace",
-    title: "Prepare parent",
-    purpose: "Prepare",
-    output: "Ready",
-    lifecycle_stage: "workspace_ready",
-    status: "completed",
-  }];
-  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
+  ledger.groups[0].atoms = [
+    {
+      id: "workspace",
+      title: "Prepare parent",
+      purpose: "Prepare",
+      output: "Ready",
+      lifecycle_stage: "workspace_ready",
+      status: "completed",
+    },
+  ];
+  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({
+    ...atom,
+    group_id: "g",
+  }));
   ledger.groups[0].lifecycle.workspace_ready = "passed";
   ledger.events.push({
     id: "bootstrap-workspace-recorded",
@@ -516,19 +758,46 @@ test("contribution dispatch is blocked until the parent PR gate is complete", ()
   const ledger = v2Fixture();
   approveV2(ledger);
   ledger.groups[0].atoms = [
-    { id: "workspace", title: "Prepare parent", purpose: "Prepare", output: "Ready", lifecycle_stage: "workspace_ready", status: "planned" },
-    { id: "parent-pr", title: "Create parent PR", purpose: "Publish", output: "Created", lifecycle_stage: "pr_created", status: "planned" },
+    {
+      id: "workspace",
+      title: "Prepare parent",
+      purpose: "Prepare",
+      output: "Ready",
+      lifecycle_stage: "workspace_ready",
+      status: "planned",
+    },
+    {
+      id: "parent-pr",
+      title: "Create parent PR",
+      purpose: "Publish",
+      output: "Created",
+      lifecycle_stage: "pr_created",
+      status: "planned",
+    },
   ];
-  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
-  expect(() => apply(ledger, "dispatch-claim", request(ledger, "blocked-before-parent-pr", {
-    task_id: "a",
-    operation_id: "dispatch-before-parent-pr",
-  }))).toThrow("parent PR is created and verified");
+  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({
+    ...atom,
+    group_id: "g",
+  }));
+  expect(() =>
+    apply(
+      ledger,
+      "dispatch-claim",
+      request(ledger, "blocked-before-parent-pr", {
+        task_id: "a",
+        operation_id: "dispatch-before-parent-pr",
+      }),
+    ),
+  ).toThrow("parent PR is created and verified");
   try {
-    apply(ledger, "dispatch-claim", request(ledger, "blocked-before-parent-pr-details", {
-      task_id: "a",
-      operation_id: "dispatch-before-parent-pr-details",
-    }));
+    apply(
+      ledger,
+      "dispatch-claim",
+      request(ledger, "blocked-before-parent-pr-details", {
+        task_id: "a",
+        operation_id: "dispatch-before-parent-pr-details",
+      }),
+    );
   } catch (error) {
     expect((error as any).code).toBe("DELIVERY_GATE_PENDING");
     expect((error as any).details.missing).toEqual(["workspace_ready", "parent_pr"]);
@@ -536,17 +805,37 @@ test("contribution dispatch is blocked until the parent PR gate is complete", ()
   }
   ledger.tasks[0].thread_id = "task-a-thread";
   ledger.tasks[0].state = "starting";
-  expect(() => apply(ledger, "task-update", request(ledger, "blocked-task-start", {
-    task_id: "a",
-    state: "running",
-    occurred_at: at,
-  }, { role: "task", thread_id: "task-a-thread" }))).toThrow("parent PR is created and verified");
+  expect(() =>
+    apply(
+      ledger,
+      "task-update",
+      request(
+        ledger,
+        "blocked-task-start",
+        {
+          task_id: "a",
+          state: "running",
+          occurred_at: at,
+        },
+        { role: "task", thread_id: "task-a-thread" },
+      ),
+    ),
+  ).toThrow("parent PR is created and verified");
   try {
-    apply(ledger, "task-update", request(ledger, "blocked-task-start-details", {
-      task_id: "a",
-      state: "running",
-      occurred_at: at,
-    }, { role: "task", thread_id: "task-a-thread" }));
+    apply(
+      ledger,
+      "task-update",
+      request(
+        ledger,
+        "blocked-task-start-details",
+        {
+          task_id: "a",
+          state: "running",
+          occurred_at: at,
+        },
+        { role: "task", thread_id: "task-a-thread" },
+      ),
+    );
   } catch (error) {
     expect((error as any).details.recovery).toContain("retry task-update");
   }
@@ -556,10 +845,27 @@ test("dispatch-claim recovery names its caller when only workspace readiness is 
   const ledger = v2Fixture();
   approveV2(ledger);
   ledger.groups[0].atoms = [
-    { id: "workspace", title: "Prepare parent", purpose: "Prepare", output: "Ready", lifecycle_stage: "workspace_ready", status: "planned" },
-    { id: "parent-pr", title: "Create parent PR", purpose: "Publish", output: "Created", lifecycle_stage: "pr_created", status: "completed" },
+    {
+      id: "workspace",
+      title: "Prepare parent",
+      purpose: "Prepare",
+      output: "Ready",
+      lifecycle_stage: "workspace_ready",
+      status: "planned",
+    },
+    {
+      id: "parent-pr",
+      title: "Create parent PR",
+      purpose: "Publish",
+      output: "Created",
+      lifecycle_stage: "pr_created",
+      status: "completed",
+    },
   ];
-  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
+  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({
+    ...atom,
+    group_id: "g",
+  }));
   ledger.groups[0].lifecycle.pr_created = "passed";
   const parentPr = providerPrReceipt("parent-pr", "parent", base, base);
   ledger.groups[0].parent_pr = parentPr.pr;
@@ -588,10 +894,14 @@ test("dispatch-claim recovery names its caller when only workspace readiness is 
 
   let dispatchError: any;
   try {
-    apply(ledger, "dispatch-claim", request(ledger, "workspace-only-dispatch", {
-      task_id: "a",
-      operation_id: "workspace-only-dispatch-op",
-    }));
+    apply(
+      ledger,
+      "dispatch-claim",
+      request(ledger, "workspace-only-dispatch", {
+        task_id: "a",
+        operation_id: "workspace-only-dispatch-op",
+      }),
+    );
   } catch (error) {
     dispatchError = error;
     expect((error as any).details.missing).toEqual(["workspace_ready"]);
@@ -606,15 +916,20 @@ test("main-owned bootstrap contributions can start before the parent PR exists",
   ledger.groups[0].delivery_unit_kind = "bootstrap";
   ledger.groups[0].owner_kind = "main";
   ledger.groups[0].agent_thread_id = null;
-  ledger.groups[0].atoms = [{
-    id: "workspace",
-    title: "Prepare parent",
-    purpose: "Prepare",
-    output: "Ready",
-    lifecycle_stage: "workspace_ready",
-    status: "planned",
-  }];
-  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
+  ledger.groups[0].atoms = [
+    {
+      id: "workspace",
+      title: "Prepare parent",
+      purpose: "Prepare",
+      output: "Ready",
+      lifecycle_stage: "workspace_ready",
+      status: "planned",
+    },
+  ];
+  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({
+    ...atom,
+    group_id: "g",
+  }));
   const task = ledger.tasks[0];
   task.execution_owner = "main";
   task.conversation_policy = "main_owned";
@@ -647,11 +962,20 @@ test("main-owned bootstrap contributions can start before the parent PR exists",
 
   let bootstrapWorkspaceError: any;
   try {
-    apply(ledger, "task-update", request(ledger, "bootstrap-main-before-workspace", {
-      task_id: task.id,
-      state: "running",
-      occurred_at: at,
-    }, main));
+    apply(
+      ledger,
+      "task-update",
+      request(
+        ledger,
+        "bootstrap-main-before-workspace",
+        {
+          task_id: task.id,
+          state: "running",
+          occurred_at: at,
+        },
+        main,
+      ),
+    );
   } catch (error) {
     bootstrapWorkspaceError = error;
     expect((error as any).message).toContain("delivery-unit workspace is ready");
@@ -673,18 +997,38 @@ test("main-owned bootstrap contributions can start before the parent PR exists",
   });
 
   ledger.groups[0].state = "planned";
-  expect(() => apply(ledger, "task-update", request(ledger, "bootstrap-planned-group", {
-    task_id: task.id,
-    state: "running",
-    occurred_at: at,
-  }, main))).toThrow("Task group is not active");
+  expect(() =>
+    apply(
+      ledger,
+      "task-update",
+      request(
+        ledger,
+        "bootstrap-planned-group",
+        {
+          task_id: task.id,
+          state: "running",
+          occurred_at: at,
+        },
+        main,
+      ),
+    ),
+  ).toThrow("Task group is not active");
   ledger.groups[0].state = "active";
 
-  apply(ledger, "task-update", request(ledger, "bootstrap-main-start", {
-    task_id: task.id,
-    state: "running",
-    occurred_at: at,
-  }, main));
+  apply(
+    ledger,
+    "task-update",
+    request(
+      ledger,
+      "bootstrap-main-start",
+      {
+        task_id: task.id,
+        state: "running",
+        occurred_at: at,
+      },
+      main,
+    ),
+  );
 
   expect(ledger.tasks[0].state).toBe("running");
   expect(ledger.tasks[0].started_at).toBe(at);
@@ -698,25 +1042,36 @@ test("main-owned bootstrap contributions can start before the parent PR exists",
   proposed.revision = null;
   proposed.actions = proposed.actions.map((action: any) => ({
     ...action,
-    target: action.group_id ? { type: "group", id: action.group_id } : { type: "task", id: action.task_id },
+    target: action.group_id
+      ? { type: "group", id: action.group_id }
+      : { type: "task", id: action.task_id },
   }));
   const revisedTasks = structuredClone(ledger.tasks);
   revisedTasks[0].owned_surfaces = ["src/changed-after-start"];
   let migrationError: any;
   try {
-    apply(ledger, "plan-propose", request(ledger, "bootstrap-boundary-change", {
-      plan: proposed,
-      groups: structuredClone(ledger.groups),
-      tasks: revisedTasks,
-      revision: {
-        reason: {
-          category: "owner_direction",
-          summary: "Update the implementation boundary after direct bootstrap start.",
-          evidence_refs: ["evidence://bootstrap-start"],
-          impact: "The started task requires explicit migration if its owned surface changes.",
+    apply(
+      ledger,
+      "plan-propose",
+      request(
+        ledger,
+        "bootstrap-boundary-change",
+        {
+          plan: proposed,
+          groups: structuredClone(ledger.groups),
+          tasks: revisedTasks,
+          revision: {
+            reason: {
+              category: "owner_direction",
+              summary: "Update the implementation boundary after direct bootstrap start.",
+              evidence_refs: ["evidence://bootstrap-start"],
+              impact: "The started task requires explicit migration if its owned surface changes.",
+            },
+          },
         },
-      },
-    }, main));
+        main,
+      ),
+    );
   } catch (error) {
     migrationError = error;
   }
@@ -730,11 +1085,22 @@ test("bootstrap parent PR bypass requires explicit absence evidence", () => {
   task.execution_owner = "main";
   task.conversation_policy = "main_owned";
   task.delivery_policy = "parent_pr";
-  expect(() => apply(ledger, "task-update", request(ledger, "bootstrap-without-absence", {
-    task_id: task.id,
-    state: "running",
-    occurred_at: at,
-  }, main))).toThrow("parent PR is created and verified");
+  expect(() =>
+    apply(
+      ledger,
+      "task-update",
+      request(
+        ledger,
+        "bootstrap-without-absence",
+        {
+          task_id: task.id,
+          state: "running",
+          occurred_at: at,
+        },
+        main,
+      ),
+    ),
+  ).toThrow("parent PR is created and verified");
 });
 
 test("bootstrap parent PR bypass fails closed for uncertain publication and retained paths", () => {
@@ -770,11 +1136,22 @@ test("bootstrap parent PR bypass fails closed for uncertain publication and reta
         receipt: null,
       });
     }
-    expect(() => apply(ledger, "task-update", request(ledger, `bootstrap-uncertain-${uncertainty}`, {
-      task_id: task.id,
-      state: "running",
-      occurred_at: at,
-    }, main))).toThrow("parent PR is created and verified");
+    expect(() =>
+      apply(
+        ledger,
+        "task-update",
+        request(
+          ledger,
+          `bootstrap-uncertain-${uncertainty}`,
+          {
+            task_id: task.id,
+            state: "running",
+            occurred_at: at,
+          },
+          main,
+        ),
+      ),
+    ).toThrow("parent PR is created and verified");
     expect(ledger.tasks[0].state).toBe("planned");
   }
 });
@@ -787,11 +1164,22 @@ test("regular and Task Agent bootstrap paths retain the parent PR gate after wor
   regular.tasks[0].execution_owner = "main";
   regular.tasks[0].conversation_policy = "main_owned";
   regular.tasks[0].delivery_policy = "parent_pr";
-  expect(() => apply(regular, "task-update", request(regular, "regular-main-without-parent", {
-    task_id: "a",
-    state: "running",
-    occurred_at: at,
-  }, main))).toThrow("parent PR is created and verified");
+  expect(() =>
+    apply(
+      regular,
+      "task-update",
+      request(
+        regular,
+        "regular-main-without-parent",
+        {
+          task_id: "a",
+          state: "running",
+          occurred_at: at,
+        },
+        main,
+      ),
+    ),
+  ).toThrow("parent PR is created and verified");
   expect(regular.tasks[0].state).toBe("planned");
 
   const taskAgent = readyBootstrapFixture();
@@ -800,11 +1188,22 @@ test("regular and Task Agent bootstrap paths retain the parent PR gate after wor
   taskAgent.tasks[0].delivery_policy = "child_pr";
   taskAgent.tasks[0].thread_id = "task-a-thread";
   taskAgent.tasks[0].state = "starting";
-  expect(() => apply(taskAgent, "task-update", request(taskAgent, "bootstrap-task-agent-without-parent", {
-    task_id: "a",
-    state: "running",
-    occurred_at: at,
-  }, { role: "task", thread_id: "task-a-thread" }))).toThrow("parent PR is created and verified");
+  expect(() =>
+    apply(
+      taskAgent,
+      "task-update",
+      request(
+        taskAgent,
+        "bootstrap-task-agent-without-parent",
+        {
+          task_id: "a",
+          state: "running",
+          occurred_at: at,
+        },
+        { role: "task", thread_id: "task-a-thread" },
+      ),
+    ),
+  ).toThrow("parent PR is created and verified");
   expect(taskAgent.tasks[0].state).toBe("starting");
 });
 
@@ -813,10 +1212,16 @@ test("bootstrap dispatch-claim remains blocked for Task Agent work without a par
   ledger.tasks[0].execution_owner = "task_agent";
   ledger.tasks[0].conversation_policy = "task_agent";
   ledger.tasks[0].delivery_policy = "child_pr";
-  expect(() => apply(ledger, "dispatch-claim", request(ledger, "bootstrap-dispatch-without-parent", {
-    task_id: "a",
-    operation_id: "bootstrap-dispatch-without-parent-op",
-  }))).toThrow("parent PR is created and verified");
+  expect(() =>
+    apply(
+      ledger,
+      "dispatch-claim",
+      request(ledger, "bootstrap-dispatch-without-parent", {
+        task_id: "a",
+        operation_id: "bootstrap-dispatch-without-parent-op",
+      }),
+    ),
+  ).toThrow("parent PR is created and verified");
   expect(ledger.operations).toHaveLength(0);
 });
 
@@ -827,8 +1232,18 @@ test("closed parent PRs do not satisfy the retained contribution gate", () => {
   ledger.groups[0].agent_thread_id = "group-thread";
   ledger.groups[0].parent_pr = providerPrReceipt("closed-parent", "parent", base, base).pr;
   ledger.groups[0].lifecycle.pr_created = "passed";
-  ledger.groups[0].atoms.push({ id: "parent-pr", title: "Create parent PR", purpose: "Publish", output: "Created", lifecycle_stage: "pr_created", status: "completed" });
-  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
+  ledger.groups[0].atoms.push({
+    id: "parent-pr",
+    title: "Create parent PR",
+    purpose: "Publish",
+    output: "Created",
+    lifecycle_stage: "pr_created",
+    status: "completed",
+  });
+  ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({
+    ...atom,
+    group_id: "g",
+  }));
   ledger.facts.push({
     id: "closed-parent-pr",
     kind: "pr_published",
@@ -845,11 +1260,22 @@ test("closed parent PRs do not satisfy the retained contribution gate", () => {
   ledger.tasks[0].delivery_policy = "child_pr";
   ledger.tasks[0].thread_id = "task-a-thread";
   ledger.tasks[0].state = "starting";
-  expect(() => apply(ledger, "task-update", request(ledger, "closed-parent-blocked", {
-    task_id: "a",
-    state: "running",
-    occurred_at: at,
-  }, { role: "task", thread_id: "task-a-thread" }))).toThrow("parent PR is created and verified");
+  expect(() =>
+    apply(
+      ledger,
+      "task-update",
+      request(
+        ledger,
+        "closed-parent-blocked",
+        {
+          task_id: "a",
+          state: "running",
+          occurred_at: at,
+        },
+        { role: "task", thread_id: "task-a-thread" },
+      ),
+    ),
+  ).toThrow("parent PR is created and verified");
   expect(ledger.tasks[0].state).toBe("starting");
 });
 function providerBranchReceipt(branch: string, sha: string) {
@@ -867,12 +1293,7 @@ function providerBranchReceipt(branch: string, sha: string) {
     evidence_ref: `provider:${branch}`,
   };
 }
-function providerPrReceipt(
-  id: string,
-  branch: string,
-  baseSha: string,
-  headSha: string,
-) {
+function providerPrReceipt(id: string, branch: string, baseSha: string, headSha: string) {
   const pr = {
     provider: "github",
     repository: "example/repo",
@@ -914,10 +1335,27 @@ test("contract-3 regular dispatch uses the repository target branch and current 
     owner.lifecycle.workspace_ready = "passed";
     owner.lifecycle.pr_created = "passed";
     owner.atoms = [
-      { id: "workspace", title: "Prepare parent", purpose: "Prepare", output: "Ready", lifecycle_stage: "workspace_ready", status: "completed" },
-      { id: "parent-pr", title: "Create parent PR", purpose: "Publish", output: "Created", lifecycle_stage: "pr_created", status: "completed" },
+      {
+        id: "workspace",
+        title: "Prepare parent",
+        purpose: "Prepare",
+        output: "Ready",
+        lifecycle_stage: "workspace_ready",
+        status: "completed",
+      },
+      {
+        id: "parent-pr",
+        title: "Create parent PR",
+        purpose: "Publish",
+        output: "Created",
+        lifecycle_stage: "pr_created",
+        status: "completed",
+      },
     ];
-    ledger.plans[0]!.group_atoms = owner.atoms.map(({ status, ...atom }) => ({ ...atom, group_id: owner.id }));
+    ledger.plans[0]!.group_atoms = owner.atoms.map(({ status, ...atom }) => ({
+      ...atom,
+      group_id: owner.id,
+    }));
     ledger.events.push(
       {
         id: "parent-workspace-event",
@@ -926,7 +1364,11 @@ test("contract-3 regular dispatch uses the repository target branch and current 
         actor_id: owner.agent_thread_id,
         occurred_at: at,
         recorded_at: at,
-        data: { target_type: "group", stage: "workspace_ready", evidence_ref: "provider:workspace" },
+        data: {
+          target_type: "group",
+          stage: "workspace_ready",
+          evidence_ref: "provider:workspace",
+        },
       },
       {
         id: "parent-pr-lifecycle-event",
@@ -939,7 +1381,12 @@ test("contract-3 regular dispatch uses the repository target branch and current 
       },
     );
 
-    const parentPr = providerPrReceipt("parent-pr", owner.parent_branch!, owner.current_sha!, owner.current_sha!);
+    const parentPr = providerPrReceipt(
+      "parent-pr",
+      owner.parent_branch!,
+      owner.current_sha!,
+      owner.current_sha!,
+    );
     expect(owner.parent_branch).not.toBe(ledger.repository.target_branch);
     expect(parentPr.target_branch).toBe(ledger.repository.target_branch);
     expect(parentPr.head_sha).toBe(owner.current_sha);
@@ -1002,23 +1449,39 @@ test("contract-3 regular dispatch uses the repository target branch and current 
   };
 
   const ledger = readyLedger();
-  expect(apply(ledger, "dispatch-claim", request(ledger, "regular-dispatch", {
-    task_id: "a",
-    operation_id: "regular-dispatch-op",
-  }))).toMatchObject({ result: { operation_id: "regular-dispatch-op" } });
+  expect(
+    apply(
+      ledger,
+      "dispatch-claim",
+      request(ledger, "regular-dispatch", {
+        task_id: "a",
+        operation_id: "regular-dispatch-op",
+      }),
+    ),
+  ).toMatchObject({ result: { operation_id: "regular-dispatch-op" } });
 
   const staleHead = readyLedger();
   const parentPrFact = staleHead.facts.find((fact) => fact.id === "parent-pr-fact")!;
   parentPrFact.receipt!.head_sha = head;
-  expect(() => apply(staleHead, "dispatch-claim", request(staleHead, "stale-parent-head", {
-    task_id: "a",
-    operation_id: "stale-parent-head-op",
-  }))).toThrow("parent PR is created and verified");
+  expect(() =>
+    apply(
+      staleHead,
+      "dispatch-claim",
+      request(staleHead, "stale-parent-head", {
+        task_id: "a",
+        operation_id: "stale-parent-head-op",
+      }),
+    ),
+  ).toThrow("parent PR is created and verified");
   try {
-    apply(staleHead, "dispatch-claim", request(staleHead, "stale-parent-head-details", {
-      task_id: "a",
-      operation_id: "stale-parent-head-details-op",
-    }));
+    apply(
+      staleHead,
+      "dispatch-claim",
+      request(staleHead, "stale-parent-head-details", {
+        task_id: "a",
+        operation_id: "stale-parent-head-details-op",
+      }),
+    );
   } catch (error) {
     expect((error as any).code).toBe("DELIVERY_GATE_PENDING");
     expect((error as any).details.missing).toEqual(["parent_pr"]);
@@ -1031,10 +1494,21 @@ describe("orchestration state", () => {
     ledger.groups[0].delivery_unit_kind = "bootstrap";
     ledger.groups[0].owner_kind = "main";
     ledger.groups[0].agent_thread_id = null;
-    const incoming = structuredClone(ledger.groups[0]); incoming.state = "blocked";
-    expect(apply(ledger, "group-update", request(ledger, "bootstrap-update", { group: incoming }))).toMatchObject({ result: { group_id: "g", state: "blocked" } });
-    const regular = fixture(); const regularIncoming = structuredClone(regular.groups[0]); regularIncoming.state = "blocked";
-    expect(() => apply(regular, "group-update", request(regular, "regular-main-update", { group: regularIncoming }))).toThrow("Main conversation may update only the bootstrap delivery unit");
+    const incoming = structuredClone(ledger.groups[0]);
+    incoming.state = "blocked";
+    expect(
+      apply(ledger, "group-update", request(ledger, "bootstrap-update", { group: incoming })),
+    ).toMatchObject({ result: { group_id: "g", state: "blocked" } });
+    const regular = fixture();
+    const regularIncoming = structuredClone(regular.groups[0]);
+    regularIncoming.state = "blocked";
+    expect(() =>
+      apply(
+        regular,
+        "group-update",
+        request(regular, "regular-main-update", { group: regularIncoming }),
+      ),
+    ).toThrow("Main conversation may update only the bootstrap delivery unit");
   });
   test("rejects contradictory bootstrap ownership and cross-group predecessors in complete ledgers", () => {
     const bootstrap = fixture();
@@ -1047,9 +1521,26 @@ describe("orchestration state", () => {
     duplicate.groups.push({ ...structuredClone(duplicate.groups[0]), id: "other" });
     expect(() => validateLedger(duplicate)).toThrow("At most one bootstrap");
     const predecessor = structuredClone(bootstrap);
-    predecessor.groups.push({ ...structuredClone(predecessor.groups[0]), id: "other", delivery_unit_kind: "regular", owner_kind: "group", agent_thread_id: "other-thread" });
-    predecessor.plans[0].nodes.push({ ...predecessor.plans[0].nodes[0]!, id: "other-node", kind: "milestone", ref_id: null, group_id: "other" });
-    predecessor.plans[0].edges.push({ id: "other-before-bootstrap", from_node_id: "other-node", to_node_id: "node-a", requires: "completed" });
+    predecessor.groups.push({
+      ...structuredClone(predecessor.groups[0]),
+      id: "other",
+      delivery_unit_kind: "regular",
+      owner_kind: "group",
+      agent_thread_id: "other-thread",
+    });
+    predecessor.plans[0].nodes.push({
+      ...predecessor.plans[0].nodes[0]!,
+      id: "other-node",
+      kind: "milestone",
+      ref_id: null,
+      group_id: "other",
+    });
+    predecessor.plans[0].edges.push({
+      id: "other-before-bootstrap",
+      from_node_id: "other-node",
+      to_node_id: "node-a",
+      requires: "completed",
+    });
     expect(() => validateLedger(predecessor)).toThrow("Bootstrap cannot depend");
   });
   test("bootstrap parent merge claim uses main ownership and retains integration gates", () => {
@@ -1057,14 +1548,32 @@ describe("orchestration state", () => {
     ledger.groups[0].delivery_unit_kind = "bootstrap";
     ledger.groups[0].owner_kind = "main";
     ledger.groups[0].agent_thread_id = null;
-    const pr = { provider: "github", repository: "example/repo", id: "9", url: "https://github.com/example/repo/pull/9" };
+    const pr = {
+      provider: "github",
+      repository: "example/repo",
+      id: "9",
+      url: "https://github.com/example/repo/pull/9",
+    };
     ledger.groups[0].parent_pr = pr;
     ledger.groups[0].current_sha = head;
     approve(ledger);
-    const payload = { mode: "parent", operation_id: "parent-merge", group_id: "g", target_branch: "main", expected_base_sha: base, expected_head_sha: head, owner_approval_id: "parent-approved", pr };
-    expect(() => apply(ledger, "merge-claim", request(ledger, "premature-parent", payload))).toThrow("Contribution tasks are not integrated");
+    const payload = {
+      mode: "parent",
+      operation_id: "parent-merge",
+      group_id: "g",
+      target_branch: "main",
+      expected_base_sha: base,
+      expected_head_sha: head,
+      owner_approval_id: "parent-approved",
+      pr,
+    };
+    expect(() =>
+      apply(ledger, "merge-claim", request(ledger, "premature-parent", payload)),
+    ).toThrow("Contribution tasks are not integrated");
     for (const task of ledger.tasks) task.state = "integrated";
-    expect(() => apply(ledger, "merge-claim", request(ledger, "main-parent", payload))).not.toThrow();
+    expect(() =>
+      apply(ledger, "merge-claim", request(ledger, "main-parent", payload)),
+    ).not.toThrow();
   });
   test("accepts legacy development tasks with contribution semantics", () => {
     const ledger = fixture();
@@ -1398,12 +1907,7 @@ describe("orchestration state", () => {
     apply(
       ledger,
       "task-update",
-      request(
-        ledger,
-        "task-close",
-        { task_id: "a", state: "closed" },
-        taskActor,
-      ),
+      request(ledger, "task-close", { task_id: "a", state: "closed" }, taskActor),
     );
     expect(ledger.tasks[0].lifecycle).toEqual({
       workspace_ready: "passed",
@@ -1659,7 +2163,7 @@ describe("orchestration state", () => {
           operation_id: "blocked-dispatch",
         }),
       ),
-      ).toThrow("parent PR is created and verified");
+    ).toThrow("parent PR is created and verified");
   });
   test("release facts cannot be written without an operation receipt", () => {
     const ledger = fixture();
@@ -2073,12 +2577,7 @@ describe("orchestration state", () => {
     apply(
       ledger,
       "task-update",
-      request(
-        ledger,
-        "start-atoms",
-        { task_id: "a", state: "running", occurred_at: at },
-        actor,
-      ),
+      request(ledger, "start-atoms", { task_id: "a", state: "running", occurred_at: at }, actor),
     );
     expect(() =>
       apply(
@@ -2122,35 +2621,129 @@ describe("orchestration state", () => {
         actor,
       ),
     );
-    expect(ledger.tasks[0].atoms.map((atom) => atom.status)).toEqual([
-      "completed",
-      "running",
-    ]);
+    expect(ledger.tasks[0].atoms.map((atom) => atom.status)).toEqual(["completed", "running"]);
   });
 
   test("delivery-unit atoms and coordination waiting state are independent from contribution tasks", () => {
     const ledger = fixture();
     ledger.plans[0].group_atoms = [
-      { id: "group-atom-one", title: "Prepare parent", group_id: "g", purpose: "Prepare", output: "Prepared", lifecycle_stage: null },
-      { id: "group-atom-two", title: "Close out", group_id: "g", purpose: "Close", output: "Closed", lifecycle_stage: null },
+      {
+        id: "group-atom-one",
+        title: "Prepare parent",
+        group_id: "g",
+        purpose: "Prepare",
+        output: "Prepared",
+        lifecycle_stage: null,
+      },
+      {
+        id: "group-atom-two",
+        title: "Close out",
+        group_id: "g",
+        purpose: "Close",
+        output: "Closed",
+        lifecycle_stage: null,
+      },
     ];
-    ledger.groups[0].atoms = ledger.plans[0].group_atoms.map((atom) => ({ ...atom, group_id: undefined, status: "planned" as const })).map(({ group_id: _groupId, ...atom }) => atom);
-    apply(ledger, "group-execution-update", request(ledger, "group-waiting", { group_id: "g", state: "waiting", reason: "等待贡献任务完成集成", waiting_for_task_ids: ["a"] }, groupActor));
-    expect(ledger.groups[0].coordination_execution).toEqual({ state: "waiting", reason: "等待贡献任务完成集成", waiting_for_task_ids: ["a"] });
+    ledger.groups[0].atoms = ledger.plans[0].group_atoms
+      .map((atom) => ({ ...atom, group_id: undefined, status: "planned" as const }))
+      .map(({ group_id: _groupId, ...atom }) => atom);
+    apply(
+      ledger,
+      "group-execution-update",
+      request(
+        ledger,
+        "group-waiting",
+        {
+          group_id: "g",
+          state: "waiting",
+          reason: "等待贡献任务完成集成",
+          waiting_for_task_ids: ["a"],
+        },
+        groupActor,
+      ),
+    );
+    expect(ledger.groups[0].coordination_execution).toEqual({
+      state: "waiting",
+      reason: "等待贡献任务完成集成",
+      waiting_for_task_ids: ["a"],
+    });
     approve(ledger);
-    apply(ledger, "group-atom-update", request(ledger, "group-atom-start", { group_id: "g", atom_id: "group-atom-one", state: "running" }, groupActor));
-    expect(() => apply(ledger, "group-atom-update", request(ledger, "group-atom-skip", { group_id: "g", atom_id: "group-atom-two", state: "running" }, groupActor))).toThrow("Earlier delivery-unit atoms");
-    apply(ledger, "group-atom-update", request(ledger, "group-atom-done", { group_id: "g", atom_id: "group-atom-one", state: "completed" }, groupActor));
-    apply(ledger, "group-atom-update", request(ledger, "group-atom-two-start", { group_id: "g", atom_id: "group-atom-two", state: "running" }, groupActor));
-    expect(() => apply(ledger, "group-execution-update", request(ledger, "group-bad-wait", { group_id: "g", state: "waiting", reason: "missing", waiting_for_task_ids: ["missing"] }, groupActor))).toThrow("contribution tasks");
+    apply(
+      ledger,
+      "group-atom-update",
+      request(
+        ledger,
+        "group-atom-start",
+        { group_id: "g", atom_id: "group-atom-one", state: "running" },
+        groupActor,
+      ),
+    );
+    expect(() =>
+      apply(
+        ledger,
+        "group-atom-update",
+        request(
+          ledger,
+          "group-atom-skip",
+          { group_id: "g", atom_id: "group-atom-two", state: "running" },
+          groupActor,
+        ),
+      ),
+    ).toThrow("Earlier delivery-unit atoms");
+    apply(
+      ledger,
+      "group-atom-update",
+      request(
+        ledger,
+        "group-atom-done",
+        { group_id: "g", atom_id: "group-atom-one", state: "completed" },
+        groupActor,
+      ),
+    );
+    apply(
+      ledger,
+      "group-atom-update",
+      request(
+        ledger,
+        "group-atom-two-start",
+        { group_id: "g", atom_id: "group-atom-two", state: "running" },
+        groupActor,
+      ),
+    );
+    expect(() =>
+      apply(
+        ledger,
+        "group-execution-update",
+        request(
+          ledger,
+          "group-bad-wait",
+          { group_id: "g", state: "waiting", reason: "missing", waiting_for_task_ids: ["missing"] },
+          groupActor,
+        ),
+      ),
+    ).toThrow("contribution tasks");
   });
 
   test("runtime execution requires bound orchestration ownership", () => {
     const ledger = fixture();
     ledger.control.ownership = "uncertain";
-    expect(() => apply(ledger, "group-execution-update", request(ledger, "uncertain-runtime", {
-      group_id: "g", state: "running", reason: null, waiting_for_task_ids: [],
-    }, groupActor))).toThrow("ownership is not resolved");
+    expect(() =>
+      apply(
+        ledger,
+        "group-execution-update",
+        request(
+          ledger,
+          "uncertain-runtime",
+          {
+            group_id: "g",
+            state: "running",
+            reason: null,
+            waiting_for_task_ids: [],
+          },
+          groupActor,
+        ),
+      ),
+    ).toThrow("ownership is not resolved");
   });
 
   test("active delivery units cannot become idle while a contribution task is ready", () => {
@@ -2166,12 +2759,17 @@ describe("orchestration state", () => {
       apply(
         ledger,
         "group-execution-update",
-        request(ledger, "group-idle-with-ready-task", {
-          group_id: "g",
-          state: "idle",
-          reason: null,
-          waiting_for_task_ids: [],
-        }, groupActor),
+        request(
+          ledger,
+          "group-idle-with-ready-task",
+          {
+            group_id: "g",
+            state: "idle",
+            reason: null,
+            waiting_for_task_ids: [],
+          },
+          groupActor,
+        ),
       ),
     ).toThrow("ready contribution task");
   });
@@ -2200,43 +2798,121 @@ describe("orchestration state", () => {
     const ledger = v2Fixture();
     ledger.contract_version = 2;
     ledger.source_schema_version = 1;
-    const atom = { id: "prepare", title: "Prepare", purpose: "Prepare", output: "Ready", lifecycle_stage: "workspace_ready", status: "running" };
+    const atom = {
+      id: "prepare",
+      title: "Prepare",
+      purpose: "Prepare",
+      output: "Ready",
+      lifecycle_stage: "workspace_ready",
+      status: "running",
+    };
     ledger.groups[0].atoms = [atom];
     const { status, ...definition } = atom;
     ledger.plans[0].group_atoms = [{ ...definition, group_id: "g" }];
     approve(ledger);
-    expect(() => apply(ledger, "group-atom-update", request(ledger, "migrated-atom", { group_id: "g", atom_id: "prepare", state: "completed" }, groupActor))).toThrow("not passed");
+    expect(() =>
+      apply(
+        ledger,
+        "group-atom-update",
+        request(
+          ledger,
+          "migrated-atom",
+          { group_id: "g", atom_id: "prepare", state: "completed" },
+          groupActor,
+        ),
+      ),
+    ).toThrow("not passed");
     expect(ledger.groups[0].atoms[0].status).toBe("running");
   });
 
-  test.each([false, true])("group-close completes the closeout atom in the same transaction (bootstrap=%s)", (bootstrap) => {
-    const ledger = v2Fixture();
-    const coordinator = bootstrap ? main : groupActor;
-    if (bootstrap) {
-      ledger.groups[0].delivery_unit_kind = "bootstrap";
-      ledger.groups[0].owner_kind = "main";
-      ledger.groups[0].agent_thread_id = null;
-    }
-    ledger.groups[0].state = "merged";
-    ledger.groups[0].merge_sha = merge;
-    ledger.groups[0].lifecycle.pr_merged = "passed";
-    ledger.groups[0].atoms = [
-      { id: "group-atom-one", title: "Merge", purpose: "Merge", output: "Merged", lifecycle_stage: "pr_merged", status: "completed" },
-      { id: "group-atom-two", title: "Close", purpose: "Close", output: "Closed", lifecycle_stage: "closed", status: "running" },
-    ];
-    ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: "g" }));
-    ledger.groups[0].coordination_execution = { state: "waiting", reason: "merged closeout", waiting_for_task_ids: [] };
-    ledger.tasks.forEach((task: Task) => { task.state = "integrated"; });
-    ledger.facts.push({ id: "group-merged", kind: "pr_merged", subject_id: "g", status: "passed", source: "github", observed_at: at, sha: merge, evidence_ref: "merge" });
-    ledger.facts.push({ id: "group-ci", kind: "ci_passed", subject_id: "g", status: "passed", source: "github", observed_at: at, sha: merge, evidence_ref: "ci" });
-    apply(ledger, "group-execution-update", request(ledger, "merged-closeout-idle", {
-      group_id: "g", state: "idle", reason: null, waiting_for_task_ids: [],
-    }, coordinator));
-    apply(ledger, "group-close", request(ledger, "group-closeout", { group_id: "g" }, coordinator));
-    expect(ledger.groups[0].state).toBe("closed");
-    expect(ledger.groups[0].atoms.at(-1)?.status).toBe("completed");
-    expect(ledger.groups[0].lifecycle.closed).toBe("passed");
-  });
+  test.each([false, true])(
+    "group-close completes the closeout atom in the same transaction (bootstrap=%s)",
+    (bootstrap) => {
+      const ledger = v2Fixture();
+      const coordinator = bootstrap ? main : groupActor;
+      if (bootstrap) {
+        ledger.groups[0].delivery_unit_kind = "bootstrap";
+        ledger.groups[0].owner_kind = "main";
+        ledger.groups[0].agent_thread_id = null;
+      }
+      ledger.groups[0].state = "merged";
+      ledger.groups[0].merge_sha = merge;
+      ledger.groups[0].lifecycle.pr_merged = "passed";
+      ledger.groups[0].atoms = [
+        {
+          id: "group-atom-one",
+          title: "Merge",
+          purpose: "Merge",
+          output: "Merged",
+          lifecycle_stage: "pr_merged",
+          status: "completed",
+        },
+        {
+          id: "group-atom-two",
+          title: "Close",
+          purpose: "Close",
+          output: "Closed",
+          lifecycle_stage: "closed",
+          status: "running",
+        },
+      ];
+      ledger.plans[0].group_atoms = ledger.groups[0].atoms.map(({ status, ...atom }: any) => ({
+        ...atom,
+        group_id: "g",
+      }));
+      ledger.groups[0].coordination_execution = {
+        state: "waiting",
+        reason: "merged closeout",
+        waiting_for_task_ids: [],
+      };
+      ledger.tasks.forEach((task: Task) => {
+        task.state = "integrated";
+      });
+      ledger.facts.push({
+        id: "group-merged",
+        kind: "pr_merged",
+        subject_id: "g",
+        status: "passed",
+        source: "github",
+        observed_at: at,
+        sha: merge,
+        evidence_ref: "merge",
+      });
+      ledger.facts.push({
+        id: "group-ci",
+        kind: "ci_passed",
+        subject_id: "g",
+        status: "passed",
+        source: "github",
+        observed_at: at,
+        sha: merge,
+        evidence_ref: "ci",
+      });
+      apply(
+        ledger,
+        "group-execution-update",
+        request(
+          ledger,
+          "merged-closeout-idle",
+          {
+            group_id: "g",
+            state: "idle",
+            reason: null,
+            waiting_for_task_ids: [],
+          },
+          coordinator,
+        ),
+      );
+      apply(
+        ledger,
+        "group-close",
+        request(ledger, "group-closeout", { group_id: "g" }, coordinator),
+      );
+      expect(ledger.groups[0].state).toBe("closed");
+      expect(ledger.groups[0].atoms.at(-1)?.status).toBe("completed");
+      expect(ledger.groups[0].lifecycle.closed).toBe("passed");
+    },
+  );
 
   test("replays a matching request and rejects ID reuse", () => {
     const ledger = fixture();
@@ -2246,9 +2922,7 @@ describe("orchestration state", () => {
       operation_id: "dispatch-a",
     });
     apply(ledger, "dispatch-claim", first);
-    expect((apply(ledger, "dispatch-claim", first) as any).code).toBe(
-      "REPLAYED",
-    );
+    expect((apply(ledger, "dispatch-claim", first) as any).code).toBe("REPLAYED");
     expect(() =>
       apply(ledger, "dispatch-claim", {
         ...first,
@@ -2297,12 +2971,7 @@ describe("orchestration state", () => {
     apply(
       ledger,
       "task-update",
-      request(
-        ledger,
-        "start-foreign",
-        { task_id: "a", state: "running", occurred_at: at },
-        actor,
-      ),
+      request(ledger, "start-foreign", { task_id: "a", state: "running", occurred_at: at }, actor),
     );
     const foreign = {
       provider: "github",
@@ -2311,11 +2980,7 @@ describe("orchestration state", () => {
       url: "https://github.com/other/repo/pull/1",
     };
     expect(() =>
-      apply(
-        ledger,
-        "task-pr",
-        request(ledger, "foreign-pr", { task_id: "a", pr: foreign }, actor),
-      ),
+      apply(ledger, "task-pr", request(ledger, "foreign-pr", { task_id: "a", pr: foreign }, actor)),
     ).toThrow("repository");
   });
 
@@ -2419,11 +3084,7 @@ describe("orchestration state", () => {
       pr: parentPr,
     };
     expect(() =>
-      apply(
-        ledger,
-        "merge-claim",
-        request(ledger, "task-parent-claim", parentClaim, taskActor),
-      ),
+      apply(ledger, "merge-claim", request(ledger, "task-parent-claim", parentClaim, taskActor)),
     ).toThrow("Delivery coordinator");
 
     ledger.groups[0]!.state = "merged";
@@ -2449,156 +3110,142 @@ describe("orchestration state", () => {
     expect(ledger.groups[0]!.state).toBe("merged");
   });
 
-  test.each([false, true])("group review binds the exact head before a child merge unlocks its successor (bootstrap=%s)", (bootstrap) => {
-    const ledger = fixture();
-    const coordinator = bootstrap ? main : groupActor;
-    if (bootstrap) {
-      ledger.groups[0].delivery_unit_kind = "bootstrap";
-      ledger.groups[0].owner_kind = "main";
-      ledger.groups[0].agent_thread_id = null;
-    }
-    approve(ledger);
-    apply(
-      ledger,
-      "dispatch-claim",
-      request(ledger, "claim-a", { task_id: "a", operation_id: "dispatch-a" }),
-    );
-    apply(
-      ledger,
-      "dispatch-resolve",
-      request(ledger, "bind-a", {
-        operation_id: "dispatch-a",
-        outcome: "succeeded",
-        thread_id: "task-a",
-        native_evidence: { source: "create_thread" },
-      }),
-    );
-    const taskActor = { role: "task", thread_id: "task-a" } as const;
-    expect(ledger.tasks.find((item) => item.id === "a")!.started_at).toBeNull();
-    apply(
-      ledger,
-      "task-update",
-      request(
-        ledger,
-        "start-a",
-        { task_id: "a", state: "running", occurred_at: at },
-        taskActor,
-      ),
-    );
-    const pr = {
-      provider: "github",
-      repository: "example/repo",
-      id: "1",
-      url: "https://github.com/example/repo/pull/1",
-    };
-    apply(
-      ledger,
-      "task-pr",
-      request(ledger, "task-pr", { task_id: "a", pr }, taskActor),
-    );
-    const claim = {
-      operation_id: "merge-a",
-      group_id: "g",
-      task_id: "a",
-      target_branch: "parent",
-      expected_base_sha: base,
-      expected_head_sha: head,
-      pr,
-    };
-    expect(() =>
+  test.each([false, true])(
+    "group review binds the exact head before a child merge unlocks its successor (bootstrap=%s)",
+    (bootstrap) => {
+      const ledger = fixture();
+      const coordinator = bootstrap ? main : groupActor;
+      if (bootstrap) {
+        ledger.groups[0].delivery_unit_kind = "bootstrap";
+        ledger.groups[0].owner_kind = "main";
+        ledger.groups[0].agent_thread_id = null;
+      }
+      approve(ledger);
       apply(
         ledger,
-        "merge-claim",
-        request(ledger, "premature", claim, taskActor),
-      ),
-    ).toThrow("quality proof");
-    apply(
-      ledger,
-      "task-quality-record",
-      request(
+        "dispatch-claim",
+        request(ledger, "claim-a", { task_id: "a", operation_id: "dispatch-a" }),
+      );
+      apply(
         ledger,
-        "review",
-        {
-          task_id: "a",
-          base_sha: base,
-          evidence: {
-            id: "review-fact",
-            kind: "task_quality",
-            subject_id: "a",
-            status: "passed",
-            source: taskActor.thread_id,
-            observed_at: at,
-            sha: head,
-            evidence_ref: "review-proof",
-            quality: taskQuality("a", taskActor.thread_id, pr, base, head),
-          },
-        },
-        taskActor,
-      ),
-    );
-    apply(
-      ledger,
-      "merge-claim",
-      request(ledger, "claim-merge", claim, taskActor),
-    );
-    apply(
-      ledger,
-      "merge-resolve",
-      request(
-        ledger,
-        "merge-result",
-        {
-          operation_id: "merge-a",
+        "dispatch-resolve",
+        request(ledger, "bind-a", {
+          operation_id: "dispatch-a",
           outcome: "succeeded",
-          provider_evidence: {
-            id: "merge-fact",
-            kind: "pr_merged",
-            subject_id: "a",
-            status: "passed",
-            source: "github",
-            observed_at: at,
-            sha: merge,
-            evidence_ref: "provider-receipt",
-          },
-          provider_observation: {
-            pr,
-            head_sha: head,
+          thread_id: "task-a",
+          native_evidence: { source: "create_thread" },
+        }),
+      );
+      const taskActor = { role: "task", thread_id: "task-a" } as const;
+      expect(ledger.tasks.find((item) => item.id === "a")!.started_at).toBeNull();
+      apply(
+        ledger,
+        "task-update",
+        request(ledger, "start-a", { task_id: "a", state: "running", occurred_at: at }, taskActor),
+      );
+      const pr = {
+        provider: "github",
+        repository: "example/repo",
+        id: "1",
+        url: "https://github.com/example/repo/pull/1",
+      };
+      apply(ledger, "task-pr", request(ledger, "task-pr", { task_id: "a", pr }, taskActor));
+      const claim = {
+        operation_id: "merge-a",
+        group_id: "g",
+        task_id: "a",
+        target_branch: "parent",
+        expected_base_sha: base,
+        expected_head_sha: head,
+        pr,
+      };
+      expect(() =>
+        apply(ledger, "merge-claim", request(ledger, "premature", claim, taskActor)),
+      ).toThrow("quality proof");
+      apply(
+        ledger,
+        "task-quality-record",
+        request(
+          ledger,
+          "review",
+          {
+            task_id: "a",
             base_sha: base,
-            merge_sha: merge,
-            state: "merged",
+            evidence: {
+              id: "review-fact",
+              kind: "task_quality",
+              subject_id: "a",
+              status: "passed",
+              source: taskActor.thread_id,
+              observed_at: at,
+              sha: head,
+              evidence_ref: "review-proof",
+              quality: taskQuality("a", taskActor.thread_id, pr, base, head),
+            },
           },
-        },
-        taskActor,
-      ),
-    );
-    expect(ready(ledger, "c")).toBe(true);
-    expect(ledger.groups[0].current_sha).toBe(merge);
-    expect(() =>
+          taskActor,
+        ),
+      );
+      apply(ledger, "merge-claim", request(ledger, "claim-merge", claim, taskActor));
       apply(
         ledger,
-        "dispatch-claim",
-        request(ledger, "stale-c", {
-          task_id: "c",
-          operation_id: "dispatch-c",
-        }),
-      ),
-    ).toThrow("base");
-    apply(
-      ledger,
-      "task-base",
-      request(ledger, "update-base-c", { task_id: "c", base_sha: merge }),
-    );
-    expect(() =>
+        "merge-resolve",
+        request(
+          ledger,
+          "merge-result",
+          {
+            operation_id: "merge-a",
+            outcome: "succeeded",
+            provider_evidence: {
+              id: "merge-fact",
+              kind: "pr_merged",
+              subject_id: "a",
+              status: "passed",
+              source: "github",
+              observed_at: at,
+              sha: merge,
+              evidence_ref: "provider-receipt",
+            },
+            provider_observation: {
+              pr,
+              head_sha: head,
+              base_sha: base,
+              merge_sha: merge,
+              state: "merged",
+            },
+          },
+          taskActor,
+        ),
+      );
+      expect(ready(ledger, "c")).toBe(true);
+      expect(ledger.groups[0].current_sha).toBe(merge);
+      expect(() =>
+        apply(
+          ledger,
+          "dispatch-claim",
+          request(ledger, "stale-c", {
+            task_id: "c",
+            operation_id: "dispatch-c",
+          }),
+        ),
+      ).toThrow("base");
       apply(
         ledger,
-        "dispatch-claim",
-        request(ledger, "claim-c", {
-          task_id: "c",
-          operation_id: "dispatch-c",
-        }),
-      ),
-    ).not.toThrow();
-  });
+        "task-base",
+        request(ledger, "update-base-c", { task_id: "c", base_sha: merge }),
+      );
+      expect(() =>
+        apply(
+          ledger,
+          "dispatch-claim",
+          request(ledger, "claim-c", {
+            task_id: "c",
+            operation_id: "dispatch-c",
+          }),
+        ),
+      ).not.toThrow();
+    },
+  );
 
   test("reconciles an external parent update-branch with exact provider evidence", () => {
     const ledger = fixture();
@@ -2792,11 +3439,7 @@ describe("orchestration state", () => {
       id: "2",
       url: "https://github.com/example/repo/pull/2",
     };
-    apply(
-      ledger,
-      "task-pr",
-      request(ledger, "pr-b", { task_id: "b", pr }, actor),
-    );
+    apply(ledger, "task-pr", request(ledger, "pr-b", { task_id: "b", pr }, actor));
     apply(
       ledger,
       "task-quality-record",
@@ -2865,9 +3508,9 @@ describe("orchestration state", () => {
         evidence_ref: "cut-proof",
       },
     };
-    expect(() =>
-      apply(ledger, "cut-apply", request(ledger, "cut-too-early", cutPayload)),
-    ).toThrow("pending merges");
+    expect(() => apply(ledger, "cut-apply", request(ledger, "cut-too-early", cutPayload))).toThrow(
+      "pending merges",
+    );
     apply(
       ledger,
       "merge-resolve",
@@ -2899,25 +3542,29 @@ describe("orchestration state", () => {
       ),
     );
     const contaminated = structuredClone(cutPayload) as any;
-    contaminated.next_group.coordination_execution = { state: "running", reason: null, waiting_for_task_ids: [] };
-    expect(() => apply(ledger, "cut-apply", request(ledger, "cut-contaminated", contaminated))).toThrow("pre-existing runtime");
+    contaminated.next_group.coordination_execution = {
+      state: "running",
+      reason: null,
+      waiting_for_task_ids: [],
+    };
+    expect(() =>
+      apply(ledger, "cut-apply", request(ledger, "cut-contaminated", contaminated)),
+    ).toThrow("pre-existing runtime");
     const bootstrapCut = structuredClone(cutPayload) as any;
     bootstrapCut.next_group.delivery_unit_kind = "bootstrap";
     bootstrapCut.next_group.owner_kind = "main";
     const beforeRejectedCut = structuredClone(ledger);
-    expect(() => apply(ledger, "cut-apply", request(ledger, "cut-bootstrap", bootstrapCut))).toThrow("only be created during run initialization");
+    expect(() =>
+      apply(ledger, "cut-apply", request(ledger, "cut-bootstrap", bootstrapCut)),
+    ).toThrow("only be created during run initialization");
     expect(ledger).toEqual(beforeRejectedCut);
     apply(ledger, "cut-apply", request(ledger, "cut-finished", cutPayload));
     expect(ledger.groups.find((item) => item.id === "g")!.cut_sha).toBe(merge);
     expect(ledger.plans[0]!.cut_rules[0]!.status).toBe("applied");
     expect(ledger.tasks.find((item) => item.id === "a")!.group_id).toBe("g");
     expect(ledger.tasks.find((item) => item.id === "b")!.group_id).toBe("g");
-    expect(ledger.tasks.find((item) => item.id === "c")!.group_id).toBe(
-      "g-next",
-    );
-    expect(ledger.tasks.find((item) => item.id === "deploy")!.group_id).toBe(
-      "g",
-    );
+    expect(ledger.tasks.find((item) => item.id === "c")!.group_id).toBe("g-next");
+    expect(ledger.tasks.find((item) => item.id === "deploy")!.group_id).toBe("g");
     const newBase = {
       group_id: "g-next",
       provider_observation: {
@@ -2928,14 +3575,12 @@ describe("orchestration state", () => {
         ancestor_sha: merge,
       },
     };
-    expect(() =>
-      apply(ledger, "group-base", request(ledger, "too-early-base", newBase)),
-    ).toThrow("not merged");
+    expect(() => apply(ledger, "group-base", request(ledger, "too-early-base", newBase))).toThrow(
+      "not merged",
+    );
     ledger.groups.find((item) => item.id === "g")!.state = "merged";
     ledger.groups.find((item) => item.id === "g")!.merge_sha = merge;
-    expect(() =>
-      apply(ledger, "group-base", request(ledger, "new-base", newBase)),
-    ).not.toThrow();
+    expect(() => apply(ledger, "group-base", request(ledger, "new-base", newBase))).not.toThrow();
   });
 
   test("validates a starting task boundary after a dynamic cut", () => {
@@ -3007,9 +3652,7 @@ describe("orchestration state", () => {
       }),
     );
 
-    expect(ledger.tasks.find((item) => item.id === "b")!.state).toBe(
-      "starting",
-    );
+    expect(ledger.tasks.find((item) => item.id === "b")!.state).toBe("starting");
     expect(() => validateLedger(ledger)).not.toThrow();
   });
 
@@ -3069,9 +3712,7 @@ describe("orchestration state", () => {
     proposed.id = "plan-revision";
     proposed.supersedes_id = ledger.active_plan_id;
     proposed.approval_id = null;
-    proposed.nodes.find(
-      (node) => node.kind === "task" && node.ref_id === "a",
-    )!.label = "a revised";
+    proposed.nodes.find((node) => node.kind === "task" && node.ref_id === "a")!.label = "a revised";
     expect(() =>
       apply(
         ledger,
@@ -3098,9 +3739,17 @@ describe("orchestration state", () => {
     groups[0]!.agent_thread_id = null;
     const originalGroups = structuredClone(ledger.groups);
     const originalEvents = structuredClone(ledger.events);
-    expect(() => apply(ledger, "plan-propose", request(ledger, "owner-rewrite", {
-      plan: proposed, groups, tasks: structuredClone(ledger.tasks),
-    }))).toThrow("Plan revision cannot overwrite runtime group g");
+    expect(() =>
+      apply(
+        ledger,
+        "plan-propose",
+        request(ledger, "owner-rewrite", {
+          plan: proposed,
+          groups,
+          tasks: structuredClone(ledger.tasks),
+        }),
+      ),
+    ).toThrow("Plan revision cannot overwrite runtime group g");
     expect(ledger.groups).toEqual(originalGroups);
     expect(ledger.events).toEqual(originalEvents);
   });
@@ -3111,15 +3760,28 @@ describe("orchestration state", () => {
     proposed.id = "plan-retrofit-bootstrap";
     proposed.supersedes_id = ledger.active_plan_id;
     const newGroup = {
-      ...structuredClone(ledger.groups[0]!), id: "new-bootstrap", state: "planned",
-      delivery_unit_kind: "bootstrap", owner_kind: "main", agent_thread_id: null,
-      parent_branch: null, parent_pr: null, current_sha: null,
+      ...structuredClone(ledger.groups[0]!),
+      id: "new-bootstrap",
+      state: "planned",
+      delivery_unit_kind: "bootstrap",
+      owner_kind: "main",
+      agent_thread_id: null,
+      parent_branch: null,
+      parent_pr: null,
+      current_sha: null,
     };
     const before = structuredClone(ledger);
-    expect(() => apply(ledger, "plan-propose", request(ledger, "retrofit-bootstrap", {
-      plan: proposed, groups: [...structuredClone(ledger.groups), newGroup],
-      tasks: structuredClone(ledger.tasks),
-    }))).toThrow("only be created during run initialization");
+    expect(() =>
+      apply(
+        ledger,
+        "plan-propose",
+        request(ledger, "retrofit-bootstrap", {
+          plan: proposed,
+          groups: [...structuredClone(ledger.groups), newGroup],
+          tasks: structuredClone(ledger.tasks),
+        }),
+      ),
+    ).toThrow("only be created during run initialization");
     expect(ledger).toEqual(before);
   });
 
@@ -3213,9 +3875,7 @@ describe("orchestration state", () => {
         taskActor,
       ),
     ) as any;
-    const sentNotice = ledger.notifications.find(
-      (item) => item.id === notice.id,
-    )!;
+    const sentNotice = ledger.notifications.find((item) => item.id === notice.id)!;
     expect(sent.result).toMatchObject({
       notification_id: notice.id,
       delivery_attempt_id: "attempt-1",
@@ -3237,9 +3897,7 @@ describe("orchestration state", () => {
         main,
       ),
     ) as any;
-    const acknowledgedNotice = ledger.notifications.find(
-      (item) => item.id === notice.id,
-    )!;
+    const acknowledgedNotice = ledger.notifications.find((item) => item.id === notice.id)!;
     expect(acknowledged.result.ack_status).toBe("acknowledged");
     expect(acknowledgedNotice.status).toBe("acknowledged");
   });
@@ -3304,9 +3962,7 @@ describe("orchestration state", () => {
         { role: "task", thread_id: "task-a" },
       ),
     );
-    expect(
-      legacy.notifications.find((item) => item.id === notice.id)!.status,
-    ).toBe("unknown");
+    expect(legacy.notifications.find((item) => item.id === notice.id)!.status).toBe("unknown");
     expect(() =>
       apply(
         legacy,
@@ -3390,57 +4046,146 @@ describe("orchestration state", () => {
 
   test("stores independent complete execution profiles and freezes after binding", () => {
     const ledger = fixture();
-    const updated = apply(ledger, "execution-profile-update", request(ledger, "profile-a", {
-      target_type: "task",
-      target_id: "a",
-      execution_profile: { model: "gpt-6.1-sol", thinking: "high" },
-    }));
+    const updated = apply(
+      ledger,
+      "execution-profile-update",
+      request(ledger, "profile-a", {
+        target_type: "task",
+        target_id: "a",
+        execution_profile: { model: "gpt-6.1-sol", thinking: "high" },
+      }),
+    );
     expect((updated as any).result).toMatchObject({ target_id: "a" });
     expect(ledger.tasks[0].execution_profile).toEqual({ model: "gpt-6.1-sol", thinking: "high" });
     expect(ledger.groups[0].execution_profile).toBeNull();
-    expect(() => apply(ledger, "execution-profile-update", request(ledger, "partial-profile", {
-      target_type: "task", target_id: "a", execution_profile: { model: "gpt-6-luna" },
-    }))).toThrow();
+    expect(() =>
+      apply(
+        ledger,
+        "execution-profile-update",
+        request(ledger, "partial-profile", {
+          target_type: "task",
+          target_id: "a",
+          execution_profile: { model: "gpt-6-luna" },
+        }),
+      ),
+    ).toThrow();
     ledger.tasks[0].thread_id = "created-thread";
-    expect(() => apply(ledger, "execution-profile-update", request(ledger, "frozen-profile", {
-      target_type: "task", target_id: "a", execution_profile: null,
-    }))).toThrow("frozen");
+    expect(() =>
+      apply(
+        ledger,
+        "execution-profile-update",
+        request(ledger, "frozen-profile", {
+          target_type: "task",
+          target_id: "a",
+          execution_profile: null,
+        }),
+      ),
+    ).toThrow("frozen");
   });
   test("native request freezes both editing and recommendation, including unknown creation", () => {
-    const ledger = fixture(); approve(ledger);
-    apply(ledger, "dispatch-claim", request(ledger, "claim-profile", { task_id: "a", operation_id: "profile-op" }));
-    apply(ledger, "dispatch-bind-request", request(ledger, "native-profile", { operation_id: "profile-op", native_request_id: "native-profile" }));
+    const ledger = fixture();
+    approve(ledger);
+    apply(
+      ledger,
+      "dispatch-claim",
+      request(ledger, "claim-profile", { task_id: "a", operation_id: "profile-op" }),
+    );
+    apply(
+      ledger,
+      "dispatch-bind-request",
+      request(ledger, "native-profile", {
+        operation_id: "profile-op",
+        native_request_id: "native-profile",
+      }),
+    );
     for (const command of ["execution-profile-update", "execution-profile-recommend"]) {
-      expect(() => apply(ledger, command, request(ledger, command, { target_type: "task", target_id: "a", execution_profile: null }))).toThrow("frozen");
+      expect(() =>
+        apply(
+          ledger,
+          command,
+          request(ledger, command, {
+            target_type: "task",
+            target_id: "a",
+            execution_profile: null,
+          }),
+        ),
+      ).toThrow("frozen");
     }
-    apply(ledger, "dispatch-resolve", request(ledger, "unknown-profile", { operation_id: "profile-op", outcome: "unknown" }));
-    expect(() => apply(ledger, "execution-profile-update", request(ledger, "edit-unknown", { target_type: "task", target_id: "a", execution_profile: null }))).toThrow("frozen");
-    expect(ledger.operations.find((item) => item.id === "profile-op")?.request.execution_profile).toEqual(ledger.config.execution_profile);
+    apply(
+      ledger,
+      "dispatch-resolve",
+      request(ledger, "unknown-profile", { operation_id: "profile-op", outcome: "unknown" }),
+    );
+    expect(() =>
+      apply(
+        ledger,
+        "execution-profile-update",
+        request(ledger, "edit-unknown", {
+          target_type: "task",
+          target_id: "a",
+          execution_profile: null,
+        }),
+      ),
+    ).toThrow("frozen");
+    expect(
+      ledger.operations.find((item) => item.id === "profile-op")?.request.execution_profile,
+    ).toEqual(ledger.config.execution_profile);
   });
 
   test("profile change cancels an unbound claim and recommendation preserves its audit history", () => {
-    const ledger = fixture(); approve(ledger);
-    apply(ledger, "dispatch-claim", request(ledger, "claim-profile", { task_id: "a", operation_id: "profile-op" }));
-    apply(ledger, "execution-profile-update", request(ledger, "manual-profile", { target_type: "task", target_id: "a", execution_profile: { model: "gpt-6-luna", thinking: "high" } }));
+    const ledger = fixture();
+    approve(ledger);
+    apply(
+      ledger,
+      "dispatch-claim",
+      request(ledger, "claim-profile", { task_id: "a", operation_id: "profile-op" }),
+    );
+    apply(
+      ledger,
+      "execution-profile-update",
+      request(ledger, "manual-profile", {
+        target_type: "task",
+        target_id: "a",
+        execution_profile: { model: "gpt-6-luna", thinking: "high" },
+      }),
+    );
     expect(ledger.operations.find((item) => item.id === "profile-op")?.status).toBe("failed");
-    expect(ledger.events.find((item) => item.type === "dispatch_claim_replaced")?.data.previous_effective_profile).toEqual(ledger.config.execution_profile);
+    expect(
+      ledger.events.find((item) => item.type === "dispatch_claim_replaced")?.data
+        .previous_effective_profile,
+    ).toEqual(ledger.config.execution_profile);
     expect(ledger.tasks[0].execution_profile_source).toBe("manual");
-    apply(ledger, "execution-profile-recommend", request(ledger, "recommend-profile", { target_type: "task", target_id: "a" }));
+    apply(
+      ledger,
+      "execution-profile-recommend",
+      request(ledger, "recommend-profile", { target_type: "task", target_id: "a" }),
+    );
     expect(ledger.tasks[0].execution_profile).toEqual({ model: "gpt-6.1-sol", thinking: "high" });
-    expect(ledger.events.at(-1)?.data.previous_profile).toEqual({ model: "gpt-6-luna", thinking: "high" });
+    expect(ledger.events.at(-1)?.data.previous_profile).toEqual({
+      model: "gpt-6-luna",
+      thinking: "high",
+    });
   });
 
   test("legacy profile migration requires a full explicit pair and exact revision", () => {
-    const ledger = fixture(); ledger.config.execution_profile = null;
+    const ledger = fixture();
+    ledger.config.execution_profile = null;
     expect(() => approve(ledger)).toThrow("read-only");
-    expect(() => apply(ledger, "execution-profile-migrate", request(ledger, "partial", { execution_profile: { model: "gpt-6-luna" } }))).toThrow();
-    const input = request(ledger, "migrate-profile", { execution_profile: { model: "gpt-6-luna", thinking: "medium" } });
+    expect(() =>
+      apply(
+        ledger,
+        "execution-profile-migrate",
+        request(ledger, "partial", { execution_profile: { model: "gpt-6-luna" } }),
+      ),
+    ).toThrow();
+    const input = request(ledger, "migrate-profile", {
+      execution_profile: { model: "gpt-6-luna", thinking: "medium" },
+    });
     apply(ledger, "execution-profile-migrate", input);
     expect(ledger.revision).toBe(1);
     expect((apply(ledger, "execution-profile-migrate", input) as any).code).toBe("REPLAYED");
     expect(ledger.events.at(-1)?.type).toBe("execution_profile_migrated");
   });
-
 });
 
 test("parent follow-up merge reconciles a group after its original parent PR already merged", () => {
@@ -3463,38 +4208,56 @@ test("parent follow-up merge reconciles a group after its original parent PR alr
   const mainBase = "d".repeat(40);
   const followUpHead = "e".repeat(40);
   const followUpMerge = "f".repeat(40);
-  apply(ledger, "merge-claim", request(ledger, "claim-parent-followup", {
-    operation_id: "merge-parent-followup",
-    group_id: "g",
-    mode: "parent-followup",
-    original_parent_pr: originalParentPr,
-    original_parent_merge_sha: "c".repeat(40),
-    target_branch: "main",
-    expected_base_sha: mainBase,
-    expected_head_sha: followUpHead,
-    pr: followUpPr,
-  }, groupActor));
-  apply(ledger, "merge-resolve", request(ledger, "resolve-parent-followup", {
-    operation_id: "merge-parent-followup",
-    outcome: "succeeded",
-    provider_evidence: {
-      id: "parent-followup-merged",
-      kind: "pr_merged",
-      subject_id: "g",
-      status: "passed",
-      source: "github",
-      observed_at: at,
-      sha: followUpMerge,
-      evidence_ref: "https://api.github.com/repos/example/repo/pulls/146",
-    },
-    provider_observation: {
-      pr: followUpPr,
-      head_sha: followUpHead,
-      base_sha: mainBase,
-      merge_sha: followUpMerge,
-      state: "merged",
-    },
-  }, groupActor));
+  apply(
+    ledger,
+    "merge-claim",
+    request(
+      ledger,
+      "claim-parent-followup",
+      {
+        operation_id: "merge-parent-followup",
+        group_id: "g",
+        mode: "parent-followup",
+        original_parent_pr: originalParentPr,
+        original_parent_merge_sha: "c".repeat(40),
+        target_branch: "main",
+        expected_base_sha: mainBase,
+        expected_head_sha: followUpHead,
+        pr: followUpPr,
+      },
+      groupActor,
+    ),
+  );
+  apply(
+    ledger,
+    "merge-resolve",
+    request(
+      ledger,
+      "resolve-parent-followup",
+      {
+        operation_id: "merge-parent-followup",
+        outcome: "succeeded",
+        provider_evidence: {
+          id: "parent-followup-merged",
+          kind: "pr_merged",
+          subject_id: "g",
+          status: "passed",
+          source: "github",
+          observed_at: at,
+          sha: followUpMerge,
+          evidence_ref: "https://api.github.com/repos/example/repo/pulls/146",
+        },
+        provider_observation: {
+          pr: followUpPr,
+          head_sha: followUpHead,
+          base_sha: mainBase,
+          merge_sha: followUpMerge,
+          state: "merged",
+        },
+      },
+      groupActor,
+    ),
+  );
   expect(ledger.groups[0].state).toBe("merged");
   expect(ledger.groups[0].merge_sha).toBe(followUpMerge);
   expect(ledger.groups[0].current_sha).toBe(followUpMerge);
@@ -3503,24 +4266,68 @@ test("parent follow-up merge reconciles a group after its original parent PR alr
 
 describe("native CLI handoff contract", () => {
   function claimed() {
-    const ledger = fixture(); approve(ledger);
-    apply(ledger, "dispatch-claim", request(ledger, "cli-claim", { task_id: "a", operation_id: "cli-a" }));
-    apply(ledger, "dispatch-bind-request", request(ledger, "cli-bind", { operation_id: "cli-a", native_request_id: "cli-request", creation_parameters: {
-      title: "task", prompt: "formal", cwd: "/repo", transport: "codex-exec", execution_profile: ledger.config.execution_profile,
-    } }));
+    const ledger = fixture();
+    approve(ledger);
+    apply(
+      ledger,
+      "dispatch-claim",
+      request(ledger, "cli-claim", { task_id: "a", operation_id: "cli-a" }),
+    );
+    apply(
+      ledger,
+      "dispatch-bind-request",
+      request(ledger, "cli-bind", {
+        operation_id: "cli-a",
+        native_request_id: "cli-request",
+        creation_parameters: {
+          title: "task",
+          prompt: "formal",
+          cwd: "/repo",
+          transport: "codex-exec",
+          execution_profile: ledger.config.execution_profile,
+        },
+      }),
+    );
     return ledger;
   }
   function resolve(ledger: ReturnType<typeof fixture>, exit_code = 0) {
-    return request(ledger, "cli-resolve", { operation_id: "cli-a", outcome: "succeeded", thread_id: "cli-thread",
-      native_evidence: { source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "cli-a", native_request_id: "cli-request",
-        ...ledger.config.execution_profile, created_at: at, evidence_ref: "codex-exec:cli-request", thread_id: "cli-thread",
-        exit_code, turn_completed: true, workspace_path: "/owned/worktree", initial_head: head } });
+    return request(ledger, "cli-resolve", {
+      operation_id: "cli-a",
+      outcome: "succeeded",
+      thread_id: "cli-thread",
+      native_evidence: {
+        source: "multi-task-flow-cli",
+        native_tool_name: "codex exec",
+        operation_id: "cli-a",
+        native_request_id: "cli-request",
+        ...ledger.config.execution_profile,
+        created_at: at,
+        evidence_ref: "codex-exec:cli-request",
+        thread_id: "cli-thread",
+        exit_code,
+        turn_completed: true,
+        workspace_path: "/owned/worktree",
+        initial_head: head,
+      },
+    });
   }
   test("reconciliation evidence can resolve an observed unknown without changing native identity", () => {
     const ledger = claimed();
-    apply(ledger, "dispatch-progress", request(ledger, "reconcile-observed", { operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread" }));
+    apply(
+      ledger,
+      "dispatch-progress",
+      request(ledger, "reconcile-observed", {
+        operation_id: "cli-a",
+        native_request_id: "cli-request",
+        thread_id: "cli-thread",
+      }),
+    );
     const payload = resolve(ledger).payload as any;
-    payload.native_evidence = { ...payload.native_evidence, source: "multi-task-flow-reconcile", evidence_ref: "codex-thread-reconcile:cli-thread" };
+    payload.native_evidence = {
+      ...payload.native_evidence,
+      source: "multi-task-flow-reconcile",
+      evidence_ref: "codex-thread-reconcile:cli-thread",
+    };
     delete payload.native_evidence.exit_code;
     apply(ledger, "dispatch-resolve", request(ledger, "reconcile-resolve", payload));
     expect(ledger.operations[0].status).toBe("succeeded");
@@ -3531,11 +4338,19 @@ describe("native CLI handoff contract", () => {
     for (const parameters of [undefined, { cwd: "/repo" }]) {
       const ledger = claimed();
       ledger.operations[0].request.creation_parameters = parameters;
-      apply(ledger, "dispatch-progress", request(ledger, "observed", {
-        operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread",
-      }));
+      apply(
+        ledger,
+        "dispatch-progress",
+        request(ledger, "observed", {
+          operation_id: "cli-a",
+          native_request_id: "cli-request",
+          thread_id: "cli-thread",
+        }),
+      );
       const before = JSON.stringify(ledger);
-      expect(() => apply(ledger, "dispatch-resolve", resolve(ledger))).toThrow("bound native transport");
+      expect(() => apply(ledger, "dispatch-resolve", resolve(ledger))).toThrow(
+        "bound native transport",
+      );
       expect(JSON.stringify(ledger)).toBe(before);
       expect(ledger.tasks[0].thread_id).toBeNull();
     }
@@ -3543,7 +4358,11 @@ describe("native CLI handoff contract", () => {
   test("identity is durable before binding; failed exit cannot bind and replay cannot create again", () => {
     const ledger = claimed();
     expect(() => apply(ledger, "dispatch-resolve", resolve(ledger))).toThrow("observed identity");
-    const progress = request(ledger, "cli-observed", { operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread" });
+    const progress = request(ledger, "cli-observed", {
+      operation_id: "cli-a",
+      native_request_id: "cli-request",
+      thread_id: "cli-thread",
+    });
     apply(ledger, "dispatch-progress", progress);
     expect(ledger.tasks[0].thread_id).toBeNull();
     expect(ledger.operations[0].request.observed_thread_id).toBe("cli-thread");
@@ -3553,143 +4372,499 @@ describe("native CLI handoff contract", () => {
     expect(ledger.tasks[0].thread_id).toBe("cli-thread");
     expect(ledger.notifications[0].recipient_thread_id).toBe("cli-thread");
     expect(ledger.notifications[0].delivery_status).toBe("pending");
-    expect(() => apply(ledger, "dispatch-claim", request(ledger, "duplicate-create", { task_id: "a", operation_id: "second-a" }))).toThrow();
+    expect(() =>
+      apply(
+        ledger,
+        "dispatch-claim",
+        request(ledger, "duplicate-create", { task_id: "a", operation_id: "second-a" }),
+      ),
+    ).toThrow();
   });
   test("observed CLI identity cannot release the claim through failed or legacy evidence", () => {
     const ledger = claimed();
-    apply(ledger, "dispatch-progress", request(ledger, "observed-before-failure", { operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread" }));
+    apply(
+      ledger,
+      "dispatch-progress",
+      request(ledger, "observed-before-failure", {
+        operation_id: "cli-a",
+        native_request_id: "cli-request",
+        thread_id: "cli-thread",
+      }),
+    );
     for (const native_tool_name of ["codex exec", "thread/start"]) {
       const failure = resolve(ledger);
       Object.assign(failure.payload, { outcome: "failed" });
-      Object.assign(failure.payload.native_evidence, { native_tool_name, error: "Initialization failed", process_started: false, resources_created: false });
+      Object.assign(failure.payload.native_evidence, {
+        native_tool_name,
+        error: "Initialization failed",
+        process_started: false,
+        resources_created: false,
+      });
       expect(() => apply(ledger, "dispatch-resolve", failure)).toThrow();
       expect(ledger.operations[0].status).toBe("unknown");
       expect(ledger.operations[0].request.observed_thread_id).toBe("cli-thread");
-      expect(() => apply(ledger, "dispatch-claim", request(ledger, `retry-${native_tool_name}`, { task_id: "a", operation_id: "duplicate-a" }))).toThrow();
+      expect(() =>
+        apply(
+          ledger,
+          "dispatch-claim",
+          request(ledger, `retry-${native_tool_name}`, {
+            task_id: "a",
+            operation_id: "duplicate-a",
+          }),
+        ),
+      ).toThrow();
     }
     const unobserved = claimed();
     const failure = resolve(unobserved);
     Object.assign(failure.payload, { outcome: "failed" });
-    Object.assign(failure.payload.native_evidence, { error: "No event received after process start" });
+    Object.assign(failure.payload.native_evidence, {
+      error: "No event received after process start",
+    });
     expect(() => apply(unobserved, "dispatch-resolve", failure)).toThrow("require reconciliation");
     expect(unobserved.operations[0].status).toBe("unknown");
   });
   test("same native request freezes every creation parameter, including transport", () => {
     const ledger = claimed();
     const parameters = structuredClone(ledger.operations[0].request.creation_parameters) as any;
-    for (const change of [{ transport: undefined }, { cwd: "/another-repo" }, { prompt: "different task" },
-      { title: "different title" }, { execution_profile: { model: "gpt-6-luna", thinking: "low" } }]) {
+    for (const change of [
+      { transport: undefined },
+      { cwd: "/another-repo" },
+      { prompt: "different task" },
+      { title: "different title" },
+      { execution_profile: { model: "gpt-6-luna", thinking: "low" } },
+    ]) {
       const before = JSON.stringify(ledger);
-      expect(() => apply(ledger, "dispatch-bind-request", request(ledger, `rebind-${Object.keys(change)[0]}`, {
-        operation_id: "cli-a", native_request_id: "cli-request", creation_parameters: { ...parameters, ...change },
-      }))).toThrow("frozen");
+      expect(() =>
+        apply(
+          ledger,
+          "dispatch-bind-request",
+          request(ledger, `rebind-${Object.keys(change)[0]}`, {
+            operation_id: "cli-a",
+            native_request_id: "cli-request",
+            creation_parameters: { ...parameters, ...change },
+          }),
+        ),
+      ).toThrow("frozen");
       expect(JSON.stringify(ledger)).toBe(before);
     }
-    apply(ledger, "dispatch-bind-request", request(ledger, "identical-rebind", {
-      operation_id: "cli-a", native_request_id: "cli-request", creation_parameters: parameters,
-    }));
-    apply(ledger, "dispatch-bind-request", request(ledger, "identity-only-rebind", {
-      operation_id: "cli-a", native_request_id: "cli-request",
-    }));
+    apply(
+      ledger,
+      "dispatch-bind-request",
+      request(ledger, "identical-rebind", {
+        operation_id: "cli-a",
+        native_request_id: "cli-request",
+        creation_parameters: parameters,
+      }),
+    );
+    apply(
+      ledger,
+      "dispatch-bind-request",
+      request(ledger, "identity-only-rebind", {
+        operation_id: "cli-a",
+        native_request_id: "cli-request",
+      }),
+    );
     expect(ledger.operations[0].request.creation_parameters).toEqual(parameters);
     expect(ledger.operations[0].status).toBe("unknown");
   });
   test("unknown reports retain creation facts across later empty reports and cannot release retry protection", () => {
-    for (const report of [{ thread_id: "cli-thread" }, { native_evidence: { workspace_path: "/allocated" } },
-      { native_evidence: { initial_head: head } }, { native_evidence: { exit_code: 1 } },
-      { native_evidence: { turn_completed: true } }, { native_evidence: { events: ["turn.started"] } },
-      { native_evidence: { process_started: true } }, { native_evidence: { resources_created: true } }]) {
+    for (const report of [
+      { thread_id: "cli-thread" },
+      { native_evidence: { workspace_path: "/allocated" } },
+      { native_evidence: { initial_head: head } },
+      { native_evidence: { exit_code: 1 } },
+      { native_evidence: { turn_completed: true } },
+      { native_evidence: { events: ["turn.started"] } },
+      { native_evidence: { process_started: true } },
+      { native_evidence: { resources_created: true } },
+    ]) {
       const ledger = claimed();
-      apply(ledger, "dispatch-resolve", request(ledger, "known-unknown", { operation_id: "cli-a", outcome: "unknown", ...report }));
+      apply(
+        ledger,
+        "dispatch-resolve",
+        request(ledger, "known-unknown", { operation_id: "cli-a", outcome: "unknown", ...report }),
+      );
       const observed = structuredClone(ledger.operations[0].request.creation_observations);
       expect(Object.keys(observed as object).length).toBeGreaterThan(0);
-      apply(ledger, "dispatch-resolve", request(ledger, "empty-unknown", { operation_id: "cli-a", outcome: "unknown" }));
+      apply(
+        ledger,
+        "dispatch-resolve",
+        request(ledger, "empty-unknown", { operation_id: "cli-a", outcome: "unknown" }),
+      );
       expect(ledger.operations[0].request.creation_observations).toEqual(observed);
-      const failure = request(ledger, "false-preflight", { operation_id: "cli-a", outcome: "failed", native_evidence: {
-        source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "cli-a", native_request_id: "cli-request",
-        ...ledger.config.execution_profile, created_at: at, evidence_ref: "preflight:incorrect", error: "No resources",
-        process_started: false, resources_created: false,
-      } });
+      const failure = request(ledger, "false-preflight", {
+        operation_id: "cli-a",
+        outcome: "failed",
+        native_evidence: {
+          source: "multi-task-flow-cli",
+          native_tool_name: "codex exec",
+          operation_id: "cli-a",
+          native_request_id: "cli-request",
+          ...ledger.config.execution_profile,
+          created_at: at,
+          evidence_ref: "preflight:incorrect",
+          error: "No resources",
+          process_started: false,
+          resources_created: false,
+        },
+      });
       expect(() => apply(ledger, "dispatch-resolve", failure)).toThrow("require reconciliation");
       expect(ledger.operations[0].status).toBe("unknown");
-      expect(() => apply(ledger, "dispatch-claim", request(ledger, "retry-known", { task_id: "a", operation_id: "duplicate-a" }))).toThrow();
+      expect(() =>
+        apply(
+          ledger,
+          "dispatch-claim",
+          request(ledger, "retry-known", { task_id: "a", operation_id: "duplicate-a" }),
+        ),
+      ).toThrow();
     }
   });
   test("historical unknown identity blocks failed resolution even without exec transport or progress event", () => {
     const ledger = claimed();
     delete (ledger.operations[0].request.creation_parameters as any).transport;
     ledger.operations[0].status = "claimed";
-    ledger.operations[0].request.creation_result = { outcome: "unknown", thread_id: "prior-cli-thread" };
+    ledger.operations[0].request.creation_result = {
+      outcome: "unknown",
+      thread_id: "prior-cli-thread",
+    };
     const before = JSON.stringify(ledger);
-    const failure = request(ledger, "historical-failure", { operation_id: "cli-a", outcome: "failed", native_evidence: {
-      source: "multi-task-flow-cli", native_tool_name: "thread/start", operation_id: "cli-a", native_request_id: "cli-request",
-      ...ledger.config.execution_profile, created_at: at, evidence_ref: "legacy:failure", error: "Failed",
-    } });
+    const failure = request(ledger, "historical-failure", {
+      operation_id: "cli-a",
+      outcome: "failed",
+      native_evidence: {
+        source: "multi-task-flow-cli",
+        native_tool_name: "thread/start",
+        operation_id: "cli-a",
+        native_request_id: "cli-request",
+        ...ledger.config.execution_profile,
+        created_at: at,
+        evidence_ref: "legacy:failure",
+        error: "Failed",
+      },
+    });
     expect(() => apply(ledger, "dispatch-resolve", failure)).toThrow("require reconciliation");
     expect(JSON.stringify(ledger)).toBe(before);
-    apply(ledger, "dispatch-resolve", request(ledger, "retain-history", { operation_id: "cli-a", outcome: "unknown" }));
+    apply(
+      ledger,
+      "dispatch-resolve",
+      request(ledger, "retain-history", { operation_id: "cli-a", outcome: "unknown" }),
+    );
     expect(ledger.operations[0].request.observed_thread_id).toBe("prior-cli-thread");
-    expect(() => apply(ledger, "dispatch-resolve", request(ledger, "replace-known-id", {
-      operation_id: "cli-a", outcome: "unknown", thread_id: "contradictory-thread",
-    }))).toThrow("cannot change");
+    expect(() =>
+      apply(
+        ledger,
+        "dispatch-resolve",
+        request(ledger, "replace-known-id", {
+          operation_id: "cli-a",
+          outcome: "unknown",
+          thread_id: "contradictory-thread",
+        }),
+      ),
+    ).toThrow("cannot change");
   });
   test("codex exec failure requires explicit pre-creation evidence even without stored transport", () => {
     const ledger = claimed();
     delete (ledger.operations[0].request.creation_parameters as any).transport;
     ledger.operations[0].status = "claimed";
-    expect(() => apply(ledger, "dispatch-resolve", request(ledger, "unsafe-exec-failure", {
-      operation_id: "cli-a", outcome: "failed", native_evidence: {
-        source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "cli-a", native_request_id: "cli-request",
-        ...ledger.config.execution_profile, created_at: at, evidence_ref: "codex:ambiguous", error: "failed",
-      },
-    }))).toThrow("pre-creation failure");
+    expect(() =>
+      apply(
+        ledger,
+        "dispatch-resolve",
+        request(ledger, "unsafe-exec-failure", {
+          operation_id: "cli-a",
+          outcome: "failed",
+          native_evidence: {
+            source: "multi-task-flow-cli",
+            native_tool_name: "codex exec",
+            operation_id: "cli-a",
+            native_request_id: "cli-request",
+            ...ledger.config.execution_profile,
+            created_at: at,
+            evidence_ref: "codex:ambiguous",
+            error: "failed",
+          },
+        }),
+      ),
+    ).toThrow("pre-creation failure");
     expect(ledger.operations[0].status).toBe("claimed");
   });
   test("development waits for owned workspace readiness and the current parent SHA, separate from initial HEAD", () => {
     const ledger = claimed();
-    apply(ledger, "dispatch-progress", request(ledger, "cli-observed", { operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread" }));
+    apply(
+      ledger,
+      "dispatch-progress",
+      request(ledger, "cli-observed", {
+        operation_id: "cli-a",
+        native_request_id: "cli-request",
+        thread_id: "cli-thread",
+      }),
+    );
     apply(ledger, "dispatch-resolve", resolve(ledger));
     expect(ledger.notifications.at(-1)?.event_id).toBe("cli-resolve-creation");
     const actor = { role: "task" as const, thread_id: "cli-thread" };
-    expect(() => apply(ledger, "task-update", request(ledger, "too-early", { task_id: "a", state: "running", detail: "Start after readiness", occurred_at: at }, actor))).toThrow("baseline");
-    apply(ledger, "task-runtime-observe", request(ledger, "initial-idle", {
-      task_id: "a", thread_id: "cli-thread", runtime: "idle", turn_id: "completed-initialization", observed_at: new Date().toISOString(),
-    }));
+    expect(() =>
+      apply(
+        ledger,
+        "task-update",
+        request(
+          ledger,
+          "too-early",
+          { task_id: "a", state: "running", detail: "Start after readiness", occurred_at: at },
+          actor,
+        ),
+      ),
+    ).toThrow("baseline");
+    apply(
+      ledger,
+      "task-runtime-observe",
+      request(ledger, "initial-idle", {
+        task_id: "a",
+        thread_id: "cli-thread",
+        runtime: "idle",
+        turn_id: "completed-initialization",
+        observed_at: new Date().toISOString(),
+      }),
+    );
     expect(ledger.tasks[0].state).toBe("agent_idle");
-    expect(() => apply(ledger, "task-update", request(ledger, "idle-too-early", { task_id: "a", state: "running", detail: "Resume after readiness", occurred_at: at }, actor))).toThrow("baseline");
+    expect(() =>
+      apply(
+        ledger,
+        "task-update",
+        request(
+          ledger,
+          "idle-too-early",
+          { task_id: "a", state: "running", detail: "Resume after readiness", occurred_at: at },
+          actor,
+        ),
+      ),
+    ).toThrow("baseline");
     ledger.config.max_running_tasks = 1;
-    ledger.resources = [ { id: "wt", kind: "worktree", target: "a", status: "active", evidence_ref: "owned:cli-thread" }, { id: "br", kind: "branch", target: "task-a", status: "active", evidence_ref: "owned:branch" } ];
-    const payload = { target_type: "task", target_id: "a", stage: "workspace_ready", branch: "task-a", resource_ids: ["wt", "br"], evidence_ref: "git:clean" };
-    expect(() => apply(ledger, "lifecycle-record", request(ledger, "missing-baseline", payload, actor))).toThrow();
-    expect(() => apply(ledger, "lifecycle-record", request(ledger, "wrong-baseline", { ...payload, baseline: { sha: head, head, clean: true, source: "group:g" } }, actor))).toThrow("parent SHA");
-    expect(() => apply(ledger, "lifecycle-record", request(ledger, "dirty-baseline", { ...payload, baseline: { sha: base, head: base, clean: false, source: "group:g" } }, actor))).toThrow();
-    apply(ledger, "lifecycle-record", request(ledger, "ready-baseline", { ...payload, baseline: { sha: base, head: base, clean: true, source: "group:g" } }, actor));
-    apply(ledger, "task-update", request(ledger, "start", { task_id: "a", state: "running", detail: "Start after readiness", occurred_at: at }, actor));
+    ledger.resources = [
+      {
+        id: "wt",
+        kind: "worktree",
+        target: "a",
+        status: "active",
+        evidence_ref: "owned:cli-thread",
+      },
+      {
+        id: "br",
+        kind: "branch",
+        target: "task-a",
+        status: "active",
+        evidence_ref: "owned:branch",
+      },
+    ];
+    const payload = {
+      target_type: "task",
+      target_id: "a",
+      stage: "workspace_ready",
+      branch: "task-a",
+      resource_ids: ["wt", "br"],
+      evidence_ref: "git:clean",
+    };
+    expect(() =>
+      apply(ledger, "lifecycle-record", request(ledger, "missing-baseline", payload, actor)),
+    ).toThrow();
+    expect(() =>
+      apply(
+        ledger,
+        "lifecycle-record",
+        request(
+          ledger,
+          "wrong-baseline",
+          { ...payload, baseline: { sha: head, head, clean: true, source: "group:g" } },
+          actor,
+        ),
+      ),
+    ).toThrow("parent SHA");
+    expect(() =>
+      apply(
+        ledger,
+        "lifecycle-record",
+        request(
+          ledger,
+          "dirty-baseline",
+          { ...payload, baseline: { sha: base, head: base, clean: false, source: "group:g" } },
+          actor,
+        ),
+      ),
+    ).toThrow();
+    apply(
+      ledger,
+      "lifecycle-record",
+      request(
+        ledger,
+        "ready-baseline",
+        { ...payload, baseline: { sha: base, head: base, clean: true, source: "group:g" } },
+        actor,
+      ),
+    );
+    apply(
+      ledger,
+      "task-update",
+      request(
+        ledger,
+        "start",
+        { task_id: "a", state: "running", detail: "Start after readiness", occurred_at: at },
+        actor,
+      ),
+    );
     expect(ledger.tasks[0].base_sha).toBe(base);
-    expect((ledger.operations[0].request.creation_result as any).native_evidence.initial_head).toBe(head);
+    expect((ledger.operations[0].request.creation_result as any).native_evidence.initial_head).toBe(
+      head,
+    );
   });
 });
 
 test("native group retry ignores a failed attempt and still requires a fresh mainline baseline receipt", () => {
-  const ledger = fixture(); approve(ledger);
-  Object.assign(ledger.groups[0], { agent_thread_id: null, state: "planned", parent_branch: null, current_sha: null });
-  const invoke = (command: string, requestId: string, payload: any, actor: Request["actor"] = main) => apply(ledger, command, request(ledger, requestId, payload, actor));
+  const ledger = fixture();
+  approve(ledger);
+  Object.assign(ledger.groups[0], {
+    agent_thread_id: null,
+    state: "planned",
+    parent_branch: null,
+    current_sha: null,
+  });
+  const invoke = (
+    command: string,
+    requestId: string,
+    payload: any,
+    actor: Request["actor"] = main,
+  ) => apply(ledger, command, request(ledger, requestId, payload, actor));
   invoke("dispatch-group-claim", "failed-cli", { group_id: "g", operation_id: "failed-cli" });
-  invoke("dispatch-bind-request", "failed-bind", { operation_id: "failed-cli", native_request_id: "failed-native", creation_parameters: { title: "group", prompt: "formal", cwd: "/repo", execution_profile: ledger.config.execution_profile, transport: "codex-exec" } });
-  invoke("dispatch-resolve", "failed-resolve", { operation_id: "failed-cli", outcome: "failed", native_evidence: { source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "failed-cli", native_request_id: "failed-native", ...ledger.config.execution_profile, evidence_ref: "codex:verified-no-resource", created_at: at, error: "Preflight verified process was not started and no resource was created", process_started: false, resources_created: false } });
+  invoke("dispatch-bind-request", "failed-bind", {
+    operation_id: "failed-cli",
+    native_request_id: "failed-native",
+    creation_parameters: {
+      title: "group",
+      prompt: "formal",
+      cwd: "/repo",
+      execution_profile: ledger.config.execution_profile,
+      transport: "codex-exec",
+    },
+  });
+  invoke("dispatch-resolve", "failed-resolve", {
+    operation_id: "failed-cli",
+    outcome: "failed",
+    native_evidence: {
+      source: "multi-task-flow-cli",
+      native_tool_name: "codex exec",
+      operation_id: "failed-cli",
+      native_request_id: "failed-native",
+      ...ledger.config.execution_profile,
+      evidence_ref: "codex:verified-no-resource",
+      created_at: at,
+      error: "Preflight verified process was not started and no resource was created",
+      process_started: false,
+      resources_created: false,
+    },
+  });
   invoke("dispatch-group-claim", "group-cli", { group_id: "g", operation_id: "group-cli" });
-  expect(() => invoke("dispatch-bind-request", "reused-bind", { operation_id: "group-cli", native_request_id: "failed-native", creation_parameters: { title: "group", prompt: "formal", cwd: "/repo", execution_profile: ledger.config.execution_profile, transport: "codex-exec" } })).toThrow("already claimed");
-  invoke("dispatch-bind-request", "group-bind", { operation_id: "group-cli", native_request_id: "group-native", creation_parameters: { title: "group", prompt: "formal", cwd: "/repo", execution_profile: ledger.config.execution_profile, transport: "codex-exec" } });
+  expect(() =>
+    invoke("dispatch-bind-request", "reused-bind", {
+      operation_id: "group-cli",
+      native_request_id: "failed-native",
+      creation_parameters: {
+        title: "group",
+        prompt: "formal",
+        cwd: "/repo",
+        execution_profile: ledger.config.execution_profile,
+        transport: "codex-exec",
+      },
+    }),
+  ).toThrow("already claimed");
+  invoke("dispatch-bind-request", "group-bind", {
+    operation_id: "group-cli",
+    native_request_id: "group-native",
+    creation_parameters: {
+      title: "group",
+      prompt: "formal",
+      cwd: "/repo",
+      execution_profile: ledger.config.execution_profile,
+      transport: "codex-exec",
+    },
+  });
   expect(ledger.operations.at(-1)!.status).toBe("unknown");
-  invoke("dispatch-progress", "group-observed", { operation_id: "group-cli", native_request_id: "group-native", thread_id: "group-thread" });
-  invoke("dispatch-resolve", "group-resolved", { operation_id: "group-cli", thread_id: "group-thread", outcome: "succeeded", native_evidence: { source: "multi-task-flow-cli", native_tool_name: "codex exec", operation_id: "group-cli", native_request_id: "group-native", ...ledger.config.execution_profile, evidence_ref: "codex:group", created_at: at, thread_id: "group-thread", workspace_path: "/owned", initial_head: base, exit_code: 0, turn_completed: true } });
+  invoke("dispatch-progress", "group-observed", {
+    operation_id: "group-cli",
+    native_request_id: "group-native",
+    thread_id: "group-thread",
+  });
+  invoke("dispatch-resolve", "group-resolved", {
+    operation_id: "group-cli",
+    thread_id: "group-thread",
+    outcome: "succeeded",
+    native_evidence: {
+      source: "multi-task-flow-cli",
+      native_tool_name: "codex exec",
+      operation_id: "group-cli",
+      native_request_id: "group-native",
+      ...ledger.config.execution_profile,
+      evidence_ref: "codex:group",
+      created_at: at,
+      thread_id: "group-thread",
+      workspace_path: "/owned",
+      initial_head: base,
+      exit_code: 0,
+      turn_completed: true,
+    },
+  });
   ledger.groups[0]!.state = "active";
-  expect(() => invoke("group-execution-update", "early-group", { group_id: "g", state: "running" }, groupActor)).toThrow("baseline");
-  ledger.resources = [{ id: "gwt", kind: "worktree", target: "g", status: "active", evidence_ref: "owned" }, { id: "gbr", kind: "branch", target: "parent", status: "active", evidence_ref: "branch" }];
-  const payload = { target_type: "group", target_id: "g", stage: "workspace_ready", branch: "parent", resource_ids: ["gwt", "gbr"], evidence_ref: "fresh-fetch" };
-  expect(() => invoke("lifecycle-record", "no-fetch", { ...payload, baseline: { sha: head, head, clean: true, source: "remote:main" } }, groupActor)).toThrow("fresh remote fetch");
-  expect(() => invoke("lifecycle-record", "stale-fetch", { ...payload, baseline: { sha: head, head, clean: true, source: "remote:main", fetched_at: at } }, groupActor)).toThrow("fresh remote fetch");
-  invoke("lifecycle-record", "fresh-fetch", { ...payload, baseline: { sha: head, head, clean: true, source: "remote:main", fetched_at: new Date().toISOString() } }, groupActor);
+  expect(() =>
+    invoke(
+      "group-execution-update",
+      "early-group",
+      { group_id: "g", state: "running" },
+      groupActor,
+    ),
+  ).toThrow("baseline");
+  ledger.resources = [
+    { id: "gwt", kind: "worktree", target: "g", status: "active", evidence_ref: "owned" },
+    { id: "gbr", kind: "branch", target: "parent", status: "active", evidence_ref: "branch" },
+  ];
+  const payload = {
+    target_type: "group",
+    target_id: "g",
+    stage: "workspace_ready",
+    branch: "parent",
+    resource_ids: ["gwt", "gbr"],
+    evidence_ref: "fresh-fetch",
+  };
+  expect(() =>
+    invoke(
+      "lifecycle-record",
+      "no-fetch",
+      { ...payload, baseline: { sha: head, head, clean: true, source: "remote:main" } },
+      groupActor,
+    ),
+  ).toThrow("fresh remote fetch");
+  expect(() =>
+    invoke(
+      "lifecycle-record",
+      "stale-fetch",
+      {
+        ...payload,
+        baseline: { sha: head, head, clean: true, source: "remote:main", fetched_at: at },
+      },
+      groupActor,
+    ),
+  ).toThrow("fresh remote fetch");
+  invoke(
+    "lifecycle-record",
+    "fresh-fetch",
+    {
+      ...payload,
+      baseline: {
+        sha: head,
+        head,
+        clean: true,
+        source: "remote:main",
+        fetched_at: new Date().toISOString(),
+      },
+    },
+    groupActor,
+  );
   expect(ledger.groups[0].current_sha).toBe(head);
   invoke("group-execution-update", "group-start", { group_id: "g", state: "running" }, groupActor);
 });
@@ -3698,67 +4873,104 @@ test("contract-3 baseline sync refreshes an advanced lineage without changing na
   const ledger = fixture();
   approve(ledger);
   ledger.contract_version = 3;
-  apply(ledger, "dispatch-claim", request(ledger, "baseline-claim", { task_id: "a", operation_id: "baseline-op" }));
-  apply(ledger, "dispatch-bind-request", request(ledger, "baseline-bind", {
-    operation_id: "baseline-op",
-    native_request_id: "baseline-native",
-    creation_parameters: {
-      title: "task",
-      prompt: "formal",
-      cwd: "/repo",
-      transport: "codex-exec",
-      execution_profile: ledger.config.execution_profile,
-    },
-  }));
-  apply(ledger, "dispatch-progress", request(ledger, "baseline-progress", {
-    operation_id: "baseline-op",
-    native_request_id: "baseline-native",
-    thread_id: "baseline-thread",
-  }));
-  apply(ledger, "dispatch-resolve", request(ledger, "baseline-resolve", {
-    operation_id: "baseline-op",
-    outcome: "succeeded",
-    thread_id: "baseline-thread",
-    native_evidence: {
-      source: "multi-task-flow-cli",
-      native_tool_name: "codex exec",
+  apply(
+    ledger,
+    "dispatch-claim",
+    request(ledger, "baseline-claim", { task_id: "a", operation_id: "baseline-op" }),
+  );
+  apply(
+    ledger,
+    "dispatch-bind-request",
+    request(ledger, "baseline-bind", {
       operation_id: "baseline-op",
       native_request_id: "baseline-native",
-      ...ledger.config.execution_profile,
-      created_at: at,
-      evidence_ref: "codex:baseline",
+      creation_parameters: {
+        title: "task",
+        prompt: "formal",
+        cwd: "/repo",
+        transport: "codex-exec",
+        execution_profile: ledger.config.execution_profile,
+      },
+    }),
+  );
+  apply(
+    ledger,
+    "dispatch-progress",
+    request(ledger, "baseline-progress", {
+      operation_id: "baseline-op",
+      native_request_id: "baseline-native",
       thread_id: "baseline-thread",
-      workspace_path: "/owned/baseline",
-      initial_head: head,
-      exit_code: 0,
-      turn_completed: true,
-    },
-  }));
+    }),
+  );
+  apply(
+    ledger,
+    "dispatch-resolve",
+    request(ledger, "baseline-resolve", {
+      operation_id: "baseline-op",
+      outcome: "succeeded",
+      thread_id: "baseline-thread",
+      native_evidence: {
+        source: "multi-task-flow-cli",
+        native_tool_name: "codex exec",
+        operation_id: "baseline-op",
+        native_request_id: "baseline-native",
+        ...ledger.config.execution_profile,
+        created_at: at,
+        evidence_ref: "codex:baseline",
+        thread_id: "baseline-thread",
+        workspace_path: "/owned/baseline",
+        initial_head: head,
+        exit_code: 0,
+        turn_completed: true,
+      },
+    }),
+  );
   ledger.resources = [
     { id: "baseline-wt", kind: "worktree", target: "a", status: "active", evidence_ref: "owned" },
-    { id: "baseline-branch", kind: "branch", target: "task-a", status: "active", evidence_ref: "branch" },
+    {
+      id: "baseline-branch",
+      kind: "branch",
+      target: "task-a",
+      status: "active",
+      evidence_ref: "branch",
+    },
   ];
   const actor = { role: "task" as const, thread_id: "baseline-thread" };
   ledger.groups[0]!.current_sha = base;
   ledger.tasks[0]!.base_sha = base;
-  const initialBaseline = { sha: base, head: base, clean: true as const, source: "workspace-verifier" };
-  apply(ledger, "development-baseline-sync", request(ledger, "baseline-initial", {
-    target_type: "task",
-    target_id: "a",
-    dispatch_operation_id: "baseline-op",
-    mode: "initial",
-    expected_previous_baseline: null,
-    expected_lineage_sha: base,
-    lineage_event_id: "initial",
-    branch: "task-a",
-    resource_ids: ["baseline-wt", "baseline-branch"],
-    baseline: initialBaseline,
-    evidence_ref: "git:initial",
-  }, actor));
+  const initialBaseline = {
+    sha: base,
+    head: base,
+    clean: true as const,
+    source: "workspace-verifier",
+  };
+  apply(
+    ledger,
+    "development-baseline-sync",
+    request(
+      ledger,
+      "baseline-initial",
+      {
+        target_type: "task",
+        target_id: "a",
+        dispatch_operation_id: "baseline-op",
+        mode: "initial",
+        expected_previous_baseline: null,
+        expected_lineage_sha: base,
+        lineage_event_id: "initial",
+        branch: "task-a",
+        resource_ids: ["baseline-wt", "baseline-branch"],
+        baseline: initialBaseline,
+        evidence_ref: "git:initial",
+      },
+      actor,
+    ),
+  );
   expect(ledger.operations[0]!.request.development_baseline).toEqual(initialBaseline);
   expect(ledger.facts.at(-1)!.kind).toBe("baseline_verified");
   expect(ledger.events.at(-1)!.type).toBe("development_baseline_synchronized");
-  const initialHead = (ledger.operations[0]!.request.creation_result as any).native_evidence.initial_head;
+  const initialHead = (ledger.operations[0]!.request.creation_result as any).native_evidence
+    .initial_head;
 
   ledger.groups[0]!.current_sha = head;
   ledger.tasks[0]!.base_sha = head;
@@ -3772,48 +4984,83 @@ test("contract-3 baseline sync refreshes an advanced lineage without changing na
     data: { sha: head, previous_sha: base },
   });
   const refreshed = { sha: head, head, clean: true as const, source: "workspace-verifier" };
-  apply(ledger, "development-baseline-sync", request(ledger, "baseline-refresh", {
-    target_type: "task",
-    target_id: "a",
-    dispatch_operation_id: "baseline-op",
-    mode: "refresh",
-    expected_previous_baseline: initialBaseline,
-    expected_lineage_sha: head,
-    lineage_event_id: "lineage-advance",
-    branch: "task-a",
-    resource_ids: ["baseline-wt", "baseline-branch"],
-    baseline: refreshed,
-    evidence_ref: "git:refresh",
-  }, actor));
+  apply(
+    ledger,
+    "development-baseline-sync",
+    request(
+      ledger,
+      "baseline-refresh",
+      {
+        target_type: "task",
+        target_id: "a",
+        dispatch_operation_id: "baseline-op",
+        mode: "refresh",
+        expected_previous_baseline: initialBaseline,
+        expected_lineage_sha: head,
+        lineage_event_id: "lineage-advance",
+        branch: "task-a",
+        resource_ids: ["baseline-wt", "baseline-branch"],
+        baseline: refreshed,
+        evidence_ref: "git:refresh",
+      },
+      actor,
+    ),
+  );
   expect(ledger.operations[0]!.request.development_baseline).toEqual(refreshed);
-  expect((ledger.operations[0]!.request.creation_result as any).native_evidence.initial_head).toBe(initialHead);
+  expect((ledger.operations[0]!.request.creation_result as any).native_evidence.initial_head).toBe(
+    initialHead,
+  );
   expect(ledger.facts.filter((item) => item.kind === "baseline_verified")).toHaveLength(2);
-  expect((apply(ledger, "development-baseline-sync", request(ledger, "baseline-refresh", {
-    target_type: "task",
-    target_id: "a",
-    dispatch_operation_id: "baseline-op",
-    mode: "refresh",
-    expected_previous_baseline: initialBaseline,
-    expected_lineage_sha: head,
-    lineage_event_id: "lineage-advance",
-    branch: "task-a",
-    resource_ids: ["baseline-wt", "baseline-branch"],
-    baseline: refreshed,
-    evidence_ref: "git:refresh",
-  }, actor)) as any).code).toBe("REPLAYED");
+  expect(
+    (
+      apply(
+        ledger,
+        "development-baseline-sync",
+        request(
+          ledger,
+          "baseline-refresh",
+          {
+            target_type: "task",
+            target_id: "a",
+            dispatch_operation_id: "baseline-op",
+            mode: "refresh",
+            expected_previous_baseline: initialBaseline,
+            expected_lineage_sha: head,
+            lineage_event_id: "lineage-advance",
+            branch: "task-a",
+            resource_ids: ["baseline-wt", "baseline-branch"],
+            baseline: refreshed,
+            evidence_ref: "git:refresh",
+          },
+          actor,
+        ),
+      ) as any
+    ).code,
+  ).toBe("REPLAYED");
   const before = JSON.stringify(ledger);
-  expect(() => apply(ledger, "development-baseline-sync", request(ledger, "stale-refresh", {
-    target_type: "task",
-    target_id: "a",
-    dispatch_operation_id: "baseline-op",
-    mode: "refresh",
-    expected_previous_baseline: initialBaseline,
-    expected_lineage_sha: base,
-    lineage_event_id: "lineage-advance",
-    branch: "task-a",
-    resource_ids: ["baseline-wt", "baseline-branch"],
-    baseline: initialBaseline,
-    evidence_ref: "git:stale",
-  }, actor))).toThrow("current development baseline");
+  expect(() =>
+    apply(
+      ledger,
+      "development-baseline-sync",
+      request(
+        ledger,
+        "stale-refresh",
+        {
+          target_type: "task",
+          target_id: "a",
+          dispatch_operation_id: "baseline-op",
+          mode: "refresh",
+          expected_previous_baseline: initialBaseline,
+          expected_lineage_sha: base,
+          lineage_event_id: "lineage-advance",
+          branch: "task-a",
+          resource_ids: ["baseline-wt", "baseline-branch"],
+          baseline: initialBaseline,
+          evidence_ref: "git:stale",
+        },
+        actor,
+      ),
+    ),
+  ).toThrow("current development baseline");
   expect(JSON.stringify(ledger)).toBe(before);
 });

@@ -1,38 +1,36 @@
-import { normalizeRetiredPlanAlias } from "../lib/legacy-plan-alias";
 import { createHash } from "node:crypto";
 import { posix as posixPath } from "node:path";
 import { z } from "zod";
-import { topologicalOrder, validateGrouping } from "../lib/graph";
+import {
+  atomicNode,
+  atomicEdge as canonicalAtomicEdge,
+  deliveryUnitExternalFacts,
+  taskPrBinding,
+  validateAtomicBoundaries,
+  validateAtomicGraph,
+  validateDeliveryUnitLifecycleEdges,
+  validateTaskLifecycleEdges,
+} from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
-import { atomicNode, atomicEdge as canonicalAtomicEdge, taskPrBinding, deliveryUnitExternalFacts, validateAtomicGraph, validateAtomicBoundaries, validateDeliveryUnitLifecycleEdges, validateTaskLifecycleEdges } from "../lib/atomic-orchestration";
+import { topologicalOrder, validateGrouping } from "../lib/graph";
+import { normalizeRetiredPlanAlias } from "../lib/legacy-plan-alias";
 
 export const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
 const text = z.string().trim().min(1);
-export const executionProfile = z
-  .object({ model: text, thinking: text })
-  .strict();
-export const optionalExecutionProfile = executionProfile
-  .nullable()
-  .default(null);
+export const executionProfile = z.object({ model: text, thinking: text }).strict();
+export const optionalExecutionProfile = executionProfile.nullable().default(null);
 const defaultExecutionProfile = { model: "gpt-5.6-luna", thinking: "max" };
 const timestamp = z.iso.datetime({ offset: false });
 const sha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const nullableText = text.nullable();
 const requirementsPath = nullableText.refine(
-  (value) =>
-    value === null ||
-    /^requirements\/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.md$/.test(value),
+  (value) => value === null || /^requirements\/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.md$/.test(value),
   "requirements_path must reference a Markdown file under requirements/",
 );
 const stringMap = z.record(z.string(), z.unknown());
 export const executionPhase = z.enum(["planning", "implementation"]);
-export const planLifecycle = z.enum([
-  "proposed",
-  "approved",
-  "superseded",
-  "abandoned",
-]);
+export const planLifecycle = z.enum(["proposed", "approved", "superseded", "abandoned"]);
 export const changeClass = z.enum([
   "planning_revision",
   "implementation_low_impact",
@@ -87,9 +85,7 @@ export const devPlanTaskSurface = z
 export const devPlanAcceptanceScope = z
   .object({
     acceptance_id: id,
-    scope: z
-      .string()
-      .regex(/^(?:batch|task):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
+    scope: z.string().regex(/^(?:batch|task):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/),
     owner_id: id,
   })
   .strict();
@@ -135,20 +131,11 @@ export const groupAtomPlan = z
       .default(null),
   })
   .strict();
-export const atomEdge = z
-  .object({ id, from_atom_id: id, to_atom_id: id })
-  .strict();
+export const atomEdge = z.object({ id, from_atom_id: id, to_atom_id: id }).strict();
 export const node = z
   .object({
     id,
-    kind: z.enum([
-      "main_start",
-      "main_end",
-      "group_start",
-      "group_end",
-      "task",
-      "milestone",
-    ]),
+    kind: z.enum(["main_start", "main_end", "group_start", "group_end", "task", "milestone"]),
     ref_id: id.nullable(),
     group_id: id.nullable(),
     label: text,
@@ -182,12 +169,7 @@ export const cutRule = z
     status: z.enum(["pending", "claimed", "applied", "cancelled"]),
   })
   .strict();
-export const lifecycleStage = z.enum([
-  "unknown",
-  "pending",
-  "passed",
-  "blocked",
-]);
+export const lifecycleStage = z.enum(["unknown", "pending", "passed", "blocked"]);
 export const lifecycle = z
   .object({
     workspace_ready: lifecycleStage,
@@ -286,10 +268,7 @@ export const group = z
       .strict()
       .default({ state: "unknown", reason: null, waiting_for_task_ids: [] }),
     execution_profile: optionalExecutionProfile,
-    execution_profile_source: z
-      .enum(["manual", "recommendation"])
-      .nullable()
-      .default(null),
+    execution_profile_source: z.enum(["manual", "recommendation"]).nullable().default(null),
     execution_profile_rule: text.nullable().default(null),
     lifecycle: lifecycle.default({
       workspace_ready: "unknown",
@@ -339,10 +318,30 @@ export function defaultGroupAtoms(groupId: string) {
 
 export function defaultTaskAtoms(taskId: string) {
   return [
-    { id: `task-atom-${taskId}-prepare-branch`, title: "准备任务分支", status: "planned" as const, lifecycle_stage: "branch_ready" as const },
-    { id: `task-atom-${taskId}-create-pr`, title: "创建任务 PR", status: "planned" as const, lifecycle_stage: "pr_created" as const },
-    { id: `task-atom-${taskId}-merge-pr`, title: "合并任务 PR", status: "planned" as const, lifecycle_stage: "pr_merged" as const },
-    { id: `task-atom-${taskId}-closeout`, title: "任务收口", status: "planned" as const, lifecycle_stage: "closed" as const },
+    {
+      id: `task-atom-${taskId}-prepare-branch`,
+      title: "准备任务分支",
+      status: "planned" as const,
+      lifecycle_stage: "branch_ready" as const,
+    },
+    {
+      id: `task-atom-${taskId}-create-pr`,
+      title: "创建任务 PR",
+      status: "planned" as const,
+      lifecycle_stage: "pr_created" as const,
+    },
+    {
+      id: `task-atom-${taskId}-merge-pr`,
+      title: "合并任务 PR",
+      status: "planned" as const,
+      lifecycle_stage: "pr_merged" as const,
+    },
+    {
+      id: `task-atom-${taskId}-closeout`,
+      title: "任务收口",
+      status: "planned" as const,
+      lifecycle_stage: "closed" as const,
+    },
   ];
 }
 export const task = z
@@ -373,13 +372,8 @@ export const task = z
       "closed",
     ]),
     agent_resume_state: z.enum(["starting", "running"]).optional(),
-    disposition: z
-      .enum(["active", "superseded", "abandoned"])
-      .default("active"),
-    execution_owner: z
-      .enum(["main", "delivery_agent", "task_agent"])
-      .nullable()
-      .default(null),
+    disposition: z.enum(["active", "superseded", "abandoned"]).default("active"),
+    execution_owner: z.enum(["main", "delivery_agent", "task_agent"]).nullable().default(null),
     conversation_policy: z
       .enum(["main_owned", "delivery_owned", "task_agent", "none"])
       .nullable()
@@ -395,7 +389,10 @@ export const task = z
           id,
           title: text,
           status: z.enum(["planned", "running", "completed", "blocked"]),
-          lifecycle_stage: z.enum(["branch_ready", "pr_created", "pr_merged", "closed"]).nullable().optional(),
+          lifecycle_stage: z
+            .enum(["branch_ready", "pr_created", "pr_merged", "closed"])
+            .nullable()
+            .optional(),
         })
         .strict(),
     ),
@@ -405,10 +402,7 @@ export const task = z
     pr: z.union([externalRef, taskPrBinding]).nullable().default(null),
     requirements_path: requirementsPath,
     execution_profile: optionalExecutionProfile,
-    execution_profile_source: z
-      .enum(["manual", "recommendation"])
-      .nullable()
-      .default(null),
+    execution_profile_source: z.enum(["manual", "recommendation"]).nullable().default(null),
     execution_profile_rule: text.nullable().default(null),
     started_at: timestamp.nullable(),
     finished_at: timestamp.nullable(),
@@ -502,11 +496,7 @@ export const fact = z
         head_sha: sha,
         acceptance_refs: z.array(text).min(1),
         checks: z
-          .array(
-            z
-              .object({ name: text, status: z.literal("passed"), evidence_ref: text })
-              .strict(),
-          )
+          .array(z.object({ name: text, status: z.literal("passed"), evidence_ref: text }).strict())
           .min(1),
       })
       .nullable()
@@ -526,15 +516,7 @@ export const cutEvidence = z
 export const operation = z
   .object({
     id,
-    kind: z.enum([
-      "dispatch",
-      "merge",
-      "cut",
-      "publish_branch",
-      "publish_pr",
-      "release",
-      "deploy",
-    ]),
+    kind: z.enum(["dispatch", "merge", "cut", "publish_branch", "publish_pr", "release", "deploy"]),
     actor_id: text,
     target_id: id,
     status: z.enum(["claimed", "succeeded", "failed", "unknown"]),
@@ -625,12 +607,7 @@ export const notificationOption = z
     recipient: notificationRecipient.optional(),
   })
   .strict();
-export const notificationDeliveryStatus = z.enum([
-  "pending",
-  "sent",
-  "failed",
-  "unknown",
-]);
+export const notificationDeliveryStatus = z.enum(["pending", "sent", "failed", "unknown"]);
 export const notificationAckStatus = z.enum(["unacknowledged", "acknowledged"]);
 export const notification = z
   .object({
@@ -653,11 +630,15 @@ export const ledgerSchema = z
     schema_version: z.literal(2),
     source_schema_version: z.literal(1).nullable().default(null),
     contract_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
-    version: z.object({
-      skill_id: text,
-      skill_version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
-      viewer_contract: z.number().int().positive(),
-    }).strict().nullable().default(null),
+    version: z
+      .object({
+        skill_id: text,
+        skill_version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
+        viewer_contract: z.number().int().positive(),
+      })
+      .strict()
+      .nullable()
+      .default(null),
     orchestration_id: id,
     revision: z.number().int().nonnegative(),
     repository: z
@@ -726,13 +707,7 @@ export const ledgerSchema = z
       z
         .object({
           id,
-          kind: z.enum([
-            "conversation",
-            "worktree",
-            "branch",
-            "port",
-            "service",
-          ]),
+          kind: z.enum(["conversation", "worktree", "branch", "port", "service"]),
           target: nullableText,
           status: z.enum([
             "unknown",
@@ -772,12 +747,8 @@ export const TASK_EXECUTION_POLICY_FIELDS = [
 ] as const;
 const taskExecutionPolicyDeclaration = z
   .object({
-    execution_owner: z
-      .enum(["main", "delivery_agent", "task_agent"])
-      .nullable(),
-    conversation_policy: z
-      .enum(["main_owned", "delivery_owned", "task_agent", "none"])
-      .nullable(),
+    execution_owner: z.enum(["main", "delivery_agent", "task_agent"]).nullable(),
+    conversation_policy: z.enum(["main_owned", "delivery_owned", "task_agent", "none"]).nullable(),
     delivery_policy: z
       .enum(["parent_pr", "child_pr", "shared_delivery_unit", "evidence", "none"])
       .nullable(),
@@ -801,10 +772,12 @@ export function taskExecutionPolicyDeclarationGaps(
       (field) => !Object.prototype.hasOwnProperty.call(task, field),
     );
     return missing_fields.length
-      ? [{
-          task_id: typeof task.id === "string" ? task.id : `task-${index}`,
-          missing_fields,
-        }]
+      ? [
+          {
+            task_id: typeof task.id === "string" ? task.id : `task-${index}`,
+            missing_fields,
+          },
+        ]
       : [];
   });
 }
@@ -814,26 +787,72 @@ export type TaskExecutionPolicyIssue = { code: string; message: string };
 export function taskExecutionPolicyIssues(
   candidate: Pick<Task, "execution_owner" | "conversation_policy" | "delivery_policy">,
 ): TaskExecutionPolicyIssue[] {
-  const { execution_owner: owner, conversation_policy: conversation, delivery_policy: delivery } = candidate;
+  const {
+    execution_owner: owner,
+    conversation_policy: conversation,
+    delivery_policy: delivery,
+  } = candidate;
   if (owner === null && conversation === null && delivery === null) return [];
   const issues: TaskExecutionPolicyIssue[] = [];
   if (owner === null || conversation === null || delivery === null) {
-    issues.push({ code: "TASK_EXECUTION_POLICY_INCOMPLETE", message: "任务执行归属、对话策略和交付策略必须同时声明" });
+    issues.push({
+      code: "TASK_EXECUTION_POLICY_INCOMPLETE",
+      message: "任务执行归属、对话策略和交付策略必须同时声明",
+    });
     return issues;
   }
-  if (owner === "main" && conversation !== "main_owned") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "Main Agent 任务必须使用 main_owned 对话策略" });
-  if (owner === "task_agent" && conversation !== "task_agent") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "Task Agent 任务必须使用 task_agent 对话策略" });
-  if (owner === "delivery_agent" && conversation !== "delivery_owned") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "交付 Agent 任务必须使用 delivery_owned 对话策略" });
-  if (owner === "main" && delivery === "child_pr") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "Main Agent 不得拥有 child PR" });
-  if (owner === "delivery_agent" && delivery === "child_pr") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "交付 Agent 不得拥有 child PR" });
-  if (owner === "task_agent" && delivery === "parent_pr") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "Task Agent 不得拥有 parent PR" });
-  if (delivery === "shared_delivery_unit" && owner !== "delivery_agent") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "共享交付任务必须由交付 Agent 持有" });
-  if (delivery === "shared_delivery_unit" && conversation !== "delivery_owned") issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "共享交付任务必须复用交付单元对话" });
-  if (conversation === "none" && ["child_pr", "evidence"].includes(delivery)) issues.push({ code: "TASK_EXECUTION_POLICY_CONFLICT", message: "无对话任务不能声明 child PR 或验证证据" });
+  if (owner === "main" && conversation !== "main_owned")
+    issues.push({
+      code: "TASK_EXECUTION_POLICY_CONFLICT",
+      message: "Main Agent 任务必须使用 main_owned 对话策略",
+    });
+  if (owner === "task_agent" && conversation !== "task_agent")
+    issues.push({
+      code: "TASK_EXECUTION_POLICY_CONFLICT",
+      message: "Task Agent 任务必须使用 task_agent 对话策略",
+    });
+  if (owner === "delivery_agent" && conversation !== "delivery_owned")
+    issues.push({
+      code: "TASK_EXECUTION_POLICY_CONFLICT",
+      message: "交付 Agent 任务必须使用 delivery_owned 对话策略",
+    });
+  if (owner === "main" && delivery === "child_pr")
+    issues.push({
+      code: "TASK_EXECUTION_POLICY_CONFLICT",
+      message: "Main Agent 不得拥有 child PR",
+    });
+  if (owner === "delivery_agent" && delivery === "child_pr")
+    issues.push({
+      code: "TASK_EXECUTION_POLICY_CONFLICT",
+      message: "交付 Agent 不得拥有 child PR",
+    });
+  if (owner === "task_agent" && delivery === "parent_pr")
+    issues.push({
+      code: "TASK_EXECUTION_POLICY_CONFLICT",
+      message: "Task Agent 不得拥有 parent PR",
+    });
+  if (delivery === "shared_delivery_unit" && owner !== "delivery_agent")
+    issues.push({
+      code: "TASK_EXECUTION_POLICY_CONFLICT",
+      message: "共享交付任务必须由交付 Agent 持有",
+    });
+  if (delivery === "shared_delivery_unit" && conversation !== "delivery_owned")
+    issues.push({
+      code: "TASK_EXECUTION_POLICY_CONFLICT",
+      message: "共享交付任务必须复用交付单元对话",
+    });
+  if (conversation === "none" && ["child_pr", "evidence"].includes(delivery))
+    issues.push({
+      code: "TASK_EXECUTION_POLICY_CONFLICT",
+      message: "无对话任务不能声明 child PR 或验证证据",
+    });
   return issues;
 }
 
-export function validateTaskExecutionPolicies(tasks: readonly Task[], requireComplete = false): void {
+export function validateTaskExecutionPolicies(
+  tasks: readonly Task[],
+  requireComplete = false,
+): void {
   for (const candidate of tasks) {
     const parsed = taskExecutionPolicyDeclaration.safeParse({
       execution_owner: candidate.execution_owner,
@@ -846,10 +865,25 @@ export function validateTaskExecutionPolicies(tasks: readonly Task[], requireCom
       `${candidate.id}: 任务执行策略值无效`,
       3,
     );
-    if (requireComplete && parsed.data.execution_owner === null && parsed.data.conversation_policy === null && parsed.data.delivery_policy === null)
-      requireCondition(false, "TASK_EXECUTION_POLICY_INCOMPLETE", `${candidate.id}: 任务执行归属、对话策略和交付策略必须声明`, 3);
+    if (
+      requireComplete &&
+      parsed.data.execution_owner === null &&
+      parsed.data.conversation_policy === null &&
+      parsed.data.delivery_policy === null
+    )
+      requireCondition(
+        false,
+        "TASK_EXECUTION_POLICY_INCOMPLETE",
+        `${candidate.id}: 任务执行归属、对话策略和交付策略必须声明`,
+        3,
+      );
     const issues = taskExecutionPolicyIssues(parsed.data);
-    requireCondition(issues.length === 0, issues[0]?.code ?? "TASK_EXECUTION_POLICY_INVALID", `${candidate.id}: ${issues.map((issue) => issue.message).join("；")}`, 3);
+    requireCondition(
+      issues.length === 0,
+      issues[0]?.code ?? "TASK_EXECUTION_POLICY_INVALID",
+      `${candidate.id}: ${issues.map((issue) => issue.message).join("；")}`,
+      3,
+    );
   }
 }
 export function isContributionKind(kind: Task["kind"]): boolean {
@@ -864,15 +898,9 @@ export function deliveryTopologyForGroup(
 ): DeliveryTopology {
   const count = tasks.filter(
     (task) =>
-      task.group_id === groupId &&
-      task.disposition === "active" &&
-      isContributionKind(task.kind),
+      task.group_id === groupId && task.disposition === "active" && isContributionKind(task.kind),
   ).length;
-  return count === 0
-    ? "none"
-    : count === 1
-      ? "shared_delivery"
-      : "multi_task_integration";
+  return count === 0 ? "none" : count === 1 ? "shared_delivery" : "multi_task_integration";
 }
 
 /**
@@ -880,10 +908,7 @@ export function deliveryTopologyForGroup(
  * The grouping itself is a planning decision; this function only checks that the
  * resulting one-task/multi-task topology is represented consistently at runtime.
  */
-export function validateDeliveryTopologies(
-  tasks: readonly Task[],
-  requireComplete = false,
-): void {
+export function validateDeliveryTopologies(tasks: readonly Task[], requireComplete = false): void {
   const groupIds = new Set(
     tasks
       .filter((task) => task.disposition === "active" && isContributionKind(task.kind))
@@ -893,9 +918,7 @@ export function validateDeliveryTopologies(
     const topology = deliveryTopologyForGroup(tasks, groupId);
     const contributionTasks = tasks.filter(
       (task) =>
-        task.group_id === groupId &&
-        task.disposition === "active" &&
-        isContributionKind(task.kind),
+        task.group_id === groupId && task.disposition === "active" && isContributionKind(task.kind),
     );
     if (!requireComplete) {
       if (contributionTasks.some((task) => task.delivery_policy === "shared_delivery_unit"))
@@ -970,17 +993,15 @@ type DevPlanHandoffValidationOptions = {
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>).sort(
-      ([left], [right]) => (left < right ? -1 : left > right ? 1 : 0),
+    const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0,
     );
     return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
   }
   return JSON.stringify(value);
 }
 
-export function acceptanceScopeDigest(
-  scopes: DevPlanHandoff["acceptance_scopes"],
-): string {
+export function acceptanceScopeDigest(scopes: DevPlanHandoff["acceptance_scopes"]): string {
   const normalized = [...scopes].sort((left, right) =>
     left.acceptance_id < right.acceptance_id
       ? -1
@@ -1068,8 +1089,7 @@ function sameTaskStructure(left: Task, right: Task): boolean {
     left.kind === right.kind &&
     left.thread_id === right.thread_id &&
     left.requirements_path === right.requirements_path &&
-    canonicalJson(left.owned_surfaces) ===
-      canonicalJson(right.owned_surfaces) &&
+    canonicalJson(left.owned_surfaces) === canonicalJson(right.owned_surfaces) &&
     canonicalJson(left.atoms.map(({ id, title }) => ({ id, title }))) ===
       canonicalJson(right.atoms.map(({ id, title }) => ({ id, title })))
   );
@@ -1083,8 +1103,7 @@ function normalizeOwnedSurface(value: string): string | undefined {
   const stripped = value.trim().replaceAll("\\", "/");
   if (!stripped) return;
   const normalized = posixPath.normalize(stripped);
-  const canonical =
-    normalized === "/" ? normalized : normalized.replace(/\/+$/, "") || ".";
+  const canonical = normalized === "/" ? normalized : normalized.replace(/\/+$/, "") || ".";
   if (
     canonical.startsWith("/") ||
     canonical === ".." ||
@@ -1097,8 +1116,7 @@ function normalizeOwnedSurface(value: string): string | undefined {
 
 function normalizedOwnedSurfaces(value: string[]): string[] | undefined {
   const normalized = value.map(normalizeOwnedSurface);
-  if (normalized.some((surface): surface is undefined => surface === undefined))
-    return;
+  if (normalized.some((surface): surface is undefined => surface === undefined)) return;
   const surfaces = normalized as string[];
   return new Set(surfaces).size === surfaces.length ? surfaces : undefined;
 }
@@ -1159,14 +1177,13 @@ export function validatePlanHandoff(candidate: Plan): void {
       );
     }
   requireCondition(
-    new Set(handoff.acceptance_scopes.map((item) => item.acceptance_id))
-      .size === handoff.acceptance_scopes.length,
+    new Set(handoff.acceptance_scopes.map((item) => item.acceptance_id)).size ===
+      handoff.acceptance_scopes.length,
     "INVALID_PLAN_HANDOFF",
     "dev-plan handoff acceptance IDs must be unique",
   );
   requireCondition(
-    handoff.acceptance_digest ===
-      acceptanceScopeDigest(handoff.acceptance_scopes),
+    handoff.acceptance_digest === acceptanceScopeDigest(handoff.acceptance_scopes),
     "INVALID_PLAN_HANDOFF",
     "dev-plan handoff acceptance digest does not match its scopes",
   );
@@ -1192,10 +1209,7 @@ export function validatePlanHandoff(candidate: Plan): void {
   }
 }
 
-export function attachDevPlanHandoff(
-  candidate: Plan,
-  source: DevPlanHandoffSource,
-): Plan {
+export function attachDevPlanHandoff(candidate: Plan, source: DevPlanHandoffSource): Plan {
   requireCondition(
     candidate.plan_handoff === undefined,
     "INVALID_PLAN_HANDOFF",
@@ -1266,12 +1280,8 @@ export function validateDevPlanHandoff(
     );
     plannedGroupIds.add(taskNode!.group_id!);
     const hasDynamicAssignment =
-      options.assignmentEvidence
-        ?.get(runtimeTask.id)
-        ?.has(runtimeTask.group_id) === true &&
-      runtimeTask.assignment_history.some(
-        (item) => item.group_id === runtimeTask.group_id,
-      );
+      options.assignmentEvidence?.get(runtimeTask.id)?.has(runtimeTask.group_id) === true &&
+      runtimeTask.assignment_history.some((item) => item.group_id === runtimeTask.group_id);
     requireCondition(
       options.allowDynamicAssignments
         ? taskNode!.group_id === runtimeTask.group_id || hasDynamicAssignment
@@ -1285,12 +1295,8 @@ export function validateDevPlanHandoff(
   );
   const normalizedRuntimeSurfaces = new Map<string, string[]>();
   for (const runtimeTask of tasks) {
-    const handoffOwnedSurfaces = normalizedOwnedSurfaces(
-      surfaces.get(runtimeTask.id) ?? [],
-    );
-    const runtimeOwnedSurfaces = normalizedOwnedSurfaces(
-      runtimeTask.owned_surfaces,
-    );
+    const handoffOwnedSurfaces = normalizedOwnedSurfaces(surfaces.get(runtimeTask.id) ?? []);
+    const runtimeOwnedSurfaces = normalizedOwnedSurfaces(runtimeTask.owned_surfaces);
     requireCondition(
       handoffOwnedSurfaces !== undefined && runtimeOwnedSurfaces !== undefined,
       "INVALID_PLAN_HANDOFF",
@@ -1306,9 +1312,7 @@ export function validateDevPlanHandoff(
   }
   const runtimeSurfaceEntries = [...normalizedRuntimeSurfaces.entries()];
   for (let index = 0; index < runtimeSurfaceEntries.length; index += 1)
-    for (const [rightTaskId, rightSurfaces] of runtimeSurfaceEntries.slice(
-      index + 1,
-    )) {
+    for (const [rightTaskId, rightSurfaces] of runtimeSurfaceEntries.slice(index + 1)) {
       const [leftTaskId, leftSurfaces] = runtimeSurfaceEntries[index]!;
       const shared = leftSurfaces.some((surface) =>
         rightSurfaces.some((other) => ownedSurfacesOverlap(surface, other)),
@@ -1336,9 +1340,7 @@ export function validateDevPlanHandoff(
   }
   for (const runtimeTask of tasks)
     requireCondition(
-      handoff.acceptance_scopes.some(
-        (item) => item.scope === `task:${runtimeTask.id}`,
-      ),
+      handoff.acceptance_scopes.some((item) => item.scope === `task:${runtimeTask.id}`),
       "INVALID_PLAN_HANDOFF",
       `dev-plan handoff is missing task acceptance scope for ${runtimeTask.id}`,
     );
@@ -1354,9 +1356,7 @@ export function validateDevPlanHandoff(
     );
   for (const groupId of requiredBatchGroupIds)
     requireCondition(
-      handoff.acceptance_scopes.some(
-        (item) => item.scope === `batch:${groupId}`,
-      ),
+      handoff.acceptance_scopes.some((item) => item.scope === `batch:${groupId}`),
       "INVALID_PLAN_HANDOFF",
       `dev-plan handoff is missing batch acceptance scope for ${groupId}`,
     );
@@ -1368,9 +1368,7 @@ export function validateInitialRuntimeState(
 ): void {
   const validRequirementsPath = (value: string | null): boolean =>
     requirementsPath.safeParse(value).success;
-  const bootstraps = groups.filter(
-    (candidate) => candidate.delivery_unit_kind === "bootstrap",
-  );
+  const bootstraps = groups.filter((candidate) => candidate.delivery_unit_kind === "bootstrap");
   requireCondition(
     bootstraps.length <= 1,
     "INVALID_INITIAL_STATE",
@@ -1391,9 +1389,7 @@ export function validateInitialRuntimeState(
       3,
     );
   }
-  for (const candidate of groups.filter(
-    (item) => item.delivery_unit_kind === "regular",
-  ))
+  for (const candidate of groups.filter((item) => item.delivery_unit_kind === "regular"))
     requireCondition(
       candidate.owner_kind === "group",
       "INVALID_INITIAL_STATE",
@@ -1486,7 +1482,10 @@ export function validatePlan(candidate: Plan): void {
       "Plan IDs must be unique within each collection",
     );
   }
-  if (candidate.atomic_nodes.length || candidate.atomic_edges.some((edge) => "from_node_id" in edge)) {
+  if (
+    candidate.atomic_nodes.length ||
+    candidate.atomic_edges.some((edge) => "from_node_id" in edge)
+  ) {
     requireCondition(
       candidate.atomic_edges.every((edge) => "from_node_id" in edge && "to_node_id" in edge),
       "ATOMIC_CONTRACT_REQUIRED",
@@ -1497,7 +1496,11 @@ export function validatePlan(candidate: Plan): void {
       try {
         validateAtomicBoundaries(candidate.atomic_nodes, candidate.atomic_edges as any);
       } catch (error) {
-        requireCondition(false, "ATOMIC_GRAPH_INCOMPLETE", error instanceof Error ? error.message : String(error));
+        requireCondition(
+          false,
+          "ATOMIC_GRAPH_INCOMPLETE",
+          error instanceof Error ? error.message : String(error),
+        );
       }
     }
     const canonicalById = new Map(candidate.atomic_nodes.map((node) => [node.id, node]));
@@ -1512,7 +1515,9 @@ export function validatePlan(candidate: Plan): void {
     for (const atom of candidate.group_atoms) {
       const node = canonicalById.get(atom.id);
       requireCondition(
-        node?.kind === "work" && node.scope?.kind === "delivery_unit" && node.scope.delivery_unit_id === atom.group_id,
+        node?.kind === "work" &&
+          node.scope?.kind === "delivery_unit" &&
+          node.scope.delivery_unit_id === atom.group_id,
         "ATOMIC_GRAPH_INCOMPLETE",
         `Canonical graph must contain delivery-unit atom ${atom.id} with matching scope`,
       );
@@ -1520,20 +1525,34 @@ export function validatePlan(candidate: Plan): void {
     try {
       validateDeliveryUnitLifecycleEdges(candidate.group_atoms, candidate.atomic_edges);
     } catch (error) {
-      requireCondition(false, "ATOMIC_GRAPH_INCOMPLETE", error instanceof Error ? error.message : String(error));
+      requireCondition(
+        false,
+        "ATOMIC_GRAPH_INCOMPLETE",
+        error instanceof Error ? error.message : String(error),
+      );
     }
     try {
       validateTaskLifecycleEdges(candidate.atoms, candidate.atomic_edges);
     } catch (error) {
-      requireCondition(false, "ATOMIC_GRAPH_INCOMPLETE", error instanceof Error ? error.message : String(error));
+      requireCondition(
+        false,
+        "ATOMIC_GRAPH_INCOMPLETE",
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
   for (const task of (candidate.tasks ?? []).filter((item) => isContributionKind(item.kind))) {
-    requireCondition(candidate.atoms.some((atom) => atom.task_id === task.id), "MISSING_CONTRIBUTION_ATOM", `Contribution task ${task.id} must declare at least one atomic task`);
+    requireCondition(
+      candidate.atoms.some((atom) => atom.task_id === task.id),
+      "MISSING_CONTRIBUTION_ATOM",
+      `Contribution task ${task.id} must declare at least one atomic task`,
+    );
   }
   validateGrouping(
     candidate.atoms,
-    candidate.atomic_edges.filter((edge): edge is z.infer<typeof atomEdge> => "from_atom_id" in edge),
+    candidate.atomic_edges.filter(
+      (edge): edge is z.infer<typeof atomEdge> => "from_atom_id" in edge,
+    ),
   );
   topologicalOrder(
     candidate.nodes.map((item) => item.id),
@@ -1543,14 +1562,11 @@ export function validatePlan(candidate: Plan): void {
     })),
   );
   const taskNodes = new Map(
-    candidate.nodes
-      .filter((item) => item.kind === "task")
-      .map((item) => [item.ref_id, item.id]),
+    candidate.nodes.filter((item) => item.kind === "task").map((item) => [item.ref_id, item.id]),
   );
   requireCondition(
     !taskNodes.has(null) &&
-      taskNodes.size ===
-        candidate.nodes.filter((item) => item.kind === "task").length,
+      taskNodes.size === candidate.nodes.filter((item) => item.kind === "task").length,
     "DUPLICATE_TASK_NODE",
     "Each task needs exactly one identified plan node",
   );
@@ -1560,9 +1576,7 @@ export function validatePlan(candidate: Plan): void {
     "Every atom must belong to a task node",
   );
   const groupNodes = new Set(
-    candidate.nodes
-      .map((item) => item.group_id)
-      .filter((item): item is string => item !== null),
+    candidate.nodes.map((item) => item.group_id).filter((item): item is string => item !== null),
   );
   requireCondition(
     candidate.group_atoms.every((atom) => groupNodes.has(atom.group_id)),
@@ -1598,9 +1612,7 @@ export function validatePlan(candidate: Plan): void {
   requireCondition(
     candidate.actions.every(
       (action) =>
-        action.kind === "publish_branch" ||
-        action.kind === "publish_pr" ||
-        action.task_id !== null,
+        action.kind === "publish_branch" || action.kind === "publish_pr" || action.task_id !== null,
     ),
     "MISSING_TASK_NODE",
     "Release and deploy actions must belong to a task node",
@@ -1614,18 +1626,16 @@ export function validatePlan(candidate: Plan): void {
   const nodes = new Map(candidate.nodes.map((item) => [item.id, item]));
   const atoms = new Map(candidate.atoms.map((item) => [item.id, item]));
   const actualEdges = new Set(
-    candidate.edges.map(
-      (item) => `${item.from_node_id}:${item.to_node_id}:${item.requires}`,
-    ),
+    candidate.edges.map((item) => `${item.from_node_id}:${item.to_node_id}:${item.requires}`),
   );
-  for (const atomDependency of candidate.atomic_edges.filter((edge): edge is z.infer<typeof atomEdge> => "from_atom_id" in edge)) {
+  for (const atomDependency of candidate.atomic_edges.filter(
+    (edge): edge is z.infer<typeof atomEdge> => "from_atom_id" in edge,
+  )) {
     const from = atoms.get(atomDependency.from_atom_id)!;
     const to = atoms.get(atomDependency.to_atom_id)!;
     if (from.task_id !== to.task_id) {
       requireCondition(
-        actualEdges.has(
-          `${taskNodes.get(from.task_id)}:${taskNodes.get(to.task_id)}:integrated`,
-        ),
+        actualEdges.has(`${taskNodes.get(from.task_id)}:${taskNodes.get(to.task_id)}:integrated`),
         "MISSING_HANDOFF",
         "Cross-task atomic dependencies require an integrated task edge",
       );
@@ -1658,9 +1668,15 @@ export function planCompletenessIssues(candidate: Plan): PlanCompletenessIssue[]
     if (taskNode.estimate_minutes === null)
       issues.push({ code: "missing_estimate", message: `任务 ${taskNode.label} 缺少估时。` });
     if (!taskNode.estimate_basis)
-      issues.push({ code: "missing_estimate_basis", message: `任务 ${taskNode.label} 缺少估时依据。` });
+      issues.push({
+        code: "missing_estimate_basis",
+        message: `任务 ${taskNode.label} 缺少估时依据。`,
+      });
     if (!taskNode.estimate_confidence)
-      issues.push({ code: "missing_estimate_confidence", message: `任务 ${taskNode.label} 缺少估时置信度。` });
+      issues.push({
+        code: "missing_estimate_confidence",
+        message: `任务 ${taskNode.label} 缺少估时置信度。`,
+      });
   }
   return issues;
 }
@@ -1678,7 +1694,11 @@ export function theoreticalScheduleIssues(candidate: Plan): TheoreticalScheduleI
   const incoming = new Map<string, string[]>();
   for (const edge of candidate.edges) {
     if (!nodes.has(edge.from_node_id) || !nodes.has(edge.to_node_id)) {
-      issues.push({ code: "SCHEDULE_DANGLING_DEPENDENCY", node_id: edge.to_node_id, message: `依赖引用不存在：${edge.from_node_id} → ${edge.to_node_id}。` });
+      issues.push({
+        code: "SCHEDULE_DANGLING_DEPENDENCY",
+        node_id: edge.to_node_id,
+        message: `依赖引用不存在：${edge.from_node_id} → ${edge.to_node_id}。`,
+      });
       continue;
     }
     incoming.set(edge.to_node_id, [...(incoming.get(edge.to_node_id) ?? []), edge.from_node_id]);
@@ -1686,16 +1706,35 @@ export function theoreticalScheduleIssues(candidate: Plan): TheoreticalScheduleI
   const visiting = new Set<string>();
   const visited = new Set<string>();
   const visit = (id: string): void => {
-    if (visiting.has(id)) { issues.push({ code: "SCHEDULE_CYCLE", node_id: id, message: `理论排期存在循环依赖：${id}。` }); return; }
+    if (visiting.has(id)) {
+      issues.push({
+        code: "SCHEDULE_CYCLE",
+        node_id: id,
+        message: `理论排期存在循环依赖：${id}。`,
+      });
+      return;
+    }
     if (visited.has(id)) return;
     visiting.add(id);
     for (const predecessor of incoming.get(id) ?? []) visit(predecessor);
-    visiting.delete(id); visited.add(id);
+    visiting.delete(id);
+    visited.add(id);
   };
   for (const node of candidate.nodes) visit(node.id);
-  for (const node of candidate.nodes) if (node.kind === "task" && (node.estimate_minutes === null || node.estimate_minutes <= 0)) {
-    issues.push({ code: node.estimate_minutes === null ? "SCHEDULE_MISSING_DURATION" : "SCHEDULE_NONPOSITIVE_DURATION", node_id: node.id, message: node.estimate_minutes === null ? `任务 ${node.label} 缺少理论排期时长。` : `任务 ${node.label} 的理论排期时长必须大于 0。` });
-  }
+  for (const node of candidate.nodes)
+    if (node.kind === "task" && (node.estimate_minutes === null || node.estimate_minutes <= 0)) {
+      issues.push({
+        code:
+          node.estimate_minutes === null
+            ? "SCHEDULE_MISSING_DURATION"
+            : "SCHEDULE_NONPOSITIVE_DURATION",
+        node_id: node.id,
+        message:
+          node.estimate_minutes === null
+            ? `任务 ${node.label} 缺少理论排期时长。`
+            : `任务 ${node.label} 的理论排期时长必须大于 0。`,
+      });
+    }
   return issues;
 }
 
@@ -1704,10 +1743,7 @@ export type CutAssignmentEvidence = {
   dynamicGroupIds: Set<string>;
 };
 
-export function collectCutAssignmentEvidence(
-  ledger: Ledger,
-  active: Plan,
-): CutAssignmentEvidence {
+export function collectCutAssignmentEvidence(ledger: Ledger, active: Plan): CutAssignmentEvidence {
   const currentGroups = new Map<string, string>();
   for (const node of active.nodes.filter((item) => item.kind === "task"))
     if (node.ref_id !== null && node.group_id !== null)
@@ -1740,8 +1776,7 @@ export function collectCutAssignmentEvidence(
       "cut_applied event has invalid assignment evidence",
     );
     requireCondition(
-      !appliedOperationIds.has(operationId as string) &&
-        !createdGroupIds.has(newGroupId as string),
+      !appliedOperationIds.has(operationId as string) && !createdGroupIds.has(newGroupId as string),
       "INVALID_CUT_EVENT",
       "cut_applied event reuses a cut operation or dynamic group",
     );
@@ -1851,19 +1886,14 @@ export function collectCutAssignmentEvidence(
     );
     requireCondition(
       initialGroupSnapshot.data.state === event.data.new_group_state &&
-        initialGroupSnapshot.data.agent_thread_id ===
-          event.data.new_group_agent_thread_id &&
-        initialGroupSnapshot.data.parent_branch ===
-          event.data.new_group_parent_branch &&
+        initialGroupSnapshot.data.agent_thread_id === event.data.new_group_agent_thread_id &&
+        initialGroupSnapshot.data.parent_branch === event.data.new_group_parent_branch &&
         canonicalJson(initialGroupSnapshot.data.parent_pr) ===
           canonicalJson(event.data.new_group_parent_pr) &&
         initialGroupSnapshot.data.cut_sha === event.data.new_group_cut_sha &&
-        initialGroupSnapshot.data.current_sha ===
-          event.data.new_group_current_sha &&
-        initialGroupSnapshot.data.merge_sha ===
-          event.data.new_group_merge_sha &&
-        initialGroupSnapshot.data.requirements_path ===
-          event.data.new_group_requirements_path,
+        initialGroupSnapshot.data.current_sha === event.data.new_group_current_sha &&
+        initialGroupSnapshot.data.merge_sha === event.data.new_group_merge_sha &&
+        initialGroupSnapshot.data.requirements_path === event.data.new_group_requirements_path,
       "INVALID_CUT_EVENT",
       "cut_applied event snapshot does not match its creation fields",
     );
@@ -1876,10 +1906,8 @@ export function collectCutAssignmentEvidence(
         oldGroupSnapshot.data.title === oldGroup.title &&
         oldGroupSnapshot.data.agent_thread_id === oldGroup.agent_thread_id &&
         oldGroupSnapshot.data.parent_branch === oldGroup.parent_branch &&
-        canonicalJson(oldGroupSnapshot.data.parent_pr) ===
-          canonicalJson(oldGroup.parent_pr) &&
-        oldGroupSnapshot.data.requirements_path ===
-          oldGroup.requirements_path &&
+        canonicalJson(oldGroupSnapshot.data.parent_pr) === canonicalJson(oldGroup.parent_pr) &&
+        oldGroupSnapshot.data.requirements_path === oldGroup.requirements_path &&
         oldGroupSnapshot.data.merge_sha === null &&
         ["planned", "active", "blocked"].includes(oldGroupSnapshot.data.state),
       "INVALID_CUT_EVENT",
@@ -1899,9 +1927,7 @@ export function collectCutAssignmentEvidence(
       const snapshotField =
         laterEvent.type === "cut_applied"
           ? "old_group_snapshot"
-          : ["thread_bound", "group_updated", "merge_resolved"].includes(
-                laterEvent.type,
-              )
+          : ["thread_bound", "group_updated", "merge_resolved"].includes(laterEvent.type)
             ? "group_snapshot"
             : null;
       if (snapshotField === null) continue;
@@ -1921,17 +1947,12 @@ export function collectCutAssignmentEvidence(
     const included = includedTaskIds as string[];
     const reassigned = reassignedTaskIds as string[];
     requireCondition(
-      new Set([...included, ...reassigned]).size ===
-        included.length + reassigned.length,
+      new Set([...included, ...reassigned]).size === included.length + reassigned.length,
       "INVALID_CUT_EVENT",
       "cut_applied event overlaps included and reassigned tasks",
     );
     const expectedDevelopmentTaskIds = ledger.tasks
-      .filter(
-        (task) =>
-          isContributionKind(task.kind) &&
-          currentGroups.get(task.id) === oldGroupId,
-      )
+      .filter((task) => isContributionKind(task.kind) && currentGroups.get(task.id) === oldGroupId)
       .map((task) => task.id);
     requireCondition(
       sameMembers(expectedDevelopmentTaskIds, [...included, ...reassigned]),
@@ -1946,16 +1967,13 @@ export function collectCutAssignmentEvidence(
           expectedDevelopmentTaskIds,
         ) &&
         taskSnapshots.data.every(
-          (item) =>
-            item.group_id === oldGroupId && isContributionKind(item.kind),
+          (item) => item.group_id === oldGroupId && isContributionKind(item.kind),
         ),
       "INVALID_CUT_EVENT",
       "cut_applied event is missing complete task boundary snapshots",
     );
     const snapshotById = new Map(
-      taskSnapshots.success
-        ? taskSnapshots.data.map((item) => [item.id, item])
-        : [],
+      taskSnapshots.success ? taskSnapshots.data.map((item) => [item.id, item]) : [],
     );
     const boundaryStateById = new Map(
       expectedDevelopmentTaskIds.map((taskId) => [
@@ -1994,8 +2012,7 @@ export function collectCutAssignmentEvidence(
           snapshot !== undefined &&
           isContributionKind(task.kind) &&
           currentGroups.get(taskId) === oldGroupId &&
-          canonicalJson(task.assignment_history) ===
-            canonicalJson(snapshot.assignment_history) &&
+          canonicalJson(task.assignment_history) === canonicalJson(snapshot.assignment_history) &&
           ["integrated", "closed"].includes(snapshot.state),
         "INVALID_CUT_EVENT",
         `cut_applied event has an invalid included task ${taskId}`,
@@ -2021,9 +2038,7 @@ export function collectCutAssignmentEvidence(
           currentGroups.get(taskId) === oldGroupId &&
           task.group_id === newGroupId &&
           task.assignment_history.some(
-            (item) =>
-              item.group_id === newGroupId &&
-              item.cut_operation_id === operationId,
+            (item) => item.group_id === newGroupId && item.cut_operation_id === operationId,
           ),
         "INVALID_CUT_EVENT",
         `cut_applied event has an invalid task boundary snapshot ${taskId}`,
@@ -2031,28 +2046,19 @@ export function collectCutAssignmentEvidence(
       requireCondition(
         snapshot !== undefined &&
           task.assignment_history.length > snapshot.assignment_history.length &&
-          canonicalJson(
-            task.assignment_history.slice(
-              0,
-              snapshot.assignment_history.length,
-            ),
-          ) === canonicalJson(snapshot.assignment_history) &&
-          task.assignment_history[snapshot.assignment_history.length]
-            ?.cut_operation_id === operationId,
+          canonicalJson(task.assignment_history.slice(0, snapshot.assignment_history.length)) ===
+            canonicalJson(snapshot.assignment_history) &&
+          task.assignment_history[snapshot.assignment_history.length]?.cut_operation_id ===
+            operationId,
         "INVALID_CUT_EVENT",
         `cut_applied event does not prove reassignment boundary for task ${taskId}`,
       );
       currentGroups.set(taskId, reassignmentGroupId);
-      assignments.set(
-        taskId,
-        new Set([...(assignments.get(taskId) ?? []), reassignmentGroupId]),
-      );
+      assignments.set(taskId, new Set([...(assignments.get(taskId) ?? []), reassignmentGroupId]));
     }
     const historyTaskIds = ledger.tasks
       .filter((task) =>
-        task.assignment_history.some(
-          (item) => item.cut_operation_id === operationId,
-        ),
+        task.assignment_history.some((item) => item.cut_operation_id === operationId),
       )
       .map((task) => task.id);
     requireCondition(
@@ -2074,20 +2080,13 @@ export function collectCutAssignmentEvidence(
 }
 
 export function normalizeLegacyLedger(value: unknown): unknown {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    return value;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
   const raw = value as Record<string, unknown>;
   const rawPlans = Array.isArray(raw.plans) ? raw.plans : [];
   const plans = rawPlans.map((candidate) => {
-    if (
-      candidate === null ||
-      typeof candidate !== "object" ||
-      Array.isArray(candidate)
-    )
+    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate))
       return candidate;
-    const item = normalizeRetiredPlanAlias(
-      candidate as Record<string, unknown>,
-    );
+    const item = normalizeRetiredPlanAlias(candidate as Record<string, unknown>);
     if (
       item.plan_handoff !== null &&
       typeof item.plan_handoff === "object" &&
@@ -2097,24 +2096,20 @@ export function normalizeLegacyLedger(value: unknown): unknown {
       const { plan_handoff: _legacyHandoff, ...withoutLegacyHandoff } = item;
       return {
         ...withoutLegacyHandoff,
-        lifecycle:
-          item.lifecycle ??
-          (item.approval_id === null ? "proposed" : "approved"),
+        lifecycle: item.lifecycle ?? (item.approval_id === null ? "proposed" : "approved"),
         revision: item.revision ?? null,
       };
     }
     return {
       ...item,
-      lifecycle:
-        item.lifecycle ?? (item.approval_id === null ? "proposed" : "approved"),
+      lifecycle: item.lifecycle ?? (item.approval_id === null ? "proposed" : "approved"),
       revision: item.revision ?? null,
     };
   });
   return {
     ...raw,
     schema_version: 2,
-    source_schema_version:
-      raw.schema_version === 1 ? 1 : (raw.source_schema_version ?? null),
+    source_schema_version: raw.schema_version === 1 ? 1 : (raw.source_schema_version ?? null),
     contract_version:
       raw.schema_version === undefined
         ? 1
@@ -2138,11 +2133,8 @@ export function normalizeLegacyLedger(value: unknown): unknown {
                   closed: "unknown",
                   ...((item as any).lifecycle ?? {}),
                 },
-                atoms: Array.isArray((item as any).atoms)
-                  ? (item as any).atoms
-                  : [],
-                coordination_execution: (item as any)
-                  .coordination_execution ?? {
+                atoms: Array.isArray((item as any).atoms) ? (item as any).atoms : [],
+                coordination_execution: (item as any).coordination_execution ?? {
                   state: "unknown",
                   reason: null,
                   waiting_for_task_ids: [],
@@ -2183,9 +2175,7 @@ export function normalizeLegacyLedger(value: unknown): unknown {
                     : ((item as any).status ?? "pending")),
                 ack_status:
                   (item as any).ack_status ??
-                  ((item as any).status === "acknowledged"
-                    ? "acknowledged"
-                    : "unacknowledged"),
+                  ((item as any).status === "acknowledged" ? "acknowledged" : "unacknowledged"),
                 last_attempt_id: null,
                 last_reconciliation_id: null,
                 last_error: null,
@@ -2202,9 +2192,7 @@ export function normalizeLegacyLedger(value: unknown): unknown {
 }
 
 function validateDeliveryUnits(ledger: Ledger): void {
-  const bootstrap = ledger.groups.filter(
-    (item) => item.delivery_unit_kind === "bootstrap",
-  );
+  const bootstrap = ledger.groups.filter((item) => item.delivery_unit_kind === "bootstrap");
   requireCondition(
     bootstrap.length <= 1,
     "INVALID_DELIVERY_UNIT",
@@ -2222,8 +2210,7 @@ function validateDeliveryUnits(ledger: Ledger): void {
     } else {
       requireCondition(
         item.owner_kind === "group" &&
-          (!item.agent_thread_id ||
-            item.agent_thread_id !== ledger.control.owner_thread_id),
+          (!item.agent_thread_id || item.agent_thread_id !== ledger.control.owner_thread_id),
         "INVALID_DELIVERY_UNIT",
         "Regular delivery unit must use an independent group conversation",
       );
@@ -2248,9 +2235,7 @@ function validateDeliveryUnits(ledger: Ledger): void {
           "INVALID_DELIVERY_UNIT",
           "Bootstrap cannot depend on another delivery unit",
         );
-        for (const incoming of plan.edges.filter(
-          (item) => item.to_node_id === node.id,
-        ))
+        for (const incoming of plan.edges.filter((item) => item.to_node_id === node.id))
           pending.push(nodes.get(incoming.from_node_id));
       }
     }
@@ -2268,12 +2253,27 @@ export function validateLedger(value: unknown): Ledger {
     );
     validateAtomicGraph(parsed.atomic_nodes, parsed.atomic_edges as any);
     for (const group of parsed.groups) {
-      requireCondition(deliveryUnitExternalFacts.safeParse(group.pr).success, "ATOMIC_CONTRACT_REQUIRED", "Contract-3 DeliveryUnit PR must use DeliveryUnitExternalFacts", 3);
+      requireCondition(
+        deliveryUnitExternalFacts.safeParse(group.pr).success,
+        "ATOMIC_CONTRACT_REQUIRED",
+        "Contract-3 DeliveryUnit PR must use DeliveryUnitExternalFacts",
+        3,
+      );
     }
     for (const task of parsed.tasks.filter((item) => isContributionKind(item.kind))) {
-      requireCondition(taskPrBinding.safeParse(task.pr).success, "ATOMIC_CONTRACT_REQUIRED", "Contract-3 contribution Task PR must use TaskPrBinding", 3);
+      requireCondition(
+        taskPrBinding.safeParse(task.pr).success,
+        "ATOMIC_CONTRACT_REQUIRED",
+        "Contract-3 contribution Task PR must use TaskPrBinding",
+        3,
+      );
       if (task.pr?.state === "shared_delivery_unit")
-        requireCondition(task.pr.delivery_unit_id === task.group_id, "DELIVERY_TOPOLOGY_CONFLICT", "Shared task PR binding must reference its delivery unit", 3);
+        requireCondition(
+          task.pr.delivery_unit_id === task.group_id,
+          "DELIVERY_TOPOLOGY_CONFLICT",
+          "Shared task PR binding must reference its delivery unit",
+          3,
+        );
     }
   }
   for (const collection of [
@@ -2294,8 +2294,7 @@ export function validateLedger(value: unknown): Ledger {
     );
   }
   requireCondition(
-    new Set(parsed.requests.map((item) => item.request_id)).size ===
-      parsed.requests.length,
+    new Set(parsed.requests.map((item) => item.request_id)).size === parsed.requests.length,
     "DUPLICATE_REQUEST",
     "Request IDs must be unique",
   );
@@ -2304,8 +2303,7 @@ export function validateLedger(value: unknown): Ledger {
   const groupIds = new Set(parsed.groups.map((item) => item.id));
   for (const operation of parsed.operations) {
     requireCondition(
-      operation.receipt_fact_id === null ||
-        factIds.has(operation.receipt_fact_id),
+      operation.receipt_fact_id === null || factIds.has(operation.receipt_fact_id),
       "MISSING_FACT",
       "Operation receipt_fact_id must reference an existing fact",
     );
@@ -2325,10 +2323,8 @@ export function validateLedger(value: unknown): Ledger {
     );
     requireCondition(
       notice.status === "acknowledged"
-        ? notice.delivery_status === "sent" &&
-            notice.ack_status === "acknowledged"
-        : notice.status === notice.delivery_status &&
-            notice.ack_status === "unacknowledged",
+        ? notice.delivery_status === "sent" && notice.ack_status === "acknowledged"
+        : notice.status === notice.delivery_status && notice.ack_status === "unacknowledged",
       "INVALID_NOTIFICATION_STATE",
       "Notification status fields are inconsistent",
     );
@@ -2343,15 +2339,10 @@ export function validateLedger(value: unknown): Ledger {
     "MISSING_PLAN",
     "Execution plan not found",
   );
-  const activePlan = parsed.plans.find(
-    (item) => item.id === parsed.active_plan_id,
-  )!;
-  const executionPlan = parsed.plans.find(
-    (item) => item.id === parsed.execution_plan_id,
-  )!;
+  const activePlan = parsed.plans.find((item) => item.id === parsed.active_plan_id)!;
+  const executionPlan = parsed.plans.find((item) => item.id === parsed.execution_plan_id)!;
   requireCondition(
-    activePlan.lifecycle !== "superseded" &&
-      activePlan.lifecycle !== "abandoned",
+    activePlan.lifecycle !== "superseded" && activePlan.lifecycle !== "abandoned",
     "INVALID_PLAN_LIFECYCLE",
     "Active plan cannot be superseded or abandoned",
   );
@@ -2371,8 +2362,7 @@ export function validateLedger(value: unknown): Ledger {
     "Execution plan must be approved unless the run is still awaiting its initial approval",
   );
   requireCondition(
-    parsed.active_plan_id === parsed.execution_plan_id ||
-      activePlan.lifecycle === "proposed",
+    parsed.active_plan_id === parsed.execution_plan_id || activePlan.lifecycle === "proposed",
     "INVALID_PLAN_LIFECYCLE",
     "A different active and execution plan requires a proposed active revision",
   );
@@ -2397,9 +2387,7 @@ export function validateLedger(value: unknown): Ledger {
       );
   }
   requireCondition(
-    parsed.tasks.every((item) =>
-      parsed.groups.some((group) => group.id === item.group_id),
-    ),
+    parsed.tasks.every((item) => parsed.groups.some((group) => group.id === item.group_id)),
     "MISSING_GROUP",
     "Task references an unknown group",
   );
@@ -2413,9 +2401,7 @@ export function validateLedger(value: unknown): Ledger {
     "THREAD_CONFLICT",
     "Runtime conversations must have unique identities",
   );
-  const active = parsed.plans.find(
-    (item) => item.id === parsed.active_plan_id,
-  )!;
+  const active = parsed.plans.find((item) => item.id === parsed.active_plan_id)!;
   if (active.plan_handoff) {
     const cutEvidence = collectCutAssignmentEvidence(parsed, active);
     validateDevPlanHandoff(active, parsed.groups, parsed.tasks, {
@@ -2432,9 +2418,7 @@ export function validateLedger(value: unknown): Ledger {
     "Active plan references an unknown task",
   );
   const planTaskIds = new Set(
-    active.nodes
-      .filter((item) => item.kind === "task")
-      .map((item) => item.ref_id),
+    active.nodes.filter((item) => item.kind === "task").map((item) => item.ref_id),
   );
   const planGroupIds = new Set(
     active.nodes
@@ -2442,10 +2426,7 @@ export function validateLedger(value: unknown): Ledger {
       .filter((groupId): groupId is string => groupId !== null),
   );
   for (const event of parsed.events)
-    if (
-      event.type === "cut_applied" &&
-      typeof event.data.new_group_id === "string"
-    )
+    if (event.type === "cut_applied" && typeof event.data.new_group_id === "string")
       planGroupIds.add(event.data.new_group_id);
   requireCondition(
     parsed.groups.every((group) => planGroupIds.has(group.id)),
@@ -2453,17 +2434,12 @@ export function validateLedger(value: unknown): Ledger {
     "Runtime group is not present in the active plan",
   );
   const executionPlanTaskIds = new Set(
-    (
-      parsed.plans.find((item) => item.id === parsed.execution_plan_id)
-        ?.nodes ?? []
-    )
+    (parsed.plans.find((item) => item.id === parsed.execution_plan_id)?.nodes ?? [])
       .filter((item) => item.kind === "task")
       .map((item) => item.ref_id),
   );
   requireCondition(
-    parsed.tasks.every(
-      (task) => planTaskIds.has(task.id) || executionPlanTaskIds.has(task.id),
-    ),
+    parsed.tasks.every((task) => planTaskIds.has(task.id) || executionPlanTaskIds.has(task.id)),
     "UNKNOWN_PLAN_TASK",
     "Runtime task is not present in the active plan",
   );
@@ -2477,15 +2453,15 @@ export function validateLedger(value: unknown): Ledger {
     );
     const reassignedByCut = Boolean(
       task &&
-      task.group_id !== node.group_id &&
-      task.assignment_history.some((item) => item.group_id === task.group_id) &&
-      parsed.events.some(
-        (event) =>
-          event.type === "cut_applied" &&
-          event.data.new_group_id === task.group_id &&
-          Array.isArray(event.data.reassigned_task_ids) &&
-          event.data.reassigned_task_ids.includes(task.id),
-      ),
+        task.group_id !== node.group_id &&
+        task.assignment_history.some((item) => item.group_id === task.group_id) &&
+        parsed.events.some(
+          (event) =>
+            event.type === "cut_applied" &&
+            event.data.new_group_id === task.group_id &&
+            Array.isArray(event.data.reassigned_task_ids) &&
+            event.data.reassigned_task_ids.includes(task.id),
+        ),
     );
     requireCondition(
       Boolean(task && (task.group_id === node.group_id || reassignedByCut)),
@@ -2495,31 +2471,23 @@ export function validateLedger(value: unknown): Ledger {
   }
   for (const owner of parsed.groups) {
     const cut = parsed.events.find(
-      (event) =>
-        event.type === "cut_applied" && event.data.new_group_id === owner.id,
+      (event) => event.type === "cut_applied" && event.data.new_group_id === owner.id,
     );
-    const snapshot = cut?.data.new_group_snapshot as
-      z.infer<typeof group> | undefined;
-    const configured = active.group_atoms.filter(
-      (atom) => atom.group_id === owner.id,
-    );
+    const snapshot = cut?.data.new_group_snapshot as z.infer<typeof group> | undefined;
+    const configured = active.group_atoms.filter((atom) => atom.group_id === owner.id);
     const expected = configured.length
       ? configured.map(({ group_id, ...atom }) => atom)
       : (snapshot?.atoms.map(({ status, ...atom }) => atom) ?? []);
     requireCondition(
-      canonicalJson(expected) ===
-        canonicalJson(owner.atoms.map(({ status, ...atom }) => atom)),
+      canonicalJson(expected) === canonicalJson(owner.atoms.map(({ status, ...atom }) => atom)),
       "GROUP_ATOM_MISMATCH",
       "Delivery-unit atoms must match their plan or verified cut configuration in serial order",
     );
   }
   for (const task of parsed.tasks) {
-    const expected = active.atoms
-      .filter((atom) => atom.task_id === task.id)
-      .map((atom) => atom.id);
+    const expected = active.atoms.filter((atom) => atom.task_id === task.id).map((atom) => atom.id);
     requireCondition(
-      JSON.stringify(expected) ===
-        JSON.stringify(task.atoms.map((atom) => atom.id)),
+      JSON.stringify(expected) === JSON.stringify(task.atoms.map((atom) => atom.id)),
       "ATOM_MISMATCH",
       "Task atoms must match the active plan in serial order",
     );
@@ -2544,18 +2512,22 @@ export function validateLedger(value: unknown): Ledger {
       );
     if (item.lifecycle.pr_created === "passed") {
       const binding = target.type === "group" ? item.pr : item.pr;
-      const pr = binding && typeof binding === "object" && "state" in binding
-        ? (binding.state === "published" || binding.state === "open" || binding.state === "merged" || binding.state === "closed" ? binding.pr : null)
-        : target.type === "group" ? item.parent_pr : item.pr;
+      const pr =
+        binding && typeof binding === "object" && "state" in binding
+          ? binding.state === "published" ||
+            binding.state === "open" ||
+            binding.state === "merged" ||
+            binding.state === "closed"
+            ? binding.pr
+            : null
+          : target.type === "group"
+            ? item.parent_pr
+            : item.pr;
       const latest = parsed.facts
         .filter(
-          (candidate) =>
-            candidate.kind === "pr_published" &&
-            candidate.subject_id === item.id,
+          (candidate) => candidate.kind === "pr_published" && candidate.subject_id === item.id,
         )
-        .sort((left, right) =>
-          left.observed_at.localeCompare(right.observed_at),
-        )
+        .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
         .at(-1);
       requireCondition(
         pr &&

@@ -1,14 +1,14 @@
+import { CodexDesktopFollower } from "../lib/codex-desktop-follower";
 import {
+  connectSocket,
+  framePayload,
+  type JsonRecord,
+  parseRpc,
   record,
   socketPath,
-  connectSocket,
   timeoutMs,
   websocketFrame,
-  framePayload,
-  parseRpc,
-  type JsonRecord,
 } from "../lib/codex-socket";
-import { CodexDesktopFollower } from "../lib/codex-desktop-follower";
 import { LoadedThreadSubscriptions } from "../lib/codex-subscription";
 /** Observer connection: read history and rejoin bound, already loaded sessions only. */
 export async function observeCodex(
@@ -63,33 +63,23 @@ export async function observeCodex(
           continue;
         }
         if (opcode === 10) continue;
-        if (opcode !== 1 && opcode !== 0)
-          throw new Error("Unsupported WebSocket opcode");
-        if (
-          (opcode === 1 && fragments.length) ||
-          (opcode === 0 && !fragments.length)
-        )
+        if (opcode !== 1 && opcode !== 0) throw new Error("Unsupported WebSocket opcode");
+        if ((opcode === 1 && fragments.length) || (opcode === 0 && !fragments.length))
           throw new Error("Invalid WebSocket continuation");
         fragments.push(frame.payload);
         fragmentBytes += frame.payload.length;
-        if (fragmentBytes > 64 * 1024 * 1024)
-          throw new Error("Observer message exceeds limit");
+        if (fragmentBytes > 64 * 1024 * 1024) throw new Error("Observer message exceeds limit");
         if (!final) continue;
         const message = parseRpc(Buffer.concat(fragments));
         fragments = [];
         fragmentBytes = 0;
         if (!message) continue;
-        const call =
-          typeof message.id === "number" ? pending.get(message.id) : undefined;
+        const call = typeof message.id === "number" ? pending.get(message.id) : undefined;
         if (call) {
           pending.delete(message.id as number);
           clearTimeout(call.timer);
           if (message.error)
-            call.reject(
-              new Error(
-                String(record(message.error)?.message ?? "Codex read rejected"),
-              ),
-            );
+            call.reject(new Error(String(record(message.error)?.message ?? "Codex read rejected")));
           else call.resolve(record(message.result) ?? {});
         } else if (
           typeof message.method === "string" &&
@@ -116,9 +106,7 @@ export async function observeCodex(
         reject(new Error("Codex read timed out"));
       }, timeoutMs());
       pending.set(id, { resolve, reject, timer });
-      socket.write(
-        websocketFrame(JSON.stringify({ jsonrpc: "2.0", id, method, params })),
-      );
+      socket.write(websocketFrame(JSON.stringify({ jsonrpc: "2.0", id, method, params })));
       consume();
     });
   };
@@ -127,13 +115,10 @@ export async function observeCodex(
       clientInfo: { name: "multi-task-flow-observer", version: "1" },
       capabilities: {},
     });
-    socket.write(
-      websocketFrame(JSON.stringify({ jsonrpc: "2.0", method: "initialized" })),
-    );
+    socket.write(websocketFrame(JSON.stringify({ jsonrpc: "2.0", method: "initialized" })));
     nativeSubscriptions = new LoadedThreadSubscriptions(request);
     const desktopPath = CodexDesktopFollower.availablePath();
-    if (desktopPath)
-      desktop = new CodexDesktopFollower(desktopPath, onNotification, close);
+    if (desktopPath) desktop = new CodexDesktopFollower(desktopPath, onNotification, close);
     const subscriptions = {
       retain(threads: Iterable<string>) {
         const ids = [...threads];
@@ -150,11 +135,7 @@ export async function observeCodex(
       },
     };
     const historyRequest = (method: string, params: JsonRecord) => {
-      if (
-        !["thread/read", "thread/items/list", "thread/turns/list"].includes(
-          method,
-        )
-      )
+      if (!["thread/read", "thread/items/list", "thread/turns/list"].includes(method))
         return Promise.reject(new Error("Not a history read method"));
       return request(method, params);
     };

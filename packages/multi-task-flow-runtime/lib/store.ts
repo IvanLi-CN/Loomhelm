@@ -1,44 +1,47 @@
-import { readStoredLedger } from "../lib/store-ledger";
 import {
   ensureDirectory,
   readRegular,
   syncDirectory,
-  writeAtomic,
   withExclusiveLock,
+  writeAtomic,
 } from "../lib/store-io";
+import { readStoredLedger } from "../lib/store-ledger";
+
 export {
   ensureDirectory,
   readRegular,
   syncDirectory,
-  writeAtomic,
   withExclusiveLock,
+  writeAtomic,
 } from "../lib/store-io";
+
+import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
-import { ContractError, requireCondition } from "../lib/errors";
 import {
+  type FileIdentity,
   identity,
   removeStagingPath,
-  type FileIdentity,
 } from "@loomhelm/runtime-core/modules/visual/isolation";
 import {
   createDirectoryNoFollow,
+  type DirectoryIdentity,
   readRegularNoFollow,
   renameNoReplace,
   syncDirectoryNoFollow,
   writeAtomicNoFollow,
   writeExclusiveNoFollow,
-  type DirectoryIdentity,
 } from "@loomhelm/runtime-core/modules/visual/secure_io";
+import { ContractError, requireCondition } from "../lib/errors";
 import { normalizeLegacyLedger, validateLedger } from "../lib/schema";
-import { orchestrationRoot } from "../lib/service-paths";
 import { requireLedgerCompatibility } from "../lib/service-contract";
+import { orchestrationRoot } from "../lib/service-paths";
 import {
-  migrateLocked,
   type LedgerMigrationRequest,
   type LockedLedgerMigrationContext,
+  migrateLocked,
 } from "../lib/store-migration";
+
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 export function safeId(id: unknown): string {
   requireCondition(
@@ -67,9 +70,7 @@ function requireDirectory(path: string): void {
 function directoryIdentity(path: string): FileIdentity | undefined {
   try {
     const metadata = lstatSync(path);
-    return metadata.isDirectory()
-      ? { dev: metadata.dev, ino: metadata.ino }
-      : undefined;
+    return metadata.isDirectory() ? { dev: metadata.dev, ino: metadata.ino } : undefined;
   } catch {
     return undefined;
   }
@@ -93,11 +94,7 @@ export class LedgerStore {
     runId: string,
     private readonly onStage?: (stage: string) => void,
   ) {
-    requireCondition(
-      isAbsolute(root),
-      "INVALID_ROOT",
-      "Data root must be absolute",
-    );
+    requireCondition(isAbsolute(root), "INVALID_ROOT", "Data root must be absolute");
     this.rootPath = resolve(root);
     this.runPath = join(this.rootPath, "runs", safeId(runId));
     this.ledgerPath = join(this.runPath, "ledger.json");
@@ -113,12 +110,7 @@ export class LedgerStore {
     const runs = dirname(this.runPath);
     ensureDirectory(runs);
     const runsIdentity = directoryIdentity(runs);
-    requireCondition(
-      runsIdentity,
-      "UNSAFE_PATH",
-      "Runs directory is unavailable",
-      5,
-    );
+    requireCondition(runsIdentity, "UNSAFE_PATH", "Runs directory is unavailable", 5);
     withExclusiveLock(
       join(runs, ".create.lock"),
       () => {
@@ -127,32 +119,18 @@ export class LedgerStore {
           lstatSync(this.runPath);
           throw new ContractError("RUN_EXISTS", "Run already exists", 3);
         } catch (error: any) {
-          if (error instanceof ContractError || error.code !== "ENOENT")
-            throw error;
+          if (error instanceof ContractError || error.code !== "ENOENT") throw error;
         }
-        const stagingPath = join(
-          runs,
-          `.run-${safeId(basename(this.runPath))}-${randomUUID()}`,
-        );
+        const stagingPath = join(runs, `.run-${safeId(basename(this.runPath))}-${randomUUID()}`);
         let stagingIdentity: FileIdentity | undefined;
         let destinationIdentity: FileIdentity | undefined;
         let renamed = false;
         let published = false;
         try {
-          createDirectoryNoFollow(
-            stagingPath,
-            this.rootPath,
-            0o700,
-            runsIdentity,
-          );
+          createDirectoryNoFollow(stagingPath, this.rootPath, 0o700, runsIdentity);
           stagingIdentity = identity(stagingPath);
           const stagingLocksPath = join(stagingPath, "locks");
-          createDirectoryNoFollow(
-            stagingLocksPath,
-            this.rootPath,
-            0o700,
-            stagingIdentity,
-          );
+          createDirectoryNoFollow(stagingLocksPath, this.rootPath, 0o700, stagingIdentity);
           const stagingLocksIdentity = directoryIdentity(stagingLocksPath);
           requireCondition(
             stagingLocksIdentity,
@@ -161,17 +139,8 @@ export class LedgerStore {
             5,
           );
           const lockPath = join(stagingLocksPath, "ledger.lock");
-          writeExclusiveNoFollow(
-            lockPath,
-            "",
-            this.rootPath,
-            stagingLocksIdentity,
-          );
-          syncDirectoryNoFollow(
-            stagingLocksPath,
-            this.rootPath,
-            stagingLocksIdentity,
-          );
+          writeExclusiveNoFollow(lockPath, "", this.rootPath, stagingLocksIdentity);
+          syncDirectoryNoFollow(stagingLocksPath, this.rootPath, stagingLocksIdentity);
           writeAtomicNoFollow(
             join(stagingPath, "ledger.json"),
             JSON.stringify(initial, null, 2) + "\n",
@@ -179,19 +148,10 @@ export class LedgerStore {
             undefined,
             stagingIdentity,
           );
-          syncDirectoryNoFollow(
-            stagingLocksPath,
-            this.rootPath,
-            stagingLocksIdentity,
-          );
+          syncDirectoryNoFollow(stagingLocksPath, this.rootPath, stagingLocksIdentity);
           syncDirectoryNoFollow(stagingPath, this.rootPath, stagingIdentity);
           try {
-            renameNoReplace(
-              stagingPath,
-              this.runPath,
-              this.rootPath,
-              runsIdentity,
-            );
+            renameNoReplace(stagingPath, this.runPath, this.rootPath, runsIdentity);
           } catch (error: any) {
             if (error.code === "EEXIST" || error.code === "ENOTEMPTY")
               throw new ContractError("RUN_EXISTS", "Run already exists", 3);
@@ -224,10 +184,7 @@ export class LedgerStore {
             ? (destinationIdentity ?? stagingIdentity)
             : stagingIdentity;
           if (!published && cleanupIdentity)
-            removeStagingPath(
-              renamed ? this.runPath : stagingPath,
-              cleanupIdentity,
-            );
+            removeStagingPath(renamed ? this.runPath : stagingPath, cleanupIdentity);
         }
       },
       30_000,
@@ -299,11 +256,7 @@ export class LedgerStore {
         try {
           ledger = JSON.parse(oldContent);
         } catch {
-          throw new ContractError(
-            "LEDGER_UNREADABLE",
-            "Ledger is unreadable",
-            5,
-          );
+          throw new ContractError("LEDGER_UNREADABLE", "Ledger is unreadable", 5);
         }
         requireCondition(
           ledger?.schema_version !== 1 && ledger?.schema_version !== undefined,
@@ -317,8 +270,7 @@ export class LedgerStore {
           "Ledger schema version is unsupported",
           4,
         );
-        if (ledger?.schema_version !== undefined)
-          requireLedgerCompatibility(ledger, "write");
+        if (ledger?.schema_version !== undefined) requireLedgerCompatibility(ledger, "write");
         const isDomainLedger =
           typeof ledger.orchestration_id === "string" &&
           Array.isArray(ledger.plans) &&
@@ -407,12 +359,7 @@ export class LedgerStore {
   }
   private currentRunIdentity(): DirectoryIdentity {
     const run = this.activeRunIdentity ?? directoryIdentity(this.runPath);
-    requireCondition(
-      run,
-      "UNSAFE_PATH",
-      "Run directory identity is unavailable",
-      5,
-    );
+    requireCondition(run, "UNSAFE_PATH", "Run directory identity is unavailable", 5);
     return run;
   }
 }

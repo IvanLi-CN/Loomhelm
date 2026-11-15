@@ -1,25 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  realpathSync,
-  unlinkSync,
-} from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync, unlinkSync } from "node:fs";
+import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname, isAbsolute } from "node:path";
-import {
-  createConnection,
-  createServer,
-  type Server,
-  type Socket,
-} from "node:net";
 import { z } from "zod";
-import {
-  viewerWorkerKeySchema,
-  type ViewerWorkerRequestContext,
-} from "./viewer-runtime";
+import { type ViewerWorkerRequestContext, viewerWorkerKeySchema } from "./viewer-runtime";
 
 const DEFAULT_MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const DEFAULT_CONNECT_TIMEOUT_MS = 1_500;
@@ -57,9 +42,7 @@ const chunkFrame = z
   })
   .strict();
 
-const endFrame = z
-  .object({ type: z.literal("end"), id: z.string().min(1) })
-  .strict();
+const endFrame = z.object({ type: z.literal("end"), id: z.string().min(1) }).strict();
 
 const errorFrame = z
   .object({
@@ -145,10 +128,8 @@ function assertPrivateSocketDirectory(path: string): void {
   const directoryStat = lstatSync(directory);
   if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory())
     throw new Error("socket directory must be a regular directory");
-  if (realpathSync(directory) !== directory)
-    throw new Error("socket directory must be canonical");
-  if ((directoryStat.mode & 0o077) !== 0)
-    throw new Error("socket directory must be private");
+  if (realpathSync(directory) !== directory) throw new Error("socket directory must be canonical");
+  if ((directoryStat.mode & 0o077) !== 0) throw new Error("socket directory must be private");
 }
 
 function prepareSocketPath(path: string): void {
@@ -197,9 +178,7 @@ function requestFromFrame(frame: z.infer<typeof requestFrame>): Request {
   return new Request(frame.url, {
     method: frame.method,
     headers: frame.headers,
-    ...(body === undefined || frame.method === "GET" || frame.method === "HEAD"
-      ? {}
-      : { body }),
+    ...(body === undefined || frame.method === "GET" || frame.method === "HEAD" ? {} : { body }),
   });
 }
 
@@ -209,10 +188,8 @@ async function serveRequest(
   options: UnixViewerWorkerServerOptions,
   maximum: number,
 ): Promise<void> {
-  if (frame.worker_key !== options.workerKey)
-    throw new Error("viewer worker key mismatch");
-  if (frame.generation !== options.generation)
-    throw new Error("viewer worker generation mismatch");
+  if (frame.worker_key !== options.workerKey) throw new Error("viewer worker key mismatch");
+  if (frame.generation !== options.generation) throw new Error("viewer worker generation mismatch");
   const request = requestFromFrame(frame);
   const response = await options.handle(request, {
     runId: frame.run_id,
@@ -298,7 +275,11 @@ export async function startUnixViewerWorkerServer(
         handled = true;
         void serveRequest(socket, parsed.data, options, maximum).catch(() => {
           if (!socket.destroyed)
-            writeFrame(socket, { type: "error", id: parsed.data.id, code: "WORKER_REQUEST_FAILED" }, maximum);
+            writeFrame(
+              socket,
+              { type: "error", id: parsed.data.id, code: "WORKER_REQUEST_FAILED" },
+              maximum,
+            );
           socket.destroy();
         });
       }

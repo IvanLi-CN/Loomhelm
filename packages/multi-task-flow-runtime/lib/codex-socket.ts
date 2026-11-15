@@ -1,8 +1,8 @@
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { createConnection, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { randomBytes, createHash } from "node:crypto";
-import { createConnection, type Socket } from "node:net";
 export type JsonRecord = Record<string, unknown>;
 
 export function record(value: unknown): JsonRecord | null {
@@ -11,26 +11,23 @@ export function record(value: unknown): JsonRecord | null {
     : null;
 }
 export function socketPath(): string | null {
-  const configured = (process.env.LOOMHELM_CODEX_APP_SERVER_SOCKET ?? process.env.CODEX_APP_SERVER_SOCKET)?.trim();
+  const configured = (
+    process.env.LOOMHELM_CODEX_APP_SERVER_SOCKET ?? process.env.CODEX_APP_SERVER_SOCKET
+  )?.trim();
   if (configured) return configured;
   const root = process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
   const candidate = join(root, "app-server-control", "app-server-control.sock");
   return existsSync(candidate) ? candidate : null;
 }
 export function timeoutMs(): number {
-  const value = Number(
-    process.env.MULTI_TASK_FLOW_CODEX_AGENT_TIMEOUT_MS ?? 30_000,
-  );
-  return Number.isFinite(value) && value >= 1_000 && value <= 300_000
-    ? value
-    : 30_000;
+  const value = Number(process.env.MULTI_TASK_FLOW_CODEX_AGENT_TIMEOUT_MS ?? 30_000);
+  return Number.isFinite(value) && value >= 1_000 && value <= 300_000 ? value : 30_000;
 }
 export function websocketFrame(text: string | Buffer, opcode = 1): Buffer {
   const payload = typeof text === "string" ? Buffer.from(text, "utf8") : text;
   const mask = randomBytes(4);
   let header: Buffer;
-  if (payload.length < 126)
-    header = Buffer.from([0x80 | opcode, 0x80 | payload.length]);
+  if (payload.length < 126) header = Buffer.from([0x80 | opcode, 0x80 | payload.length]);
   else if (payload.length <= 0xffff) {
     header = Buffer.alloc(4);
     header[0] = 0x80 | opcode;
@@ -47,9 +44,7 @@ export function websocketFrame(text: string | Buffer, opcode = 1): Buffer {
     masked[index] = payload[index]! ^ mask[index % 4]!;
   return Buffer.concat([header, mask, masked]);
 }
-export function framePayload(
-  buffer: Buffer,
-): { payload: Buffer; consumed: number } | null {
+export function framePayload(buffer: Buffer): { payload: Buffer; consumed: number } | null {
   if (buffer.length < 2) return null;
   const code = buffer[1]! & 0x7f;
   const masked = (buffer[1]! & 0x80) !== 0;
@@ -62,13 +57,11 @@ export function framePayload(
   } else if (code === 127) {
     if (buffer.length < 10) return null;
     const n = buffer.readBigUInt64BE(2);
-    if (n > BigInt(Number.MAX_SAFE_INTEGER))
-      throw new Error("WebSocket frame is too large");
+    if (n > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("WebSocket frame is too large");
     length = Number(n);
     offset = 10;
   }
-  if (length > 64 * 1024 * 1024)
-    throw new Error("WebSocket frame exceeds observer limit");
+  if (length > 64 * 1024 * 1024) throw new Error("WebSocket frame exceeds observer limit");
   const maskOffset = masked ? 4 : 0;
   if (buffer.length < offset + maskOffset + length) return null;
   const mask = masked ? buffer.subarray(offset, offset + 4) : null;
@@ -87,9 +80,7 @@ export function parseRpc(value: Buffer): JsonRecord | null {
   }
 }
 
-export async function connectSocket(
-  path: string,
-): Promise<{ socket: Socket; buffer: Buffer }> {
+export async function connectSocket(path: string): Promise<{ socket: Socket; buffer: Buffer }> {
   const socket = createConnection(path);
   try {
     await new Promise<void>((resolve, reject) => {
@@ -103,8 +94,7 @@ export async function connectSocket(
         cleanup();
         reject(error);
       };
-      const ended = () =>
-        failed(new Error("Codex socket closed during connection"));
+      const ended = () => failed(new Error("Codex socket closed during connection"));
       const connected = () => {
         cleanup();
         resolve();
@@ -130,14 +120,12 @@ export async function connectSocket(
         cleanup();
         reject(error);
       };
-      const ended = () =>
-        failed(new Error("Codex socket closed during handshake"));
+      const ended = () => failed(new Error("Codex socket closed during handshake"));
       const onData = (chunk: Buffer) => {
         header = Buffer.concat([header, chunk]);
         const boundary = header.indexOf("\r\n\r\n");
         if (boundary < 0) {
-          if (header.length > 16384)
-            failed(new Error("Codex handshake headers too large"));
+          if (header.length > 16384) failed(new Error("Codex handshake headers too large"));
           return;
         }
         const response = header.subarray(0, boundary).toString("utf8");
@@ -152,9 +140,7 @@ export async function connectSocket(
           .join(":")
           .trim();
         if (!response.startsWith("HTTP/1.1 101 ") || accept !== expected) {
-          failed(
-            new Error("Codex app-server WebSocket handshake was rejected"),
-          );
+          failed(new Error("Codex app-server WebSocket handshake was rejected"));
           return;
         }
         header = header.subarray(boundary + 4);
@@ -162,8 +148,7 @@ export async function connectSocket(
         resolve();
       };
       const timer = setTimeout(
-        () =>
-          failed(new Error("Codex app-server WebSocket handshake timed out")),
+        () => failed(new Error("Codex app-server WebSocket handshake timed out")),
         timeoutMs(),
       );
       socket.on("data", onData);

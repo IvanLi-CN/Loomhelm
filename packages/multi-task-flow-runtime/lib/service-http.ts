@@ -1,46 +1,45 @@
-import type { ConnectObserver } from "../lib/conversation-output";
-import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { z } from "zod";
+import type { ConnectObserver } from "../lib/conversation-output";
+import { ContractError } from "../lib/errors";
 import { createRunDashboard, dashboardHeaders } from "../lib/server";
-import { LedgerStore, readRegular, safeId } from "../lib/store";
+import { readBodyWithinLimit } from "../lib/server-files";
 import { ServiceAuth } from "../lib/service-auth";
 import {
   compatibility,
+  type ReleaseManifest,
   requireApi,
   requireLedgerCompatibility,
-  type ReleaseManifest,
 } from "../lib/service-contract";
-import { ContractError } from "../lib/errors";
-import { ServiceState } from "../lib/service-state";
 import {
   authFailedPage,
   homePage,
   homeScript,
   parseViewerTarget,
-  viewerPage,
   runClientScript,
+  viewerPage,
 } from "../lib/service-pages";
-import { readBodyWithinLimit } from "../lib/server-files";
 import { verifyRelease } from "../lib/service-release";
+import type { ServiceState } from "../lib/service-state";
+import { LedgerStore, readRegular, safeId } from "../lib/store";
 import { parseViewerRoute } from "../scripts/viewer-gateway";
-import { viewerWorkerSocketPath } from "../scripts/viewer-socket";
-import { createUnixViewerWorker, dataVersionOf, workerKeyOf } from "../scripts/viewer-worker";
-import { startUnixViewerWorkerServer } from "../scripts/viewer-socket";
 import { createWorkerGeneration, ViewerWorkerPool } from "../scripts/viewer-runtime";
-import { WorkerDiagnosticStore, workerDiagnosticFromError, type WorkerDiagnosticStage } from "./worker-diagnostics";
+import { startUnixViewerWorkerServer, viewerWorkerSocketPath } from "../scripts/viewer-socket";
+import { createUnixViewerWorker, dataVersionOf, workerKeyOf } from "../scripts/viewer-worker";
 import { serviceLog } from "./service-log";
-import { ensureViewerBinding, readViewerBinding } from "./viewer-binding";
 import { cachedVersionDiscovery } from "./service-update";
-import { randomUUID } from "node:crypto";
+import { ensureViewerBinding, readViewerBinding } from "./viewer-binding";
+import {
+  type WorkerDiagnosticStage,
+  WorkerDiagnosticStore,
+  workerDiagnosticFromError,
+} from "./worker-diagnostics";
 
-const json = (
-  value: unknown,
-  status = 200,
-  extra: Record<string, string> = {},
-) =>
+const json = (value: unknown, status = 200, extra: Record<string, string> = {}) =>
   Response.json(value, { status, headers: { ...dashboardHeaders, ...extra } });
 const html = (body: string, status = 200) =>
   new Response(body, {
@@ -84,19 +83,14 @@ export function agentLease(input: z.infer<typeof agentInput>) {
 }
 async function body(request: Request): Promise<unknown> {
   const value = await readBodyWithinLimit(request, 8192);
-  if (value === null)
-    throw new ContractError("BODY_TOO_LARGE", "Request too large");
+  if (value === null) throw new ContractError("BODY_TOO_LARGE", "Request too large");
   return JSON.parse(value);
 }
 export function listRuns(root: string, offset = 0) {
   const runsPath = join(root, "runs");
   if (!existsSync(runsPath)) return { runs: [], total: 0 };
   const entries = readdirSync(runsPath, { withFileTypes: true })
-    .filter(
-      (item) =>
-        item.isDirectory() &&
-        /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(item.name),
-    )
+    .filter((item) => item.isDirectory() && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(item.name))
     .sort((a, b) => a.name.localeCompare(b.name));
   return {
     total: entries.length,
@@ -113,8 +107,7 @@ export function listRuns(root: string, offset = 0) {
       } catch (error) {
         return {
           id: item.name,
-          error:
-            error instanceof ContractError ? error.code : "LEDGER_UNAVAILABLE",
+          error: error instanceof ContractError ? error.code : "LEDGER_UNAVAILABLE",
         };
       }
     }),
@@ -125,8 +118,7 @@ export function selectAssets(root: string, runId: string, shared: string) {
   const custom = join(root, "runs", safeId(runId), "view");
   if (!existsSync(custom)) return { path: shared, warning: null };
   try {
-    if (!lstatSync(custom).isDirectory() || lstatSync(custom).isSymbolicLink())
-      throw new Error();
+    if (!lstatSync(custom).isDirectory() || lstatSync(custom).isSymbolicLink()) throw new Error();
     const manifest = z
       .object({ api_version: z.literal(1), frontend_contract: z.literal(1) })
       .strict()
@@ -142,17 +134,34 @@ export function selectAssets(root: string, runId: string, shared: string) {
 }
 
 function readOnlyView(releaseRoot: string, ledger: unknown, planId?: string) {
-  const result = spawnSync(
-    join(releaseRoot, "viewer"), ["read-only-view", "--input", "-"],
-    { input: JSON.stringify({ ledger, ...(planId ? { plan_id: planId } : {}) }), encoding: "utf8", timeout: 30_000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" } },
-  );
-  if (result.status !== 0) throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer could not read this run", 2);
+  const result = spawnSync(join(releaseRoot, "viewer"), ["read-only-view", "--input", "-"], {
+    input: JSON.stringify({ ledger, ...(planId ? { plan_id: planId } : {}) }),
+    encoding: "utf8",
+    timeout: 30_000,
+    maxBuffer: 4 * 1024 * 1024,
+    env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" },
+  });
+  if (result.status !== 0)
+    throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer could not read this run", 2);
   try {
-    const parsed = z.object({ ok: z.literal(true), code: z.literal("OK"), result: z.object({ view: z.record(z.string(), z.unknown()) }).strict() }).strict().parse(JSON.parse(result.stdout));
+    const parsed = z
+      .object({
+        ok: z.literal(true),
+        code: z.literal("OK"),
+        result: z.object({ view: z.record(z.string(), z.unknown()) }).strict(),
+      })
+      .strict()
+      .parse(JSON.parse(result.stdout));
     const view = parsed.result.view as { orchestration?: { id?: unknown; revision?: unknown } };
-    if (view.orchestration?.id !== (ledger as { orchestration_id?: unknown }).orchestration_id || view.orchestration?.revision !== (ledger as { revision?: unknown }).revision) throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer returned a stale view", 2);
+    if (
+      view.orchestration?.id !== (ledger as { orchestration_id?: unknown }).orchestration_id ||
+      view.orchestration?.revision !== (ledger as { revision?: unknown }).revision
+    )
+      throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer returned a stale view", 2);
     return parsed.result.view;
-  } catch { throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer returned no readable view", 2); }
+  } catch {
+    throw new ContractError("LEDGER_UNREADABLE", "Legacy viewer returned no readable view", 2);
+  }
 }
 
 function pathIsLegacyView(pathname: string, method: string): boolean {
@@ -208,47 +217,77 @@ export async function startSharedViewer(
   port: number,
   sourceRevision?: () => string,
   sourceName?: string,
-  demoHooks?: ConnectObserver | Pick<import("../lib/server-contract").DashboardOptions, "connectObserver" | "archiveProvider" | "getProfileCapabilities">
+  demoHooks?:
+    | ConnectObserver
+    | Pick<
+        import("../lib/server-contract").DashboardOptions,
+        "connectObserver" | "archiveProvider" | "getProfileCapabilities"
+      >,
 ) {
   if ((sourceRevision || demoHooks) && !state.paths.isolated)
-    throw new ContractError(
-      "INVALID_PROFILE",
-      "Source reload requires an isolated profile",
-    );
+    throw new ContractError("INVALID_PROFILE", "Source reload requires an isolated profile");
   state.initialize();
   const auth = new ServiceAuth(state);
-  const serviceConfig = (() => { try { return state.config(); } catch { return {} as any; } })();
-  const versionDiscovery = (() => { try { return cachedVersionDiscovery(state); } catch { return undefined; } })();
+  const serviceConfig = (() => {
+    try {
+      return state.config();
+    } catch {
+      return {} as any;
+    }
+  })();
+  const versionDiscovery = (() => {
+    try {
+      return cachedVersionDiscovery(state);
+    } catch {
+      return undefined;
+    }
+  })();
   const diagnostics = new WorkerDiagnosticStore(state.paths);
   diagnostics.sweep(undefined, (runId) => existsSync(join(state.paths.data, "runs", runId)));
   const recordDiagnostic = (input: Parameters<WorkerDiagnosticStore["record"]>[0]) => {
     const diagnostic = diagnostics.record(input);
     try {
-      serviceLog(state.paths, "worker_diagnostic", state.runtime().generation ?? "unknown-generation", manifest.build_id, {
-        diagnostic_id: diagnostic.diagnostic_id,
-        run_id: diagnostic.run_id,
-        worker_generation: diagnostic.worker_generation,
-        stage: diagnostic.stage,
-        error_code: diagnostic.error_code,
-        state: diagnostic.state,
-        retry_count: diagnostic.retry_count,
-      });
-    } catch { /* Diagnostics remain available through the runtime state file. */ }
+      serviceLog(
+        state.paths,
+        "worker_diagnostic",
+        state.runtime().generation ?? "unknown-generation",
+        manifest.build_id,
+        {
+          diagnostic_id: diagnostic.diagnostic_id,
+          run_id: diagnostic.run_id,
+          worker_generation: diagnostic.worker_generation,
+          stage: diagnostic.stage,
+          error_code: diagnostic.error_code,
+          state: diagnostic.state,
+          retry_count: diagnostic.retry_count,
+        },
+      );
+    } catch {
+      /* Diagnostics remain available through the runtime state file. */
+    }
     return diagnostic;
   };
   const fallbackViewer = (() => {
     let previous: string | null = null;
-    try { if (!sourceRevision && !demoHooks && !state.config().package_name) previous = state.config().previous_build; } catch {}
+    try {
+      if (!sourceRevision && !demoHooks && !state.config().package_name)
+        previous = state.config().previous_build;
+    } catch {}
     if (!previous || previous === manifest.build_id) return null;
     try {
       const root = join(state.paths.releases, previous);
       const release = verifyRelease(root);
       if (release.schema_version !== 2 || release.build_id !== previous) return null;
       return root;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   })();
   const resources = new Map<string, ReturnType<typeof createRunDashboard>>();
-  const workerBridges = new Map<string, (request: Request, runId: string, path: string) => Promise<Response>>();
+  const workerBridges = new Map<
+    string,
+    (request: Request, runId: string, path: string) => Promise<Response>
+  >();
   const workerBuilds = new Map<string, { build_id: string; package_version: string }>();
   const warnings = new Map<string, string | null>();
   let timeoutServer: Pick<Awaited<ReturnType<typeof Runtime.serve>>, "timeout"> | undefined;
@@ -291,12 +330,27 @@ export async function startSharedViewer(
       workerBridges.set(bridgeToken, async (request, runId, path) => {
         const requestUrl = new URL(request.url);
         const route = parseViewerRoute(requestUrl);
-        if (!route || route.runId !== runId) throw new Error("viewer worker route identity mismatch");
+        if (!route || route.runId !== runId)
+          throw new Error("viewer worker route identity mismatch");
         const run = getRun(runId);
-        const normalizedPath = requestUrl.pathname.startsWith("/api/v1/") && !route.path.startsWith("/api/") ? "/api" + route.path : route.path;
-        return run.handle(request, { timeout(req, timeout) { timeoutServer?.timeout(req, timeout); } }, normalizedPath);
+        const normalizedPath =
+          requestUrl.pathname.startsWith("/api/v1/") && !route.path.startsWith("/api/")
+            ? "/api" + route.path
+            : route.path;
+        return run.handle(
+          request,
+          {
+            timeout(req, timeout) {
+              timeoutServer?.timeout(req, timeout);
+            },
+          },
+          normalizedPath,
+        );
       });
-      const selected = workerBuilds.get(workerKey) ?? { build_id: manifest.build_id, package_version: serviceConfig.package_version ?? manifest.service_version };
+      const selected = workerBuilds.get(workerKey) ?? {
+        build_id: manifest.build_id,
+        package_version: serviceConfig.package_version ?? manifest.service_version,
+      };
       // Synthetic observers are an explicit test/preview seam. Keep the same
       // Unix-socket contract while retaining the injected observer in-process;
       // production workers never receive demoHooks and always use a child PID.
@@ -307,364 +361,519 @@ export async function startSharedViewer(
           generation,
           handle: async (request, context) => {
             const route = parseViewerRoute(new URL(request.url));
-            if (!route || route.runId !== context.runId) throw new Error("viewer worker route identity mismatch");
-            const normalizedPath = new URL(request.url).pathname.startsWith("/api/v1/") && !route.path.startsWith("/api/") ? "/api" + route.path : route.path;
-            return getRun(context.runId).handle(request, { timeout(req, timeout) { timeoutServer?.timeout(req, timeout); } }, normalizedPath);
+            if (!route || route.runId !== context.runId)
+              throw new Error("viewer worker route identity mismatch");
+            const normalizedPath =
+              new URL(request.url).pathname.startsWith("/api/v1/") &&
+              !route.path.startsWith("/api/")
+                ? "/api" + route.path
+                : route.path;
+            return getRun(context.runId).handle(
+              request,
+              {
+                timeout(req, timeout) {
+                  timeoutServer?.timeout(req, timeout);
+                },
+              },
+              normalizedPath,
+            );
           },
         });
-        return createUnixViewerWorker({ socketPath, workerKey, generation, stop: async () => { workerBridges.delete(bridgeToken); await server.stop(); } });
+        return createUnixViewerWorker({
+          socketPath,
+          workerKey,
+          generation,
+          stop: async () => {
+            workerBridges.delete(bridgeToken);
+            await server.stop();
+          },
+        });
       }
-      const childCommand = selected.build_id === manifest.build_id
-        ? [process.execPath, new URL("../scripts/viewer-worker-process.ts", import.meta.url).pathname]
-        : [process.execPath, "x", "--bun", "--package", `@loomhelm/multi-task-flow@${selected.package_version}`, "multi-task-flow", "worker-process"];
+      const childCommand =
+        selected.build_id === manifest.build_id
+          ? [
+              process.execPath,
+              new URL("../scripts/viewer-worker-process.ts", import.meta.url).pathname,
+            ]
+          : [
+              process.execPath,
+              "x",
+              "--bun",
+              "--package",
+              `@loomhelm/multi-task-flow@${selected.package_version}`,
+              "multi-task-flow",
+              "worker-process",
+            ];
       const child = Bun.spawn(childCommand, {
-        env: { ...process.env, MTF_WORKER_SOCKET: socketPath, MTF_WORKER_KEY: workerKey, MTF_WORKER_GENERATION: generation, MTF_WORKER_DATA_ROOT: state.paths.data, MTF_WORKER_PORT: String(gatewayPort), ...(selected.build_id === manifest.build_id ? { MTF_WORKER_ASSETS: assetsDir } : {}) },
-        stdout: "ignore", stderr: "ignore",
+        env: {
+          ...process.env,
+          MTF_WORKER_SOCKET: socketPath,
+          MTF_WORKER_KEY: workerKey,
+          MTF_WORKER_GENERATION: generation,
+          MTF_WORKER_DATA_ROOT: state.paths.data,
+          MTF_WORKER_PORT: String(gatewayPort),
+          ...(selected.build_id === manifest.build_id ? { MTF_WORKER_ASSETS: assetsDir } : {}),
+        },
+        stdout: "ignore",
+        stderr: "ignore",
       });
       const deadline = Date.now() + 1_500;
-      while (!existsSync(socketPath) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
-      if (!existsSync(socketPath)) { child.kill(); workerBridges.delete(bridgeToken); throw new Error("viewer worker failed to start"); }
+      while (!existsSync(socketPath) && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      if (!existsSync(socketPath)) {
+        child.kill();
+        workerBridges.delete(bridgeToken);
+        throw new Error("viewer worker failed to start");
+      }
       return createUnixViewerWorker({
         socketPath,
         workerKey,
         generation,
-        stop: async () => { workerBridges.delete(bridgeToken); child.kill(); await child.exited; },
+        stop: async () => {
+          workerBridges.delete(bridgeToken);
+          child.kill();
+          await child.exited;
+        },
       });
     },
   });
   let server: Awaited<ReturnType<typeof Runtime.serve>>;
   try {
     server = await Runtime.serve({
-    hostname: "127.0.0.1",
-    port,
-    async fetch(request, currentServer) {
-      timeoutServer = currentServer;
-      gatewayPort = currentServer.port;
-      const host = `127.0.0.1:${currentServer.port}`;
-      const origin = request.headers.get("origin");
-      if (
-        request.headers.get("host") !== host ||
-        (origin && origin !== `http://${host}`)
-      )
-        return json({ code: "FORBIDDEN" }, 403);
-      const url = new URL(request.url);
+      hostname: "127.0.0.1",
+      port,
+      async fetch(request, currentServer) {
+        timeoutServer = currentServer;
+        gatewayPort = currentServer.port;
+        const host = `127.0.0.1:${currentServer.port}`;
+        const origin = request.headers.get("origin");
+        if (request.headers.get("host") !== host || (origin && origin !== `http://${host}`))
+          return json({ code: "FORBIDDEN" }, 403);
+        const url = new URL(request.url);
         if (url.pathname === "/__internal/worker" && request.method !== "OPTIONS") {
           const token = request.headers.get("x-mtf-worker-token");
           const runId = request.headers.get("x-mtf-worker-run-id");
           const workerPath = request.headers.get("x-mtf-worker-path");
           const bridge = token ? workerBridges.get(token) : undefined;
-          if (!bridge || !runId || !workerPath) return json({ code: "WORKER_BRIDGE_UNAUTHORIZED" }, 403);
-          const body = request.method === "GET" || request.method === "HEAD" ? undefined : request.body;
-          const forwarded = new Request(`http://${host}${workerPath}`, { method: request.method, headers: request.headers, ...(body ? { body, duplex: "half" as const } : {}) });
+          if (!bridge || !runId || !workerPath)
+            return json({ code: "WORKER_BRIDGE_UNAUTHORIZED" }, 403);
+          const body =
+            request.method === "GET" || request.method === "HEAD" ? undefined : request.body;
+          const forwarded = new Request(`http://${host}${workerPath}`, {
+            method: request.method,
+            headers: request.headers,
+            ...(body ? { body, duplex: "half" as const } : {}),
+          });
           return await bridge(forwarded, runId, workerPath);
         }
-      let diagnosticResponse: ReturnType<WorkerDiagnosticStore["get"]> = null;
-      try {
-        if (url.pathname === "/login" || url.pathname === "/login.js" || url.pathname === "/resume-task.js" || url.pathname === "/api/v1/login")
-          return json({ code: "NOT_FOUND" }, 404);
-        const viewerEntry = request.method === "GET" &&
-          (url.pathname === "/" || runEntryPath.test(url.pathname));
-        if (request.method === "GET" && url.pathname === "/auth/failed") {
-          const redirectValues = url.searchParams.getAll("redirect");
-          const hasOnlyRedirect = [...url.searchParams.keys()].every((key) => key === "redirect");
-          const target = hasOnlyRedirect && redirectValues.length === 1
-            ? parseViewerTarget(redirectValues[0]!, `http://${host}`, { allowHome: false })?.target
+        let diagnosticResponse: ReturnType<WorkerDiagnosticStore["get"]> = null;
+        try {
+          if (
+            url.pathname === "/login" ||
+            url.pathname === "/login.js" ||
+            url.pathname === "/resume-task.js" ||
+            url.pathname === "/api/v1/login"
+          )
+            return json({ code: "NOT_FOUND" }, 404);
+          const viewerEntry =
+            request.method === "GET" && (url.pathname === "/" || runEntryPath.test(url.pathname));
+          if (request.method === "GET" && url.pathname === "/auth/failed") {
+            const redirectValues = url.searchParams.getAll("redirect");
+            const hasOnlyRedirect = [...url.searchParams.keys()].every((key) => key === "redirect");
+            const target =
+              hasOnlyRedirect && redirectValues.length === 1
+                ? parseViewerTarget(redirectValues[0]!, `http://${host}`, { allowHome: false })
+                    ?.target
+                : null;
+            if (!target) return html(authFailedPage, 400);
+            const actor = auth.authorize(request);
+            return actor ? redirect(target) : html(authFailedPage, 401);
+          }
+          const viewerTarget = viewerEntry
+            ? parseViewerTarget(request.url, `http://${host}`, { allowTicket: true })
             : null;
-          if (!target) return html(authFailedPage, 400);
           const actor = auth.authorize(request);
-          return actor ? redirect(target) : html(authFailedPage, 401);
-        }
-        const viewerTarget = viewerEntry
-          ? parseViewerTarget(request.url, `http://${host}`, { allowTicket: true })
-          : null;
-        const actor = auth.authorize(request);
-        if (viewerEntry && !viewerTarget) {
-          if (!actor) return html(authFailedPage, 400);
-          return json({ code: "INVALID_REDIRECT" }, 400);
-        }
-        if (viewerEntry && viewerTarget) {
-          if (actor) {
-            if (viewerTarget.ticket !== null) {
-              auth.consumeTicket(viewerTarget.ticket, url.pathname);
-              return redirect(viewerTarget.target);
-            }
-          } else if (viewerTarget.ticket !== null) {
-            try {
-              const session = auth.exchange(viewerTarget.ticket, url.pathname);
-              return redirect(viewerTarget.target, { "Set-Cookie": session.cookie });
-            } catch (error) {
-              if (!(error instanceof ContractError) || error.code !== "INVALID_TICKET") throw error;
-              if (url.pathname === "/") return html(authFailedPage, 401);
+          if (viewerEntry && !viewerTarget) {
+            if (!actor) return html(authFailedPage, 400);
+            return json({ code: "INVALID_REDIRECT" }, 400);
+          }
+          if (viewerEntry && viewerTarget) {
+            if (actor) {
+              if (viewerTarget.ticket !== null) {
+                auth.consumeTicket(viewerTarget.ticket, url.pathname);
+                return redirect(viewerTarget.target);
+              }
+            } else if (viewerTarget.ticket !== null) {
+              try {
+                const session = auth.exchange(viewerTarget.ticket, url.pathname);
+                return redirect(viewerTarget.target, { "Set-Cookie": session.cookie });
+              } catch (error) {
+                if (!(error instanceof ContractError) || error.code !== "INVALID_TICKET")
+                  throw error;
+                if (url.pathname === "/") return html(authFailedPage, 401);
+                return redirect(authFailureLocation(viewerTarget.target));
+              }
+            } else if (url.pathname !== "/") {
               return redirect(authFailureLocation(viewerTarget.target));
             }
-          } else if (url.pathname !== "/") {
-            return redirect(authFailureLocation(viewerTarget.target));
           }
-        }
-        if (url.pathname === "/api/v1/reconnect" && request.method === "POST") {
-          if (!request.headers.get("cookie")) return json({ code: "UNAUTHENTICATED" }, 401);
-          const target = parseViewerTarget(url.searchParams.get("target") ?? "/", `http://${host}`, { allowHome: false })?.target;
-          if (!target) return json({ code: "INVALID_TARGET" }, 400);
-          const targetPath = new URL(target, `http://${host}`).pathname;
-          const ticket = auth.ticket(targetPath);
-          return json({ login_url: `http://${host}${target}${target.includes("?") ? "&" : "?"}ticket=${encodeURIComponent(ticket)}`, expires_in_seconds: 60, single_use: true });
-        }
-        if (!actor)
-          return request.method === "GET" && !url.pathname.startsWith("/api/")
-            ? html(
-                viewerPage(
-                  "需要连接本地展示服务",
-                  "<p>请通过 service login 获取一次性登录入口；登录后将恢复任务定位。若在其他标签页登录，请返回此页刷新。</p>",
-                ),
-                401,
-              )
-            : json({ code: "UNAUTHENTICATED" }, 401);
-        if (
-          request.method !== "GET" &&
-          actor.kind === "browser" &&
-          origin !== `http://${host}`
-        )
-          return json({ code: "FORBIDDEN" }, 403);
-        if (
-          sourceRevision &&
-          request.method === "GET" &&
-          url.pathname === "/api/v1/source"
-        )
-          return json({ revision: sourceRevision(), name: sourceName });
-        if (
-          sourceRevision &&
-          request.method === "GET" &&
-          url.pathname === "/source-client.js"
-        )
-          return script(
-            `document.title=${JSON.stringify(sourceName ?? "源码开发预览")};let previous=${JSON.stringify(sourceRevision())};setInterval(async()=>{try{const response=await fetch('/api/v1/source');if(!response.ok)return;const value=await response.json();if(previous&&previous!==value.revision)location.reload();previous=value.revision}catch{}},1000);`,
+          if (url.pathname === "/api/v1/reconnect" && request.method === "POST") {
+            if (!request.headers.get("cookie")) return json({ code: "UNAUTHENTICATED" }, 401);
+            const target = parseViewerTarget(
+              url.searchParams.get("target") ?? "/",
+              `http://${host}`,
+              { allowHome: false },
+            )?.target;
+            if (!target) return json({ code: "INVALID_TARGET" }, 400);
+            const targetPath = new URL(target, `http://${host}`).pathname;
+            const ticket = auth.ticket(targetPath);
+            return json({
+              login_url: `http://${host}${target}${target.includes("?") ? "&" : "?"}ticket=${encodeURIComponent(ticket)}`,
+              expires_in_seconds: 60,
+              single_use: true,
+            });
+          }
+          if (!actor)
+            return request.method === "GET" && !url.pathname.startsWith("/api/")
+              ? html(
+                  viewerPage(
+                    "需要连接本地展示服务",
+                    "<p>请通过 service login 获取一次性登录入口；登录后将恢复任务定位。若在其他标签页登录，请返回此页刷新。</p>",
+                  ),
+                  401,
+                )
+              : json({ code: "UNAUTHENTICATED" }, 401);
+          if (request.method !== "GET" && actor.kind === "browser" && origin !== `http://${host}`)
+            return json({ code: "FORBIDDEN" }, 403);
+          if (sourceRevision && request.method === "GET" && url.pathname === "/api/v1/source")
+            return json({ revision: sourceRevision(), name: sourceName });
+          if (sourceRevision && request.method === "GET" && url.pathname === "/source-client.js")
+            return script(
+              `document.title=${JSON.stringify(sourceName ?? "源码开发预览")};let previous=${JSON.stringify(sourceRevision())};setInterval(async()=>{try{const response=await fetch('/api/v1/source');if(!response.ok)return;const value=await response.json();if(previous&&previous!==value.revision)location.reload();previous=value.revision}catch{}},1000);`,
+            );
+          if (url.pathname === "/api/v1/status" && request.method === "GET") {
+            if (actor.kind !== "cli") return json({ code: "FORBIDDEN" }, 403);
+            return json({
+              ok: true,
+              build_id: manifest.build_id,
+              source_sha: manifest.source_sha,
+              package_name: state.config().package_name,
+              package_version: state.config().package_version,
+              compatibility_line: state.config().compatibility_line,
+              skill_version: state.config().skill_version ?? manifest.skill_version,
+              service_contract: state.config().service_contract ?? String(manifest.service_version),
+              skill_id: manifest.skill_id,
+              ledger_contract: manifest.ledger_contract,
+              viewer_contract: manifest.viewer_contract,
+              compatibility,
+              generation: state.runtime().generation,
+              pid: process.pid,
+              port: currentServer.port,
+            });
+          }
+          if (url.pathname === "/api/v1/lease" && request.method === "POST") {
+            if (actor.kind === "browser") return json(state.renewBrowser(actor.id));
+            const input = agentInput.parse(await body(request));
+            requireApi(input.api_version);
+            return json(state.renew(agentLease(input), state.config().agent_ttl_ms));
+          }
+          if (url.pathname === "/api/v1/runs" && request.method === "GET") {
+            const offset = Number(url.searchParams.get("offset") ?? 0);
+            if (!Number.isInteger(offset) || offset < 0)
+              return json({ code: "INVALID_OFFSET" }, 400);
+            const listed = listRuns(state.paths.data, offset);
+            return json({
+              ...listed,
+              runs: listed.runs.map((run) => ({
+                ...run,
+                viewer_binding: (() => {
+                  try {
+                    return readViewerBinding(state, run.id);
+                  } catch {
+                    return null;
+                  }
+                })(),
+              })),
+              gateway: {
+                package_name: serviceConfig.package_name,
+                package_version: serviceConfig.package_version,
+                build_id: manifest.build_id,
+                compatibility_line: serviceConfig.compatibility_line,
+              },
+              ...(versionDiscovery
+                ? {
+                    update_hint: {
+                      surface: "gateway",
+                      current: {
+                        package_version: serviceConfig.package_version ?? null,
+                        build_id: manifest.build_id,
+                        source_sha: manifest.source_sha,
+                        compatibility_line: serviceConfig.compatibility_line ?? null,
+                        viewer_contract: manifest.viewer_contract,
+                      },
+                      target:
+                        versionDiscovery.compatible_version ??
+                        versionDiscovery.latest_version ??
+                        null,
+                      compatible: versionDiscovery.compatible_version ? true : "unknown",
+                      reason: "registry_discovery",
+                      command: "multi-task-flow gateway upgrade",
+                    },
+                  }
+                : {}),
+            });
+          }
+          if (request.method === "GET" && url.pathname === "/") return html(homePage);
+          if (request.method === "GET" && url.pathname === "/home.js") return script(homeScript);
+          if (request.method === "GET" && url.pathname === "/service-client.js")
+            return script(runClientScript);
+          const match = url.pathname.match(
+            /^\/(?:api\/v1\/)?runs\/([A-Za-z0-9][A-Za-z0-9_.-]{0,127})\/(.*)$/,
           );
-        if (url.pathname === "/api/v1/status" && request.method === "GET") {
-          if (actor.kind !== "cli") return json({ code: "FORBIDDEN" }, 403);
-          return json({
-            ok: true,
+          if (!match) return json({ code: "NOT_FOUND" }, 404);
+          const id = match[1]!;
+          if (pathIsLegacyView(url.pathname, request.method)) {
+            if (!fallbackViewer) return json({ code: "LEGACY_VIEW_UNAVAILABLE" }, 404);
+            let raw: unknown;
+            try {
+              raw = JSON.parse(new LedgerStore(state.paths.data, id).readRaw());
+            } catch {
+              throw new ContractError("LEDGER_UNREADABLE", "Stored run ledger is unreadable", 2);
+            }
+            return json({
+              run_id: id,
+              build_id: manifest.build_id,
+              fallback_build_id: state.config().previous_build,
+              read_only: true,
+              view: readOnlyView(fallbackViewer, raw, url.searchParams.get("plan") ?? undefined),
+            });
+          }
+          let path = "/" + match[2]!;
+          if (url.pathname.startsWith("/api/v1/")) path = "/api/" + match[2]!;
+          if (path === "/api/service" && request.method === "GET") {
+            const binding = ensureViewerBinding(state, id, {
+              package_name: serviceConfig.package_name ?? "@loomhelm/multi-task-flow",
+              package_version: serviceConfig.package_version ?? manifest.service_version,
+              build_id: manifest.build_id,
+              source_sha: manifest.source_sha,
+              compatibility_line: serviceConfig.compatibility_line ?? "compat-v1",
+              ledger_contract: manifest.ledger_contract,
+              api_contract: manifest.api_versions[0] ?? 1,
+              frontend_contract: manifest.frontend_contracts[0] ?? 1,
+              viewer_contract: manifest.viewer_contract,
+            });
+            return json({
+              surface: "orchestration",
+              current: binding,
+              daemon: {
+                package_name: serviceConfig.package_name,
+                package_version: serviceConfig.package_version,
+                build_id: manifest.build_id,
+                compatibility_line: serviceConfig.compatibility_line,
+              },
+              warning: warnings.get(id),
+              ...(versionDiscovery
+                ? {
+                    update_hint: {
+                      surface: "orchestration",
+                      current: {
+                        package_version: binding.package_version,
+                        build_id: binding.build_id,
+                        source_sha: binding.source_sha,
+                        compatibility_line: binding.compatibility_line,
+                        viewer_contract: binding.viewer_contract,
+                      },
+                      target:
+                        versionDiscovery.compatible_version ??
+                        versionDiscovery.latest_version ??
+                        null,
+                      compatible: versionDiscovery.compatible_version ? true : "unknown",
+                      reason: "registry_discovery",
+                      command: "multi-task-flow orchestration upgrade --run-id",
+                    },
+                  }
+                : {}),
+            });
+          }
+          if (path === "/api/diagnostics/worker" && request.method === "GET") {
+            const requestedRun = url.searchParams.get("run_id") ?? id;
+            if (requestedRun !== id) return json({ code: "FORBIDDEN" }, 403);
+            new LedgerStore(state.paths.data, id).read();
+            return json({ diagnostic: diagnostics.get(id) });
+          }
+          if (path === "/api/lease" && request.method === "POST" && actor.kind === "browser")
+            return json(state.renewBrowser(actor.id));
+          const ledger = new LedgerStore(state.paths.data, id).read();
+          requireLedgerCompatibility(ledger);
+          const binding = ensureViewerBinding(state, id, {
+            package_name: serviceConfig.package_name ?? "@loomhelm/multi-task-flow",
+            package_version: serviceConfig.package_version ?? manifest.service_version,
             build_id: manifest.build_id,
             source_sha: manifest.source_sha,
-            package_name: state.config().package_name,
-            package_version: state.config().package_version,
-            compatibility_line: state.config().compatibility_line,
-            skill_version: state.config().skill_version ?? manifest.skill_version,
-            service_contract: state.config().service_contract ?? String(manifest.service_version),
-            skill_id: manifest.skill_id,
+            compatibility_line: serviceConfig.compatibility_line ?? "compat-v1",
             ledger_contract: manifest.ledger_contract,
+            api_contract: manifest.api_versions[0] ?? 1,
+            frontend_contract: manifest.frontend_contracts[0] ?? 1,
             viewer_contract: manifest.viewer_contract,
-            compatibility,
-            generation: state.runtime().generation,
-            pid: process.pid,
-            port: currentServer.port,
           });
-        }
-        if (url.pathname === "/api/v1/lease" && request.method === "POST") {
-          if (actor.kind === "browser")
-            return json(state.renewBrowser(actor.id));
-          const input = agentInput.parse(await body(request));
-          requireApi(input.api_version);
-          return json(
-            state.renew(agentLease(input), state.config().agent_ttl_ms),
-          );
-        }
-        if (url.pathname === "/api/v1/runs" && request.method === "GET") {
-          const offset = Number(url.searchParams.get("offset") ?? 0);
-          if (!Number.isInteger(offset) || offset < 0)
-            return json({ code: "INVALID_OFFSET" }, 400);
-          const listed = listRuns(state.paths.data, offset);
-          return json({
-            ...listed,
-            runs: listed.runs.map((run) => ({ ...run, viewer_binding: (() => { try { return readViewerBinding(state, run.id); } catch { return null; } })() })),
-            gateway: { package_name: serviceConfig.package_name, package_version: serviceConfig.package_version, build_id: manifest.build_id, compatibility_line: serviceConfig.compatibility_line },
-            ...(versionDiscovery ? { update_hint: { surface: "gateway", current: { package_version: serviceConfig.package_version ?? null, build_id: manifest.build_id, source_sha: manifest.source_sha, compatibility_line: serviceConfig.compatibility_line ?? null, viewer_contract: manifest.viewer_contract }, target: versionDiscovery.compatible_version ?? versionDiscovery.latest_version ?? null, compatible: versionDiscovery.compatible_version ? true : "unknown", reason: "registry_discovery", command: "multi-task-flow gateway upgrade" } } : {}),
+          getRun(id); // Gateway owns lifecycle observation; the selected Worker owns response rendering.
+          const version = dataVersionOf(ledger, binding.viewer_contract, binding.build_id);
+          const workerKey = workerKeyOf(version);
+          workerBuilds.set(workerKey, {
+            build_id: binding.build_id,
+            package_version: binding.package_version,
           });
-        }
-        if (request.method === "GET" && url.pathname === "/")
-          return html(homePage);
-        if (request.method === "GET" && url.pathname === "/home.js")
-          return script(homeScript);
-        if (request.method === "GET" && url.pathname === "/service-client.js")
-          return script(runClientScript);
-        const match = url.pathname.match(
-          /^\/(?:api\/v1\/)?runs\/([A-Za-z0-9][A-Za-z0-9_.-]{0,127})\/(.*)$/,
-        );
-        if (!match) return json({ code: "NOT_FOUND" }, 404);
-        const id = match[1]!;
-        if (pathIsLegacyView(url.pathname, request.method)) {
-          if (!fallbackViewer) return json({ code: "LEGACY_VIEW_UNAVAILABLE" }, 404);
-          let raw: unknown;
-          try { raw = JSON.parse(new LedgerStore(state.paths.data, id).readRaw()); }
-          catch { throw new ContractError("LEDGER_UNREADABLE", "Stored run ledger is unreadable", 2); }
-          return json({ run_id: id, build_id: manifest.build_id, fallback_build_id: state.config().previous_build, read_only: true, view: readOnlyView(fallbackViewer, raw, url.searchParams.get("plan") ?? undefined) });
-        }
-        let path = "/" + match[2]!;
-        if (url.pathname.startsWith("/api/v1/")) path = "/api/" + match[2]!;
-        if (path === "/api/service" && request.method === "GET") {
-        const binding = ensureViewerBinding(state, id, { package_name: serviceConfig.package_name ?? "@loomhelm/multi-task-flow", package_version: serviceConfig.package_version ?? manifest.service_version, build_id: manifest.build_id, source_sha: manifest.source_sha, compatibility_line: serviceConfig.compatibility_line ?? "compat-v1", ledger_contract: manifest.ledger_contract, api_contract: manifest.api_versions[0] ?? 1, frontend_contract: manifest.frontend_contracts[0] ?? 1, viewer_contract: manifest.viewer_contract });
-          return json({
-            surface: "orchestration",
-            current: binding,
-            daemon: { package_name: serviceConfig.package_name, package_version: serviceConfig.package_version, build_id: manifest.build_id, compatibility_line: serviceConfig.compatibility_line },
-            warning: warnings.get(id),
-            ...(versionDiscovery ? { update_hint: { surface: "orchestration", current: { package_version: binding.package_version, build_id: binding.build_id, source_sha: binding.source_sha, compatibility_line: binding.compatibility_line, viewer_contract: binding.viewer_contract }, target: versionDiscovery.compatible_version ?? versionDiscovery.latest_version ?? null, compatible: versionDiscovery.compatible_version ? true : "unknown", reason: "registry_discovery", command: "multi-task-flow orchestration upgrade --run-id" } } : {}),
-          });
-        }
-        if (path === "/api/diagnostics/worker" && request.method === "GET") {
-          const requestedRun = url.searchParams.get("run_id") ?? id;
-          if (requestedRun !== id) return json({ code: "FORBIDDEN" }, 403);
-          new LedgerStore(state.paths.data, id).read();
-          return json({ diagnostic: diagnostics.get(id) });
-        }
-        if (
-          path === "/api/lease" &&
-          request.method === "POST" &&
-          actor.kind === "browser"
-        )
-          return json(state.renewBrowser(actor.id));
-        const ledger = new LedgerStore(state.paths.data, id).read();
-        requireLedgerCompatibility(ledger);
-        const binding = ensureViewerBinding(state, id, { package_name: serviceConfig.package_name ?? "@loomhelm/multi-task-flow", package_version: serviceConfig.package_version ?? manifest.service_version, build_id: manifest.build_id, source_sha: manifest.source_sha, compatibility_line: serviceConfig.compatibility_line ?? "compat-v1", ledger_contract: manifest.ledger_contract, api_contract: manifest.api_versions[0] ?? 1, frontend_contract: manifest.frontend_contracts[0] ?? 1, viewer_contract: manifest.viewer_contract });
-        getRun(id); // Gateway owns lifecycle observation; the selected Worker owns response rendering.
-        const version = dataVersionOf(
-          ledger,
-          binding.viewer_contract,
-          binding.build_id,
-        );
-        const workerKey = workerKeyOf(version);
-        workerBuilds.set(workerKey, { build_id: binding.build_id, package_version: binding.package_version });
-        let workerStage: WorkerDiagnosticStage = "worker_select";
-        let lease: Awaited<ReturnType<typeof workerPool.acquire>>;
-        try {
-          lease = await workerPool.acquire(workerKey);
-          workerStage = "request_dispatch";
-        } catch (error) {
-          const diagnostic = recordDiagnostic(workerDiagnosticFromError({
-            run_id: id,
-            worker_key: workerKey,
-            worker_generation: workerPool.generation(workerKey) ?? "unknown-generation",
-            stage: error instanceof Error && /socket (connection|connect)/i.test(error.message) ? "socket_connect" : workerStage,
-            retry_count: workerPool.failureCount(workerKey),
-            retryable: workerPool.failureCount(workerKey) < 3,
-            reconnect_required: true,
-            state: workerPool.failureCount(workerKey) >= 3 ? "degraded" : undefined,
-            error,
-          }));
-          diagnosticResponse = diagnostic;
-          throw error;
-        }
-        let response: Response;
-        try {
-          response = await lease.worker.handle(request, currentServer, path, {
-            runId: id,
-            workerKey,
-            generation: lease.generation,
-          });
-        } catch (error) {
-          lease.release();
-          await workerPool.invalidate(workerKey, lease.generation);
-          diagnosticResponse = recordDiagnostic(workerDiagnosticFromError({
-            run_id: id,
-            worker_key: workerKey,
-            worker_generation: lease.generation,
-            stage: error instanceof Error && /socket (connection|connect|closed|timeout)/i.test(error.message) ? "socket_connect" : "request_dispatch",
-            retry_count: workerPool.failureCount(workerKey),
-            retryable: workerPool.failureCount(workerKey) < 3,
-            reconnect_required: true,
-            state: workerPool.failureCount(workerKey) >= 3 ? "degraded" : undefined,
-            error,
-          }));
-          throw error;
-        }
-        const leasedResponse = releaseWorkerResponse(
-          response,
-          lease.release,
-          async () => {
-            await workerPool.invalidate(workerKey, lease.generation);
-            recordDiagnostic(workerDiagnosticFromError({
-              run_id: id,
-              worker_key: workerKey,
-              worker_generation: lease.generation,
-              stage: "response_stream",
-              retry_count: workerPool.failureCount(workerKey),
-              retryable: workerPool.failureCount(workerKey) < 3,
-              reconnect_required: true,
-              state: workerPool.failureCount(workerKey) >= 3 ? "degraded" : undefined,
-              error: new Error("worker response stream failed"),
-            }));
-          },
-        );
-        if (path !== "/api/events") {
-          const beforeRecovery = diagnostics.get(id);
-          const recovered = beforeRecovery ? diagnostics.recover(id, beforeRecovery) : null;
-          if (recovered) {
-            try {
-              serviceLog(state.paths, "worker_diagnostic", state.runtime().generation ?? "unknown-generation", manifest.build_id, {
-                diagnostic_id: recovered.diagnostic_id,
-                run_id: recovered.run_id,
-                worker_generation: recovered.worker_generation,
-                stage: recovered.stage,
-                error_code: recovered.error_code,
-                safe_summary: recovered.safe_summary,
-                retryable: recovered.retryable,
-                reconnect_required: recovered.reconnect_required,
-                worker_key: recovered.worker_key,
-                retry_count: recovered.retry_count,
-                state: recovered.state,
-                recovered_at: recovered.recovered_at,
-              });
-            } catch { /* Do not turn a recovered request into a logging failure. */ }
+          let workerStage: WorkerDiagnosticStage = "worker_select";
+          let lease: Awaited<ReturnType<typeof workerPool.acquire>>;
+          try {
+            lease = await workerPool.acquire(workerKey);
+            workerStage = "request_dispatch";
+          } catch (error) {
+            const diagnostic = recordDiagnostic(
+              workerDiagnosticFromError({
+                run_id: id,
+                worker_key: workerKey,
+                worker_generation: workerPool.generation(workerKey) ?? "unknown-generation",
+                stage:
+                  error instanceof Error && /socket (connection|connect)/i.test(error.message)
+                    ? "socket_connect"
+                    : workerStage,
+                retry_count: workerPool.failureCount(workerKey),
+                retryable: workerPool.failureCount(workerKey) < 3,
+                reconnect_required: true,
+                state: workerPool.failureCount(workerKey) >= 3 ? "degraded" : undefined,
+                error,
+              }),
+            );
+            diagnosticResponse = diagnostic;
+            throw error;
           }
-        }
-        if (
-          path === "/" &&
-          leasedResponse.ok &&
-          leasedResponse.headers.get("content-type")?.startsWith("text/html")
-        ) {
-          return html(
-            (await leasedResponse.text()) +
-              '<script src="/service-client.js" defer></script>' +
-              (sourceRevision
-                ? '<script src="/source-client.js" defer></script>'
-                : ""),
+          let response: Response;
+          try {
+            response = await lease.worker.handle(request, currentServer, path, {
+              runId: id,
+              workerKey,
+              generation: lease.generation,
+            });
+          } catch (error) {
+            lease.release();
+            await workerPool.invalidate(workerKey, lease.generation);
+            diagnosticResponse = recordDiagnostic(
+              workerDiagnosticFromError({
+                run_id: id,
+                worker_key: workerKey,
+                worker_generation: lease.generation,
+                stage:
+                  error instanceof Error &&
+                  /socket (connection|connect|closed|timeout)/i.test(error.message)
+                    ? "socket_connect"
+                    : "request_dispatch",
+                retry_count: workerPool.failureCount(workerKey),
+                retryable: workerPool.failureCount(workerKey) < 3,
+                reconnect_required: true,
+                state: workerPool.failureCount(workerKey) >= 3 ? "degraded" : undefined,
+                error,
+              }),
+            );
+            throw error;
+          }
+          const leasedResponse = releaseWorkerResponse(response, lease.release, async () => {
+            await workerPool.invalidate(workerKey, lease.generation);
+            recordDiagnostic(
+              workerDiagnosticFromError({
+                run_id: id,
+                worker_key: workerKey,
+                worker_generation: lease.generation,
+                stage: "response_stream",
+                retry_count: workerPool.failureCount(workerKey),
+                retryable: workerPool.failureCount(workerKey) < 3,
+                reconnect_required: true,
+                state: workerPool.failureCount(workerKey) >= 3 ? "degraded" : undefined,
+                error: new Error("worker response stream failed"),
+              }),
+            );
+          });
+          if (path !== "/api/events") {
+            const beforeRecovery = diagnostics.get(id);
+            const recovered = beforeRecovery ? diagnostics.recover(id, beforeRecovery) : null;
+            if (recovered) {
+              try {
+                serviceLog(
+                  state.paths,
+                  "worker_diagnostic",
+                  state.runtime().generation ?? "unknown-generation",
+                  manifest.build_id,
+                  {
+                    diagnostic_id: recovered.diagnostic_id,
+                    run_id: recovered.run_id,
+                    worker_generation: recovered.worker_generation,
+                    stage: recovered.stage,
+                    error_code: recovered.error_code,
+                    safe_summary: recovered.safe_summary,
+                    retryable: recovered.retryable,
+                    reconnect_required: recovered.reconnect_required,
+                    worker_key: recovered.worker_key,
+                    retry_count: recovered.retry_count,
+                    state: recovered.state,
+                    recovered_at: recovered.recovered_at,
+                  },
+                );
+              } catch {
+                /* Do not turn a recovered request into a logging failure. */
+              }
+            }
+          }
+          if (
+            path === "/" &&
+            leasedResponse.ok &&
+            leasedResponse.headers.get("content-type")?.startsWith("text/html")
+          ) {
+            return html(
+              (await leasedResponse.text()) +
+                '<script src="/service-client.js" defer></script>' +
+                (sourceRevision ? '<script src="/source-client.js" defer></script>' : ""),
+            );
+          }
+          return leasedResponse;
+        } catch (error) {
+          const code =
+            error instanceof ContractError
+              ? error.code
+              : error instanceof z.ZodError || error instanceof SyntaxError
+                ? "INVALID_INPUT"
+                : "SERVICE_ERROR";
+          const status =
+            code === "INVALID_TICKET"
+              ? 401
+              : code === "SERVICE_STOPPING"
+                ? 409
+                : code === "INVALID_INPUT"
+                  ? 400
+                  : 503;
+          return json(
+            {
+              code:
+                code === "SERVICE_ERROR" && diagnosticResponse ? "RUN_WORKER_UNAVAILABLE" : code,
+              ...(diagnosticResponse
+                ? {
+                    diagnostic_id: diagnosticResponse.diagnostic_id,
+                    run_id: diagnosticResponse.run_id,
+                    stage: diagnosticResponse.stage,
+                    worker_key: diagnosticResponse.worker_key,
+                    worker_generation: diagnosticResponse.worker_generation,
+                    error_code: diagnosticResponse.error_code,
+                    safe_summary: diagnosticResponse.safe_summary,
+                    retry_count: diagnosticResponse.retry_count,
+                    state: diagnosticResponse.state,
+                    retryable: diagnosticResponse.retryable,
+                    reconnect_required: diagnosticResponse.reconnect_required,
+                  }
+                : {}),
+            },
+            status,
           );
         }
-        return leasedResponse;
-      } catch (error) {
-        const code =
-          error instanceof ContractError
-            ? error.code
-            : error instanceof z.ZodError || error instanceof SyntaxError
-              ? "INVALID_INPUT"
-              : "SERVICE_ERROR";
-        const status =
-          code === "INVALID_TICKET"
-            ? 401
-            : code === "SERVICE_STOPPING"
-              ? 409
-              : code === "INVALID_INPUT"
-                ? 400
-                : 503;
-        return json({
-          code: code === "SERVICE_ERROR" && diagnosticResponse ? "RUN_WORKER_UNAVAILABLE" : code,
-          ...(diagnosticResponse
-            ? {
-                diagnostic_id: diagnosticResponse.diagnostic_id,
-                run_id: diagnosticResponse.run_id,
-                stage: diagnosticResponse.stage,
-                worker_key: diagnosticResponse.worker_key,
-                worker_generation: diagnosticResponse.worker_generation,
-                error_code: diagnosticResponse.error_code,
-                safe_summary: diagnosticResponse.safe_summary,
-                retry_count: diagnosticResponse.retry_count,
-                state: diagnosticResponse.state,
-                retryable: diagnosticResponse.retryable,
-                reconnect_required: diagnosticResponse.reconnect_required,
-              }
-            : {}),
-        }, status);
-      }
-    },
+      },
     });
   } catch (error) {
     await workerPool.stop();
@@ -673,8 +882,7 @@ export async function startSharedViewer(
   return {
     port: server.port!,
     get watcherCount() {
-      return [...resources.values()].filter((run) => run.subscriberCount > 0)
-        .length;
+      return [...resources.values()].filter((run) => run.subscriberCount > 0).length;
     },
     async stop() {
       await server.stop(true);

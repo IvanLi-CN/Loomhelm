@@ -5,10 +5,7 @@ const root = join(import.meta.dir, "..");
 const outputIndex = process.argv.indexOf("--output");
 if (outputIndex >= 0 && !process.argv[outputIndex + 1])
   throw new Error("Missing --output directory");
-const output =
-  outputIndex >= 0
-    ? resolve(process.argv[outputIndex + 1]!)
-    : join(root, "dist");
+const output = outputIndex >= 0 ? resolve(process.argv[outputIndex + 1]!) : join(root, "dist");
 mkdirSync(output, { recursive: true });
 const result = await Bun.build({
   entrypoints: [join(root, "web", "app.ts")],
@@ -16,7 +13,10 @@ const result = await Bun.build({
   naming: "app.js",
   target: "browser",
   minify: true,
-  define: { "process.env.NODE_ENV": JSON.stringify("production"), "import.meta.env": JSON.stringify({MODE:"production"}) },
+  define: {
+    "process.env.NODE_ENV": JSON.stringify("production"),
+    "import.meta.env": JSON.stringify({ MODE: "production" }),
+  },
 });
 if (!result.success) {
   for (const log of result.logs) console.error(log);

@@ -1,27 +1,35 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
+import { z } from "zod";
+import { ContractError, requireCondition } from "../lib/errors";
+import { maintenanceApply, maintenanceCheck } from "../lib/ledger-maintenance";
+import { validateLedger } from "../lib/schema";
+import { ServiceAuth } from "../lib/service-auth";
 import {
   compatibilityReport,
-  selectedRelease,
   downgradeApproval,
+  selectedRelease,
 } from "../lib/service-compatibility";
-import { maintenanceCheck, maintenanceApply } from "../lib/ledger-maintenance";
-import { writeFileSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { z } from "zod";
+import { ledgerContract, requireApi } from "../lib/service-contract";
+import { agentLease } from "../lib/service-http";
+import { importRun } from "../lib/service-import";
+import { ensureService, runDaemon, serviceStatus } from "../lib/service-lifecycle";
+import {
+  assertPackageUpgradeCompatible,
+  installPackageRelease,
+  installRelease,
+  resolvePackageTarget,
+  switchRelease,
+  upgradePackageRelease,
+  upgradePackageReleaseAndStart,
+} from "../lib/service-maintenance";
 import { servicePaths } from "../lib/service-paths";
 import { ServiceState } from "../lib/service-state";
-import { ServiceAuth } from "../lib/service-auth";
-import { ensureService, runDaemon, serviceStatus } from "../lib/service-lifecycle";
-import { agentLease } from "../lib/service-http";
-import { installRelease, switchRelease, installPackageRelease, upgradePackageRelease, upgradePackageReleaseAndStart, resolvePackageTarget, assertPackageUpgradeCompatible } from "../lib/service-maintenance";
-import { importRun } from "../lib/service-import";
-import { ContractError, requireCondition } from "../lib/errors";
-import { requireApi, ledgerContract } from "../lib/service-contract";
-import { buildView } from "../lib/view";
-import { validateLedger } from "../lib/schema";
 import { cachedDaemonUpdate, triggerDaemonUpdateCheck } from "../lib/service-update";
-import { ensureViewerBinding, writeViewerBinding } from "../lib/viewer-binding";
 import { withExclusiveLock, writeAtomic } from "../lib/store";
+import { buildView } from "../lib/view";
+import { ensureViewerBinding, writeViewerBinding } from "../lib/viewer-binding";
 
 const actor = z
   .object({
@@ -32,17 +40,43 @@ const actor = z
   .strict();
 const empty = z.object({}).strict();
 const source = z.object({ source: z.string().startsWith("/") }).strict();
-const packageVersion = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/) }).strict();
-const upgradeRequest = z.object({ target: z.string().min(1), mode: z.enum(["normal", "dry-run", "rollback"]) }).strict();
-function verifiedTargetsPath(state: ServiceState): string { return join(state.paths.state, "verified-package-targets.json"); }
+const packageVersion = z
+  .object({ version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/) })
+  .strict();
+const upgradeRequest = z
+  .object({ target: z.string().min(1), mode: z.enum(["normal", "dry-run", "rollback"]) })
+  .strict();
+function verifiedTargetsPath(state: ServiceState): string {
+  return join(state.paths.state, "verified-package-targets.json");
+}
 function verifiedTargets(state: ServiceState): Set<string> {
-  try { return new Set(JSON.parse(readFileSync(verifiedTargetsPath(state), "utf8")) as string[]); } catch { return new Set(); }
+  try {
+    return new Set(JSON.parse(readFileSync(verifiedTargetsPath(state), "utf8")) as string[]);
+  } catch {
+    return new Set();
+  }
 }
-function recordVerifiedTarget(state: ServiceState, identity: { build_id: string; version: string }): void {
-  withExclusiveLock(join(state.paths.state, "lifecycle.lock"), () => { const targets = verifiedTargets(state); targets.add(`${identity.version}:${identity.build_id}`); writeAtomic(verifiedTargetsPath(state), JSON.stringify([...targets].sort()) + "\n"); });
+function recordVerifiedTarget(
+  state: ServiceState,
+  identity: { build_id: string; version: string },
+): void {
+  withExclusiveLock(join(state.paths.state, "lifecycle.lock"), () => {
+    const targets = verifiedTargets(state);
+    targets.add(`${identity.version}:${identity.build_id}`);
+    writeAtomic(verifiedTargetsPath(state), JSON.stringify([...targets].sort()) + "\n");
+  });
 }
-function requireVerifiedRollback(state: ServiceState, identity: { build_id: string; version: string }): void {
-  withExclusiveLock(join(state.paths.state, "lifecycle.lock"), () => requireCondition(verifiedTargets(state).has(`${identity.version}:${identity.build_id}`), "ROLLBACK_TARGET_UNVERIFIED", "Rollback target must be verified by an earlier exact dry-run or upgrade"));
+function requireVerifiedRollback(
+  state: ServiceState,
+  identity: { build_id: string; version: string },
+): void {
+  withExclusiveLock(join(state.paths.state, "lifecycle.lock"), () =>
+    requireCondition(
+      verifiedTargets(state).has(`${identity.version}:${identity.build_id}`),
+      "ROLLBACK_TARGET_UNVERIFIED",
+      "Rollback target must be verified by an earlier exact dry-run or upgrade",
+    ),
+  );
 }
 
 export async function serviceCommand(
@@ -51,11 +85,14 @@ export async function serviceCommand(
   state = new ServiceState(servicePaths()),
 ): Promise<unknown> {
   if (command === "install") {
-    const parsed = z.union([
-      source.extend({ registry_dir: z.string().startsWith("/").optional() }),
-      packageVersion.extend({ registry_dir: z.string().startsWith("/").optional() }),
-    ]).parse(input);
-    if ("version" in parsed) return installPackageRelease(state, parsed.version, parsed.registry_dir);
+    const parsed = z
+      .union([
+        source.extend({ registry_dir: z.string().startsWith("/").optional() }),
+        packageVersion.extend({ registry_dir: z.string().startsWith("/").optional() }),
+      ])
+      .parse(input);
+    if ("version" in parsed)
+      return installPackageRelease(state, parsed.version, parsed.registry_dir);
     return installRelease(state, parsed.source, parsed.registry_dir);
   }
   if (command === "gateway-upgrade") {
@@ -63,61 +100,116 @@ export async function serviceCommand(
     triggerDaemonUpdateCheck(state);
     const identity = resolvePackageTarget(parsed.target);
     if (parsed.mode === "rollback") requireVerifiedRollback(state, identity);
-    if (parsed.mode === "dry-run") { assertPackageUpgradeCompatible(state.config(), identity); recordVerifiedTarget(state, identity); return { surface: "gateway", changed: false, target: identity.version, requested: parsed.target, dry_run: true, handoff: { fixed_port: state.config().port, health_check: true } }; }
-    const result = await upgradePackageReleaseAndStart(state, identity.version); recordVerifiedTarget(state, identity); return result;
+    if (parsed.mode === "dry-run") {
+      assertPackageUpgradeCompatible(state.config(), identity);
+      recordVerifiedTarget(state, identity);
+      return {
+        surface: "gateway",
+        changed: false,
+        target: identity.version,
+        requested: parsed.target,
+        dry_run: true,
+        handoff: { fixed_port: state.config().port, health_check: true },
+      };
+    }
+    const result = await upgradePackageReleaseAndStart(state, identity.version);
+    recordVerifiedTarget(state, identity);
+    return result;
   }
   if (command === "orchestration-upgrade") {
-    const parsed = z.object({ run_id: z.string(), target: z.string().min(1), mode: z.enum(["normal", "dry-run", "rollback"]) }).strict().parse(input);
+    const parsed = z
+      .object({
+        run_id: z.string(),
+        target: z.string().min(1),
+        mode: z.enum(["normal", "dry-run", "rollback"]),
+      })
+      .strict()
+      .parse(input);
     triggerDaemonUpdateCheck(state);
     const identity = resolvePackageTarget(parsed.target);
     const current = ensureViewerBinding(state, parsed.run_id);
-    requireCondition(identity.compatibility_line === current.compatibility_line, "INCOMPATIBLE_RELEASE", "Target package compatibility line does not match the run binding");
-    requireCondition(identity.contracts.ledger === current.ledger_contract && identity.contracts.api === current.api_contract && identity.contracts.frontend === current.frontend_contract && identity.contracts.viewer === current.viewer_contract, "INCOMPATIBLE_RELEASE", "Target package contracts do not match the run binding");
+    requireCondition(
+      identity.compatibility_line === current.compatibility_line,
+      "INCOMPATIBLE_RELEASE",
+      "Target package compatibility line does not match the run binding",
+    );
+    requireCondition(
+      identity.contracts.ledger === current.ledger_contract &&
+        identity.contracts.api === current.api_contract &&
+        identity.contracts.frontend === current.frontend_contract &&
+        identity.contracts.viewer === current.viewer_contract,
+      "INCOMPATIBLE_RELEASE",
+      "Target package contracts do not match the run binding",
+    );
     if (parsed.mode === "rollback") requireVerifiedRollback(state, identity);
-    if (parsed.mode === "dry-run") { recordVerifiedTarget(state, identity); return { surface: "orchestration", run_id: parsed.run_id, changed: false, current, target: identity.version, requested: parsed.target, dry_run: true }; }
-    if (identity.build_id === current.build_id) return { surface: "orchestration", run_id: parsed.run_id, changed: false, current, daemon_refresh: "best-effort" };
-    const next = writeViewerBinding(state, {
-      schema_version: 1,
-      run_id: parsed.run_id,
-      package_name: identity.package_name,
-      package_version: identity.version,
-      build_id: identity.build_id,
-      source_sha: identity.source_sha,
-      compatibility_line: identity.compatibility_line,
-      ledger_contract: identity.contracts.ledger,
-      api_contract: identity.contracts.api,
-      frontend_contract: identity.contracts.frontend,
-      viewer_contract: identity.contracts.viewer,
-      revision: current.revision,
-      request_id: `orchestration-upgrade-${current.revision}-${identity.build_id}`,
-      updated_at: new Date().toISOString(),
-    }, { revision: current.revision, source_sha: current.source_sha });
+    if (parsed.mode === "dry-run") {
+      recordVerifiedTarget(state, identity);
+      return {
+        surface: "orchestration",
+        run_id: parsed.run_id,
+        changed: false,
+        current,
+        target: identity.version,
+        requested: parsed.target,
+        dry_run: true,
+      };
+    }
+    if (identity.build_id === current.build_id)
+      return {
+        surface: "orchestration",
+        run_id: parsed.run_id,
+        changed: false,
+        current,
+        daemon_refresh: "best-effort",
+      };
+    const next = writeViewerBinding(
+      state,
+      {
+        schema_version: 1,
+        run_id: parsed.run_id,
+        package_name: identity.package_name,
+        package_version: identity.version,
+        build_id: identity.build_id,
+        source_sha: identity.source_sha,
+        compatibility_line: identity.compatibility_line,
+        ledger_contract: identity.contracts.ledger,
+        api_contract: identity.contracts.api,
+        frontend_contract: identity.contracts.frontend,
+        viewer_contract: identity.contracts.viewer,
+        revision: current.revision,
+        request_id: `orchestration-upgrade-${current.revision}-${identity.build_id}`,
+        updated_at: new Date().toISOString(),
+      },
+      { revision: current.revision, source_sha: current.source_sha },
+    );
     recordVerifiedTarget(state, identity);
-    return { surface: "orchestration", run_id: parsed.run_id, changed: next.build_id !== current.build_id, current: next, daemon_refresh: "best-effort" };
+    return {
+      surface: "orchestration",
+      run_id: parsed.run_id,
+      changed: next.build_id !== current.build_id,
+      current: next,
+      daemon_refresh: "best-effort",
+    };
   }
   if (command === "compatibility-check") {
-    const parsed = z
-      .union([source, z.object({ rollback: z.literal(true) }).strict()])
-      .parse(input);
-    return compatibilityReport(state, selectedRelease(state, parsed), "source" in parsed ? parsed.source : undefined);
-  }
-  if (command === "ledger-maintenance-check")
-    return maintenanceCheck(state, input);
-  if (command === "ledger-maintenance-apply")
-    return maintenanceApply(state, input);
-  if (command === "upgrade") {
-    const parsed = z.union([
-      source.extend({ write_downgrade_approval: downgradeApproval.optional() }),
-      packageVersion.extend({ write_downgrade_approval: downgradeApproval.optional() }),
-    ]).parse(input);
-    if ("version" in parsed) return upgradePackageRelease(state, parsed.version);
-    return switchRelease(
+    const parsed = z.union([source, z.object({ rollback: z.literal(true) }).strict()]).parse(input);
+    return compatibilityReport(
       state,
-      parsed.source,
-      false,
-      undefined,
-      parsed.write_downgrade_approval,
+      selectedRelease(state, parsed),
+      "source" in parsed ? parsed.source : undefined,
     );
+  }
+  if (command === "ledger-maintenance-check") return maintenanceCheck(state, input);
+  if (command === "ledger-maintenance-apply") return maintenanceApply(state, input);
+  if (command === "upgrade") {
+    const parsed = z
+      .union([
+        source.extend({ write_downgrade_approval: downgradeApproval.optional() }),
+        packageVersion.extend({ write_downgrade_approval: downgradeApproval.optional() }),
+      ])
+      .parse(input);
+    if ("version" in parsed) return upgradePackageRelease(state, parsed.version);
+    return switchRelease(state, parsed.source, false, undefined, parsed.write_downgrade_approval);
   }
   if (command === "rollback") {
     const parsed = z
@@ -125,14 +217,11 @@ export async function serviceCommand(
       .strict()
       .parse(input);
     if (existsSync(join(state.paths.config, "service.json")) && state.config().package_name)
-      throw new ContractError("PACKAGE_ROLLBACK_UNSUPPORTED", "Package-backed daemon rollback requires an explicit exact package upgrade");
-    return switchRelease(
-      state,
-      "",
-      true,
-      undefined,
-      parsed.write_downgrade_approval,
-    );
+      throw new ContractError(
+        "PACKAGE_ROLLBACK_UNSUPPORTED",
+        "Package-backed daemon rollback requires an explicit exact package upgrade",
+      );
+    return switchRelease(state, "", true, undefined, parsed.write_downgrade_approval);
   }
   if (command === "import" || command === "migrate") {
     const parsed = z
@@ -189,18 +278,12 @@ export async function serviceCommand(
     }
   }
   if (command === "login") {
-    const parsed = z
-      .object({ run_id: z.string().optional() })
-      .strict()
-      .parse(input);
+    const parsed = z.object({ run_id: z.string().optional() }).strict().parse(input);
     await serviceStatus(state);
     const daemonUpdate = cachedDaemonUpdate(state);
     const target = parsed.run_id ? `/runs/${parsed.run_id}/` : "/";
     const ticket = new ServiceAuth(state).ticket(target);
-    const loginUrl = new URL(
-      target,
-      `http://127.0.0.1:${state.config().port}`,
-    );
+    const loginUrl = new URL(target, `http://127.0.0.1:${state.config().port}`);
     loginUrl.searchParams.set("ticket", ticket);
     return {
       login_url: loginUrl.toString(),
@@ -214,9 +297,7 @@ export async function serviceCommand(
     state.config();
     new ServiceAuth(state).rotate();
     state.transaction((runtime) => {
-      runtime.leases = runtime.leases.filter(
-        (lease) => lease.kind !== "browser",
-      );
+      runtime.leases = runtime.leases.filter((lease) => lease.kind !== "browser");
     });
     return { sessions_revoked: true };
   }
@@ -226,7 +307,10 @@ export async function serviceCommand(
     return { contract: ledgerContract(ledger), revision: ledger.revision };
   }
   if (command === "read-only-view") {
-    const parsed = z.object({ ledger: z.unknown(), plan_id: z.string().optional() }).strict().parse(input);
+    const parsed = z
+      .object({ ledger: z.unknown(), plan_id: z.string().optional() })
+      .strict()
+      .parse(input);
     const ledger = validateLedger(parsed.ledger);
     return { view: buildView(ledger, parsed.plan_id) };
   }
@@ -253,8 +337,13 @@ if (import.meta.main) {
         "Usage: service.ts <command> --input -",
       );
       const text = await Runtime.stdin.text();
-      const inputLimit = command === "reader-check" || command === "read-only-view" ? 256 * 1024 * 1024 : 16_384;
-      requireCondition(text.length <= inputLimit, "INPUT_TOO_LARGE", "Service command input is too large");
+      const inputLimit =
+        command === "reader-check" || command === "read-only-view" ? 256 * 1024 * 1024 : 16_384;
+      requireCondition(
+        text.length <= inputLimit,
+        "INPUT_TOO_LARGE",
+        "Service command input is too large",
+      );
       const result = await serviceCommand(command, JSON.parse(text));
       console.log(JSON.stringify({ ok: true, code: "OK", result }));
     }

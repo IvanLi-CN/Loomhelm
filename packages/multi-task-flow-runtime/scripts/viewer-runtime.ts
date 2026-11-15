@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 export type ViewerWorkerKey = string;
-export const viewerWorkerKeySchema = z.string().min(1).refine((value) => !value.includes("\0"));
+export const viewerWorkerKeySchema = z
+  .string()
+  .min(1)
+  .refine((value) => !value.includes("\0"));
 export type ViewerWorkerGeneration = string;
 
 const WORKER_STOP_TIMEOUT_MS = 500;
@@ -26,9 +29,7 @@ export interface ViewerWorker {
   stop?(): void | Promise<void>;
 }
 
-export type ViewerWorkerFactory = (
-  key: ViewerWorkerKey,
-) => ViewerWorker | Promise<ViewerWorker>;
+export type ViewerWorkerFactory = (key: ViewerWorkerKey) => ViewerWorker | Promise<ViewerWorker>;
 
 type WorkerEntry = {
   worker: ViewerWorker;
@@ -152,11 +153,9 @@ export class ViewerWorkerPool {
       this.failures.delete(key);
       return;
     }
-    if (failure.count >= this.maxRestarts)
-      throw new Error("viewer worker restart limit reached");
+    if (failure.count >= this.maxRestarts) throw new Error("viewer worker restart limit reached");
     const remaining = this.restartBackoffMs - (now - failure.lastFailedAt);
-    if (remaining > 0)
-      await new Promise<void>((resolve) => setTimeout(resolve, remaining));
+    if (remaining > 0) await new Promise<void>((resolve) => setTimeout(resolve, remaining));
   }
 
   async acquire(key: ViewerWorkerKey): Promise<ViewerWorkerLease> {
@@ -181,7 +180,13 @@ export class ViewerWorkerPool {
             const generation = worker.generation ?? createWorkerGeneration();
             if (!generation || generation.includes("\0"))
               throw new Error("viewer worker factory returned an invalid generation");
-            return { worker, generation, lastUsedAt: this.now(), activeRequests: 0, stopping: null };
+            return {
+              worker,
+              generation,
+              lastUsedAt: this.now(),
+              activeRequests: 0,
+              stopping: null,
+            };
           } catch (error) {
             await Promise.resolve(worker?.stop?.()).catch(() => undefined);
             this.noteFailure(key);
@@ -267,7 +272,8 @@ export class ViewerWorkerPool {
 }
 
 export function versionedWorkerKey(dataContract: string, viewerVersion: string): ViewerWorkerKey {
-  if (!dataContract || !viewerVersion) throw new Error("viewer worker version identity is required");
+  if (!dataContract || !viewerVersion)
+    throw new Error("viewer worker version identity is required");
   return `${dataContract}@${viewerVersion}`;
 }
 

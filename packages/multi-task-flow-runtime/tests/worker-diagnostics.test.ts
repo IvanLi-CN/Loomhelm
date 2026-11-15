@@ -5,7 +5,9 @@ import { WorkerDiagnosticStore, workerDiagnosticFromError } from "../lib/worker-
 import { serviceFixture } from "./service-fixture";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 function input(runId = "demo") {
   return workerDiagnosticFromError({
@@ -21,12 +23,15 @@ function input(runId = "demo") {
 }
 
 test("worker diagnostics persist safely and recover across store instances", () => {
-  const fixture = serviceFixture(); roots.push(fixture.root);
+  const fixture = serviceFixture();
+  roots.push(fixture.root);
   const first = new WorkerDiagnosticStore(fixture.state.paths);
   const recorded = first.record(input());
   expect(recorded.diagnostic_id).toMatch(/^diag-/);
   expect(recorded).toMatchObject({ error_code: "WORKER_SOCKET_TIMEOUT", state: "observed" });
-  expect(readFileSync(join(fixture.state.paths.state, "worker-diagnostics.json"), "utf8")).not.toContain("secret.sock");
+  expect(
+    readFileSync(join(fixture.state.paths.state, "worker-diagnostics.json"), "utf8"),
+  ).not.toContain("secret.sock");
   const second = new WorkerDiagnosticStore(fixture.state.paths);
   expect(second.get("demo")?.diagnostic_id).toBe(recorded.diagnostic_id);
   expect(second.recover("demo")?.state).toBe("recovered");
@@ -34,7 +39,8 @@ test("worker diagnostics persist safely and recover across store instances", () 
 });
 
 test("worker diagnostics sweep removes expired and missing runs", () => {
-  const fixture = serviceFixture(); roots.push(fixture.root);
+  const fixture = serviceFixture();
+  roots.push(fixture.root);
   const now = new Date("2026-01-08T00:00:00Z");
   const store = new WorkerDiagnosticStore(fixture.state.paths, () => now);
   store.record(input("expired"));

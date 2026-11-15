@@ -3,13 +3,13 @@ import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { ledgerContract } from "../lib/service-contract";
-import { connectUnixViewerWorker, type UnixViewerWorkerClientOptions } from "./viewer-socket";
 import {
   createWorkerId,
-  versionedWorkerKey,
   type ViewerWorker,
   type ViewerWorkerKey,
+  versionedWorkerKey,
 } from "./viewer-runtime";
+import { connectUnixViewerWorker, type UnixViewerWorkerClientOptions } from "./viewer-socket";
 
 type ViewerTimeoutServer = {
   timeout(request: Request, timeout: number): void;
@@ -20,21 +20,31 @@ export type ViewerDataVersion = {
   viewerContract: number;
   buildId?: string;
 };
-export const viewerDataVersionSchema = z.object({
-  dataContract: z.string().min(1),
-  viewerContract: z.number().int().positive(),
-  buildId: z.string().min(1).optional(),
-}).strict();
+export const viewerDataVersionSchema = z
+  .object({
+    dataContract: z.string().min(1),
+    viewerContract: z.number().int().positive(),
+    buildId: z.string().min(1).optional(),
+  })
+  .strict();
 
 export type ViewerWorkerModule = {
   default?: ViewerWorker | (() => ViewerWorker | Promise<ViewerWorker>);
   worker?: ViewerWorker | (() => ViewerWorker | Promise<ViewerWorker>);
 };
 
-export function dataVersionOf(ledger: unknown, viewerContract: number, buildId?: string): ViewerDataVersion {
+export function dataVersionOf(
+  ledger: unknown,
+  viewerContract: number,
+  buildId?: string,
+): ViewerDataVersion {
   if (!Number.isInteger(viewerContract) || viewerContract <= 0)
     throw new Error("viewer contract must be a positive integer");
-  return viewerDataVersionSchema.parse({ dataContract: ledgerContract(ledger), viewerContract, ...(buildId ? { buildId } : {}) });
+  return viewerDataVersionSchema.parse({
+    dataContract: ledgerContract(ledger),
+    viewerContract,
+    ...(buildId ? { buildId } : {}),
+  });
 }
 
 export function workerKeyOf(version: ViewerDataVersion): ViewerWorkerKey {
@@ -55,9 +65,7 @@ export type UnixViewerWorkerOptions = Omit<UnixViewerWorkerClientOptions, "id"> 
 };
 
 /** Adapt a version-fenced Unix-socket worker to the gateway worker contract. */
-export function createUnixViewerWorker(
-  options: UnixViewerWorkerOptions,
-): ViewerWorker {
+export function createUnixViewerWorker(options: UnixViewerWorkerOptions): ViewerWorker {
   const key = options.workerKey;
   const generation = options.generation;
   return {
@@ -72,11 +80,10 @@ export function createUnixViewerWorker(
       ) {
         (server as ViewerTimeoutServer).timeout(request, 0);
       }
-      return connectUnixViewerWorker(
-        { ...options, id: options.id },
-        request,
-        { ...context, ...(context.generation ? {} : { generation }) },
-      );
+      return connectUnixViewerWorker({ ...options, id: options.id }, request, {
+        ...context,
+        ...(context.generation ? {} : { generation }),
+      });
     },
     stop: options.stop,
   };
@@ -93,7 +100,12 @@ export class VersionedViewerWorkers {
   private readonly workers = new Map<ViewerWorkerKey, ViewerWorker>();
   private readonly pending = new Map<ViewerWorkerKey, Promise<ViewerWorker>>();
 
-  constructor(private readonly load: (key: ViewerWorkerKey, version: ViewerDataVersion) => ViewerWorker | Promise<ViewerWorker>) {}
+  constructor(
+    private readonly load: (
+      key: ViewerWorkerKey,
+      version: ViewerDataVersion,
+    ) => ViewerWorker | Promise<ViewerWorker>,
+  ) {}
 
   async select(version: ViewerDataVersion): Promise<WorkerSelection> {
     const key = workerKeyOf(version);
@@ -156,6 +168,7 @@ export async function loadDynamicViewerWorker(spec: DynamicWorkerSpec): Promise<
 }
 
 export function readLedgerDataContract(path: string): string {
-  if (!isAbsolute(path) || realpathSync(path) !== path) throw new Error("ledger path must be canonical");
+  if (!isAbsolute(path) || realpathSync(path) !== path)
+    throw new Error("ledger path must be canonical");
   return ledgerContract(JSON.parse(readFileSync(path, "utf8")));
 }

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.8/schema.json",
+  "files": {
+    "includes": [
+      "lib/**/*.ts",
+      "scripts/**/*.ts",
+      "web/**/*.ts",
+      "web/**/*.tsx",
+      "examples/**/*.ts",
+      "tests/**/*.ts",
+      "tests/**/*.tsx",
+      "!data",
+      "!dist",
+      "!node_modules"
+    ],
+    "ignoreUnknown": true
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "a11y": {
+        "useButtonType": "warn"
+      },
+      "correctness": {
+        "noComponentHookFactories": "warn",
+        "noUnsafeOptionalChaining": "warn",
+        "noVoidTypeReturn": "warn"
+      },
+      "suspicious": {
+        "noAssignInExpressions": "warn",
+        "noAsyncPromiseExecutor": "warn",
+        "noControlCharactersInRegex": "warn",
+        "noImplicitAnyLet": "warn",
+        "noSelfCompare": "warn",
+        "noShadowRestrictedNames": "warn",
+        "useIterableCallbackReturn": "warn"
+      }
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "vcs": {
+    "clientKind": "git",
+    "enabled": true,
+    "useIgnoreFile": true
+  }
+}

@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { readCodexCapabilities } from "../lib/codex-agent-api";
-import { mutateExecutionProfile } from "../lib/profile-mutation";
-import { ContractError, requireCondition } from "../lib/errors";
-import { validateLedger } from "../lib/schema";
 import { requestSchema } from "../lib/engine";
-import { readBodyWithinLimit } from "../lib/server-files";
+import { ContractError, requireCondition } from "../lib/errors";
+import { mutateExecutionProfile } from "../lib/profile-mutation";
+import { validateLedger } from "../lib/schema";
 import type { DashboardOptions } from "../lib/server-contract";
+import { readBodyWithinLimit } from "../lib/server-files";
 import type { LedgerStore } from "../lib/store";
 
 export async function handleProfileRequest(
@@ -21,11 +21,8 @@ export async function handleProfileRequest(
     return Response.json(
       {
         default_profile: ledger.config.execution_profile,
-        read_only:
-          options.readOnly === true || !ledger.config.execution_profile,
-        capabilities: await (
-          options.getProfileCapabilities ?? readCodexCapabilities
-        )(),
+        read_only: options.readOnly === true || !ledger.config.execution_profile,
+        capabilities: await (options.getProfileCapabilities ?? readCodexCapabilities)(),
       },
       { headers: responseHeaders },
     );
@@ -40,10 +37,7 @@ export async function handleProfileRequest(
   );
   const body = await readBodyWithinLimit(request, 16 * 1024);
   if (body === null)
-    return Response.json(
-      { error: "request_body_too_large" },
-      { status: 413, headers },
-    );
+    return Response.json({ error: "request_body_too_large" }, { status: 413, headers });
   const parsed = requestSchema.parse(JSON.parse(body));
   requireCondition(
     parsed.run_id === options.runId,
@@ -68,25 +62,16 @@ export async function handleProfileRequest(
   return Response.json(result, { headers: responseHeaders });
 }
 
-export function profileErrorResponse(
-  error: unknown,
-  headers: Record<string, string>,
-): Response {
+export function profileErrorResponse(error: unknown, headers: Record<string, string>): Response {
   const code =
     error instanceof ContractError
       ? error.code
       : error instanceof z.ZodError || error instanceof SyntaxError
         ? "INVALID_INPUT"
         : "CAPABILITIES_UNAVAILABLE";
-  const status = ["FORBIDDEN", "ACTOR_MISMATCH", "READ_ONLY_SOURCE"].includes(
-    code,
-  )
+  const status = ["FORBIDDEN", "ACTOR_MISMATCH", "READ_ONLY_SOURCE"].includes(code)
     ? 403
-    : [
-          "REVISION_CONFLICT",
-          "PROFILE_FROZEN",
-          "PROFILE_MIGRATION_REQUIRED",
-        ].includes(code)
+    : ["REVISION_CONFLICT", "PROFILE_FROZEN", "PROFILE_MIGRATION_REQUIRED"].includes(code)
       ? 409
       : code === "CAPABILITIES_UNAVAILABLE"
         ? 503

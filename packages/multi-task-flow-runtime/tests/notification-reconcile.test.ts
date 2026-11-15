@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { apply } from "../lib/engine";
@@ -17,22 +11,14 @@ const initialInput = JSON.parse(
 );
 
 function temporaryRoot(): string {
-  const root = mkdtempSync(
-    join(realpathSync(tmpdir()), "notification-reconcile-"),
-  );
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "notification-reconcile-"));
   createdRoots.push(root);
   return root;
 }
 
 async function runCommand(root: string, command: string, input: unknown) {
   const child = Bun.spawn(
-    [
-      process.execPath,
-      join(import.meta.dir, "../scripts/orchestrate.ts"),
-      command,
-      "--input",
-      "-",
-    ],
+    [process.execPath, join(import.meta.dir, "../scripts/orchestrate.ts"), command, "--input", "-"],
     {
       env: { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: root },
       stdin: "pipe",
@@ -57,8 +43,7 @@ async function runCommand(root: string, command: string, input: unknown) {
 }
 
 afterEach(() => {
-  for (const root of createdRoots.splice(0))
-    rmSync(root, { recursive: true, force: true });
+  for (const root of createdRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("orchestrate notification-reconcile", () => {
@@ -137,8 +122,6 @@ describe("orchestrate notification-reconcile", () => {
       code: "APPLIED",
       result: { notification_id: notificationId, delivery_status: "failed" },
     });
-    expect(existsSync(join(root, "runs", input.run_id, "ledger.json"))).toBe(
-      true,
-    );
+    expect(existsSync(join(root, "runs", input.run_id, "ledger.json"))).toBe(true);
   });
 });

@@ -1,8 +1,4 @@
-export function viewerPage(
-  title: string,
-  body: string,
-  script?: string,
-): string {
+export function viewerPage(title: string, body: string, script?: string): string {
   return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>:root{color-scheme:light dark;font:15px system-ui}body{max-width:1120px;margin:48px auto;padding:0 24px}header{border-bottom:1px solid #8886;padding-bottom:24px}h1{font-size:28px;font-weight:600}p{line-height:1.7}a{color:inherit}ul{list-style:none;padding:0}li{border-bottom:1px solid #8884;padding:20px 0;display:flex;gap:16px;flex-wrap:wrap}code,small{font-family:monospace}small{opacity:.7}#status{min-height:24px}button{padding:8px 16px}</style><header><small>MULTI TASK FLOW / SHARED VIEWER</small><h1>${title}</h1></header>${body}${script ? `<script src="${script}" defer></script>` : ""}</html>`;
 }
 
@@ -20,7 +16,11 @@ export function parseViewerTarget(
   const allowTicket = options.allowTicket ?? false;
   try {
     const rawPath = typeof value === "string" ? value.split(/[?#]/, 1)[0]! : null;
-    if (rawPath && (rawPath.includes("\\") || /(?:^|\/)(?:\.{1,2}|%2e(?:%2e)?)(?:\/|$)/i.test(rawPath))) return null;
+    if (
+      rawPath &&
+      (rawPath.includes("\\") || /(?:^|\/)(?:\.{1,2}|%2e(?:%2e)?)(?:\/|$)/i.test(rawPath))
+    )
+      return null;
     const url = value instanceof URL ? new URL(value.href) : new URL(value, origin);
     if (typeof value === "string" && value.trim() !== value) return null;
     if (url.origin !== origin || url.username || url.password || url.hash) return null;
@@ -29,16 +29,27 @@ export function parseViewerTarget(
     const ticketValues = url.searchParams.getAll("ticket");
     if (ticketValues.length > 1 || (ticketValues.length > 0 && !allowTicket)) return null;
     const ticket = ticketValues[0] ?? null;
-    if (ticket !== null && (ticket.length > 100 || /[\u0000-\u001f\u007f]/.test(ticket))) return null;
+    if (ticket !== null && (ticket.length > 100 || /[\u0000-\u001f\u007f]/.test(ticket)))
+      return null;
     for (const [key, parameter] of url.searchParams) {
       if (key === "ticket") continue;
-      if (home || /[\u0000-\u001f\u007f]/.test(key) || /[\u0000-\u001f\u007f]/.test(parameter)) return null;
+      if (home || /[\u0000-\u001f\u007f]/.test(key) || /[\u0000-\u001f\u007f]/.test(parameter))
+        return null;
     }
-    for (const [start, end] of [["plannedStart", "plannedEnd"], ["actualStart", "actualEnd"]] as const) {
+    for (const [start, end] of [
+      ["plannedStart", "plannedEnd"],
+      ["actualStart", "actualEnd"],
+    ] as const) {
       const startValue = url.searchParams.get(start);
       const endValue = url.searchParams.get(end);
       if ((startValue === null) !== (endValue === null)) return null;
-      if (startValue && endValue && (Date.parse(startValue) >= Date.parse(endValue) || Date.parse(endValue) - Date.parse(startValue) > maxTimelineSpanMs)) return null;
+      if (
+        startValue &&
+        endValue &&
+        (Date.parse(startValue) >= Date.parse(endValue) ||
+          Date.parse(endValue) - Date.parse(startValue) > maxTimelineSpanMs)
+      )
+        return null;
     }
     url.searchParams.delete("ticket");
     return { target: url.pathname + url.search, ticket };

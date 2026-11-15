@@ -1,16 +1,16 @@
 import {
-  existsSync,
-  lstatSync,
-  renameSync,
-  writeSync,
-  openSync,
   closeSync,
   constants,
+  existsSync,
+  lstatSync,
+  openSync,
+  renameSync,
   unlinkSync,
+  writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { ensureDirectory, withExclusiveLock } from "../lib/store";
 import type { ServicePaths } from "../lib/service-paths";
+import { ensureDirectory, withExclusiveLock } from "../lib/store";
 
 export function serviceLog(
   paths: ServicePaths,
@@ -32,14 +32,12 @@ export function serviceLog(
     const path = join(paths.logs, "viewer.jsonl");
     if (existsSync(path)) {
       const stat = lstatSync(path);
-      if (!stat.isFile() || stat.isSymbolicLink())
-        throw new Error("Unsafe viewer log");
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Unsafe viewer log");
       if (stat.size >= 5 * 1024 * 1024) {
         const oldest = path + ".2";
         if (existsSync(oldest)) {
           const old = lstatSync(oldest);
-          if (!old.isFile() || old.isSymbolicLink())
-            throw new Error("Unsafe rotated log");
+          if (!old.isFile() || old.isSymbolicLink()) throw new Error("Unsafe rotated log");
           unlinkSync(oldest);
         }
         if (existsSync(path + ".1")) renameSync(path + ".1", oldest);
@@ -49,10 +47,7 @@ export function serviceLog(
     // Only fixed event names and internal identities enter this log.
     const fd = openSync(
       path,
-      constants.O_WRONLY |
-        constants.O_APPEND |
-        constants.O_CREAT |
-        constants.O_NOFOLLOW,
+      constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW,
       0o600,
     );
     try {

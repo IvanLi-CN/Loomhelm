@@ -23,9 +23,22 @@ export type ViewState = {
 };
 
 export const DEFAULT_VIEW_STATE: ViewState = {
-  tab: "graph", graphMode: "aggregate", layout: "board", query: "", group: "", state: "", kind: "", plan: null,
-  selected: null, atom: null, detail: false, zoom: 1, plannedStart: null, plannedEnd: null,
-  actualStart: null, actualEnd: null,
+  tab: "graph",
+  graphMode: "aggregate",
+  layout: "board",
+  query: "",
+  group: "",
+  state: "",
+  kind: "",
+  plan: null,
+  selected: null,
+  atom: null,
+  detail: false,
+  zoom: 1,
+  plannedStart: null,
+  plannedEnd: null,
+  actualStart: null,
+  actualEnd: null,
 };
 
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -73,7 +86,13 @@ function validDate(value: string | null): string | null {
 function validDateRange(start: string | null, end: string | null): [string | null, string | null] {
   const normalizedStart = validDate(start);
   const normalizedEnd = validDate(end);
-  if (!normalizedStart || !normalizedEnd || Date.parse(normalizedStart) >= Date.parse(normalizedEnd) || Date.parse(normalizedEnd) - Date.parse(normalizedStart) > MAX_TIMELINE_SPAN_MS) return [null, null];
+  if (
+    !normalizedStart ||
+    !normalizedEnd ||
+    Date.parse(normalizedStart) >= Date.parse(normalizedEnd) ||
+    Date.parse(normalizedEnd) - Date.parse(normalizedStart) > MAX_TIMELINE_SPAN_MS
+  )
+    return [null, null];
   return [normalizedStart, normalizedEnd];
 }
 
@@ -85,22 +104,36 @@ function parseSelection(value: string | null, validation: ViewStateValidation): 
   if (!id) return null;
   if (match[1] === "task" && validation.tasks && !validation.tasks.has(id)) return null;
   if (match[1] === "group" && validation.groups && !validation.groups.has(id)) return null;
-  if (match[1] === "milestone" && validation.milestones && !validation.milestones.has(id)) return null;
+  if (match[1] === "milestone" && validation.milestones && !validation.milestones.has(id))
+    return null;
   return { kind: match[1] as Selection["kind"], id };
 }
 
 export function parseViewState(search: string, validation: ViewStateValidation = {}): ViewState {
   const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
   const rawZoom = Number(params.get("zoom"));
-  const zoom = Number.isFinite(rawZoom) && rawZoom >= zoomBounds.min && rawZoom <= zoomBounds.max ? Math.round(rawZoom * 100) / 100 : DEFAULT_VIEW_STATE.zoom;
-  const graphMode = graphModes.has(params.get("graph") as GraphMode) ? params.get("graph") as GraphMode : DEFAULT_VIEW_STATE.graphMode;
-  const requestedTab = tabs.has(params.get("tab") as DashboardTab) ? params.get("tab") as DashboardTab : DEFAULT_VIEW_STATE.tab;
+  const zoom =
+    Number.isFinite(rawZoom) && rawZoom >= zoomBounds.min && rawZoom <= zoomBounds.max
+      ? Math.round(rawZoom * 100) / 100
+      : DEFAULT_VIEW_STATE.zoom;
+  const graphMode = graphModes.has(params.get("graph") as GraphMode)
+    ? (params.get("graph") as GraphMode)
+    : DEFAULT_VIEW_STATE.graphMode;
+  const requestedTab = tabs.has(params.get("tab") as DashboardTab)
+    ? (params.get("tab") as DashboardTab)
+    : DEFAULT_VIEW_STATE.tab;
   const tab = requestedTab === "graph" && graphMode === "atomic" ? "atomic" : requestedTab;
-  const layout = taskLayouts.has(params.get("layout") as TaskLayout) ? params.get("layout") as TaskLayout : defaultTaskLayout(validation.groups?.size ?? 0);
+  const layout = taskLayouts.has(params.get("layout") as TaskLayout)
+    ? (params.get("layout") as TaskLayout)
+    : defaultTaskLayout(validation.groups?.size ?? 0);
   const selected = parseSelection(params.get("selected"), validation);
-  const [actualStart, actualEnd] = validDateRange(params.get("actualStart"), params.get("actualEnd"));
+  const [actualStart, actualEnd] = validDateRange(
+    params.get("actualStart"),
+    params.get("actualEnd"),
+  );
   return {
-    tab, graphMode,
+    tab,
+    graphMode,
     layout,
     query: (params.get("q") ?? "").slice(0, 200),
     group: validValue(params.get("group"), validation.groups),
@@ -118,7 +151,11 @@ export function parseViewState(search: string, validation: ViewStateValidation =
   };
 }
 
-export function restoreViewState(search: string, validation: ViewStateValidation = {}, phase: "planning" | "execution" | null = null): ViewState {
+export function restoreViewState(
+  search: string,
+  validation: ViewStateValidation = {},
+  phase: "planning" | "execution" | null = null,
+): ViewState {
   const state = parseViewState(search, validation);
   return !hasValidTabParam(search) && phase === "execution" ? { ...state, tab: "actual" } : state;
 }
@@ -128,12 +165,20 @@ export function hasValidTabParam(search: string): boolean {
   return tabs.has(params.get("tab") as DashboardTab);
 }
 
-export function restoreViewStateForNavigation(search: string, validation: ViewStateValidation = {}, phase: "planning" | "execution" | null = null): { state: ViewState; hasExplicitTab: boolean } {
-  return { state: restoreViewState(search, validation, phase), hasExplicitTab: hasValidTabParam(search) };
+export function restoreViewStateForNavigation(
+  search: string,
+  validation: ViewStateValidation = {},
+  phase: "planning" | "execution" | null = null,
+): { state: ViewState; hasExplicitTab: boolean } {
+  return {
+    state: restoreViewState(search, validation, phase),
+    hasExplicitTab: hasValidTabParam(search),
+  };
 }
 
 export function sanitizeViewState(state: ViewState, validation: ViewStateValidation): ViewState {
-  const selected = state.selected && parseSelection(`${state.selected.kind}:${state.selected.id}`, validation);
+  const selected =
+    state.selected && parseSelection(`${state.selected.kind}:${state.selected.id}`, validation);
   return {
     ...state,
     graphMode: graphModes.has(state.graphMode) ? state.graphMode : DEFAULT_VIEW_STATE.graphMode,
@@ -148,10 +193,16 @@ export function sanitizeViewState(state: ViewState, validation: ViewStateValidat
   };
 }
 
-export function serializeViewState(state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab, defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout): string {
+export function serializeViewState(
+  state: ViewState,
+  defaultPlan: string | null = null,
+  defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab,
+  defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout,
+): string {
   const params = new URLSearchParams();
   if (state.tab !== defaultTab) params.set("tab", state.tab);
-  if (state.graphMode !== DEFAULT_VIEW_STATE.graphMode && state.tab !== "atomic") params.set("graph", state.graphMode);
+  if (state.graphMode !== DEFAULT_VIEW_STATE.graphMode && state.tab !== "atomic")
+    params.set("graph", state.graphMode);
   if (state.layout !== defaultLayout) params.set("layout", state.layout);
   if (state.query) params.set("q", state.query);
   if (state.group) params.set("group", state.group);
@@ -166,7 +217,13 @@ export function serializeViewState(state: ViewState, defaultPlan: string | null 
   return params.toString();
 }
 
-export function canonicalViewUrl(currentUrl: string, state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab, defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout): string {
+export function canonicalViewUrl(
+  currentUrl: string,
+  state: ViewState,
+  defaultPlan: string | null = null,
+  defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab,
+  defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout,
+): string {
   const url = new URL(currentUrl);
   const query = serializeViewState(state, defaultPlan, defaultTab, defaultLayout);
   url.search = query ? `?${query}` : "";
@@ -176,14 +233,35 @@ export function canonicalViewUrl(currentUrl: string, state: ViewState, defaultPl
   return url.toString();
 }
 
-export function replaceViewStateOn(history: ViewStateHistory, currentUrl: string, state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab, defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout): string {
+export function replaceViewStateOn(
+  history: ViewStateHistory,
+  currentUrl: string,
+  state: ViewState,
+  defaultPlan: string | null = null,
+  defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab,
+  defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout,
+): string {
   const nextUrl = canonicalViewUrl(currentUrl, state, defaultPlan, defaultTab, defaultLayout);
   history.replaceState(null, "", nextUrl);
   return nextUrl;
 }
 
-export function replaceViewState(state: ViewState, defaultPlan: string | null = null, defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab, defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout): void {
-  replaceViewStateOn(window.history, window.location.href, state, defaultPlan, defaultTab, defaultLayout);
+export function replaceViewState(
+  state: ViewState,
+  defaultPlan: string | null = null,
+  defaultTab: DashboardTab = DEFAULT_VIEW_STATE.tab,
+  defaultLayout: TaskLayout = DEFAULT_VIEW_STATE.layout,
+): void {
+  replaceViewStateOn(
+    window.history,
+    window.location.href,
+    state,
+    defaultPlan,
+    defaultTab,
+    defaultLayout,
+  );
 }
 
-export function selectionFromState(state: ViewState): Selection | null { return state.selected; }
+export function selectionFromState(state: ViewState): Selection | null {
+  return state.selected;
+}

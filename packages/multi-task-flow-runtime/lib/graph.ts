@@ -7,11 +7,7 @@ export interface GraphEdge {
 
 export function topologicalOrder(ids: string[], edges: GraphEdge[]): string[] {
   const nodes = new Set(ids);
-  requireCondition(
-    nodes.size === ids.length,
-    "DUPLICATE_ID",
-    "Graph node IDs must be unique",
-  );
+  requireCondition(nodes.size === ids.length, "DUPLICATE_ID", "Graph node IDs must be unique");
   const incoming = new Map(ids.map((id) => [id, 0]));
   const next = new Map(ids.map((id) => [id, [] as string[]]));
   for (const edge of edges) {

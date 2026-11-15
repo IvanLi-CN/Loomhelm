@@ -5,9 +5,7 @@ export function readStoredLedger(read: () => string): any {
   try {
     const raw = JSON.parse(read());
     requireCondition(
-      raw?.schema_version === undefined ||
-        raw?.schema_version === 1 ||
-        raw?.schema_version === 2,
+      raw?.schema_version === undefined || raw?.schema_version === 1 || raw?.schema_version === 2,
       "UNSUPPORTED_SCHEMA",
       "Ledger schema version is unsupported",
       4,
@@ -21,8 +19,7 @@ export function readStoredLedger(read: () => string): any {
   } catch (error) {
     if (
       error instanceof ContractError &&
-      (error.code === "INCOMPATIBLE_LEDGER" ||
-        error.code === "UNSUPPORTED_SCHEMA")
+      (error.code === "INCOMPATIBLE_LEDGER" || error.code === "UNSUPPORTED_SCHEMA")
     )
       throw error;
     throw new ContractError(

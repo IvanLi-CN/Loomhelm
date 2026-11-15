@@ -9,7 +9,10 @@ describe("dashboard timeline window", () => {
   });
 
   test("ignores unknown timestamps without losing known entries", () => {
-    const window = defaultTimelineWindow([{ start: "not-a-date" }, { start: "2026-10-31T12:00:00.000Z", end: null }]);
+    const window = defaultTimelineWindow([
+      { start: "not-a-date" },
+      { start: "2026-10-31T12:00:00.000Z", end: null },
+    ]);
     expect(window.start).toBeInstanceOf(Date);
     expect(window.end).toBeInstanceOf(Date);
   });

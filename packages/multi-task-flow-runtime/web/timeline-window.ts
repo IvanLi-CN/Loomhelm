@@ -6,7 +6,10 @@ function timestamp(value: string | Date | null | undefined): number {
 }
 
 export function defaultTimelineWindow(entries: TimelineEntryTime[]): { start?: Date; end?: Date } {
-  const timestamps = entries.flatMap((entry) => [entry.start, entry.end]).map(timestamp).filter(Number.isFinite);
+  const timestamps = entries
+    .flatMap((entry) => [entry.start, entry.end])
+    .map(timestamp)
+    .filter(Number.isFinite);
   if (!timestamps.length) return {};
   const min = Math.min(...timestamps);
   const max = Math.max(...timestamps);

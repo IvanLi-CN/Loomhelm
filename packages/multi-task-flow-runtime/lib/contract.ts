@@ -1,12 +1,16 @@
 import { z } from "zod";
 import { deriveExecutionPhase } from "../lib/revisions";
-import { ledgerSchema, type Ledger, type PlanRevision } from "../lib/schema";
+import { type Ledger, ledgerSchema, type PlanRevision } from "../lib/schema";
 
 export const CONTRACT_VERSION = 3 as const;
 export const SKILL_ID = "multi-task-flow" as const;
 export const SKILL_VERSION = "2.7.10" as const;
 export const VIEWER_CONTRACT = 5 as const;
-export const versionEnvelope = { skill_id: SKILL_ID, skill_version: SKILL_VERSION, viewer_contract: VIEWER_CONTRACT } as const;
+export const versionEnvelope = {
+  skill_id: SKILL_ID,
+  skill_version: SKILL_VERSION,
+  viewer_contract: VIEWER_CONTRACT,
+} as const;
 
 export const contractMetadata = {
   schema_version: {
@@ -27,8 +31,7 @@ export const contractMetadata = {
       planning: "尚无任务产生真实开始事实。",
       implementation: "至少一个任务已经产生真实 task_started 事实。",
     },
-    forbiddenInterpretation:
-      "dispatch claim、starting 或计划选择不代表 implementation。",
+    forbiddenInterpretation: "dispatch claim、starting 或计划选择不代表 implementation。",
   },
   plan_lifecycle: {
     term: "plan_lifecycle",
@@ -52,14 +55,11 @@ export const contractMetadata = {
   },
   change_class: {
     term: "change_class",
-    description:
-      "由 runtime 根据规范化 diff 和 execution_phase 推导的修订类别。",
+    description: "由 runtime 根据规范化 diff 和 execution_phase 推导的修订类别。",
     values: {
       planning_revision: "设计阶段修订；理由可选，diff 和重新批准必需。",
-      implementation_low_impact:
-        "实现阶段低影响修订；理由必需，不暂停且不重新批准。",
-      implementation_high_impact:
-        "实现阶段高影响修订；理由、证据、新版本和重新批准必需。",
+      implementation_low_impact: "实现阶段低影响修订；理由必需，不暂停且不重新批准。",
+      implementation_high_impact: "实现阶段高影响修订；理由、证据、新版本和重新批准必需。",
     },
     forbiddenInterpretation: "调用方不能自报较低风险类别。",
   },
@@ -74,23 +74,19 @@ export const contractMetadata = {
   },
   superseded_by_task_id: {
     term: "superseded_by_task_id",
-    description:
-      "替代旧任务责任身份的新任务 ID；旧任务处置为 superseded 时必须存在。",
+    description: "替代旧任务责任身份的新任务 ID；旧任务处置为 superseded 时必须存在。",
     forbiddenInterpretation: "不是旧任务事实的删除标记，也不是运行状态回滚。",
   },
   change_set: {
     term: "change_set",
     description:
       "由 runtime 生成的规范化计划 diff，按 added、removed、modified 保留路径和旧/新值。",
-    forbiddenInterpretation:
-      "不能由调用方只提交摘要或省略空集合来代替 canonical diff。",
+    forbiddenInterpretation: "不能由调用方只提交摘要或省略空集合来代替 canonical diff。",
   },
   plan_revision: {
     term: "plan_revision",
-    description:
-      "绑定阶段、变更级别、影响对象、diff、理由、批准要求和暂停对象的不可变审计记录。",
-    forbiddenInterpretation:
-      "不是可直接覆盖计划内容的补丁，也不是 UI 筛选状态。",
+    description: "绑定阶段、变更级别、影响对象、diff、理由、批准要求和暂停对象的不可变审计记录。",
+    forbiddenInterpretation: "不是可直接覆盖计划内容的补丁，也不是 UI 筛选状态。",
   },
   paused_task_ids: {
     term: "paused_task_ids",
@@ -117,12 +113,8 @@ export function localSemanticProjection(
   operation = "inspect",
   revision: PlanRevision | null = null,
 ): Record<string, unknown> {
-  const active = ledger.plans.find(
-    (plan) => plan.id === ledger.active_plan_id,
-  )!;
-  const executing = ledger.plans.find(
-    (plan) => plan.id === ledger.execution_plan_id,
-  )!;
+  const active = ledger.plans.find((plan) => plan.id === ledger.active_plan_id)!;
+  const executing = ledger.plans.find((plan) => plan.id === ledger.execution_plan_id)!;
   const effectiveRevision = revision ?? active.revision;
   return {
     contract_version: ledger.contract_version,
@@ -160,8 +152,7 @@ export function localSemanticProjection(
       active_lifecycle: active.lifecycle,
       execution_plan_id: ledger.execution_plan_id,
       execution_lifecycle: executing.lifecycle,
-      approval_pending:
-        active.id !== executing.id && active.lifecycle === "proposed",
+      approval_pending: active.id !== executing.id && active.lifecycle === "proposed",
     },
     revision: effectiveRevision
       ? {
@@ -171,10 +162,8 @@ export function localSemanticProjection(
           affected_edge_ids: effectiveRevision.affected_edge_ids,
           approval_required: effectiveRevision.approval_required,
           paused_task_ids: effectiveRevision.paused_task_ids,
-          reason_required:
-            effectiveRevision.change_class !== "planning_revision",
-          evidence_required:
-            effectiveRevision.change_class === "implementation_high_impact",
+          reason_required: effectiveRevision.change_class !== "planning_revision",
+          evidence_required: effectiveRevision.change_class === "implementation_high_impact",
           diff: effectiveRevision.change_set,
         }
       : null,

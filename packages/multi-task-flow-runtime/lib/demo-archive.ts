@@ -1,5 +1,9 @@
 // Synthetic fetch implementation shared by the static preview and its regression test.
-export function archiveFixtureScript(response: string, preferences: string, profile: string): string {
+export function archiveFixtureScript(
+  response: string,
+  preferences: string,
+  profile: string,
+): string {
   return `const fixture=${response};window.demoArchiveCalls=[];window.fetch=async(input,options)=>{
     const path=String(input);
     if(path.includes("api/conversation-archive")&&options?.method==="POST"){

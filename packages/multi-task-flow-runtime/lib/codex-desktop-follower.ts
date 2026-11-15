@@ -1,9 +1,9 @@
-import { createConnection, type Socket } from "node:net";
+import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync } from "node:fs";
+import { createConnection, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-import { record, type JsonRecord } from "../lib/codex-socket";
+import { type JsonRecord, record } from "../lib/codex-socket";
 import { DesktopOutputState } from "../lib/desktop-output-state";
 
 type Following = {
@@ -18,10 +18,7 @@ export class CodexDesktopFollower {
   private client: string | null = null;
   private wanted = new Map<string, object>();
   private following = new Map<string, Following>();
-  private pending = new Map<
-    string,
-    { thread: string; binding: object; at: number }
-  >();
+  private pending = new Map<string, { thread: string; binding: object; at: number }>();
   private closed = false;
   constructor(
     path: string,
@@ -49,15 +46,10 @@ export class CodexDesktopFollower {
     this.socket.on("close", () => this.fail());
   }
   static availablePath(): string | null {
-    const path = join(
-      process.env.CODEX_HOME?.trim() || homedir() + "/.codex",
-      "ipc",
-      "ipc.sock",
-    );
+    const path = join(process.env.CODEX_HOME?.trim() || homedir() + "/.codex", "ipc", "ipc.sock");
     if (!existsSync(path)) return null;
     const stat = lstatSync(path);
-    return stat.isSocket() &&
-      (process.getuid?.() === undefined || stat.uid === process.getuid?.())
+    return stat.isSocket() && (process.getuid?.() === undefined || stat.uid === process.getuid?.())
       ? path
       : null;
   }
@@ -65,9 +57,7 @@ export class CodexDesktopFollower {
     return typeof thread === "string" && this.following.has(thread);
   }
   retain(threads: Iterable<string>): void {
-    this.wanted = new Map(
-      [...threads].map((t) => [t, this.wanted.get(t) ?? {}]),
-    );
+    this.wanted = new Map([...threads].map((t) => [t, this.wanted.get(t) ?? {}]));
     for (const [thread, entry] of this.following)
       if (!this.wanted.has(thread)) {
         this.follow(thread, entry.owner, false);
@@ -76,8 +66,7 @@ export class CodexDesktopFollower {
   }
   async ensure(thread: string): Promise<void> {
     const binding = this.wanted.get(thread);
-    if (!binding || !this.client || this.following.has(thread) || this.closed)
-      return;
+    if (!binding || !this.client || this.following.has(thread) || this.closed) return;
     for (const [id, p] of this.pending) {
       if (Date.now() - p.at > 10000) this.pending.delete(id);
       else if (p.thread === thread && p.binding === binding) return;
@@ -96,8 +85,7 @@ export class CodexDesktopFollower {
   }
   close(): void {
     if (this.closed) return;
-    for (const [thread, entry] of this.following)
-      this.follow(thread, entry.owner, false);
+    for (const [thread, entry] of this.following) this.follow(thread, entry.owner, false);
     this.closed = true;
     this.wanted.clear();
     this.following.clear();
@@ -135,12 +123,9 @@ export class CodexDesktopFollower {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     while (this.buffer.length >= 4) {
       const size = this.buffer.readUInt32LE(0);
-      if (!size || size > 64 * 1024 * 1024)
-        throw new Error("Invalid desktop frame");
+      if (!size || size > 64 * 1024 * 1024) throw new Error("Invalid desktop frame");
       if (this.buffer.length < size + 4) return;
-      const message = record(
-        JSON.parse(this.buffer.subarray(4, size + 4).toString()),
-      );
+      const message = record(JSON.parse(this.buffer.subarray(4, size + 4).toString()));
       this.buffer = this.buffer.subarray(size + 4);
       if (message) this.message(message);
     }
@@ -185,10 +170,7 @@ export class CodexDesktopFollower {
     }
     if (message.type !== "broadcast") return;
     const params = record(message.params);
-    if (
-      message.method === "client-status-changed" &&
-      params?.status === "disconnected"
-    ) {
+    if (message.method === "client-status-changed" && params?.status === "disconnected") {
       for (const [thread, entry] of this.following)
         if (entry.owner === params.clientId) this.following.delete(thread);
       return;
@@ -201,14 +183,8 @@ export class CodexDesktopFollower {
       return;
     const thread = params.conversationId,
       entry = this.following.get(thread);
-    if (
-      !entry ||
-      entry.owner !== message.sourceClientId ||
-      !this.wanted.has(thread)
-    )
-      return;
-    if (message.version !== 11)
-      throw new Error("Unsupported desktop stream version");
+    if (!entry || entry.owner !== message.sourceClientId || !this.wanted.has(thread)) return;
+    if (message.version !== 11) throw new Error("Unsupported desktop stream version");
     const change = record(params.change);
     if (!change) return;
     let selected;
@@ -226,12 +202,7 @@ export class CodexDesktopFollower {
       id = String(item.id),
       text = String(item.text),
       prior = entry.last;
-    if (
-      prior?.id === id &&
-      prior.text === text &&
-      prior.complete === selected.complete
-    )
-      return;
+    if (prior?.id === id && prior.text === text && prior.complete === selected.complete) return;
     const envelope = { threadId: thread, turnId: selected.turnId, item };
     if (
       change.type === "patches" &&

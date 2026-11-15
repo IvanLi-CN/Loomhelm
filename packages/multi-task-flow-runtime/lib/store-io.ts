@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import {
-  constants,
   closeSync,
+  constants,
   existsSync,
   fstatSync,
   fsyncSync,
@@ -14,18 +15,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
-import { ContractError, requireCondition } from "../lib/errors";
-import type { FileIdentity } from "@loomhelm/runtime-core/modules/visual/isolation";
 import { withExclusiveLock as withFlowExclusiveLock } from "@loomhelm/runtime-core/modules/flow/storage";
+import type { FileIdentity } from "@loomhelm/runtime-core/modules/visual/isolation";
+import { ContractError, requireCondition } from "../lib/errors";
 export function ensureDirectory(path: string): void {
   if (!existsSync(path)) {
     const parent = dirname(path);
-    requireCondition(
-      parent !== path,
-      "UNSAFE_PATH",
-      "Cannot create filesystem root",
-    );
+    requireCondition(parent !== path, "UNSAFE_PATH", "Cannot create filesystem root");
     ensureDirectory(parent);
     try {
       mkdirSync(path, { mode: 0o700 });
@@ -46,16 +42,9 @@ export function ensureDirectory(path: string): void {
 }
 
 export function readRegular(path: string): string {
-  const fd = openSync(
-    path,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    requireCondition(
-      fstatSync(fd).isFile(),
-      "UNSAFE_PATH",
-      "File must be a regular file",
-    );
+    requireCondition(fstatSync(fd).isFile(), "UNSAFE_PATH", "File must be a regular file");
     return readFileSync(fd, "utf8");
   } finally {
     closeSync(fd);
@@ -71,18 +60,11 @@ export function syncDirectory(path: string): void {
   }
 }
 
-export function writeAtomic(
-  path: string,
-  content: string,
-  afterSync?: () => void,
-): void {
+export function writeAtomic(path: string, content: string, afterSync?: () => void): void {
   const tmp = join(dirname(path), `.ledger-${randomUUID()}.tmp`);
   const fd = openSync(
     tmp,
-    constants.O_WRONLY |
-      constants.O_CREAT |
-      constants.O_EXCL |
-      constants.O_NOFOLLOW,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
     0o600,
   );
   try {
@@ -109,8 +91,7 @@ export function withExclusiveLock<T>(
   expectedParentIdentity?: FileIdentity,
   expectedFileIdentity?: FileIdentity,
 ): T {
-  const timeoutMs =
-    typeof labelOrTimeout === "number" ? labelOrTimeout : 10_000;
+  const timeoutMs = typeof labelOrTimeout === "number" ? labelOrTimeout : 10_000;
   const create = typeof labelOrTimeout === "number" ? createIfMissing : true;
   try {
     return withFlowExclusiveLock(
