@@ -8767,7 +8767,7 @@
     {
       "path": "skills/multi-task-flow/tests/atomic-orchestration-schema.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/atomic-orchestration-schema.test.ts",
-      "installedSha256": "adefa47053d7f4a5830076cb807d3dfd7d0348ddecc173d49e71661774544b6b"
+      "installedSha256": "c8eee02b7720e560890840584988e3c981d822a8afdbcba6a070a430dd741c57"
     },
     {
       "path": "skills/multi-task-flow/tests/task-kind.test.ts",
