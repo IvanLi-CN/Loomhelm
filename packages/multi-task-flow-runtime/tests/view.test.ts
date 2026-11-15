@@ -380,6 +380,68 @@ describe("timeline projections", () => {
     expect(projected.dispatch_diagnostics).toContainEqual(expect.objectContaining({ code: "DELIVERY_PARENT_PR_GATE_PENDING" }));
   });
 
+  test("contract-3 viewer gate matches the parent PR target and current delivery-unit head", () => {
+    const ledger = withRuntimeEvidence(structuredClone(createPlanningDemoLedger(1_767_200_000_000)));
+    ledger.contract_version = 3;
+    ledger.source_schema_version = null;
+    const group = ledger.groups.find((item) => item.id === "dashboard")!;
+    const parentPr = { provider: "github", repository: "sample/multi-task-flow", id: "parent-pr", url: "https://github.com/sample/multi-task-flow/pull/parent-pr" };
+    group.pr = { state: "published", pr: parentPr, parent_branch: group.parent_branch! };
+    group.parent_pr = null;
+    group.lifecycle.pr_created = "passed";
+    group.atoms = group.atoms.map((atom) => ["workspace_ready", "pr_created"].includes(atom.lifecycle_stage ?? "") ? { ...atom, status: "completed" as const } : atom);
+    ledger.plans[0]!.group_atoms = ledger.groups.flatMap((item) => item.atoms.map(({ status, ...atom }: any) => ({ ...atom, group_id: item.id })));
+    ledger.events.push({
+      id: "dashboard-parent-pr-created",
+      type: "lifecycle_recorded",
+      subject_id: group.id,
+      actor_id: group.agent_thread_id!,
+      occurred_at: at,
+      recorded_at: at,
+      data: { target_type: "group", stage: "pr_created", evidence_ref: "provider:parent-pr" },
+    });
+    const receipt = {
+      provider: "github",
+      repository: "sample/multi-task-flow",
+      resource_type: "pr" as const,
+      resource_id: parentPr.id,
+      branch: group.parent_branch!,
+      target_branch: ledger.repository.target_branch,
+      base_sha: null,
+      head_sha: group.current_sha,
+      pr: parentPr,
+      state: "open" as const,
+      evidence_ref: "provider:parent-pr",
+    };
+    ledger.facts.push({
+      id: "dashboard-parent-pr",
+      kind: "pr_published",
+      subject_id: group.id,
+      status: "passed",
+      source: "github",
+      observed_at: at,
+      sha: group.current_sha,
+      evidence_ref: "provider:parent-pr",
+      receipt,
+    });
+
+    const readyView = buildView(ledger) as any;
+    expect(readyView.groups.find((item: any) => item.id === group.id).dispatch_readiness).toBe("ready");
+
+    receipt.target_branch = group.parent_branch!;
+    const wrongTargetView = buildView(ledger) as any;
+    const wrongTargetGroup = wrongTargetView.groups.find((item: any) => item.id === group.id);
+    expect(wrongTargetGroup.dispatch_readiness).toBe("blocked");
+    expect(wrongTargetGroup.dispatch_diagnostics).toContainEqual(expect.objectContaining({ code: "DELIVERY_PARENT_PR_GATE_PENDING" }));
+
+    receipt.target_branch = ledger.repository.target_branch;
+    receipt.head_sha = "b".repeat(40);
+    const staleHeadView = buildView(ledger) as any;
+    const staleHeadGroup = staleHeadView.groups.find((item: any) => item.id === group.id);
+    expect(staleHeadGroup.dispatch_readiness).toBe("blocked");
+    expect(staleHeadGroup.dispatch_diagnostics).toContainEqual(expect.objectContaining({ code: "DELIVERY_PARENT_PR_GATE_PENDING" }));
+  });
+
   test("projects an unresolved group conversation creation as unknown", () => {
     const ledger = structuredClone(createPlanningDemoLedger(1_767_200_000_000));
     ledger.contract_version = 2;

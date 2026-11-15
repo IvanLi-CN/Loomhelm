@@ -481,7 +481,7 @@ function prReceipt(
     (receiptState === undefined || latest.receipt.state === receiptState)
   );
 }
-function parentPrReady(
+export function parentPrReady(
   ledger: Ledger,
   owner: Ledger["groups"][number],
   prAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "pr_created"),
@@ -496,7 +496,7 @@ function parentPrReady(
     (canonicalState === null || canonicalState === "published") &&
     prReceipt(ledger, owner.id, pr, undefined, undefined, "open") &&
     (ledger.contract_version < 3 || !receipt || owner.current_sha === null || receipt.target_branch === null || receipt.head_sha === null ||
-      (receipt.target_branch === owner.parent_branch && receipt.head_sha === owner.current_sha))
+      (receipt.target_branch === ledger.repository.target_branch && receipt.head_sha === owner.current_sha))
   );
 }
 function parentPrDefinitivelyAbsent(
