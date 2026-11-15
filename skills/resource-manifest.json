@@ -7356,7 +7356,7 @@
     {
       "path": "skills/multi-task-flow/scripts/service.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/service.ts",
-      "installedSha256": "33d2fe7342865f875811a19ad32cd1ecae1a831743d969eb5e85741f013846f5"
+      "installedSha256": "bc409b7818c9b9df89b26da0298ffa565bfbed19a26e79846dfe9cc63f32291b"
     },
     {
       "path": "skills/multi-task-flow/scripts/verify-service-browser.ts",
