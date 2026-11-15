@@ -30,6 +30,8 @@ ADR 0030 将 registry 对账和消费者依赖边界收敛为当前实现：新 
 
 当前实现还同步记录 consumer-install dependencies、tarball 无 production `node_modules`、UTF-8 path-byte digest、legacy integrity authority、processing/409/timeout reconcile、dist-tag逐个 read-back、release receipt 和 `github-issue` failure sidecar 的边界。
 
+候选发布门禁现在进一步验证实际 npm archive 的 `toolkit/package.json`、artifact inventory、显式 npm omissions、未登记 toolkit 文件和 npm 自动省略的隐藏文件，并在干净临时目录用 Bun 1.4.4 安装候选包、导入客户端与 runtime-core、列出 `multi-task-flow` Skill；这些检查在 npm 写入前失败即停止。
+
 后续实现收口补充了候选构建阶段的初始 receipt、缺失 dist-tag 的空值 promotion 规则，以及在 verify 阶段上传独立 release identity artifact 的失败对账入口；这些变化只强化已有 identity-first 合同，不代表发生了外部 publication、tag promotion 或 merge。
 
 native product smoke 也已接受当前 schema 3 artifact，同时继续校验 schema 2 legacy bundled projection，并在当前格式下拒绝 toolkit 内的 production `node_modules`；这只修复了既有 Candidate CI 验证器与新 artifact 合同之间的实现漂移。

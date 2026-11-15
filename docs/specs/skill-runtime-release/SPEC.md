@@ -214,7 +214,7 @@ package-backed daemon MUST 只使用 package 自带 Skill/runtime/viewer 资源�
 
 ### VER-SRR-001
 
-- Method: 在独立临时目录执行消费者 `bun install` 并安装生成的 npm tarball，断开父仓库、全局 Skill 和相邻 workspace，检查 tarball 不含 production `node_modules`，再按清单验证入口、资源和导入闭包。
+- Method: 在独立临时目录解包实际 npm tarball，校验根 package 与 `toolkit/package.json` 的版本和 consumer dependencies、artifact inventory、显式 npm omissions、无 `toolkit/**/node_modules` 与 `.gitignore`/`.npmignore`，再执行消费者 `bun install --frozen-lockfile`，导入 `@loomhelm/multi-task-flow`、`@loomhelm/runtime-core/modules/core/runtime` 并列出 `multi-task-flow` Skill；父仓库、全局 Skill 和相邻 workspace 均不可参与解析。
 - covers: `REQ-SRR-001`, `REQ-SRR-002`
 - Pass condition: 独立目录可以运行正式 CLI 和 viewer 所需入口，缺失 Bun、依赖、资源或摘要时 fail closed，且没有从源 checkout 或全局 Skill 回退。
 
