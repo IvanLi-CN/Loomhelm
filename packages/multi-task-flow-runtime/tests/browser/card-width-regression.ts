@@ -72,3 +72,51 @@ export async function checkCardWidths(tab, viewport, widths = [1304, 768, 1024, 
     throw new Error(JSON.stringify({ passed: false, results, crossLayout }));
   return { passed: true, results, crossLayout };
 }
+
+/**
+ * Real-browser acceptance test for the task-tab board scroll seam. The task
+ * tab must keep its horizontal scrollbar inside the allocated task surface;
+ * descendants must not expand the workspace and push the scrollbar below it.
+ */
+export async function checkTaskBoardScroll(tab, viewport, widths = [768, 1024, 1304, 1444], height = 1470) {
+  const results = [];
+  try {
+    for (const width of widths) {
+      await viewport.set({ width, height });
+      await tab.playwright.locator("#tab-tasks").click();
+      await tab.getAXState({ emit: false });
+      await tab.playwright.locator("#task-layout-board").click();
+      await tab.getAXState({ emit: false });
+      const measurement = await tab.playwright.evaluate(() => {
+        const board = document.querySelector("#task-list.task-layout-board");
+        const taskSurface = document.querySelector(".workspace-tasks");
+        if (!board || !taskSurface) throw new Error("task board surface is unavailable");
+        const boardRect = board.getBoundingClientRect();
+        const surfaceRect = taskSurface.getBoundingClientRect();
+        return {
+          boardBottom: boardRect.bottom,
+          surfaceBottom: surfaceRect.bottom,
+          boardClientWidth: board.clientWidth,
+          boardScrollWidth: board.scrollWidth,
+          boardClientHeight: board.clientHeight,
+          boardScrollHeight: board.scrollHeight,
+          surfaceClientHeight: taskSurface.clientHeight,
+          surfaceScrollHeight: taskSurface.scrollHeight,
+          pageOverflow: document.documentElement.scrollHeight > innerHeight,
+        };
+      });
+      const passed = measurement.boardBottom <= measurement.surfaceBottom + 1
+        && measurement.boardClientHeight > 0
+        && measurement.boardScrollWidth >= measurement.boardClientWidth
+        && measurement.boardScrollHeight <= measurement.boardClientHeight + 1
+        && measurement.surfaceScrollHeight <= measurement.surfaceClientHeight + 1
+        && !measurement.pageOverflow;
+      results.push({ width, passed, measurement });
+    }
+  } finally {
+    await viewport.reset();
+    await tab.getAXState({ emit: false });
+  }
+  if (results.some(result => !result.passed)) throw new Error(JSON.stringify({ passed: false, results }));
+  return { passed: true, results };
+}

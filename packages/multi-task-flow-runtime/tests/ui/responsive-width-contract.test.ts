@@ -46,6 +46,16 @@ test("tall medium details provide an independently scrollable content body", () 
   expect(tall).toContain("overflow-anchor: none;");
 });
 
+test("tall medium task boards compress through their ancestor chain", () => {
+  expect(css).toContain(".workspace-main { min-width: 0; min-height: 0; }");
+  expect(css).toContain(".workspace-view, .workspace-tasks { min-width: 0; min-height: 0; }");
+  const tall = css.split("@media (min-width: 768px) and (max-width: 1444px) and (min-height: 961px) {")[1]!.split("@media (min-width: 768px) and (max-width: 1444px) and (max-height: 960px)")[0]!;
+  expect(tall).toContain(".workspace-tasks { display: flex; flex-direction: column; overflow: hidden; }");
+  expect(tall).toContain(".workspace-tasks .task-list-section { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; }");
+  expect(tall).toContain(".workspace-tasks .task-list { min-height: 0; flex: 1 1 auto; }");
+  expect(tall).toContain(".workspace-tasks .task-layout-board { min-height: 0; }");
+});
+
 test("identity actions follow the project name instead of filling the title row", () => {
   expect(css).toContain(".identity-copy { flex: 0 1 auto; min-width: 0; }");
   expect(css).toContain("text-overflow: ellipsis; white-space: nowrap;");
