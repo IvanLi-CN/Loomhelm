@@ -248,7 +248,7 @@ export async function startSharedViewer(
   })();
   const resources = new Map<string, ReturnType<typeof createRunDashboard>>();
   const workerBridges = new Map<string, (request: Request, runId: string, path: string) => Promise<Response>>();
-  const workerBuilds = new Map<string, string>();
+  const workerBuilds = new Map<string, { build_id: string; package_version: string }>();
   const warnings = new Map<string, string | null>();
   let timeoutServer: Pick<Awaited<ReturnType<typeof Runtime.serve>>, "timeout"> | undefined;
   let gatewayPort = port;
@@ -295,12 +295,11 @@ export async function startSharedViewer(
         const normalizedPath = requestUrl.pathname.startsWith("/api/v1/") && !route.path.startsWith("/api/") ? "/api" + route.path : route.path;
         return run.handle(request, { timeout(req, timeout) { timeoutServer?.timeout(req, timeout); } }, normalizedPath);
       });
-      const selectedBuild = workerBuilds.get(workerKey) ?? manifest.build_id;
-      const selectedScript = selectedBuild === manifest.build_id
-        ? new URL("../scripts/viewer-worker-process.ts", import.meta.url).pathname
-        : join(state.paths.releases, selectedBuild, "skills/multi-task-flow/scripts/viewer-worker-process.ts");
-      if (!existsSync(selectedScript)) { workerBridges.delete(bridgeToken); throw new Error("viewer worker release is not installed"); }
-      const child = Bun.spawn([process.execPath, selectedScript], {
+      const selected = workerBuilds.get(workerKey) ?? { build_id: manifest.build_id, package_version: serviceConfig.package_version ?? manifest.service_version };
+      const childCommand = selected.build_id === manifest.build_id
+        ? [process.execPath, new URL("../scripts/viewer-worker-process.ts", import.meta.url).pathname]
+        : [process.execPath, "x", "--bun", "--package", `@loomhelm/multi-task-flow@${selected.package_version}`, "multi-task-flow", "worker-process"];
+      const child = Bun.spawn(childCommand, {
         env: { ...process.env, MTF_WORKER_SOCKET: socketPath, MTF_WORKER_KEY: workerKey, MTF_WORKER_GENERATION: generation, MTF_WORKER_BRIDGE_URL: `http://127.0.0.1:${gatewayPort}/__internal/worker`, MTF_WORKER_BRIDGE_TOKEN: bridgeToken },
         stdout: "ignore", stderr: "ignore",
       });
@@ -514,7 +513,7 @@ export async function startSharedViewer(
           binding.build_id,
         );
         const workerKey = workerKeyOf(version);
-        workerBuilds.set(workerKey, binding.build_id);
+        workerBuilds.set(workerKey, { build_id: binding.build_id, package_version: binding.package_version });
         let workerStage: WorkerDiagnosticStage = "worker_select";
         let lease: Awaited<ReturnType<typeof workerPool.acquire>>;
         try {

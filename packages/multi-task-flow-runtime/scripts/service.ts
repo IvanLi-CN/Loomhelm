@@ -5,7 +5,7 @@ import {
   downgradeApproval,
 } from "../lib/service-compatibility";
 import { maintenanceCheck, maintenanceApply } from "../lib/ledger-maintenance";
-import { writeFileSync, existsSync } from "node:fs";
+import { writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { servicePaths } from "../lib/service-paths";
@@ -19,7 +19,6 @@ import { ContractError, requireCondition } from "../lib/errors";
 import { requireApi, ledgerContract } from "../lib/service-contract";
 import { buildView } from "../lib/view";
 import { validateLedger } from "../lib/schema";
-import { verifyRelease } from "../lib/service-release";
 import { cachedDaemonUpdate, triggerDaemonUpdateCheck } from "../lib/service-update";
 import { ensureViewerBinding, writeViewerBinding } from "../lib/viewer-binding";
 
@@ -34,9 +33,15 @@ const empty = z.object({}).strict();
 const source = z.object({ source: z.string().startsWith("/") }).strict();
 const packageVersion = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/) }).strict();
 const upgradeRequest = z.object({ target: z.string().min(1), mode: z.enum(["normal", "dry-run", "rollback"]) }).strict();
-function requireVerifiedRollback(state: ServiceState, buildId: string): void {
-  requireCondition(existsSync(join(state.paths.releases, buildId, "manifest.json")), "ROLLBACK_TARGET_UNVERIFIED", "Rollback target is not a locally verified release");
-  verifyRelease(join(state.paths.releases, buildId));
+function verifiedTargetsPath(state: ServiceState): string { return join(state.paths.state, "verified-package-targets.json"); }
+function verifiedTargets(state: ServiceState): Set<string> {
+  try { return new Set(JSON.parse(readFileSync(verifiedTargetsPath(state), "utf8")) as string[]); } catch { return new Set(); }
+}
+function recordVerifiedTarget(state: ServiceState, identity: { build_id: string; version: string }): void {
+  const targets = verifiedTargets(state); targets.add(`${identity.version}:${identity.build_id}`); writeFileSync(verifiedTargetsPath(state), JSON.stringify([...targets].sort()) + "\n", { mode: 0o600 });
+}
+function requireVerifiedRollback(state: ServiceState, identity: { build_id: string; version: string }): void {
+  requireCondition(verifiedTargets(state).has(`${identity.version}:${identity.build_id}`), "ROLLBACK_TARGET_UNVERIFIED", "Rollback target must be verified by an earlier exact dry-run or upgrade");
 }
 
 export async function serviceCommand(
@@ -56,8 +61,9 @@ export async function serviceCommand(
     const parsed = upgradeRequest.parse(input);
     triggerDaemonUpdateCheck(state);
     const identity = resolvePackageTarget(parsed.target);
+    if (parsed.mode === "rollback") requireVerifiedRollback(state, identity);
+    else recordVerifiedTarget(state, identity);
     if (parsed.mode === "dry-run") return { surface: "gateway", changed: false, target: identity.version, requested: parsed.target, dry_run: true };
-    if (parsed.mode === "rollback") requireVerifiedRollback(state, identity.build_id);
     return upgradePackageReleaseAndStart(state, identity.version);
   }
   if (command === "orchestration-upgrade") {
@@ -67,9 +73,10 @@ export async function serviceCommand(
     const current = ensureViewerBinding(state, parsed.run_id);
     requireCondition(identity.compatibility_line === current.compatibility_line, "INCOMPATIBLE_RELEASE", "Target package compatibility line does not match the run binding");
     requireCondition(identity.contracts.ledger === current.ledger_contract && identity.contracts.api === current.api_contract && identity.contracts.frontend === current.frontend_contract && identity.contracts.viewer === current.viewer_contract, "INCOMPATIBLE_RELEASE", "Target package contracts do not match the run binding");
+    if (parsed.mode === "rollback") requireVerifiedRollback(state, identity);
+    else recordVerifiedTarget(state, identity);
     if (parsed.mode === "dry-run") return { surface: "orchestration", run_id: parsed.run_id, changed: false, current, target: identity.version, requested: parsed.target, dry_run: true };
     if (identity.build_id === current.build_id) return { surface: "orchestration", run_id: parsed.run_id, changed: false, current, daemon_refresh: "best-effort" };
-    if (parsed.mode === "rollback") requireVerifiedRollback(state, identity.build_id);
     const next = writeViewerBinding(state, {
       schema_version: 1,
       run_id: parsed.run_id,

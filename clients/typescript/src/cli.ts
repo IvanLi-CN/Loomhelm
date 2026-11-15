@@ -27,6 +27,10 @@ async function main(args: string[]): Promise<void> {
   if (command === 'codex') { await runCodexCommand(rest, configPath); return; }
   if (command === 'flow') { await runFlowCommand(rest, configPath); return; }
   if (command === 'service') { await runServiceCommand(rest); return; }
+  if (command === 'worker-process') {
+    const result = await new SkillsRuntime().run('skills/multi-task-flow/scripts/viewer-worker-process.ts', [], { timeoutMs: 2_147_483_647 });
+    process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exitCode = result.code ?? 1; return;
+  }
   if (command === 'gateway') { await runGatewayCommand(rest); return; }
   if (command === 'orchestration') { await runOrchestrationCommand(rest); return; }
   if (command === 'release') { await runReleaseCommand(rest); return; }
