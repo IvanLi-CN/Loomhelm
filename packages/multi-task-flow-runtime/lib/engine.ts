@@ -31,6 +31,7 @@ import {
   validateNewTaskKinds,
   validateLedger,
   validateSchedulablePlan,
+  theoreticalScheduleIssues,
   validatePlan,
   deliveryTopologyForGroup,
   validateDeliveryTopologies,
@@ -269,6 +270,8 @@ function ensureSchedulable(ledger: Ledger, candidate: Plan): void {
   if (legacyLedger(ledger) || ledger.source_schema_version === 1) return;
   validateTaskExecutionPolicies(ledger.tasks);
   validateSchedulablePlan(candidate);
+  const scheduleIssue = theoreticalScheduleIssues(candidate)[0];
+  requireCondition(!scheduleIssue, scheduleIssue?.code ?? "PLAN_NOT_SCHEDULABLE", scheduleIssue?.message ?? "理论排期不完整。", 3);
   if (ledger.schema_version !== 2) return;
   const contributionTasks = ledger.tasks.filter(
     (item) => item.disposition === "active" && isContributionKind(item.kind),

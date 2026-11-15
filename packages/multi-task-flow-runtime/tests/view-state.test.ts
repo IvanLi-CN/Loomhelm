@@ -10,6 +10,8 @@ describe("shareable dashboard view state", () => {
     expect(encoded).toContain("layout=grid");
     expect(encoded).toContain("selected=task%3Atask-1");
     expect(encoded).not.toContain("zoom=");
+    expect(encoded).not.toContain("plannedStart=");
+    expect(encoded).not.toContain("plannedEnd=");
     expect(serializeViewState(DEFAULT_VIEW_STATE)).toBe("");
     expect(serializeViewState({ ...DEFAULT_VIEW_STATE, tab: "graph" }, null, "actual")).toBe("tab=graph");
     expect(serializeViewState({ ...DEFAULT_VIEW_STATE, tab: "actual" }, null, "actual")).toBe("");

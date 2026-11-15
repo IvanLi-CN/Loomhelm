@@ -480,7 +480,51 @@ export function buildGraphProjection(view: View, visibleTaskIds?: ReadonlySet<st
   const dependencyNodes = [...visibleNodes, ...syntheticSources];
   const dependencyNodeIds = new Set(dependencyNodes.map((node) => node.id));
   const dependencies = makeDisplayDependencies(view, dependencyNodes, dependencyNodeIds, nodeById, taskById, new Set(nodes.map((node) => node.id)), { boundaryEndpointIds, syntheticOutgoing, syntheticBoundaryStarts });
-  return { nodes, ...dependencies };
+  const displayBoundaryIds = new Map<string, string>();
+  const displayBoundaries: GraphProjectionNode[] = [];
+  const boundaryEdges: GraphProjectionEdge[] = [];
+  const boundaryNodeId = (sourceNodeId: string): string => {
+    const existing = displayBoundaryIds.get(sourceNodeId);
+    if (existing) return existing;
+    const source = nodeById.get(sourceNodeId);
+    const groupId = source?.group_id ?? source?.planned_group_id ?? null;
+    const id = uniqueId(`boundary:${sourceNodeId}`, usedNodeIds);
+    displayBoundaryIds.set(sourceNodeId, id);
+    displayBoundaries.push({
+      id,
+      parentId: groupNodeIds.get(groupId ?? "") ?? null,
+      nodeKind: "boundary",
+      boundary: source?.kind === "main_end" || source?.kind === "group_end" ? "end" : "start",
+      sourceNodeId,
+      refId: null,
+      groupId,
+      plannedGroupId: source?.planned_group_id ?? source?.group_id ?? null,
+      taskKind: null,
+      state: null,
+      stateLabel: null,
+      stateIcon: null,
+      title: source?.kind === "main_end" || source?.kind === "group_end" ? "结束" : "开始",
+      graphLabel: source?.kind === "main_end" || source?.kind === "group_end" ? "结束" : "开始",
+      fullLabel: source?.kind === "main_end" || source?.kind === "group_end" ? "结束" : "开始",
+    });
+    return id;
+  };
+  for (const dependency of dependencies.boundaryDependencies) {
+    const paths = dependency.paths;
+    const boundaryNodeIds = [...new Set(paths.flatMap((path) => path.boundaryNodeIds))];
+    for (const sourceBoundary of boundaryNodeIds) {
+      const boundaryId = boundaryNodeId(sourceBoundary);
+      const source = dependency.direction === "incoming" ? boundaryId : dependency.nodeId;
+      const target = dependency.direction === "incoming" ? dependency.nodeId : boundaryId;
+      const edgeId = uniqueId(`display-edge:${encodeURIComponent(source)}:${encodeURIComponent(target)}`, usedNodeIds);
+      const sourceNode = nodes.find((node) => node.id === source) ?? displayBoundaries.find((node) => node.id === source);
+      const targetNode = nodes.find((node) => node.id === target) ?? displayBoundaries.find((node) => node.id === target);
+      const sourceGroup = sourceNode?.groupId ?? null;
+      const targetGroup = targetNode?.groupId ?? null;
+      boundaryEdges.push({ id: edgeId, source, target, paths: paths.filter((path) => path.boundaryNodeIds.includes(sourceBoundary)), crossGroup: sourceGroup && targetGroup && sourceGroup !== targetGroup ? "yes" : "no" });
+    }
+  }
+  return { nodes: [...nodes, ...displayBoundaries], edges: [...dependencies.edges, ...boundaryEdges], boundaryDependencies: dependencies.boundaryDependencies, warnings: dependencies.warnings };
 }
 
 export function nodeTitle(projection: GraphProjection, nodeId: string): string {

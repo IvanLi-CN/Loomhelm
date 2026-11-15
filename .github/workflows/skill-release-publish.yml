@@ -552,19 +552,30 @@ jobs:
           open(path, 'a', encoding='utf-8').write('\n')
           PY
           }
+          publish_attempted=false
           publish_candidate() {
             set +e
+            publish_attempted=true
             timeout --signal=TERM 180s npm publish "$tarball" --access public --tag "$COMPATIBILITY_LINE" > "$RUNNER_TEMP/skill-release-publish.out" 2> "$RUNNER_TEMP/skill-release-publish.err"
             publish_status=$?
             set -e
             if [ "$publish_status" -eq 0 ]; then
+              cat "$RUNNER_TEMP/skill-release-publish.out"
               update_receipt publish-submitted false false submitted
             elif grep -Eiq 'E409|cannot publish over|cannot overwrite|previously published' "$RUNNER_TEMP/skill-release-publish.out" "$RUNNER_TEMP/skill-release-publish.err"; then
+              cat "$RUNNER_TEMP/skill-release-publish.out" >&2 || true
+              cat "$RUNNER_TEMP/skill-release-publish.err" >&2 || true
               update_receipt known-409 false false known-409
             elif [ "$publish_status" -eq 124 ]; then
+              cat "$RUNNER_TEMP/skill-release-publish.out" >&2 || true
+              cat "$RUNNER_TEMP/skill-release-publish.err" >&2 || true
               update_receipt publish-timeout false false timeout
             else
               update_receipt publish-unknown false false unknown
+              cat "$RUNNER_TEMP/skill-release-publish.out" >&2 || true
+              cat "$RUNNER_TEMP/skill-release-publish.err" >&2 || true
+              echo "npm publish failed with an unclassified exit status: $publish_status" >&2
+              return 1
             fi
           }
           exact_metadata="$RUNNER_TEMP/skill-release-exact.json"
@@ -572,7 +583,6 @@ jobs:
           package_versions="$RUNNER_TEMP/skill-release-package-versions.json"
           package_error="$RUNNER_TEMP/skill-release-package.err"
           observe_exact() {
-            local phase="$1"
             rm -f "$exact_metadata" "$exact_error" "$package_versions" "$package_error"
             if npm view "$PACKAGE_NAME@$VERSION" --json > "$exact_metadata" 2> "$exact_error"; then
               echo exact-visible
@@ -583,7 +593,28 @@ jobs:
               return 0
             fi
             if npm view "$PACKAGE_NAME" versions --json > "$package_versions" 2> "$package_error"; then
-              if [ "$phase" = preflight ]; then echo exact-404; else echo processing; fi
+              versions_state="$(python3 - "$package_versions" "$VERSION" <<'PY'
+          import json
+          import sys
+
+          try:
+              versions = json.load(open(sys.argv[1], encoding='utf-8'))
+          except (OSError, json.JSONDecodeError):
+              print('invalid')
+              raise SystemExit(0)
+          if not isinstance(versions, list) or any(not isinstance(value, str) for value in versions):
+              print('invalid')
+          elif sys.argv[2] in versions:
+              print('present')
+          else:
+              print('absent')
+          PY
+              )"
+              case "$versions_state" in
+                present) echo processing ;;
+                absent) echo absent ;;
+                *) echo registry-error ;;
+              esac
               return 0
             fi
             if grep -Eiq 'E404|404|no match found|not found' "$package_error"; then
@@ -592,7 +623,7 @@ jobs:
             fi
             echo registry-error
           }
-          initial_state="$(observe_exact preflight)"
+          initial_state="$(observe_exact)"
           if [ "$VERSION" = '0.2.7' ] && [ "$initial_state" != exact-visible ]; then
             case "$initial_state" in
               registry-error)
@@ -608,6 +639,12 @@ jobs:
           fi
           case "$initial_state" in
             exact-visible)
+              ;;
+            processing)
+              # The registry's version index already contains the version but
+              # the exact metadata endpoint is lagging. Reconcile read-only;
+              # never issue a second publish for this state.
+              update_receipt processing false false processing
               ;;
             exact-404|absent)
               if [ -n "$RESUME_RUN_ID" ]; then
@@ -654,7 +691,7 @@ jobs:
           # Keep the candidate frozen and reconcile for about 15 minutes first.
           for delay in 0 5 15 30 60 120 240 480; do
             if [ "$delay" -gt 0 ]; then sleep "$delay"; fi
-            reconcile_state="$(observe_exact reconcile)"
+            reconcile_state="$(observe_exact)"
             case "$reconcile_state" in
               exact-visible) break ;;
               processing) update_receipt processing false false processing ;;
@@ -673,8 +710,37 @@ jobs:
           done
           if [ "$reconcile_state" != exact-visible ]; then
             update_receipt processing-timeout false false processing-timeout
-            echo "registry did not expose the exact version after bounded reconciliation; resume from this receipt" >&2
-            exit 1
+            if [ "$RESUME_RUN_ID" = "" ] && [ "$publish_attempted" = true ]; then
+              # The first npm request may have been accepted while the public
+              # registry still returned a transient 404. Retry the exact same
+              # frozen tarball once in this run before requiring operator resume.
+              mark_resume_retry
+              publish_candidate
+              reconcile_state=processing-timeout
+              for delay in 0 15 30 60 120; do
+                if [ "$delay" -gt 0 ]; then sleep "$delay"; fi
+                reconcile_state="$(observe_exact)"
+                case "$reconcile_state" in
+                  exact-visible) break ;;
+                  processing|absent) update_receipt processing false false "$reconcile_state" ;;
+                  registry-error)
+                    update_receipt registry-error false false registry-error
+                    echo 'registry reconciliation failed after the guarded republish; do not retry npm publish' >&2
+                    exit 1
+                    ;;
+                  *)
+                    update_receipt registry-error false false registry-error
+                    echo "unexpected registry reconciliation state after the guarded republish: $reconcile_state" >&2
+                    exit 1
+                    ;;
+                esac
+              done
+            fi
+            if [ "$reconcile_state" != exact-visible ]; then
+              update_receipt processing-timeout false false processing-timeout
+              echo "registry did not expose the exact version after the initial publish and one guarded republish; resume from this receipt" >&2
+              exit 1
+            fi
           fi
           if ! registry_url="$(python3 -c 'import json, os, sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert value.get("version") == os.environ["VERSION"], "registry version does not match the release candidate"; dist=value.get("dist") or {}; url=dist.get("tarball"); assert url, "registry metadata has no tarball URL"; print(url)' "$exact_metadata")"; then
             update_receipt registry-error false false registry-error
@@ -935,5 +1001,18 @@ jobs:
         with:
           name: skill-release-receipt-${{ inputs.merge_sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/skill-release-receipt.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Upload npm publish diagnostics
+        if: always() && (needs.verify.outputs.decision == 'release:skill' || needs.verify.outputs.decision == 'release:skill-initial-publication')
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: skill-release-diagnostics-${{ inputs.merge_sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/skill-release-publish.out
+            ${{ runner.temp }}/skill-release-publish.err
+            ${{ runner.temp }}/skill-release-exact.err
+            ${{ runner.temp }}/skill-release-package.err
           if-no-files-found: ignore
           retention-days: 30

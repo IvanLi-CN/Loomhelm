@@ -9,7 +9,7 @@ import { renderGroupPreview, renderTaskPreview } from "./preview-content";
 import { attachDependencyTooltip, renderDependencyTooltip, type DependencyTooltipItem } from "./dependency-tooltip";
 import type { Group, Task, View } from "./model";
 import { dependencyLabel, groupExecutionVisualState, stateLabel, taskKindLabel } from "./labels";
-import { buildGraphProjection, nodeTitle, type GraphBoundaryDependency, type GraphDependencyPath, type GraphProjectionEdge } from "./graph-projection";
+import { buildGraphProjection, nodeTitle, type GraphDependencyPath, type GraphProjectionEdge } from "./graph-projection";
 
 type DetailContentContext = {
   getData: () => View | null;
@@ -137,21 +137,10 @@ function dependencyValue(projection: ReturnType<typeof buildGraphProjection>, ed
   return { name: nodeTitle(projection, neighborId), state: paths, status: task?.state ?? (completedAt ? "completed" : node?.state ?? "planned"), completedAt };
 }
 
-function boundaryValue(boundary: GraphBoundaryDependency): DependencyTooltipItem {
-  const name = boundary.direction === "incoming" ? "计划入口" : "计划出口";
-  const paths = boundary.paths.map((path, index) => pathValue(path, boundary.paths.length > 1 ? index + 1 : null)).join("；");
-  return { name, state: paths };
-}
-
 function dependenciesFor(projection: ReturnType<typeof buildGraphProjection>, nodeId: string | undefined, direction: "incoming" | "outgoing", data: View): DependencyTooltipItem[] {
   if (!nodeId) return [];
   const edges = projection.edges.filter((edge) => direction === "incoming" ? edge.target === nodeId : edge.source === nodeId);
-  const boundaries = projection.boundaryDependencies.filter((item) => item.direction === direction && item.nodeId === nodeId);
-  const values = [
-    ...edges.map((edge) => dependencyValue(projection, edge, direction === "incoming" ? edge.source : edge.target, data)),
-    ...boundaries.map(boundaryValue),
-  ];
-  return values;
+  return edges.map((edge) => dependencyValue(projection, edge, direction === "incoming" ? edge.source : edge.target, data));
 }
 
 export function createDetailContent(context: DetailContentContext) {

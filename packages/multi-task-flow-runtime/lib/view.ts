@@ -12,6 +12,7 @@ import {
   isContributionKind,
   planCompletenessIssues,
   taskExecutionPolicyIssues,
+  theoreticalScheduleIssues,
   validateLedger,
   type Ledger,
   type Plan,
@@ -837,6 +838,7 @@ export function buildView(
   )!;
   const completenessIssues = planCompletenessIssues(plan);
   const schedulingPlanIssues = planSchedulingIssues(ledger, plan);
+  const theoreticalIssues = theoreticalScheduleIssues(plan);
   const schedulingTaskIssues = taskSchedulingIssues(ledger);
   const isApprovedExecution =
     activePlan.id === executionPlan.id && activePlan.lifecycle === "approved";
@@ -864,6 +866,7 @@ export function buildView(
       message: issue.message,
       resource: null,
     })),
+    ...theoreticalIssues.map((issue) => ({ code: issue.code, group_id: null, message: issue.message, resource: issue.node_id })),
     ...schedulingTaskIssues.map((issue) => ({
       code: issue.code,
       group_id: issue.group_id,
@@ -872,7 +875,7 @@ export function buildView(
     })),
     ...runtimeProjection.summary.blockers,
   ];
-  const schedulingStatus = approvalPending || completenessIssues.length || schedulingPlanIssues.length || schedulingTaskIssues.length
+  const schedulingStatus = approvalPending || completenessIssues.length || schedulingPlanIssues.length || schedulingTaskIssues.length || theoreticalIssues.length
     ? "blocked"
     : runtimeProjection.summary.status === "ready"
       ? "eligible"
