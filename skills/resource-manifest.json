@@ -8277,12 +8277,12 @@
     {
       "path": "skills/multi-task-flow/scripts/viewer-runtime.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/viewer-runtime.ts",
-      "installedSha256": "d29e1091465de30ac2ff55500173fccef7bb7f89a403df38cf8cbdb50e1100b8"
+      "installedSha256": "e4ecc1ad6cab6dc25026e470bca1f67b73a001ec8e6d22f06de451a3b4413e99"
     },
     {
       "path": "skills/multi-task-flow/scripts/viewer-socket.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/viewer-socket.ts",
-      "installedSha256": "28e3349b5565fdfe6d4f3203a8b3498c54808357cf3ee3a07375eb1a8abbdbc5"
+      "installedSha256": "e357d532a6d346cb5769e00c2af2148ddb1b00787c48101f2e1abc0c26dac3af"
     },
     {
       "path": "skills/multi-task-flow/scripts/viewer-worker.ts",
@@ -8317,7 +8317,7 @@
     {
       "path": "skills/multi-task-flow/tests/viewer-runtime.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/viewer-runtime.test.ts",
-      "installedSha256": "4e3c56e89174b3636c43d9a722fa65fbff748d8ba15659cb5032c21b34c0470e"
+      "installedSha256": "4f0b8f2180fa91b7fc1e4ec30ee879ae30c407473ca09e14fddb24d53d56211b"
     },
     {
       "path": "skills/multi-task-flow/tests/viewer-socket.test.ts",

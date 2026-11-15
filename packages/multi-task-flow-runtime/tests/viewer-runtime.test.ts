@@ -115,3 +115,29 @@ test("worker restart failures are bounded within a recovery window", async () =>
   lease.release();
   await pool.stop();
 });
+
+test("worker invalidation remains bounded when stop hangs", async () => {
+  let created = 0;
+  const key = "schema-2@hanging-stop";
+  const pool = new ViewerWorkerPool({
+    restartBackoffMs: 0,
+    workerFactory: (workerKey) => {
+      created += 1;
+      return {
+        id: createWorkerId(),
+        key: workerKey,
+        generation: createWorkerGeneration(`generation-${created}`),
+        handle: () => new Response("ok"),
+        stop: () => new Promise<void>(() => undefined),
+      };
+    },
+  });
+  const first = await pool.acquire(key);
+  const started = Date.now();
+  await pool.invalidate(key, first.generation);
+  const replacement = await pool.acquire(key);
+  expect(Date.now() - started).toBeLessThan(1_000);
+  expect(replacement.generation).not.toBe(first.generation);
+  replacement.release();
+  await pool.stop();
+});
