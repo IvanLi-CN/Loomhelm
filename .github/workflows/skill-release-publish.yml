@@ -200,7 +200,7 @@ jobs:
           }
           (cd clients/typescript && bun --no-install run build)
           set_package_metadata clients/typescript/package.json
-          set_package_metadata clients/typescript/toolkit/package.json
+          set_package_metadata clients/typescript/resources/package.json
           (cd clients/typescript && bun pm pack --destination "$draft_dir" --ignore-scripts --quiet)
           mapfile -t drafts < <(find "$draft_dir" -type f -name '*.tgz' -print)
           test "${#drafts[@]}" -eq 1
@@ -209,7 +209,7 @@ jobs:
           git checkout -- clients/typescript/package.json
           (cd clients/typescript && bun --no-install run build)
           set_package_metadata clients/typescript/package.json
-          set_package_metadata clients/typescript/toolkit/package.json
+          set_package_metadata clients/typescript/resources/package.json
           (cd clients/typescript && bun pm pack --destination "$final_dir" --ignore-scripts --quiet)
           mapfile -t finals < <(find "$final_dir" -type f -name '*.tgz' -print)
           test "${#finals[@]}" -eq 1
@@ -226,7 +226,7 @@ jobs:
                       member.name.removeprefix('package/'):
                       hashlib.sha256(archive.extractfile(member).read()).hexdigest()
                       for member in archive.getmembers()
-                      if member.isfile() and member.name != 'package/toolkit/artifact-manifest.json'
+                      if member.isfile() and member.name != 'package/resources/artifact-manifest.json'
                   }
 
           draft, final = (files(path) for path in sys.argv[1:])
@@ -359,9 +359,22 @@ jobs:
           mkdir -p "$consumer"
           tar -xzf "$tarball" -C "$consumer"
           test -f "$consumer/package/package.json"
-          test -f "$consumer/package/toolkit/package.json"
-          test -f "$consumer/package/toolkit/artifact-manifest.json"
-          test ! -e "$consumer/package/toolkit/node_modules"
+          test -f "$consumer/package/resources/package.json"
+          test -f "$consumer/package/resources/artifact-manifest.json"
+          test ! -e "$consumer/package/resources/node_modules"
+          python3 - "$tarball" <<'PY'
+          import sys, tarfile
+          tarball = sys.argv[1]
+          forbidden = ('/tests/', '/examples/', '/scripts/build.ts', '/scripts/build-service.ts', '/scripts/package-client-skills.ts', '/scripts/check-client-skills.ts', '/scripts/catalog-client-skills.ts')
+          with tarfile.open(tarball, 'r:gz') as archive:
+              members = [member for member in archive.getmembers() if member.isfile()]
+              names = [member.name.removeprefix('package/') for member in members]
+              archive_bytes = sum(member.size for member in members)
+          bad = [name for name in names if any(fragment in name for fragment in forbidden)]
+          if bad:
+              raise SystemExit('development-only resources leaked into npm archive: ' + ', '.join(sorted(bad)))
+          print(f'package_archive_files={len(names)} package_archive_bytes={archive_bytes}')
+          PY
           (cd "$consumer/package" && bun install --frozen-lockfile --ignore-scripts --backend=copy)
           (cd "$consumer/package" && bun --no-install -e '
             const client = await import("@loomhelm/multi-task-flow");

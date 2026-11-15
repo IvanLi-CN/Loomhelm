@@ -58,7 +58,7 @@ test('rejects a toolkit root symlink before validating or executing resources', 
 test('canonical ledger initializes and reads unchanged schema2/contract3 state across child runtimes', async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'loomhelm-canonical-')));
   try {
-    const input = await readFile(join(runtime.root, 'skills/multi-task-flow/examples/ledger-initialization/initial.json'), 'utf8');
+    const input = await readFile(join(import.meta.dir, '../../../packages/multi-task-flow-runtime/examples/ledger-initialization/initial.json'), 'utf8');
     const env = { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: dir };
     const initialized = await runtime.run('skills/multi-task-flow/scripts/orchestrate.ts', ['init', '--input', '-'], { input, env });
     assert.equal(initialized.code, 0, initialized.stdout + initialized.stderr);

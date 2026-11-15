@@ -8242,12 +8242,12 @@
     {
       "path": "skills/multi-task-flow/scripts/check-skills-installation.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/check-skills-installation.ts",
-      "installedSha256": "a6ee9e1b58093f3d209aa1bb31d703258fccb907a0878094e46216d364c25864"
+      "installedSha256": "3ae57790d83db9bd665b6e13edb8f4281e7c2f7687623493d8b5bb890cd9f924"
     },
     {
       "path": "skills/multi-task-flow/scripts/package-client-skills.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/package-client-skills.ts",
-      "installedSha256": "6e929f8bdf72ea686a30e9e0cf41b6361fb74df3db62da6c4c1e9af136f0312b"
+      "installedSha256": "d26ba9081378ed6841572c56e4966907b430688785ca8e12a472c1b2f178c405"
     },
     {
       "path": "skills/multi-task-flow/lib/package-source.ts",
@@ -8257,7 +8257,7 @@
     {
       "path": "skills/multi-task-flow/scripts/test-skills-artifact.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/test-skills-artifact.ts",
-      "installedSha256": "fe09578d7b92641673553a465bbc3069ea5931900337ccf2eb4aff810229ee13"
+      "installedSha256": "9cc7ecb7fee08e158527223bc31c82450b320c7d78f3a95ece48140b05012e0f"
     },
     {
       "path": "skills/multi-task-flow/scripts/test-skills-native.ts",

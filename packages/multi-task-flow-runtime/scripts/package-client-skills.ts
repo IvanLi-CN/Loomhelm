@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '../../..');
-const target = resolve(root, 'clients/typescript/toolkit');
+const target = resolve(root, 'clients/typescript/resources');
 const manifest = JSON.parse(readFileSync(resolve(root, 'skills/resource-manifest.json'), 'utf8'));
 const packageMetadata = JSON.parse(readFileSync(resolve(root, 'clients/typescript/package.json'), 'utf8'));
 const packageConfig = packageMetadata.loomhelm;
@@ -21,10 +21,15 @@ const packageOmissions = [
   { path: 'AGENTS.md', reason: 'repository instructions are package metadata, not a runtime Skill resource' },
   { path: 'package.json', reason: 'generated toolkit metadata is validated as package metadata, not a Skill resource' },
   { path: 'artifact-manifest.json', reason: 'the artifact manifest validates itself through identity and inventory checks' },
+  { path: 'skills/multi-task-flow/package.json', reason: 'source workspace metadata is not part of the consumer runtime' },
+  { path: 'skills/multi-task-flow/bun.lock', reason: 'source workspace lockfile is not part of the consumer runtime' },
 ];
 const packageOmissionPaths = new Set(packageOmissions.map(item => item.path));
 const packagedSkill = 'multi-task-flow';
+const developmentDirectories = ['/tests/', '/examples/'];
+const developmentScripts = new Set(['build.ts', 'build-service.ts', 'catalog-client-skills.ts', 'check-client-skills.ts', 'demo-static.ts', 'diagnose-candidate-sandbox.ts', 'package-client-skills.ts', 'preview-source.ts', 'test-skills-artifact.ts', 'test-skills-native.ts', 'test-viewer-source.ts', 'verify-service-browser.ts', 'verify-service-native.ts', 'verify-skills-modules.ts']);
 const isPackagedResource = (path: string): boolean => path === `skills/${packagedSkill}` || path.startsWith(`skills/${packagedSkill}/`);
+const isRuntimeResource = (path: string): boolean => isPackagedResource(path) && !developmentDirectories.some(directory => path.includes(directory)) && !(path.startsWith(`skills/${packagedSkill}/scripts/`) && developmentScripts.has(path.split('/').at(-1)!));
 const packagedResources = (values: { path: string; [key: string]: unknown }[]) => values.filter(file => isPackagedResource(file.path));
 const safeSemver = (value: unknown): value is string => {
   if (typeof value !== 'string' || !exactSemver.test(value)) return false;
@@ -95,8 +100,8 @@ function validateInstalledDependencies(): void {
   }
 }
 function copyPackageManifest(): void {
-  const files = packagedResources(manifest.files.filter(file => !packageOmissionPaths.has(file.path)));
-  const additions = packagedResources((manifest.additions ?? []).filter(file => !packageOmissionPaths.has(file.path)));
+  const files = packagedResources(manifest.files.filter(file => !packageOmissionPaths.has(file.path) && isRuntimeResource(file.path)));
+  const additions = packagedResources((manifest.additions ?? []).filter(file => !packageOmissionPaths.has(file.path) && isRuntimeResource(file.path)));
   const packageManifest = { ...manifest, skills: [packagedSkill], files, additions, packageOmissions };
   writeGenerated('skills/resource-manifest.json', Buffer.from(JSON.stringify(packageManifest, null, 2) + '\n'));
 }
@@ -113,12 +118,22 @@ function writeToolkitPackageMetadata(): void {
   };
   writeFileSync(resolve(target, 'package.json'), JSON.stringify(metadata, null, 2) + '\n');
 }
-for (const file of packagedResources([...manifest.files, ...(manifest.additions ?? [])].filter(file => !packageOmissionPaths.has(file.path)))) copy(file.path, file.installedSha256, false, file.sourcePath ?? file.path);
+for (const file of packagedResources([...manifest.files, ...(manifest.additions ?? [])].filter(file => !packageOmissionPaths.has(file.path) && isRuntimeResource(file.path)))) copy(file.path, file.installedSha256, false, file.sourcePath ?? file.path);
 copyPackageManifest();
 writeToolkitPackageMetadata();
-const catalog = JSON.parse(readFileSync(resolve(root, 'skills/catalog.json'), 'utf8'));
-writeGenerated('skills/catalog.json', Buffer.from(JSON.stringify({ ...catalog, entries: catalog.entries.filter((entry: { name: string }) => entry.name === packagedSkill) }, null, 2) + '\n'));
 for (const name of ['index.html','app.js','app.css']) copy(`skills/multi-task-flow/dist/${name}`, undefined, false, `packages/multi-task-flow-runtime/dist/${name}`);
+const catalog = JSON.parse(readFileSync(resolve(root, 'skills/catalog.json'), 'utf8'));
+const packagedCatalog = {
+  ...catalog,
+  entries: catalog.entries
+    .filter((entry: { name: string }) => entry.name === packagedSkill)
+    .map((entry: { files?: number; scripts?: string[]; [key: string]: unknown }) => ({
+      ...entry,
+      files: outputs.size,
+      ...(entry.scripts ? { scripts: entry.scripts.filter(isRuntimeResource) } : {}),
+    })),
+};
+writeGenerated('skills/catalog.json', Buffer.from(JSON.stringify(packagedCatalog, null, 2) + '\n'));
 if (requireDependencies) validateInstalledDependencies();
 const packageIdentityBase = {
   packageName: packageMetadata.name,
