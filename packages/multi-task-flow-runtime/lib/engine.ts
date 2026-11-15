@@ -149,24 +149,25 @@ function atomicNodeSatisfied(ledger: Ledger, node: any): boolean {
     scope?.kind === "task"
       ? ledger.tasks.find((task) => task.id === scope.task_id)?.atoms
       : ledger.groups.find((group) => group.id === scope?.delivery_unit_id)?.atoms;
-  return (
-    atoms?.find((atom) => atom.id === node.id)?.status === "completed" || node.state === "completed"
-  );
+  const atom = atoms?.find((candidate) => candidate.id === node.id);
+  return atom ? atom.status === "completed" : false;
 }
 function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): boolean {
   const nodes = (plan.atomic_nodes ?? []) as any[];
   const edges = (plan.atomic_edges ?? []).filter((edge: any) => "from_node_id" in edge) as any[];
-  if (!nodes.length || !edges.length) return true;
+  if (!nodes.length && !edges.length) return true;
+  if (!nodes.length) return false;
   const targets = nodes.filter(
     (node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId,
   );
   if (!targets.length) return true;
+  if (!edges.length) return false;
   return targets.some((target) => {
     if (atomicNodeSatisfied(ledger, target)) return false;
     const atom = ledger.tasks
       .find((task) => task.id === taskId)
       ?.atoms.find((candidate) => candidate.id === target.id);
-    if (atom ? atom.status !== "planned" : target.state !== "planned") return false;
+    if (!atom || atom.status !== "planned") return false;
     return edges
       .filter((edge) => edge.to_node_id === target.id)
       .every((edge) =>
