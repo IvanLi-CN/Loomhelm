@@ -7763,7 +7763,7 @@
     },
     {
       "path": "skills/project-engineering-workflow/SKILL.md",
-      "installedSha256": "afc3b77768df6b932e17ae142346f12153cb45d9f5f480fc686b301437b3758a"
+      "installedSha256": "2f64f302df391979af7252ec12ad83674fd13cace91c7ea8af8c1fec1cceedb8"
     },
     {
       "path": "skills/project-engineering-workflow/references/active-long-task-short-contract.md",
@@ -7787,7 +7787,7 @@
     },
     {
       "path": "skills/project-engineering-workflow/references/pr-diagnosis-short-contract.md",
-      "installedSha256": "1009878c3bb7f6fa0d74a98b52eb849d036c5c9c30dbfe2ee30a5ac62d3c3218"
+      "installedSha256": "5b54239f04683738a305cb2b9ff8d6aef05298cd99fd300a54c7bd2953598c7a"
     },
     {
       "path": "skills/project-engineering-workflow/references/pr-merge-procedure.md",
@@ -7807,7 +7807,7 @@
     },
     {
       "path": "skills/project-engineering-workflow/references/review-proof-short-contract.md",
-      "installedSha256": "205e488abf22fefc491f0875b23c6afee6e27a1f8729dadd097a715eb885ce2b"
+      "installedSha256": "cdd67ed3ffacfae5a8f629f82e21679ccf02cfb592e47ae195bf832cdb43be75"
     },
     {
       "path": "skills/project-engineering-workflow/scripts/base_alignment_helper.ts",
