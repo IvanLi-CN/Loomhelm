@@ -4,7 +4,7 @@ import { posix as posixPath } from "node:path";
 import { z } from "zod";
 import { topologicalOrder, validateGrouping } from "../lib/graph";
 import { requireCondition } from "../lib/errors";
-import { atomicNode, atomicEdge as canonicalAtomicEdge, taskPrBinding, deliveryUnitExternalFacts, validateAtomicGraph, validateAtomicBoundaries, validateDeliveryUnitLifecycleEdges } from "../lib/atomic-orchestration";
+import { atomicNode, atomicEdge as canonicalAtomicEdge, taskPrBinding, deliveryUnitExternalFacts, validateAtomicGraph, validateAtomicBoundaries, validateDeliveryUnitLifecycleEdges, validateTaskLifecycleEdges } from "../lib/atomic-orchestration";
 
 export const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
 const text = z.string().trim().min(1);
@@ -1519,6 +1519,11 @@ export function validatePlan(candidate: Plan): void {
     }
     try {
       validateDeliveryUnitLifecycleEdges(candidate.group_atoms, candidate.atomic_edges);
+    } catch (error) {
+      requireCondition(false, "ATOMIC_GRAPH_INCOMPLETE", error instanceof Error ? error.message : String(error));
+    }
+    try {
+      validateTaskLifecycleEdges(candidate.atoms, candidate.atomic_edges);
     } catch (error) {
       requireCondition(false, "ATOMIC_GRAPH_INCOMPLETE", error instanceof Error ? error.message : String(error));
     }

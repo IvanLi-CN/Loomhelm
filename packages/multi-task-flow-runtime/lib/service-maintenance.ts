@@ -80,6 +80,17 @@ export function resolvePackageIdentity(version: string): PackageIdentity {
   return identity;
 }
 
+export function resolvePackageTarget(target: string): PackageIdentity {
+  if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(target)) return resolvePackageIdentity(target);
+  const result = Runtime.spawnSync([process.execPath, "pm", "view", `${PACKAGE_NAME}@${target}`, "version", "--json"], { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+  requireCondition(result.exitCode === 0, "PACKAGE_RESOLUTION_FAILED", "Unable to resolve the requested package tag");
+  let version: unknown;
+  try { version = JSON.parse(result.stdout.toString("utf8")); } catch { version = undefined; }
+  const resolved = Array.isArray(version) ? version[0] : version;
+  requireCondition(typeof resolved === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(resolved), "PACKAGE_RESOLUTION_FAILED", "Package tag did not resolve to an exact SemVer");
+  return resolvePackageIdentity(resolved);
+}
+
 function packageConfig(old: ServiceConfig | null, identity: PackageIdentity, registryDir: string): ServiceConfig {
   return {
     schema_version: 1,
@@ -103,7 +114,7 @@ function packageConfig(old: ServiceConfig | null, identity: PackageIdentity, reg
   };
 }
 
-function assertPackageUpgradeCompatible(old: ServiceConfig, next: PackageIdentity): void {
+export function assertPackageUpgradeCompatible(old: ServiceConfig, next: PackageIdentity): void {
   if (!old.package_name) return;
   requireCondition(old.package_name === PACKAGE_NAME, "INCOMPATIBLE_RELEASE", "The installed service is not a supported package profile");
   requireCondition(old.compatibility_line === next.compatibility_line, "INCOMPATIBLE_RELEASE", "Package compatibility line changed; explicit migration is required");
@@ -157,6 +168,21 @@ export async function upgradePackageRelease(state: ServiceState, version: string
       throw error;
     }
   });
+}
+
+export async function upgradePackageReleaseAndStart(state: ServiceState, version: string) {
+  const oldVersion = state.config().package_version;
+  const result = await upgradePackageRelease(state, version);
+  try {
+    startUserService(state);
+    const health = await serviceStatus(state);
+    return { ...result, started: true, health };
+  } catch (error) {
+    if (oldVersion && oldVersion !== version) {
+      try { await upgradePackageRelease(state, oldVersion); startUserService(state); } catch { /* preserve the original health failure */ }
+    }
+    throw error;
+  }
 }
 
 export function stageRelease(

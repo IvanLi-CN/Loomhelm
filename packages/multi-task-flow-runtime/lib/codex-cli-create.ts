@@ -7,7 +7,7 @@ import { connectSocket, record, rpc, socketPath } from "../lib/codex-rpc";
 
 export type AgentRole = "Delivery Agent" | "Task Agent";
 export function initializationPrompt(role: AgentRole): string {
-  return `你是本次 multi-task-flow 运行中的 ${role}，由主 Agent 委派到独立工作区。主 Agent 稍后会发送正式派发消息，其中包含 run/task 身份、仓库、开发基线、负责范围、验收要求和阻塞规则。在收到正式派发前，请不要开始正式任务。`;
+  return `$multi-task-flow\n\n你是本次运行中的 ${role}，由主 Agent 委派到独立工作区。主 Agent 稍后会发送正式派发消息；收到后按本 Skill 读取任务上下文并推进自己的任务。正式派发前不要开始正式任务。`;
 }
 export const INITIALIZATION_PROMPT = initializationPrompt("Task Agent");
 export type CliRun = {

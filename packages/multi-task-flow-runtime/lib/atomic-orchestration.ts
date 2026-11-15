@@ -311,41 +311,53 @@ export function canonicalizeContract3Plan(
 }
 
 const deliveryUnitLifecycleSuffixes = ["prepare-parent", "create-pr", "merge-pr", "closeout"] as const;
+const taskLifecycleSuffixes = ["prepare-branch", "create-pr", "merge-pr", "closeout"] as const;
+
+function validatePresetLifecycleEdges(atoms: readonly any[], edges: readonly any[], suffixes: readonly string[], ownerLabel: string, ownerKey: "group_id" | "task_id"): void {
+  const owners = new Map<string, any[]>();
+  for (const atom of atoms) {
+    const ownerId = atom[ownerKey];
+    if (typeof ownerId !== "string") continue;
+    const list = owners.get(ownerId) ?? [];
+    list.push(atom);
+    owners.set(ownerId, list);
+  }
+  const outgoing = new Map<string, string[]>();
+  for (const edge of edges) {
+    const from = edge.from_node_id ?? edge.from_atom_id;
+    const to = edge.to_node_id ?? edge.to_atom_id;
+    if (typeof from === "string" && typeof to === "string") outgoing.set(from, [...(outgoing.get(from) ?? []), to]);
+  }
+  const reachable = (from: string, target: string): boolean => {
+    const seen = new Set<string>();
+    const visit = (node: string): boolean => {
+      if (node === target) return true;
+      if (seen.has(node)) return false;
+      seen.add(node);
+      return (outgoing.get(node) ?? []).some(visit);
+    };
+    return visit(from);
+  };
+  for (const [ownerId, ownerAtoms] of owners) {
+    const bySuffix = new Map(suffixes.map((suffix) => [suffix, ownerAtoms.find((atom) => atom.id.endsWith(`-${suffix}`))]));
+    if (!suffixes.some((suffix) => bySuffix.get(suffix))) continue;
+    for (const suffix of suffixes) if (!bySuffix.get(suffix)) throw new Error(`${ownerLabel} ${ownerId} has an incomplete preset lifecycle atom set`);
+    for (let index = 1; index < suffixes.length; index++) {
+      const from = bySuffix.get(suffixes[index - 1])!.id;
+      const to = bySuffix.get(suffixes[index])!.id;
+      if (!reachable(from, to)) throw new Error(`${ownerLabel} ${ownerId} lifecycle requires an Agent-declared dependency path from ${from} to ${to}`);
+    }
+  }
+}
 
 /** Require Agent-declared delivery-unit lifecycle ordering without inventing edges. */
 export function validateDeliveryUnitLifecycleEdges(groupAtoms: readonly any[], edges: readonly any[]): void {
-  const groups = new Map<string, any[]>();
-  for (const atom of groupAtoms) {
-    const list = groups.get(atom.group_id) ?? [];
-    list.push(atom);
-    groups.set(atom.group_id, list);
-  }
-  for (const [groupId, atoms] of groups) {
-    const bySuffix = new Map(deliveryUnitLifecycleSuffixes.map((suffix) => [suffix, atoms.find((atom) => atom.id.endsWith(`-${suffix}`))]));
-    if (!deliveryUnitLifecycleSuffixes.some((suffix) => bySuffix.get(suffix))) continue;
-    for (const suffix of deliveryUnitLifecycleSuffixes) if (!bySuffix.get(suffix)) throw new Error(`Delivery unit ${groupId} has an incomplete preset lifecycle atom set`);
-    const outgoing = new Map<string, string[]>();
-    for (const edge of edges) {
-      const from = edge.from_node_id ?? edge.from_atom_id;
-      const to = edge.to_node_id ?? edge.to_atom_id;
-      if (typeof from === "string" && typeof to === "string") outgoing.set(from, [...(outgoing.get(from) ?? []), to]);
-    }
-    const reachable = (from: string, target: string): boolean => {
-      const seen = new Set<string>();
-      const visit = (node: string): boolean => {
-        if (node === target) return true;
-        if (seen.has(node)) return false;
-        seen.add(node);
-        return (outgoing.get(node) ?? []).some(visit);
-      };
-      return visit(from);
-    };
-    for (let index = 1; index < deliveryUnitLifecycleSuffixes.length; index++) {
-      const from = bySuffix.get(deliveryUnitLifecycleSuffixes[index - 1])!.id;
-      const to = bySuffix.get(deliveryUnitLifecycleSuffixes[index])!.id;
-      if (!reachable(from, to)) throw new Error(`Delivery unit ${groupId} lifecycle requires an Agent-declared dependency path from ${from} to ${to}`);
-    }
-  }
+  validatePresetLifecycleEdges(groupAtoms, edges, deliveryUnitLifecycleSuffixes, "Delivery unit", "group_id");
+}
+
+/** Require Agent-declared task lifecycle ordering without inferring edges from atom names. */
+export function validateTaskLifecycleEdges(taskAtoms: readonly any[], edges: readonly any[]): void {
+  validatePresetLifecycleEdges(taskAtoms, edges, taskLifecycleSuffixes, "Task", "task_id");
 }
 
 /** Materialize the canonical graph for a contract-3 ledger without inventing

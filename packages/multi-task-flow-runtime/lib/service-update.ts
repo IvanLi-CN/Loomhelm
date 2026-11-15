@@ -6,13 +6,18 @@ import type { ServiceState } from "../lib/service-state";
 
 const CACHE_TTL_MS = 6 * 60 * 60_000;
 const CHECK_TIMEOUT_MS = 1500;
-const cachePath = (state: ServiceState) => join(state.paths.state, "daemon-update.json");
+const cachePath = (state: ServiceState) => join(state.paths.state, "version-discovery.json");
+const legacyCachePath = (state: ServiceState) => join(state.paths.state, "daemon-update.json");
+const lockPath = (state: ServiceState) => join(state.paths.state, "version-discovery.lock");
 type Cache = {
   checked_at: string;
   package_name: string;
   compatibility_line: string;
   compatible_version: string | null;
   latest_version: string | null;
+  status?: "fresh" | "pending" | "failed";
+  next_check_at?: string;
+  failure_reason?: string;
 };
 export type DaemonUpdateHint = {
   kind: "daemon_update";
@@ -23,8 +28,9 @@ export type DaemonUpdateHint = {
 
 function readCache(state: ServiceState): Cache | null {
   try {
-    if (!existsSync(cachePath(state))) return null;
-    const value = JSON.parse(readRegular(cachePath(state))) as Cache;
+    const path = existsSync(cachePath(state)) ? cachePath(state) : legacyCachePath(state);
+    if (!existsSync(path)) return null;
+    const value = JSON.parse(readRegular(path)) as Cache;
     if (typeof value.checked_at !== "string" || !Number.isFinite(Date.parse(value.checked_at)) || typeof value.package_name !== "string" || typeof value.compatibility_line !== "string" || (value.compatible_version !== null && typeof value.compatible_version !== "string") || (value.latest_version !== null && typeof value.latest_version !== "string")) return null;
     return value;
   } catch { return null; }
@@ -69,19 +75,26 @@ export function triggerDaemonUpdateCheck(state: ServiceState): void {
   const existing = readCache(state);
   if (existing && existing.package_name === config.package_name && existing.compatibility_line === (config.compatibility_line ?? "") && Date.now() - Date.parse(existing.checked_at) <= CACHE_TTL_MS) return;
   let lock: { release(): void } | undefined;
-  try { lock = tryLockFile(join(state.paths.state, "daemon-update.lock")); } catch { return; }
+  try { lock = tryLockFile(lockPath(state)); } catch { return; }
   if (!lock) return;
+  const pending = { checked_at: new Date().toISOString(), package_name: config.package_name, compatibility_line: config.compatibility_line ?? "", compatible_version: null, latest_version: null, status: "pending" as const, next_check_at: new Date(Date.now() + CACHE_TTL_MS).toISOString() };
+  try { writeAtomic(cachePath(state), JSON.stringify(pending) + "\n"); } catch { /* best effort */ }
   void (async () => {
     try {
       const response = await fetch("https://registry.npmjs.org/%40loomhelm%2Fmulti-task-flow", { signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) });
-      if (!response.ok) return;
+      if (!response.ok) throw new Error(`registry_http_${response.status}`);
       const metadata = await response.json() as { "dist-tags"?: Record<string, unknown> };
       const tags = metadata["dist-tags"] ?? {};
       const compatible = typeof tags[config.compatibility_line ?? ""] === "string" ? tags[config.compatibility_line ?? ""] as string : null;
       const latest = typeof tags.latest === "string" ? tags.latest : null;
-      writeAtomic(cachePath(state), JSON.stringify({ checked_at: new Date().toISOString(), package_name: config.package_name, compatibility_line: config.compatibility_line ?? "", compatible_version: compatible, latest_version: latest }) + "\n");
-    } catch { /* Update discovery is an optional side channel. */ }
+      writeAtomic(cachePath(state), JSON.stringify({ checked_at: new Date().toISOString(), package_name: config.package_name, compatibility_line: config.compatibility_line ?? "", compatible_version: compatible, latest_version: latest, status: "fresh", next_check_at: new Date(Date.now() + CACHE_TTL_MS).toISOString() }) + "\n");
+    } catch (error) {
+      try { writeAtomic(cachePath(state), JSON.stringify({ ...pending, status: "failed", failure_reason: error instanceof Error ? error.message.slice(0, 120) : "registry_check_failed" }) + "\n"); } catch { /* optional side channel */ }
+    }
     finally { lock?.release(); }
   })();
 }
+
+export const cachedVersionDiscovery = cachedDaemonUpdate;
+export const triggerVersionDiscoveryCheck = triggerDaemonUpdateCheck;
 

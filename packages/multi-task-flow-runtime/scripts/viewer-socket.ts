@@ -363,6 +363,7 @@ export function connectUnixViewerWorker(
     let socket: Socket | undefined;
     let responseStarted = false;
     let settled = false;
+    let cancelled = false;
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
     const decoder = new FrameDecoder(maximum);
     const timer = setTimeout(() => {
@@ -388,6 +389,7 @@ export function connectUnixViewerWorker(
         controller = value;
       },
       cancel(reason) {
+        cancelled = true;
         socket?.destroy(reason instanceof Error ? reason : undefined);
       },
     });
@@ -474,8 +476,11 @@ export function connectUnixViewerWorker(
         return;
       }
     });
-    socket.on("error", (error) => fail(error));
+    socket.on("error", (error) => {
+      if (!cancelled) fail(error);
+    });
     socket.on("close", () => {
+      if (cancelled) return;
       if (responseStarted && !settled) fail(new Error("viewer worker socket closed"));
       else if (!responseStarted && !settled) fail(new Error("viewer worker socket closed"));
     });

@@ -17,7 +17,7 @@ function readJson(path: string): JsonObject | null {
 
 const packageRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 function validatedArtifactIdentity(): PackageIdentity | null {
-  const artifact = readJson(resolve(packageRoot, 'toolkit/artifact-manifest.json'));
+  const artifact = readJson(resolve(packageRoot, 'resources/artifact-manifest.json'));
   if (!artifact || artifact.schemaVersion !== 3 || artifact.dependenciesBundled !== false || artifact.canonicalDigestAlgorithm !== 'path-byte-v2' || !Array.isArray(artifact.dependencies) || artifact.dependencies.length === 0 || artifact.dependencies.some(item => !item || typeof item !== 'object' || typeof (item as JsonObject).name !== 'string' || typeof (item as JsonObject).version !== 'string' || (item as JsonObject).mode !== 'consumer-install') || !Array.isArray(artifact.files)) return null;
   try {
     const identity = validatePackageIdentity(artifact.identity);
