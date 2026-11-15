@@ -50,11 +50,20 @@ test('validates independent package identity dimensions', () => {
 
 test('release validation binds the requested version to the packaged artifact', () => {
   const cli = resolve(import.meta.dir, '../src/cli.ts');
-  const mismatched = spawnSync(process.execPath, ['--no-install', cli, 'release', 'validate', '--version', '9.9.9'], { encoding: 'utf8' });
+  const packageMetadata = JSON.parse(readFileSync(resolve(import.meta.dir, '../package.json'), 'utf8')) as { version?: unknown };
+  const packageVersion = packageMetadata.version;
+  assert(isExactSemVer(packageVersion));
+  const artifact = JSON.parse(readFileSync(resolve(import.meta.dir, '../toolkit/artifact-manifest.json'), 'utf8')) as { packageVersion?: unknown; identity?: { packageVersion?: unknown } };
+  assert.equal(artifact.packageVersion, packageVersion);
+  assert.equal(artifact.identity?.packageVersion, packageVersion);
+
+  const mismatchedVersion = packageVersion === '0.0.0' ? '0.0.1' : '0.0.0';
+  assert.equal(isExactSemVer(mismatchedVersion), true);
+  assert.notEqual(mismatchedVersion, packageVersion);
+  const mismatched = spawnSync(process.execPath, ['--no-install', cli, 'release', 'validate', '--version', mismatchedVersion], { encoding: 'utf8' });
   assert.notEqual(mismatched.status, 0);
   assert.match(mismatched.stderr + mismatched.stdout, /Publication version does not match artifact version/);
 
-  const packageVersion = JSON.parse(readFileSync(resolve(import.meta.dir, '../package.json'), 'utf8')).version as string;
   const missingProvenance = spawnSync(process.execPath, ['--no-install', cli, 'release', 'validate', '--version', packageVersion, '--require-provenance'], { encoding: 'utf8' });
   assert.notEqual(missingProvenance.status, 0);
   assert.match(missingProvenance.stderr + missingProvenance.stdout, /Publication requires (a clean toolkit artifact|artifact merge provenance)/);
