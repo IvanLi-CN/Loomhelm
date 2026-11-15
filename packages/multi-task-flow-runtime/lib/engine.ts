@@ -139,6 +139,7 @@ function executionPlan(ledger: Ledger): Plan {
   return find(ledger.plans, (item) => item.id === ledger.execution_plan_id, "Execution plan");
 }
 function atomicNodeSatisfied(ledger: Ledger, node: any): boolean {
+  if (!node) return false;
   if (node.kind === "boundary")
     return (
       node.boundary === "start" || ledger.events.some((event) => event.type === "run_completed")
@@ -168,10 +169,19 @@ function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): bo
   );
   if (
     !task ||
+    task.atoms.some((atom) => !taskNodes.some((node) => node.id === atom.id)) ||
     taskNodes.some((node) => {
       const atom = task.atoms.find((candidate) => candidate.id === node.id);
-      return !atom || node.state !== atom.status;
+      return !atom || (node.state === "completed" && atom.status !== "completed");
     })
+  )
+    return false;
+  if (
+    edges.some(
+      (edge) =>
+        !nodes.some((node) => node.id === edge.from_node_id) ||
+        !nodes.some((node) => node.id === edge.to_node_id),
+    )
   )
     return false;
   if (
