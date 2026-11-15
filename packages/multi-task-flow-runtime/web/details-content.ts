@@ -10,6 +10,7 @@ import { attachDependencyTooltip, renderDependencyTooltip, type DependencyToolti
 import type { AtomicTask, Group, Task, View } from "./model";
 import { dependencyLabel, groupExecutionVisualState, stateLabel, taskKindLabel } from "./labels";
 import { buildGraphProjection, nodeTitle, type GraphDependencyPath, type GraphProjectionEdge } from "./graph-projection";
+import { inspectAtomicGraph } from "../lib/atomic-graph-order";
 
 type DetailContentContext = {
   getData: () => View | null;
@@ -100,25 +101,88 @@ function readinessValue(group: Group): string {
   return [status, ...blockers].join(" · ");
 }
 
-function atomList(atoms: Task["atoms"] | Group["atoms"], dependencies: (index: number) => DependencyTooltipItem[], focusedAtomId?: string | null, parent?: { kind: "task" | "group"; id: string }): HTMLElement | string {
+function atomList(atoms: Task["atoms"] | Group["atoms"], dependencies: (index: number) => DependencyTooltipItem[], focusedAtomId?: string | null, parent?: { kind: "task" | "group"; id: string }, diagnostics?: (id: string) => string[]): HTMLElement | string {
   if (!atoms?.length) return "未配置原子任务";
   const list = document.createElement("ol");
   list.className = "atom-list";
   const wrapper = document.createElement("div");
   wrapper.append(list);
-  const current = atoms.find((atom) => atom.status === "running" || atom.status === "blocked") ?? atoms.find((atom) => atom.status === "planned");
   for (const [index, atom] of atoms.entries()) {
     const item = document.createElement("li");
     item.dataset.status = atom.status;
     if (parent) { item.dataset.contextKind = "atom"; item.dataset.contextId = atom.id; item.dataset.contextParentKind = parent.kind; item.dataset.contextParentId = parent.id; }
     item.tabIndex = 0;
-    if (atom.id === current?.id) item.dataset.current = "true";
     if (atom.id === focusedAtomId) { item.dataset.focused = "true"; item.setAttribute("aria-current", "true"); }
+    const issues = diagnostics?.(atom.id) ?? [];
+    if (issues.length) {
+      item.dataset.diagnostic = "true";
+      item.title = issues.join("；");
+      item.append(text("span", `⚠ ${issues.join("、")}`, "atom-warning"));
+    }
     item.append(renderStatusRow({ name: atom.title, status: atom.status, completedAt: atom.completed_at }));
     list.append(item);
     wrapper.append(attachDependencyTooltip(item, dependencies(index), `${atom.title}，查看依赖`));
   }
   return wrapper;
+}
+
+function atomicStatus(state: string): AtomicTask["status"] {
+  return state === "completed" || state === "running" || state === "blocked" ? state : "planned";
+}
+
+function lifecycleDisplayRank(atom: { lifecycle_stage?: string | null } | undefined, kind: string | undefined): number | null {
+  if (kind === "milestone") return 35;
+  if (!atom) return null;
+  if (!atom.lifecycle_stage) return 30;
+  return { workspace_ready: 10, pr_created: 20, pr_merged: 40, closed: 50 }[atom.lifecycle_stage] ?? null;
+}
+
+function scopedAtomicAtoms(data: View, scope: { kind: "task" | "group"; id: string }): { atoms: AtomicTask[]; diagnostics: Map<string, string[]> } {
+  const legacy = scope.kind === "task"
+    ? data.tasks.find((item) => item.id === scope.id)?.atoms ?? data.tasks.find((item) => item.id === scope.id)?.planned_atoms ?? []
+    : data.groups.find((item) => item.id === scope.id)?.atoms ?? data.groups.find((item) => item.id === scope.id)?.planned_atoms ?? [];
+  const nodes = (data.atomic_nodes ?? []).filter((node) => {
+    const nodeScope = node.scope;
+    if (!nodeScope || nodeScope.delivery_unit_id !== (scope.kind === "group" ? scope.id : data.tasks.find((item) => item.id === scope.id)?.group_id)) return false;
+    return scope.kind === "group"
+      ? nodeScope.kind === "delivery_unit"
+      : nodeScope.kind === "task" && nodeScope.task_id === scope.id;
+  });
+  const legacyById = new Map(legacy.map((atom) => [atom.id, atom]));
+  const canonicalIds = new Set((data.atomic_nodes ?? []).map((node) => node.id));
+  const legacyNodes = [...data.tasks.flatMap((item) => item.atoms ?? item.planned_atoms ?? []), ...data.groups.flatMap((item) => item.atoms ?? item.planned_atoms ?? [])]
+    .filter((atom) => !canonicalIds.has(atom.id))
+    .map((atom) => ({ kind: "work", id: atom.id, title: atom.title, state: atom.status }));
+  const sourceNodes = [...(data.atomic_nodes ?? []), ...legacyNodes];
+  const nodeById = new Map(sourceNodes.map((node) => [node.id, node]));
+  const edges = (data.canonical_atomic_edges ?? data.atomic_edges?.map((edge) => ({ id: edge.id, from_node_id: edge.from_atom_id, to_node_id: edge.to_atom_id })) ?? []).filter((edge) => nodeById.has(edge.from_node_id) && nodeById.has(edge.to_node_id));
+  const inspection = inspectAtomicGraph(sourceNodes, edges);
+  const scopedIds = new Set(nodes.map((node) => node.id).concat(legacyNodes.filter((node) => legacy.some((atom) => atom.id === node.id)).map((node) => node.id)));
+  const globalIndex = new Map(inspection.order.map((id, index) => [id, index]));
+  const orderedIds = [...inspection.order.filter((id) => scopedIds.has(id)), ...[...scopedIds].filter((id) => !inspection.order.includes(id)).sort((left, right) => left.localeCompare(right))];
+  if (scope.kind === "group") {
+    orderedIds.sort((left, right) => {
+      const leftRank = lifecycleDisplayRank(legacyById.get(left), nodeById.get(left)?.kind);
+      const rightRank = lifecycleDisplayRank(legacyById.get(right), nodeById.get(right)?.kind);
+      if (leftRank !== null && rightRank !== null && leftRank !== rightRank) return leftRank - rightRank;
+      return (globalIndex.get(left) ?? Number.MAX_SAFE_INTEGER) - (globalIndex.get(right) ?? Number.MAX_SAFE_INTEGER) || left.localeCompare(right);
+    });
+  }
+  const completedAt = new Map((data.actual_milestones ?? []).map((item) => [item.node_id, item.occurred_at]));
+  const atoms = orderedIds.map((id) => {
+    const node = nodeById.get(id)!;
+    const old = legacyById.get(id);
+    return { id, title: node.title, status: atomicStatus(node.state ?? old?.status ?? "planned"), completed_at: completedAt.get(id) ?? old?.completed_at ?? null };
+  });
+  const diagnostics = new Map<string, string[]>();
+  for (const [id, codes] of inspection.nodeDiagnostics) diagnostics.set(id, codes.map((code) => inspection.diagnostics.find((item) => item.code === code)?.message ?? code));
+  return { atoms, diagnostics };
+}
+
+function atomicIncomingEdges(data: View, atomId: string): { from_node_id: string; to_node_id: string }[] {
+  const canonical = data.canonical_atomic_edges ?? [];
+  if (canonical.length) return canonical.filter((edge) => edge.to_node_id === atomId);
+  return (data.atomic_edges ?? []).filter((edge) => edge.to_atom_id === atomId).map((edge) => ({ from_node_id: edge.from_atom_id, to_node_id: edge.to_atom_id }));
 }
 
 function pathValue(path: GraphDependencyPath, index: number | null): string {
@@ -176,14 +240,15 @@ export function createDetailContent(context: DetailContentContext) {
     const projection = buildGraphProjection(data);
     const predecessors = dependenciesFor(projection, node?.id, "incoming", data);
     const successors = dependenciesFor(projection, node?.id, "outgoing", data);
-    const taskAtoms = task.atoms ?? task.planned_atoms;
+    const scoped = scopedAtomicAtoms(data, { kind: "task", id: task.id });
+    const taskAtoms = scoped.atoms.length ? scoped.atoms : task.atoms ?? task.planned_atoms;
     field(container, "原子任务", atomList(taskAtoms, (index) => {
       const id = taskAtoms![index]!.id;
-      return (data.atomic_edges ?? []).filter((edge) => edge.to_atom_id === id).map((edge) => {
-        const source = data.tasks.flatMap((item) => item.atoms ?? item.planned_atoms ?? []).find((atom) => atom.id === edge.from_atom_id);
-        return { name: source?.title ?? edge.from_atom_id, state: "", status: source?.status ?? "unknown", completedAt: source?.completed_at };
+      return atomicIncomingEdges(data, id).map((edge) => {
+        const source = taskAtoms?.find((atom) => atom.id === edge.from_node_id) ?? data.tasks.flatMap((item) => item.atoms ?? item.planned_atoms ?? []).find((atom) => atom.id === edge.from_node_id);
+        return { name: source?.title ?? edge.from_node_id, state: "", status: source?.status ?? "unknown", completedAt: source?.completed_at };
       });
-    }, focusedAtomId, { kind: "task", id: task.id }));
+    }, focusedAtomId, { kind: "task", id: task.id }, (id) => scoped.diagnostics.get(id) ?? []));
     container.append(facts);
     field(facts, "前驱", renderDependencyTooltip(predecessors, predecessors.length ? `查看 ${predecessors.length} 项依赖` : "无依赖"));
     field(facts, "后继", renderDependencyTooltip(successors, successors.length ? `查看 ${successors.length} 项依赖` : "无依赖"));
@@ -236,24 +301,15 @@ export function createDetailContent(context: DetailContentContext) {
     const historicalTaskIds = [...new Set(data.actual_intervals.filter((row) => row.group_id === group.id).map((row) => row.task_id))];
     const executionState = groupExecutionVisualState(group.state, group.coordination_execution?.state);
     const { container, restore } = begin("group", group.id, group.title, context.labels[executionState] ?? executionState);
-    const lifecycleAtoms = group.atoms ?? group.planned_atoms ?? [];
-    const milestoneAtoms: AtomicTask[] = (data.atomic_nodes ?? [])
-      .filter((node) => node.kind === "milestone" && node.scope?.kind === "delivery_unit" && node.scope.delivery_unit_id === group.id)
-      .map((node) => ({
-        id: node.id,
-        title: node.title,
-        status: node.state === "completed" || node.state === "running" || node.state === "blocked" ? node.state : "planned",
-        completed_at: data.actual_milestones.find((milestone) => milestone.node_id === node.id)?.occurred_at ?? null,
-      }));
-    const groupAtoms: AtomicTask[] = [...lifecycleAtoms, ...milestoneAtoms];
+    const scoped = scopedAtomicAtoms(data, { kind: "group", id: group.id });
+    const groupAtoms = scoped.atoms.length ? scoped.atoms : group.atoms ?? group.planned_atoms ?? [];
     const atomById = new Map(groupAtoms.map((atom) => [atom.id, atom]));
     field(container, "原子任务", atomList(groupAtoms, (index) => {
       const atom = groupAtoms[index]!;
-      const items: DependencyTooltipItem[] = (data.atomic_edges ?? [])
-        .filter((edge) => edge.to_atom_id === atom.id)
+      const items: DependencyTooltipItem[] = atomicIncomingEdges(data, atom.id)
         .map((edge) => {
-          const source = atomById.get(edge.from_atom_id);
-          return { name: source?.title ?? edge.from_atom_id, state: "", status: source?.status ?? "planned", completedAt: source?.completed_at };
+          const source = atomById.get(edge.from_node_id);
+          return { name: source?.title ?? edge.from_node_id, state: "", status: source?.status ?? "planned", completedAt: source?.completed_at };
         });
       if ("lifecycle_stage" in atom && atom.lifecycle_stage) {
         const titles = { workspace_ready: "父分支准备就绪", pr_created: "父 PR 已创建", pr_merged: "父 PR 已合并", closed: "交付单元收口" };
@@ -261,7 +317,7 @@ export function createDetailContent(context: DetailContentContext) {
         items.push({ name: titles[atom.lifecycle_stage], state: "", status: status === "passed" ? "completed" : status === "failed" ? "blocked" : "planned", completedAt: group.lifecycle_completed_at?.[atom.lifecycle_stage] });
       }
       return items;
-    }, focusedAtomId, { kind: "group", id: group.id }));
+    }, focusedAtomId, { kind: "group", id: group.id }, (id) => scoped.diagnostics.get(id) ?? []));
     const facts = text("div", "", "detail-group-facts");
     container.append(facts);
     if (group.coordination_execution?.state === "waiting") field(facts, "协调等待", group.coordination_execution.reason ?? "等待贡献任务");
