@@ -128,7 +128,7 @@ export function verifyRepositoryIdentity(cwd: string, expected: RepositoryIdenti
     throw new Error("Repository identity does not match the orchestration repository");
 }
 
-function verifyWorktree(cwd: string, source: string, threadId: string): string {
+export function verifyWorktree(cwd: string, source: string, threadId: string): string {
   const git = (path: string, args: string[]) => execFileSync("git", ["-C", path, ...args], { encoding: "utf8", timeout: 10_000 }).trim();
   const actual = realpathSync(cwd), root = realpathSync(git(cwd, ["rev-parse", "--show-toplevel"]));
   if (root === realpathSync(git(source, ["rev-parse", "--show-toplevel"]))) throw new Error("CLI did not create an independent checkout");
@@ -138,6 +138,30 @@ function verifyWorktree(cwd: string, source: string, threadId: string): string {
   if (ownership.version !== 1 || ownership.ownerThreadId !== threadId) throw new Error("Worktree is not owned by the created Codex thread");
   if (git(actual, ["status", "--porcelain"])) throw new Error("Initialization left workspace changes");
   return git(actual, ["rev-parse", "HEAD"]);
+}
+
+export async function reconcileCliThread(input: { thread_id: string; model: string; thinking: string; source_cwd: string }) {
+  const path = socketPath();
+  if (!path) throw new Error("App-server read control is unavailable");
+  const { socket, buffer: initial } = await connectSocket(path);
+  const buffer = { value: initial };
+  try {
+    const initialized = await rpc(socket, buffer, 1, "initialize", { clientInfo: { name: "multi-task-flow", version: "2" }, capabilities: { experimentalApi: true } });
+    if (initialized.error) throw new Error("Codex app-server initialization rejected");
+    const response = await rpc(socket, buffer, 2, "thread/read", { threadId: input.thread_id, includeTurns: false });
+    if (response.error) throw new Error("thread/read rejected");
+    const thread = record(record(response.result)?.thread);
+    if (!thread || thread.id !== input.thread_id) throw new Error("Thread identity mismatch");
+    if (thread.model !== input.model || thread.reasoningEffort !== input.thinking) throw new Error("CLI execution profile mismatch");
+    if (typeof thread.cwd !== "string") throw new Error("Thread working directory unavailable");
+    const turns = await rpc(socket, buffer, 3, "thread/turns/list", { threadId: input.thread_id, sortDirection: "desc", limit: 1, itemsView: "full" });
+    const turnData = record(turns.result)?.data;
+    if (turns.error || !Array.isArray(turnData)) throw new Error("Initialization turn evidence unavailable");
+    const latest = record(turnData[0]);
+    if (!latest || latest.status !== "completed") throw new Error("Initialization turn is not completed");
+    const initialHead = verifyWorktree(thread.cwd, input.source_cwd, input.thread_id);
+    return { thread_id: input.thread_id, workspace_path: thread.cwd, initial_head: initialHead, turn_completed: true, model: input.model, thinking: input.thinking, evidence_ref: `codex-thread-reconcile:${input.thread_id}`, created_at: new Date().toISOString() };
+  } finally { socket.destroy(); }
 }
 
 export async function createCliThread(input: CliCreationInput, dependencies = {

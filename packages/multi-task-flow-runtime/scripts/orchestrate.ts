@@ -1,5 +1,5 @@
 import { desktopHandoff } from "../lib/desktop-handoff";
-import { createCliThread, verifyRepositoryIdentity } from "../lib/codex-cli-create";
+import { createCliThread, reconcileCliThread, verifyRepositoryIdentity } from "../lib/codex-cli-create";
 import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import { sweepConversationArchives } from "../lib/conversation-archive";
 import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
@@ -377,6 +377,33 @@ try {
       ok: true, code: delivery?.replayed ? "REPLAYED" : "APPLIED",
       revision: delivery?.revision, result: delivery,
     }));
+  } else if (command === "creation-reconcile") {
+    const parsed = requestSchema.parse(input);
+    const payload = z.object({ operation_id: id }).strict().parse(parsed.payload);
+    const store = new LedgerStore(root, parsed.run_id);
+    const ledger = validateLedger(store.read());
+    if (parsed.actor.role !== "main" || parsed.actor.thread_id !== ledger.control.owner_thread_id)
+      throw new ContractError("ACTOR_MISMATCH", "Creation reconciliation must be run by the bound main thread");
+    const operation = ledger.operations.find(item => item.id === payload.operation_id && item.kind === "dispatch");
+    if (!operation) throw new ContractError("NOT_FOUND", "Dispatch operation not found");
+    if (operation.status !== "unknown") throw new ContractError("OPERATION_TERMINAL", "Dispatch is not awaiting creation reconciliation");
+    if (!operation.request.native_request_id) throw new ContractError("NATIVE_REQUEST_CONFLICT", "Dispatch has no bound native request");
+    const creation = record(operation.request.creation_result);
+    const evidence = record(creation?.native_evidence);
+    const threadId = operation.request.observed_thread_id ?? (typeof creation?.thread_id === "string" ? creation.thread_id : undefined) ?? (typeof evidence?.thread_id === "string" ? evidence.thread_id : undefined);
+    if (!threadId) {
+      console.log(JSON.stringify({ ok: true, code: "UNKNOWN", revision: ledger.revision, result: { operation_id: operation.id, outcome: "unknown", reason: "No observed thread identity" } }));
+      process.exit(0);
+    }
+    const target = operation.request.target_type === "group" ? ledger.groups.find(item => item.id === operation.target_id) : ledger.tasks.find(item => item.id === operation.target_id);
+    if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
+    const parameters = record(operation.request.creation_parameters);
+    const profile = executionProfile.parse(operation.request.execution_profile);
+    const reconciliation = await reconcileCliThread({ thread_id: threadId, model: profile.model, thinking: profile.thinking, source_cwd: String(parameters?.cwd ?? process.cwd()) });
+    const result = store.update(raw => apply(raw, "dispatch-resolve", { ...parsed, payload: { operation_id: operation.id, outcome: "succeeded", thread_id: threadId, native_evidence: { source: "multi-task-flow-reconcile", native_tool_name: "codex exec", operation_id: operation.id, native_request_id: operation.request.native_request_id, model: profile.model, thinking: profile.thinking, ...reconciliation } } }));
+    const notification = notificationRequestOf(result);
+    const delivery = notification ? record(await deliverNotification(store, parsed, input, notification)) : null;
+    console.log(JSON.stringify({ ...record(result), revision: validateLedger(store.read()).revision, ...(delivery ? { notification_delivery: delivery } : {}) }));
   } else if (command === "conversation-create") {
     const parsed = requestSchema.parse(input);
     const payload = z

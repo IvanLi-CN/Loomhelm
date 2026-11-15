@@ -3385,6 +3385,17 @@ describe("native CLI handoff contract", () => {
         ...ledger.config.execution_profile, created_at: at, evidence_ref: "codex-exec:cli-request", thread_id: "cli-thread",
         exit_code, turn_completed: true, workspace_path: "/owned/worktree", initial_head: head } });
   }
+  test("reconciliation evidence can resolve an observed unknown without changing native identity", () => {
+    const ledger = claimed();
+    apply(ledger, "dispatch-progress", request(ledger, "reconcile-observed", { operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread" }));
+    const payload = resolve(ledger).payload as any;
+    payload.native_evidence = { ...payload.native_evidence, source: "multi-task-flow-reconcile", evidence_ref: "codex-thread-reconcile:cli-thread" };
+    delete payload.native_evidence.exit_code;
+    apply(ledger, "dispatch-resolve", request(ledger, "reconcile-resolve", payload));
+    expect(ledger.operations[0].status).toBe("succeeded");
+    expect(ledger.operations[0].request.native_request_id).toBe("cli-request");
+    expect(ledger.tasks[0].thread_id).toBe("cli-thread");
+  });
   test("native success cannot omit the transport used by baseline and handoff gates", () => {
     for (const parameters of [undefined, { cwd: "/repo" }]) {
       const ledger = claimed();

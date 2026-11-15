@@ -6962,7 +6962,7 @@
     },
     {
       "path": "skills/multi-task-flow/SKILL.md",
-      "installedSha256": "c84aacd86e40ddbe66fb8a1734a1cb28b771be8b3d4a765818a112f45dcfbef5"
+      "installedSha256": "d8eedd40b39ff25f6f2c1b862cae3ee47f7e94c179b2cb3916dc9e109acdd9e3"
     },
     {
       "path": "skills/multi-task-flow/bun.lock",
@@ -7122,7 +7122,7 @@
     {
       "path": "skills/multi-task-flow/lib/engine.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/engine.ts",
-      "installedSha256": "67fa5b02e4a2cd4f3425267bed3d82bb923a26737c14c54c504e00d268cb8dce"
+      "installedSha256": "46ac6028165e3751ad5bdc33e1109629d84fddd119bb325b267a943912f639f1"
     },
     {
       "path": "skills/multi-task-flow/lib/errors.ts",
@@ -7351,7 +7351,7 @@
     {
       "path": "skills/multi-task-flow/scripts/orchestrate.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/orchestrate.ts",
-      "installedSha256": "ac615e7422a5e7ce6c31a6928ffe012521363ede1c6ec7a4c38184d04c490614"
+      "installedSha256": "8dd47047f718c9e0f924328857343602eae9ce8e8e4b17ff6f2a71217d53a4de"
     },
     {
       "path": "skills/multi-task-flow/scripts/service.ts",
@@ -7421,7 +7421,7 @@
     {
       "path": "skills/multi-task-flow/tests/engine.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/engine.test.ts",
-      "installedSha256": "57e063fb641c1e6af5439c91bdfe2266320ae4125e851ffbeeb479825b5d021a"
+      "installedSha256": "5b3111d0baece5d15e2f1ec38da2efd75fb66d4eaa15e3d55f2e22b7db2dd34d"
     },
     {
       "path": "skills/multi-task-flow/tests/graph-projection.test.ts",
@@ -8021,7 +8021,7 @@
     },
     {
       "path": "skills/multi-task-flow/references/native-dispatch-and-reconciliation.md",
-      "installedSha256": "75f40ab6a17311beea4b8344eca4f05049561155fb3ee04a06e16e7bc53d0393"
+      "installedSha256": "b0453131096253b5c4ad61395aff85112e3e726838f0986f8c354ae3dc024ae1"
     },
     {
       "path": "skills/multi-task-flow/references/plan-and-graph.md",
@@ -8117,7 +8117,7 @@
     {
       "path": "skills/multi-task-flow/lib/codex-cli-create.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/codex-cli-create.ts",
-      "installedSha256": "f62e5acc1f225d63ad5fb00ba48f3662f41e0551ba87fefc9d3eac94e3fd720f"
+      "installedSha256": "08d47b9b7694ee54f4b3c429d7437667b16b2573a47a2710481c711d8767a1a5"
     },
     {
       "path": "skills/multi-task-flow/lib/conversation-eligibility.ts",
