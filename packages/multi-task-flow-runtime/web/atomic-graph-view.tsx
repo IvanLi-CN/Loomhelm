@@ -227,13 +227,13 @@ export function createAtomicGraphController(context: GraphContext) {
     latestEdges = edges;
     projection = atomicProjection(nodes, edges);
     renderAccessibleNodes(projection, context);
-    const key = JSON.stringify([direction, projection.nodes.map((node) => [node.id, node.title]), projection.edges.map((edge) => [edge.id, edge.source, edge.target])]);
+    if (!localStorage.getItem(`loomhelm:atomic-display-mode:${location.pathname}`) && projection.nodes.length < 40) displayMode = "full";
+    const key = JSON.stringify([direction, displayMode, projection.nodes.map((node) => [node.id, node.title]), projection.edges.map((edge) => [edge.id, edge.source, edge.target])]);
     if (key === signature) { highlightAccessibleSelection(projection, context); update?.(); return; }
     signature = key;
     const serial = ++generation;
     pending = true;
     update?.();
-    if (!localStorage.getItem(`loomhelm:atomic-display-mode:${location.pathname}`) && projection.nodes.length < 40) displayMode = "full";
     layoutProjection(projection, direction, displayMode).then((result) => {
       if (serial !== generation) return;
       layout = result;
