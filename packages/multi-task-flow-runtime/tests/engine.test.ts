@@ -894,6 +894,137 @@ function providerPrReceipt(
   };
 }
 
+test("contract-3 regular dispatch uses the repository target branch and current delivery-unit SHA", () => {
+  const readyLedger = () => {
+    const ledger = v2Fixture();
+    ledger.contract_version = 3;
+    ledger.source_schema_version = null;
+    ledger.tasks.forEach((task) => {
+      task.execution_owner = "task_agent";
+      task.conversation_policy = "task_agent";
+      task.delivery_policy = "child_pr";
+    });
+    approveV2(ledger);
+
+    const owner = ledger.groups[0]!;
+    owner.delivery_unit_kind = "regular";
+    owner.owner_kind = "group";
+    owner.agent_thread_id = "group-thread";
+    owner.state = "active";
+    owner.lifecycle.workspace_ready = "passed";
+    owner.lifecycle.pr_created = "passed";
+    owner.atoms = [
+      { id: "workspace", title: "Prepare parent", purpose: "Prepare", output: "Ready", lifecycle_stage: "workspace_ready", status: "completed" },
+      { id: "parent-pr", title: "Create parent PR", purpose: "Publish", output: "Created", lifecycle_stage: "pr_created", status: "completed" },
+    ];
+    ledger.plans[0]!.group_atoms = owner.atoms.map(({ status, ...atom }) => ({ ...atom, group_id: owner.id }));
+    ledger.events.push(
+      {
+        id: "parent-workspace-event",
+        type: "lifecycle_recorded",
+        subject_id: owner.id,
+        actor_id: owner.agent_thread_id,
+        occurred_at: at,
+        recorded_at: at,
+        data: { target_type: "group", stage: "workspace_ready", evidence_ref: "provider:workspace" },
+      },
+      {
+        id: "parent-pr-lifecycle-event",
+        type: "lifecycle_recorded",
+        subject_id: owner.id,
+        actor_id: owner.agent_thread_id,
+        occurred_at: at,
+        recorded_at: at,
+        data: { target_type: "group", stage: "pr_created", evidence_ref: "provider:parent-pr" },
+      },
+    );
+
+    const parentPr = providerPrReceipt("parent-pr", owner.parent_branch!, owner.current_sha!, owner.current_sha!);
+    expect(owner.parent_branch).not.toBe(ledger.repository.target_branch);
+    expect(parentPr.target_branch).toBe(ledger.repository.target_branch);
+    expect(parentPr.head_sha).toBe(owner.current_sha);
+    owner.pr = {
+      state: "published",
+      pr: parentPr.pr,
+      parent_branch: owner.parent_branch!,
+    };
+    ledger.facts.push(
+      {
+        id: "parent-branch-fact",
+        kind: "branch_published",
+        subject_id: owner.id,
+        status: "passed",
+        source: "github",
+        observed_at: at,
+        sha: owner.current_sha,
+        evidence_ref: "provider:parent-branch",
+        receipt: providerBranchReceipt(owner.parent_branch!, owner.current_sha!),
+      },
+      {
+        id: "parent-pr-fact",
+        kind: "pr_published",
+        subject_id: owner.id,
+        status: "passed",
+        source: "github",
+        observed_at: at,
+        sha: owner.current_sha,
+        evidence_ref: "provider:parent-pr",
+        receipt: parentPr,
+      },
+    );
+    ledger.operations.push({
+      id: "group-dispatch",
+      kind: "dispatch",
+      actor_id: main.thread_id,
+      target_id: owner.id,
+      status: "succeeded",
+      request: { target_type: "group", handoff_notification_id: "group-handoff" },
+      expected_sha: null,
+      receipt_fact_id: null,
+      created_at: at,
+      updated_at: at,
+    });
+    ledger.notifications.push({
+      id: "group-handoff",
+      event_id: "group-dispatch-event",
+      recipient_thread_id: owner.agent_thread_id,
+      ledger_status: "committed",
+      status: "acknowledged",
+      delivery_status: "sent",
+      ack_status: "acknowledged",
+      attempts: 1,
+      last_attempt_id: "group-handoff-attempt",
+      last_reconciliation_id: null,
+      last_error: null,
+      updated_at: at,
+    });
+    return ledger;
+  };
+
+  const ledger = readyLedger();
+  expect(apply(ledger, "dispatch-claim", request(ledger, "regular-dispatch", {
+    task_id: "a",
+    operation_id: "regular-dispatch-op",
+  }))).toMatchObject({ result: { operation_id: "regular-dispatch-op" } });
+
+  const staleHead = readyLedger();
+  const parentPrFact = staleHead.facts.find((fact) => fact.id === "parent-pr-fact")!;
+  parentPrFact.receipt!.head_sha = head;
+  expect(() => apply(staleHead, "dispatch-claim", request(staleHead, "stale-parent-head", {
+    task_id: "a",
+    operation_id: "stale-parent-head-op",
+  }))).toThrow("parent PR is created and verified");
+  try {
+    apply(staleHead, "dispatch-claim", request(staleHead, "stale-parent-head-details", {
+      task_id: "a",
+      operation_id: "stale-parent-head-details-op",
+    }));
+  } catch (error) {
+    expect((error as any).code).toBe("DELIVERY_GATE_PENDING");
+    expect((error as any).details.missing).toEqual(["parent_pr"]);
+  }
+});
+
 describe("orchestration state", () => {
   test("allows the bound main conversation to manage only a bootstrap group", () => {
     const ledger = fixture();
