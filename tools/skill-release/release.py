@@ -697,10 +697,10 @@ def validate_tarball(
         if path in inventory_paths or not SHA256.fullmatch(digest):
             raise ReleaseError("artifact resource inventory is invalid")
         inventory_paths.add(path)
-        resource = f"resources/skills/{path}" if schema_version == 3 else f"toolkit/{path}"
+        resource = f"resources/{path}" if schema_version == 3 else f"toolkit/{path}"
         if resource not in files or hashlib.sha256(files[resource]).hexdigest() != digest:
             raise ReleaseError(f"artifact resource digest mismatch: {path}")
-    toolkit_inventory = {(f"resources/skills/{path}" if schema_version == 3 else f"toolkit/{path}") for path in inventory_paths}
+    toolkit_inventory = {(f"resources/{path}" if schema_version == 3 else f"toolkit/{path}") for path in inventory_paths}
     toolkit_metadata = {"resources/package.json", "resources/artifact-manifest.json"} if schema_version == 3 else {"toolkit/package.json", "toolkit/artifact-manifest.json"}
     unlisted_toolkit_files = sorted(
         path for path in files

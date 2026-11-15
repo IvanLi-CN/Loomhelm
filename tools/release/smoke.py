@@ -126,7 +126,7 @@ def smoke(directory,record):
                     relative=Path(resource['path'])
                     if relative.is_absolute() or '..' in relative.parts:
                         raise ReleaseError('unsafe TS resource path')
-                    payload=root/'resources/skills'/relative
+                    payload=root/'resources'/relative
                     if not payload.is_file() or hashlib.sha256(payload.read_bytes()).hexdigest()!=resource['sha256']:
                         raise ReleaseError('incomplete or altered TS resource: '+str(relative))
                 print(json.dumps(dict(observation='typescript-resource-inventory',files=len(manifest['files']),candidate_sha=manifest['candidateSha'])),flush=True)

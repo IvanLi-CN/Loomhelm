@@ -433,7 +433,7 @@ class ReleasePolicyTests(unittest.TestCase):
             package_root = root / "package"
             (package_root / "resources/skills/src").mkdir(parents=True)
             (package_root / "resources/skills/src/runtime.ts").write_bytes(b"runtime")
-            files = [{"path": "src/runtime.ts", "sha256": hashlib.sha256(b"runtime").hexdigest()}]
+            files = [{"path": "skills/src/runtime.ts", "sha256": hashlib.sha256(b"runtime").hexdigest()}]
             identity = {
                 "packageName": PACKAGE_NAME,
                 "packageVersion": "0.2.0",
@@ -503,7 +503,7 @@ class ReleasePolicyTests(unittest.TestCase):
             package_root = root / "package"
             (package_root / "resources/skills/src").mkdir(parents=True)
             (package_root / "resources/skills/src/runtime.ts").write_bytes(b"runtime")
-            files = [{"path": "src/runtime.ts", "sha256": hashlib.sha256(b"runtime").hexdigest()}]
+            files = [{"path": "skills/src/runtime.ts", "sha256": hashlib.sha256(b"runtime").hexdigest()}]
             identity = {
                 "packageName": PACKAGE_NAME,
                 "packageVersion": "0.2.0",
