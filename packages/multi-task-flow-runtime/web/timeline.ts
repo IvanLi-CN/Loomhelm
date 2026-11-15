@@ -202,7 +202,7 @@ export function createTimelineController(context: TimelineContext) {
     }
     for (const node of nodes.filter((item) => item.kind !== "task")) { const planned = data.planned_intervals.find((item) => item.node_id === node.id); const date = mode === "planned" ? planned?.start : data.actual_milestones.find((item) => item.node_id === node.id)?.occurred_at; if (date) { const label = mode === "planned" && planned?.start_offset_minutes != null ? `${node.label}（T+${(planned.start_offset_minutes / 60).toFixed(planned.start_offset_minutes % 60 === 0 ? 0 : 2)}h）` : node.label; entries.push({ id: `milestone-${node.id}`, group: node.id, start: date, content: text("span", label), type: "box", style: `border-color: ${context.groupColor(node.planned_group_id)};`, editable: false }); } else unknown.push(node.label); }
     const unknownElement = context.element(mode === "planned" ? "planned-unknown" : "actual-unknown");
-    const scheduleBlockers = data.plan_state?.scheduling?.blockers ?? [];
+    const scheduleBlockers = (data.plan_state?.scheduling?.blockers ?? []).filter((blocker) => blocker.code.startsWith("SCHEDULE_"));
     if (mode === "planned" && scheduleBlockers.length) {
       target.replaceChildren();
       target.hidden = true;
