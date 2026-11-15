@@ -25,7 +25,7 @@ Skill release boundary 包含 `.github/workflows/`、`clients/typescript/`、`sk
 | - | - | - |
 | `skill-release-gate.yml` | PR opened/synchronize/reopened/ready-for-review/labeled/unlabeled；merge queue checks | checkout exact PR or merge-group head，运行 `release.py gate`，校验 label、base/head projection、版本和 compatibility line |
 | `skill-release-publish.yml` | owner-approved `workflow_dispatch` | 校验已合并 main PR、构建并验证一个 candidate tarball、记录 skip/release receipt，或按 identity-first state machine 对账/发布并单调提升 dist-tags |
-| `runtime-core-release.yml` | owner-approved `workflow_dispatch` | 校验精确源码 SHA 与 `@loomhelm/runtime-core` 版本、冻结唯一 tarball、通过 npm Trusted Publishing 发布并回读精确版本，再创建 `runtime-core-vX.Y.Z` immutable tag |
+| `runtime-core-release.yml` | owner-approved `workflow_dispatch` | 校验精确源码 SHA、`@loomhelm/runtime-core` 版本与 `compat-v1` 兼容线、冻结唯一 tarball、通过 npm Trusted Publishing 发布并逐个回读 exact/`compat-v1`/`latest`，再创建 `runtime-core-vX.Y.Z` immutable tag |
 
 PR gate 使用 PR 的 exact base SHA 和 head SHA；merge queue 会重新解析唯一的 main PR 并以 queue base/head 再跑一次 gate。不要以工作区当前分支、PR title、历史 workflow 结果或本地 package version 代替 provider 传入的 SHA 和 label 证据。
 
@@ -38,7 +38,7 @@ PR gate 使用 PR 的 exact base SHA 和 head SHA；merge queue 会重新解析�
 1. `verify` checkout exact `merge_sha`，确认 PR 已 closed/merged、merge receipt 与 SHA 相同、base 为 `main` 且非 draft。
 2. `release.py gate` 重新检查唯一 release label、package projection、Skill frontmatter、`lib/contract.ts` 与 `lib/service-contract.ts` 的 contract fields；首次发布还必须先由 workflow 确认 exact npm version 缺失。
 3. `release:skill` 和 `release:skill-initial-publication` 路径先用 `verify-tag --allow-missing` 检查 `multi-task-flow-v<version>`，再以同一个 merge SHA 和 Bun `1.4.4` 构建一个可上传 candidate tarball，记录 `schemaVersion=3`、`path-byte-v2` canonical digest、raw integrity 和 release identity；`verify-tag --allow-missing` 只读，immutable tag 的创建/复用后置到 registry exact identity 对账成功之后。
-4. 候选包的 production dependencies 是根 package 声明的 `playwright`、`sharp`、`zod`，由消费者 `bun install` 解析；tarball 不得包含 `toolkit/**/node_modules`，runtime 缺依赖时 fail closed，不联网安装或回退到 checkout/global Skill。
+4. 候选包的 production dependencies 是根 package 声明的 `@loomhelm/runtime-core`、`playwright`、`sharp`、`zod`，由消费者 `bun install` 解析；候选门禁必须针对实际 npm archive 校验 `toolkit/package.json`、artifact inventory 和显式 npm omissions，拒绝 `toolkit/**/node_modules` 与 `.gitignore`/`.npmignore`，然后在干净临时目录执行 `bun install --frozen-lockfile`，导入 `@loomhelm/multi-task-flow`、`@loomhelm/runtime-core/modules/core/runtime` 并列出 `multi-task-flow` Skill。缺依赖、导入失败或资源摘要不一致均在 npm 写入前停止；runtime 缺依赖时 fail closed，不联网安装或回退到 checkout/global Skill。
 5. publish 先读取 exact registry state；只有明确的 exact 404 才允许当前 owner-approved run 进行一次 `npm publish`，exact 查询的其他错误 fail closed；processing、已知 409、timeout 或未知结果都进入 bounded reconcile，不重复上传、不重建 tarball，且所有状态写入 release receipt；现有 `0.2.7` 永远只做 read-only reconcile，即使 exact 不可见也不得 publish，exact-visible 对账后也跳过 tag 和 dist-tag 写入。
 6. exact-visible 后下载 registry tarball，比较 package identity、merge SHA、build ID、tag、raw npm integrity 和 canonical digest；schema v2 legacy artifact 只以 raw integrity 和 legacy identity 对账，不能重传 `0.2.7`。
 7. exact identity 对账成功才标记 `published`；随后以 `compat-vN`、`latest`、显式 `stable` 的顺序逐个执行 monotonic policy 并逐个 read-back，全部成功才标记 `completed`。发布 job 通过 npm Trusted Publishing 使用 GitHub OIDC，不读取长期 npm 写入 token。

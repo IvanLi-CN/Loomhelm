@@ -1,5 +1,5 @@
 import type { ConnectObserver } from "../lib/conversation-output";
-import { Runtime } from "../../../skills/bin/modules/core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";

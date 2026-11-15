@@ -4,6 +4,8 @@ import { dirname, join, resolve } from 'node:path';
 export const digest = value => createHash('sha256').update(value).digest('hex');
 export function copySkillSources(root, output, { dependencies = false } = {}) {
   const manifest = JSON.parse(readFileSync(join(root, 'skills/resource-manifest.json'), 'utf8'));
+  const skill = 'multi-task-flow';
+  const selected = resource => resource.path === `skills/${skill}` || resource.path.startsWith(`skills/${skill}/`);
   const files = new Map();
   const copy = (path, expected, sourcePath = path) => {
     const source = resolve(root, sourcePath);
@@ -14,14 +16,21 @@ export function copySkillSources(root, output, { dependencies = false } = {}) {
     const contents = readFileSync(source);
     const sha256 = digest(contents);
     if (expected && expected !== sha256) throw new Error('Source resource checksum mismatch: ' + path);
-    const packagedContents = sourcePath.startsWith('packages/multi-task-flow-runtime/') && !sourcePath.includes('/node_modules/')
-      ? Buffer.from(contents.toString('utf8').replaceAll('../../../skills/bin/', '../../bin/'))
-      : contents;
-    const target = join(output, path); mkdirSync(dirname(target), { recursive: true, mode: 0o700 }); writeFileSync(target, packagedContents);
-    files.set(path, digest(packagedContents));
+    const target = join(output, path); mkdirSync(dirname(target), { recursive: true, mode: 0o700 }); writeFileSync(target, contents);
+    files.set(path, digest(contents));
   };
-  for (const file of [...manifest.files, ...(manifest.additions ?? [])]) copy(file.path, file.installedSha256, file.sourcePath ?? file.path);
-  for (const path of ['skills/resource-manifest.json', 'skills/catalog.json']) copy(path);
+  const selectedFiles = manifest.files.filter(selected);
+  const selectedAdditions = (manifest.additions ?? []).filter(selected);
+  for (const file of [...selectedFiles, ...selectedAdditions]) copy(file.path, file.installedSha256, file.sourcePath ?? file.path);
+  const packageManifest = { ...manifest, skills: [skill], files: selectedFiles, additions: selectedAdditions };
+  const manifestTarget = join(output, 'skills/resource-manifest.json');
+  mkdirSync(dirname(manifestTarget), { recursive: true, mode: 0o700 });
+  writeFileSync(manifestTarget, JSON.stringify(packageManifest, null, 2) + '\n');
+  files.set('skills/resource-manifest.json', digest(readFileSync(manifestTarget)));
+  const catalog = JSON.parse(readFileSync(join(root, 'skills/catalog.json'), 'utf8'));
+  const catalogTarget = join(output, 'skills/catalog.json');
+  writeFileSync(catalogTarget, JSON.stringify({ ...catalog, entries: catalog.entries.filter(entry => entry.name === skill) }, null, 2) + '\n');
+  files.set('skills/catalog.json', digest(readFileSync(catalogTarget)));
   for (const name of ['index.html','app.js','app.css']) copy('skills/multi-task-flow/dist/' + name, undefined, 'packages/multi-task-flow-runtime/dist/' + name);
   if (dependencies) {
     const walk = (path, outputPrefix) => {

@@ -16,7 +16,7 @@ Treat the workflow receipt and live registry metadata as authoritative. A green 
 ## Procedure
 
 1. Verify the merged PR, exact main merge SHA, release label, package version, compatibility line, and immutable tag precondition through `skill-release-publish.yml`.
-2. Build and validate one candidate from that merge SHA. Freeze its tarball, build ID, canonical digest, raw integrity, and receipt; never rebuild during publish or recovery.
+2. Build and validate one candidate from that merge SHA. Freeze its tarball, build ID, canonical digest, raw integrity, and receipt; never rebuild during publish or recovery. The candidate gate MUST validate the actual npm archive, including `toolkit/package.json`, the artifact inventory, explicit npm omissions, absence of `toolkit/**/node_modules` and npm-ignored files, and a clean temporary consumer install with Bun 1.4.4. The consumer smoke MUST import `@loomhelm/multi-task-flow`, import `@loomhelm/runtime-core/modules/core/runtime`, and enumerate the packaged `multi-task-flow` Skill before the candidate can be uploaded.
 3. On an exact 404 plus an absent version in the package version index only, let the protected workflow perform the single initial `npm publish`. A successful command is `submitted`, not publication proof. If the version index already contains the version while exact metadata lags, reconcile read-only and never publish again.
 4. Reconcile the same exact package with the workflow's staged backoff for about 15 minutes. `processing`, timeout, and known 409 mean the registry result is ambiguous; preserve the receipt and do not delete versions, move tags manually, or build another candidate. Unknown npm publish errors fail immediately with their captured npm output so infrastructure/auth failures do not masquerade as registry lag.
 5. If the first reconciliation reaches `processing-timeout`, the workflow automatically performs one guarded republish of the same frozen tarball and another bounded read-only reconciliation. If that also times out, resume with the original run ID. The resume first checks exact visibility; if the package is visible it performs read-only identity reconciliation and never republishes. A second guarded upload is forbidden after `resumeRetryUsed=true`.
@@ -28,6 +28,8 @@ Treat the workflow receipt and live registry metadata as authoritative. A green 
 Use `gh run download` to inspect the receipt artifact and `npm view @loomhelm/multi-task-flow@<version> --json` plus the package metadata endpoint for independent exact visibility checks. A delayed exact package may become visible after the workflow has failed; a later resume can perform read-only reconciliation when the candidate and receipt are unchanged.
 
 Never use local `npm publish`, `npm dist-tag`, force tag operations, package deletion, a new build, or a manually edited receipt to repair a failed release. A second guarded upload is forbidden after `resumeRetryUsed=true`; continue read-only reconciliation or stop for owner/provider intervention. For an unknown publish error, inspect the workflow's captured npm stdout/stderr and fix the provider/auth/configuration cause before any retry.
+
+If the archive validation or isolated consumer smoke fails, stop before npm publication. Treat missing toolkit metadata, an inventory/archive mismatch, an unexpected npm omission, a bundled `node_modules`, a dependency-install failure, or a runtime import failure as a candidate defect; do not repair it by editing the receipt or by publishing a different tarball.
 
 ## Completion evidence
 

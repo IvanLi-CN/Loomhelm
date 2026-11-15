@@ -92,6 +92,8 @@ Skill 的目录将可执行命令入口放在 `scripts/`，可复用实现模块
 
 `conversation-create` payload 为 `{ operation_id, title, prompt }`。CLI 使用参数数组和关闭的 stdin 启动 `codex exec -C <repository> --worktree --json -m <model> -c 'model_reasoning_effort="<thinking>"' <固定初始化提示词>` ，完整透传已锁定配置；工作区由 Codex 创建，脚本不调用 `git worktree add`。`prompt` 是兼容保留的正式任务，只在成功结果的 `handoff.formal_prompt` 返回，首轮不执行。收到 `thread.started` 立即记录身份；绑定前必须核验独立工作区、Codex 归属元数据、实际配置、初始 HEAD、初始化回合完成以及进程正常退出。`project_id` 为空不单独失败。标题通过 `thread/name/set` 写入，不另开回合。绑定后创建正式派发通知并领取持久 attempt；主对话仅在 `handoff.should_send: true` 时调用内置 `send_message_to_thread`，使用返回的 `tool_request` 并对账平台回执。创建请求重放返回 `should_send: false`，不得再次派发。超时、创建后错误或证据冲突保留 unknown 和已知资源，先对账，不重复创建。只有没有观察到线程身份，且回执明确 `process_started: false`、`resources_created: false` 的创建前失败才允许释放 claim；新 exec 请求不能使用历史 `thread/start` 失败回执。历史 `thread/start` 与 `create_thread` 证据继续读取，不重建已有线程或中断在途 CLI。
 
+恢复 unknown creation 只能调用同一 exact-version CLI 的 `flow creation-reconcile`，使用绑定的 run、operation、native request 和当前 revision 查询原生 thread 并写回 Flow Ledger。对账成功必须有匹配 thread、初始化 handshake、execution profile、独立 worktree owner、HEAD 和清洁状态证据；没有已知 thread identity 或仅查询不到 thread 时保持 unknown，不按标题、cwd 或时间猜测，也不调用普通 `codex reconcile`。
+
 native request ID 一旦绑定，完整创建参数（含 transport、cwd、prompt、title 和 execution_profile）即冻结；相同内容可以再次绑定，不同内容复用 ID 必须拒绝。已知线程、工作区、初始 HEAD 和执行事实通过 `creation_observations` 单调保留；后续空 unknown 回执不能遗忘它们，failed 门禁不能依赖可变 transport。明确失败且完成对账的请求才允许修正配置并重新 claim。未绑定 native request 的 claim 遇到配置变化会终止旧 claim，审计记录保留旧 profile、原因和新 claim 要求。
 
 旧账本缺少默认 profile 时保持只读。历史 `schema-2/contract-2` 账本若任务缺少 `execution_owner`、`conversation_policy` 或 `delivery_policy` 也保持只读，并在普通写入口返回 `HISTORICAL_LEDGER_READ_ONLY`；先用 `ledger-maintenance-check` / `ledger-maintenance-apply` 的 `action: "contract"` 仅补出缺失策略键的显式 `null`，再按需由绑定主会话显式调用 `execution-profile-migrate`，两项迁移分别携带 request ID、expected revision、源 SHA256、operation digest、维护身份、批准引用和完整备份。部分策略声明不自动补齐，PR、owner 和 lifecycle 事实也不由迁移推断。历史 `create_thread` 证据可读；新增创建通过 CLI 证据解析。
@@ -115,6 +117,8 @@ Contract-3 的开发基线由 `development-baseline-sync` 明确提交。首次�
 ## PR 与 cut
 
 任务或交付单元 Agent 每次执行 PR 合并前都必须使用 `merge-claim`，并通过绑定的 Git provider 核对真实 PR identity、目标、当前 head/base、适用检查和任务质量证明。在共享交付拓扑中，唯一的交付单元 PR 同时是 contribution Task PR，并只有一份 merge receipt。在多贡献拓扑中，child PR 合并由实现批准覆盖，交付单元 PR 仍要求针对该交付单元的事先 `protected-approve`。脚本输入只是 Agent 报告，不是独立的 provider 证据。外部调用后查询 provider，并使用 `merge-resolve` 记录匹配回执；结果不确定时记录 `unknown`、保留占用并在重试前完成对账。不能根据未经核实的错误声称操作失败。负责的对话记录其作用域的质量证明；共享 contribution Task 不得创建 child PR。原交付单元 PR 已合并，而后续 mainline follow-up PR 携带剩余交付单元变更时，协调者使用 `merge-claim` 的 `mode: "parent-followup"`，记录原 PR 和 merge SHA，并针对集成分支解析 follow-up PR；这会推进交付单元 merge SHA，但不会改写原始回执。
+
+收口后的外部事实发生冲突时，调用方使用 `group-closeout-reconcile` 提交原收口事件、计划身份、PR observation、结果和证据引用；`valid` 保持 `closed`，`invalid` 转为 `blocked`，`unknown` 保留业务状态但冻结受影响的下游门禁。不得新增 `reconciling` 等业务状态或覆盖原始事实。只有主 Agent 通过 `protected-approve` 批准 `kind: "delivery_unit_recovery"` 后，交付单元负责人才能使用 `group-reopen` 将同一 DeliveryUnit 从 `blocked` 恢复为 `active`；该命令不会创建 PR、workspace 或 successor。`group-update` 不得绕过这个恢复边界，也不得执行 `closed -> active`。
 
 child PR 出现冲突或检查失败时，任务 Agent 首先判断问题是否由自身变更造成。自身问题留在同一任务和 PR 中修复。确认是外部问题后，向主 Agent 提交诊断证据、影响和候选编排调整；主 Agent 在创建独立修复贡献任务或改变依赖前询问主人。基线变化始终由任务 Agent 负责：rebase、重新验证并刷新任务基线证据后才能重试。普通执行不会在 Agent 之间转移任务工作区或 PR。
 

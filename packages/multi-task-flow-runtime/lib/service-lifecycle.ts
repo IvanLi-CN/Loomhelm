@@ -1,15 +1,15 @@
 import type { ConnectObserver } from "../lib/conversation-output";
-import { Runtime } from "../../../skills/bin/modules/core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { tryLockFile } from "../../../skills/bin/modules/core/security_file";
-import { withExclusiveLockAsync } from "../../../skills/bin/modules/flow/storage";
+import { tryLockFile } from "@loomhelm/runtime-core/modules/core/security_file";
+import { withExclusiveLockAsync } from "@loomhelm/runtime-core/modules/flow/storage";
 import {
   PortRegistry,
   RegistryError,
   processAlive,
-} from "../../../skills/bin/modules/workspace/port_registry";
+} from "@loomhelm/runtime-core/modules/workspace/port_registry";
 import { ServiceState } from "../lib/service-state";
 import { ServiceAuth } from "../lib/service-auth";
 import { startSharedViewer, agentLease } from "../lib/service-http";

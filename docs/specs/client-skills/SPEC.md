@@ -8,6 +8,7 @@
 
 - Skill 是命名的指令与资源包，不是一次任务执行，也不授予超出调用者授权的权限。
 - 可发布 Skill 资源以项目根 `skills/` 为源包目录；`packages/multi-task-flow-runtime/` 是独立的内部 runtime、viewer/service、构建与测试源码，不属于 Skill 安装面。构建系统必须把 runtime 映射到 npm 包内的 `skills/multi-task-flow/`，消费者只接收生成后的包资源；不能要求用户 checkout 或构建 `packages/` 源码。
+- 根 `skills/` 源包保留审查后的 29 套客户端 Skills；`@loomhelm/multi-task-flow` 的 npm projection 只发布 `multi-task-flow`，共享运行时通过 `@loomhelm/runtime-core` 依赖提供，不把其他独立 Skill 当作该包的运行时内容。
 - 外部宿主能力包括未迁入的 Skills、原生 Codex 工具及专项 CLI；缺失能力必须明确检测。
 
 ## Requirements

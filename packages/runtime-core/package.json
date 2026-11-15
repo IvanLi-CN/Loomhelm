@@ -9,5 +9,6 @@
   },
   "engines": { "bun": "1.4.4" },
   "publishConfig": { "access": "public" },
+  "loomhelm": { "compatibilityLine": "compat-v1" },
   "packageManager": "bun@1.4.4"
 }

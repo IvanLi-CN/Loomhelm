@@ -604,6 +604,13 @@ def validate_tarball(
         raise ReleaseError("schema v3 artifacts must use path-byte-v2")
     if schema_version == 2 and canonical_algorithm not in (None, LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM):
         raise ReleaseError("schema v2 artifacts must use the legacy verifier")
+    toolkit_package: Mapping[str, Any] = {}
+    if schema_version == 3:
+        if "toolkit/package.json" not in files:
+            raise ReleaseError("tarball does not contain toolkit/package.json")
+        toolkit_package = _read_json_bytes(files["toolkit/package.json"], "toolkit package.json")
+        if toolkit_package.get("name") != PACKAGE_NAME or toolkit_package.get("version") != package_version:
+            raise ReleaseError("toolkit package metadata does not match the package root")
     identity = _require_object(artifact.get("identity"), "artifact.identity")
     _validate_identity(identity)
     for field in (
@@ -666,6 +673,15 @@ def validate_tarball(
             raise ReleaseError("schema v3 artifacts must not bundle dependencies")
         if any(path == "node_modules" or path.startswith("node_modules/") or "/node_modules/" in path for path in files):
             raise ReleaseError("schema v3 tarballs must not contain node_modules")
+        toolkit_dependencies = toolkit_package.get("dependencies")
+        if not isinstance(toolkit_dependencies, dict):
+            raise ReleaseError("schema v3 toolkit package must declare consumer dependencies")
+        expected_dependencies = {dependency["name"]: dependency["version"] for dependency in dependencies}
+        if toolkit_dependencies != expected_dependencies:
+            raise ReleaseError("toolkit package dependencies do not match the artifact manifest")
+        for path in files:
+            if path.startswith("toolkit/") and path.rsplit("/", 1)[-1] in {".gitignore", ".npmignore"}:
+                raise ReleaseError("npm ignored files must not be present in the toolkit archive: " + path)
     elif artifact.get("dependenciesBundled") is not True:
         raise ReleaseError("schema v2 artifacts must declare bundled dependencies")
 
@@ -683,11 +699,35 @@ def validate_tarball(
         resource = f"toolkit/{path}"
         if resource not in files or hashlib.sha256(files[resource]).hexdigest() != digest:
             raise ReleaseError(f"artifact resource digest mismatch: {path}")
+    toolkit_inventory = {f"toolkit/{path}" for path in inventory_paths}
+    toolkit_metadata = {"toolkit/package.json", "toolkit/artifact-manifest.json"}
+    unlisted_toolkit_files = sorted(
+        path for path in files
+        if path.startswith("toolkit/") and path not in toolkit_inventory and path not in toolkit_metadata
+    )
+    if unlisted_toolkit_files:
+        raise ReleaseError("toolkit contains files absent from the artifact inventory: " + ", ".join(unlisted_toolkit_files[:10]))
     if identity_digest(identity, inventory) != identity.get("buildId"):
         raise ReleaseError("artifact build ID does not match the resource inventory")
 
     if schema_version == 2 and canonical_algorithm is None:
         canonical_algorithm = LEGACY_CANONICAL_TARBALL_DIGEST_ALGORITHM
+    if schema_version == 3:
+        omissions = artifact.get("omittedResources")
+        if not isinstance(omissions, list):
+            raise ReleaseError("schema v3 artifacts must declare package omissions")
+        omission_paths: set[str] = set()
+        for omission_value in omissions:
+            omission = _require_object(omission_value, "artifact.omittedResources[]")
+            omission_path = _require_string(omission.get("path"), "artifact.omittedResources[].path")
+            _require_string(omission.get("reason"), "artifact.omittedResources[].reason")
+            if omission_path in omission_paths:
+                raise ReleaseError("artifact package omissions contain duplicates")
+            omission_paths.add(omission_path)
+            if omission_path.startswith("skills/") and f"toolkit/{omission_path}" in files:
+                raise ReleaseError("npm-omitted resource is present in the toolkit archive: " + omission_path)
+        if "package.json" not in omission_paths or "artifact-manifest.json" not in omission_paths:
+            raise ReleaseError("schema v3 artifacts must classify generated toolkit metadata as omitted resources")
     canonical_digest_verified = canonical_algorithm == CANONICAL_TARBALL_DIGEST_ALGORITHM
     digest = canonical_tarball_digest(tarball) if canonical_digest_verified else None
     if canonical_digest_verified and identity.get("tarballDigest") != digest:

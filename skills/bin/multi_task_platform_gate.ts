@@ -1,4 +1,4 @@
-import { Runtime } from "./modules/core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 export {};
 
 const supportedPlatforms = new Set(["darwin", "linux"]);

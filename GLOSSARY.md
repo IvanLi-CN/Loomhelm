@@ -68,6 +68,28 @@ Viewer daemon 中接收浏览器请求并按 run 转发的网关边界；它不�
 
 把一个 Task 交给新的或已有的 Codex thread 执行的动作，具有可重试但不可重复混淆的身份。
 
+### 派发操作（Dispatch operation）
+
+Flow Ledger 中表示一次交付单元或任务对话创建尝试的持久操作；它拥有独立的状态、请求身份和外部证据，并不等同于普通 Codex dispatch journal 中的记录。
+
+### 原生请求身份（Native request identity）
+
+把一次 Flow 派发操作与外部 Codex thread 创建尝试关联起来的稳定身份；身份一旦绑定，创建参数不能被另一请求复用或改写。
+
+### 创建对账（Creation reconciliation）
+
+在对话创建结果未知时，根据已绑定的原生请求和 thread 证据确认创建结果并写回同一派发操作的恢复动作；它不会创建替代 thread。
+
+_Avoid_: 普通 Codex reconcile、重试创建
+
+### 未知创建结果（Unknown creation outcome）
+
+无法证明外部 thread 创建已成功或明确未开始的状态；该状态保留 claim 和已知资源，直到新的外部证据完成对账。
+
+### 对账证据（Reconciliation evidence）
+
+能够把原生请求、thread、初始化 handshake、执行配置和独立 worktree 关联起来的可验证外部事实；仅凭查询不到 thread 不能形成失败证据。
+
 ### Run
 
 一次 Task 的具体执行尝试，记录执行状态、事件、结果和恢复信息。

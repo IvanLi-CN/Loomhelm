@@ -193,6 +193,32 @@ function parentPrDefinitivelyAbsent(ledger: Ledger, group: Ledger["groups"][numb
   );
 }
 
+function mergeCapabilityProjection(ledger: Ledger, group: Ledger["groups"][number]) {
+  const pr = deliveryUnitPr(group);
+  const latest = ledger.facts
+    .filter((fact) => fact.kind === "pr_merged" && fact.subject_id === group.id)
+    .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
+    .at(-1);
+  const receipt = latest && ledger.operations.some((operation) => operation.kind === "merge" && operation.target_id === group.id && operation.status === "succeeded" && operation.receipt_fact_id === latest.id);
+  const satisfied = Boolean((group.state === "merged" || group.state === "closed") && group.merge_sha && latest?.status === "passed" && latest.sha === group.merge_sha && receipt);
+  return {
+    status: satisfied ? "satisfied" : latest?.status === "unknown" ? "unknown" : "blocked",
+    merge_sha: group.merge_sha,
+    evidence_refs: latest?.evidence_ref ? [latest.evidence_ref] : [],
+    reason: satisfied ? null : "有效 merge fact、SHA 和 merge receipt 尚未全部匹配",
+  };
+}
+
+function closeoutReconciliationProjection(ledger: Ledger, groupId: string) {
+  const event = ledger.events.filter((item) => item.subject_id === groupId && item.data.operation === "closeout-reconcile").at(-1);
+  return {
+    status: event?.data.outcome ?? "unreconciled",
+    reconciliation_id: event?.data.reconciliation_id ?? null,
+    reason: event?.data.reason ?? null,
+    evidence_refs: Array.isArray(event?.data.evidence_refs) ? event.data.evidence_refs : [],
+  };
+}
+
 function allowsBootstrapMainOwnedStart(
   ledger: Ledger,
   group: Ledger["groups"][number],
@@ -1164,6 +1190,12 @@ export function buildView(
         ...(item.delivery_unit_kind === "regular" && !item.agent_thread_id ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }] : []),
         ...deliveryGateDiagnostics(ledger, item),
       ],
+      merge_capability: mergeCapabilityProjection(ledger, item),
+      closeout_reconciliation: closeoutReconciliationProjection(ledger, item.id),
+      recovery: {
+        eligible: item.state === "blocked" && closeoutReconciliationProjection(ledger, item.id).status !== "unknown",
+        blockers: item.state !== "blocked" ? ["DeliveryUnit 当前不是 blocked"] : [],
+      },
       ...profileProjection(ledger, "group", item),
       coordinator: coordinatorProjection(ledger, item),
       runtime_readiness: runtimeProjection.byGroup.get(item.id) ?? { status: "unknown", blockers: [] },

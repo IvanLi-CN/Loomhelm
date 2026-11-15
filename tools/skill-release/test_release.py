@@ -166,6 +166,11 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("bounded reconciliation", workflow)
         self.assertIn("'state': 'candidate-validated'", workflow)
         self.assertIn("name: release-identity", workflow)
+        self.assertIn("Verify isolated consumer installation and runtime imports", workflow)
+        self.assertIn("bun install --frozen-lockfile --ignore-scripts --backend=copy", workflow)
+        self.assertIn('import("@loomhelm/multi-task-flow")', workflow)
+        self.assertIn('import("@loomhelm/runtime-core/modules/core/runtime")', workflow)
+        self.assertIn('skills.length !== 1 || skills[0]?.name !== "multi-task-flow"', workflow)
         self.assertLess(
             workflow.index("Publish exact package and reconcile registry identity"),
             workflow.index("Create or reconcile immutable release tag after exact identity"),
@@ -178,6 +183,9 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("automatically performs one guarded republish", skill)
         self.assertIn("resumeRetryUsed=true", skill)
         self.assertIn("captured npm stdout/stderr", skill)
+        self.assertIn("actual npm archive", skill)
+        self.assertIn("clean temporary consumer install", skill)
+        self.assertIn("@loomhelm/runtime-core/modules/core/runtime", skill)
 
     def test_release_skill_requires_strict_version_progression(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -458,9 +466,14 @@ class ReleasePolicyTests(unittest.TestCase):
                 "canonicalDigestAlgorithm": CANONICAL_TARBALL_DIGEST_ALGORITHM,
                 "dependenciesBundled": False,
                 "dependencies": [{"name": "zod", "version": "4.6.7", "mode": "consumer-install"}],
+                "omittedResources": [
+                    {"path": "package.json", "reason": "generated toolkit metadata"},
+                    {"path": "artifact-manifest.json", "reason": "self-validating metadata"},
+                ],
                 "files": files,
             }
             (package_root / "package.json").write_text(json.dumps({"name": PACKAGE_NAME, "version": "0.2.0"}), encoding="utf-8")
+            (package_root / "toolkit/package.json").write_text(json.dumps({"name": PACKAGE_NAME, "version": "0.2.0", "dependencies": {"zod": "4.6.7"}}), encoding="utf-8")
             (package_root / "toolkit/artifact-manifest.json").write_text(json.dumps(artifact), encoding="utf-8")
             tarball = root / "schema3.tgz"
             with tarfile.open(tarball, "w:gz") as archive:
@@ -482,6 +495,61 @@ class ReleasePolicyTests(unittest.TestCase):
             with tarfile.open(tarball, "w:gz") as archive:
                 archive.add(package_root, arcname="package")
             with self.assertRaisesRegex(ReleaseError, "node_modules"):
+                validate_tarball(tarball, expected_version="0.2.0", expected_merge_sha="a" * 40, expected_compatibility="compat-v1")
+
+    def test_schema3_rejects_toolkit_metadata_or_inventory_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package_root = root / "package"
+            (package_root / "toolkit/src").mkdir(parents=True)
+            (package_root / "toolkit/src/runtime.ts").write_bytes(b"runtime")
+            files = [{"path": "src/runtime.ts", "sha256": hashlib.sha256(b"runtime").hexdigest()}]
+            identity = {
+                "packageName": PACKAGE_NAME,
+                "packageVersion": "0.2.0",
+                "compatibilityLine": "compat-v1",
+                "skillVersion": "2.7.2",
+                "sourceSha": "a" * 40,
+                "mergeSha": "a" * 40,
+                "dirty": False,
+                "contracts": {"ledgerContract": 2, "apiVersion": 1, "frontendContract": 1, "viewerContract": 5, "serviceVersion": "1"},
+                "tarballDigest": None,
+                "gitTag": "multi-task-flow-v0.2.0",
+                "canonicalDigestAlgorithm": CANONICAL_TARBALL_DIGEST_ALGORITHM,
+            }
+            identity["buildId"] = identity_digest(identity, files)
+            artifact = {
+                "schemaVersion": 3,
+                "packageName": PACKAGE_NAME,
+                "packageVersion": "0.2.0",
+                "compatibilityLine": "compat-v1",
+                "skillVersion": "2.7.2",
+                "sourceSha": "a" * 40,
+                "mergeSha": "a" * 40,
+                "candidateSha": "a" * 40,
+                "dirty": False,
+                "runtime": "bun@1.4.4",
+                "identity": identity,
+                "buildId": identity["buildId"],
+                "tarballDigest": None,
+                "gitTag": "multi-task-flow-v0.2.0",
+                "canonicalDigestAlgorithm": CANONICAL_TARBALL_DIGEST_ALGORITHM,
+                "dependenciesBundled": False,
+                "dependencies": [{"name": "zod", "version": "4.6.7", "mode": "consumer-install"}],
+                "omittedResources": [
+                    {"path": "package.json", "reason": "generated toolkit metadata"},
+                    {"path": "artifact-manifest.json", "reason": "self-validating metadata"},
+                ],
+                "files": files,
+            }
+            (package_root / "package.json").write_text(json.dumps({"name": PACKAGE_NAME, "version": "0.2.0"}), encoding="utf-8")
+            (package_root / "toolkit/package.json").write_text(json.dumps({"name": PACKAGE_NAME, "version": "0.2.0", "dependencies": {"zod": "4.6.7"}}), encoding="utf-8")
+            (package_root / "toolkit/artifact-manifest.json").write_text(json.dumps(artifact), encoding="utf-8")
+            (package_root / "toolkit/unlisted.ts").write_text("rogue", encoding="utf-8")
+            tarball = root / "drift.tgz"
+            with tarfile.open(tarball, "w:gz") as archive:
+                archive.add(package_root, arcname="package")
+            with self.assertRaisesRegex(ReleaseError, "absent from the artifact inventory"):
                 validate_tarball(tarball, expected_version="0.2.0", expected_merge_sha="a" * 40, expected_compatibility="compat-v1")
 
     def _init_repo(self, root: Path) -> None:

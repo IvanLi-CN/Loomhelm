@@ -195,6 +195,59 @@ test("planned delivery units cannot record running execution", () => {
   }, groupActor))).toThrow("Only active delivery units can record runtime execution");
 });
 
+test("protected recovery is the only blocked-to-active path", () => {
+  const ledger = fixture();
+  approve(ledger);
+  ledger.groups[0]!.state = "blocked";
+  const incoming = structuredClone(ledger.groups[0]!);
+  incoming.state = "active";
+  expect(() => apply(ledger, "group-update", request(ledger, "illegal-reopen", { group: incoming }, groupActor))).toThrow("Group merge and closeout require verified operations");
+  apply(ledger, "protected-approve", request(ledger, "approve-recovery", {
+    kind: "delivery_unit_recovery",
+    target_id: "g",
+    approval_id: "recovery-approved",
+  }));
+  expect(apply(ledger, "group-reopen", request(ledger, "reopen", {
+    group_id: "g",
+    plan_id: "plan",
+    recovery_id: "recovery-approved",
+    reason: "provider facts reconciled",
+    evidence_refs: ["evidence://recovery"],
+  }, groupActor))).toMatchObject({ result: { group_id: "g", state: "active" } });
+});
+
+test("closeout reconciliation invalidates or preserves the business state explicitly", () => {
+  const ledger = fixture();
+  ledger.groups[0]!.state = "closed";
+  ledger.events.push({
+    id: "closeout-event",
+    type: "group_updated",
+    subject_id: "g",
+    actor_id: "group-thread",
+    occurred_at: at,
+    recorded_at: at,
+    data: { state: "closed" },
+  });
+  expect(apply(ledger, "group-closeout-reconcile", request(ledger, "reconcile-invalid", {
+    group_id: "g",
+    plan_id: "plan",
+    closeout_event_id: "closeout-event",
+    reconciliation_id: "reconcile-1",
+    outcome: "invalid",
+    reason: "merge evidence mismatch",
+    evidence_refs: ["evidence://provider"],
+    provider_observation: {
+      pr: { provider: "github", repository: "example/repo", id: "1", url: null },
+      provider_state: "closed",
+      merge_sha: null,
+      source: "github",
+      observed_at: at,
+      evidence_ref: "evidence://provider",
+    },
+  }, groupActor))).toMatchObject({ result: { outcome: "invalid", state: "blocked" } });
+  expect(ledger.groups[0]!.state).toBe("blocked");
+});
+
 test("contract-3 group dispatch waits for upstream delivery-unit PR merge", () => {
   const ledger = fixture();
   ledger.contract_version = 3;
@@ -1603,9 +1656,12 @@ describe("orchestration state", () => {
       },
     ];
     approve(ledger);
+    ledger.contract_version = 2;
+    ledger.source_schema_version = 1;
     expect(ready(ledger, "c")).toBe(false);
     ledger.groups[0].state = "merged";
     ledger.groups[0].merge_sha = merge;
+    ledger.groups[0].lifecycle.pr_merged = "passed";
     ledger.facts.push({
       id: "parent-merged",
       kind: "pr_merged",
@@ -3329,6 +3385,17 @@ describe("native CLI handoff contract", () => {
         ...ledger.config.execution_profile, created_at: at, evidence_ref: "codex-exec:cli-request", thread_id: "cli-thread",
         exit_code, turn_completed: true, workspace_path: "/owned/worktree", initial_head: head } });
   }
+  test("reconciliation evidence can resolve an observed unknown without changing native identity", () => {
+    const ledger = claimed();
+    apply(ledger, "dispatch-progress", request(ledger, "reconcile-observed", { operation_id: "cli-a", native_request_id: "cli-request", thread_id: "cli-thread" }));
+    const payload = resolve(ledger).payload as any;
+    payload.native_evidence = { ...payload.native_evidence, source: "multi-task-flow-reconcile", evidence_ref: "codex-thread-reconcile:cli-thread" };
+    delete payload.native_evidence.exit_code;
+    apply(ledger, "dispatch-resolve", request(ledger, "reconcile-resolve", payload));
+    expect(ledger.operations[0].status).toBe("succeeded");
+    expect(ledger.operations[0].request.native_request_id).toBe("cli-request");
+    expect(ledger.tasks[0].thread_id).toBe("cli-thread");
+  });
   test("native success cannot omit the transport used by baseline and handoff gates", () => {
     for (const parameters of [undefined, { cwd: "/repo" }]) {
       const ledger = claimed();

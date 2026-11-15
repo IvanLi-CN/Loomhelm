@@ -2,7 +2,7 @@ import { existsSync, readdirSync, lstatSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { z } from "zod";
-import { readRegularNoFollow } from "../../../skills/bin/modules/visual/secure_io";
+import { readRegularNoFollow } from "@loomhelm/runtime-core/modules/visual/secure_io";
 import { ServiceState } from "../lib/service-state";
 import { verifyRelease, digest } from "../lib/service-release";
 import { ledgerContract, packageReleaseManifest, type ReleaseManifest } from "../lib/service-contract";

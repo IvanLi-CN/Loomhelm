@@ -15,8 +15,8 @@ import {
   readRegularNoFollow,
   writeExclusiveNoFollow,
   renameNoReplace,
-} from "../../../skills/bin/modules/visual/secure_io";
-import { identity } from "../../../skills/bin/modules/visual/isolation";
+} from "@loomhelm/runtime-core/modules/visual/secure_io";
+import { identity } from "@loomhelm/runtime-core/modules/visual/isolation";
 import { requireLedgerCompatibility } from "../lib/service-contract";
 import { validateLedger } from "../lib/schema";
 import { requireCondition } from "../lib/errors";

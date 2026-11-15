@@ -1,4 +1,4 @@
-import { Runtime } from "../core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";

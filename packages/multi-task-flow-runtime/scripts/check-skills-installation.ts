@@ -57,7 +57,7 @@ export function checkSkillsInstallation(root, { probe = false } = {}) {
   const dependencies = { status:!sourceComplete ? 'not_checked' : dependencyMissing.length ? 'missing' : 'prepared', missing:dependencyMissing };
   const entrypoints = { status: dependencyMissing.length ? 'blocked' : 'not_checked', results: [] };
   if (probe && sourceComplete && runtime.available && dependencyMissing.length === 0) {
-    for (const [script, args] of [['skills/bin/plan-cli.sh',['--help']], ['skills/dot-codex-development/scripts/context.ts',['--help']], ['packages/multi-task-flow-runtime/scripts/orchestrate.ts',['view','--input','-']]]) {
+    for (const [script, args] of [['packages/multi-task-flow-runtime/scripts/orchestrate.ts',['view','--input','-']]]) {
       const result = spawnSync(script.endsWith('.sh') ? '/bin/bash' : process.execPath, [...(script.endsWith('.sh') ? ['-p'] : ['--no-install']), resolve(root,script), ...args], { cwd:root, env: { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH:'0' }, input:'{}', encoding:'utf8', timeout:30000 });
       const expected = script.endsWith('orchestrate.ts') ? 2 : 0;
       entrypoints.results.push({script, code:result.status, ok:!result.error && result.status === expected, error: result.error ? String(result.error) : result.status === expected ? undefined : result.stderr});

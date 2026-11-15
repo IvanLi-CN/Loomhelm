@@ -1,4 +1,4 @@
-import { Runtime } from "./modules/core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { auditReport } from "./modules/visual/report_audit";
