@@ -10,7 +10,7 @@ Multi-task Flow proposal quality gates, structured acceptance contracts and expl
 
 Viewer 维护按 [ADR 0026](../../adr/0026-viewer-compatibility-lifecycle.md) 执行：最新 viewer 保持受支持历史格式的双读，旧 viewer 只读兜底与写入路径隔离，无法证明读取安全时在服务控制前阻塞升级。旧格式测试、迁移测试、只读兜底测试和拒绝路径测试长期保留。
 
-根 `skills/` 保存源 Skill、references、测试及模板，根 `skills/bin/` 保存共享执行模块；资源合同和实现均以当前仓库内容为准。`skills/resource-manifest.json` 保存本地资源路径、逐文件摘要和安装摘要，`skills/catalog.json` 提供入口、脚本和条件性外部依赖。资源校验不执行专项外部操作，不将源包存在视为宿主能力可用。
+根 `skills/` 保存源 Skill、references、测试及模板；`@loomhelm/runtime-core` 保存 Multi-task Flow 运行时需要的共享执行模块。资源合同和实现均以当前仓库内容为准。`skills/resource-manifest.json` 保存本地资源路径、逐文件摘要和安装摘要，`skills/catalog.json` 提供入口、脚本和条件性外部依赖。资源校验不执行专项外部操作，不将源包存在视为宿主能力可用。
 
 生产仅使用 Bun 1.4.4 直接运行 TS。源码打包保留模块和完整资源路径，无服务端 JS 编译或导入后缀改写。计划 finalizer 从校验过的 TS 描述符读取私有快照，清理预加载和配置环境；POSIX 操作通过 Bun 内置 FFI 保留原子不覆盖重命名、目录描述符相对操作与原 flock 互斥，不构建 Node-API 模块。
 
@@ -28,7 +28,7 @@ Viewer 维护按 [ADR 0026](../../adr/0026-viewer-compatibility-lifecycle.md) �
 
 ## 验证边界
 
-vendor 源码安装只需保留 `skills/`。共享执行模块、合同资源、构建和检查支持分别位于 `skills/bin/`、`skills/docs/vendor/dot-codex/` 与 `packages/multi-task-flow-runtime/scripts/`；来源清单拒绝任何安装路径越出 `skills/`。隔离验证仅复制该目录并在其中安装声明依赖，验证原始 Skill 入口和生产脚本，不借用根 `bin/`、源码 checkout 或用户级全局程序。
+vendor 源码安装仍保留根 `skills/` 作为源 Skill 安装面；Multi-task Flow 的共享执行模块、合同资源、构建和检查支持分别位于 `@loomhelm/runtime-core`、`skills/docs/vendor/dot-codex/` 与 `packages/multi-task-flow-runtime/scripts/`。来源清单允许明确登记的 runtime sourcePath 映射到生成包内的 `skills/multi-task-flow/`，不借用已清退的共享目录、源码 checkout 或用户级全局程序。
 
 原共享脚本回归、原 Multi-task Flow 与网页回归、原生安全回归、客户端双运行时测试及来源隔离测试分别运行。macOS 本地结果不能代替 Linux CI，模拟 socket 不能代替真实宿主接力，已有旧运行的测试副本不能授权写入真实账本。当前候选的精确提交、经验验收和正式审查证据由交付流程保管；没有完整证据时不宣称合并就绪。
 

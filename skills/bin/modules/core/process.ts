@@ -1,4 +1,4 @@
-import { Runtime } from "./runtime";
+const Runtime = Bun;
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";

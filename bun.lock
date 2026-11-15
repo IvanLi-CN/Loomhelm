@@ -24,6 +24,7 @@
     "packages/multi-task-flow-runtime": {
       "name": "multi-task-flow",
       "dependencies": {
+        "@loomhelm/runtime-core": "workspace:*",
         "@xyflow/react": "12.12.1",
         "elkjs": "0.12.1",
         "lucide": "1.65.0",

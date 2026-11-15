@@ -18,7 +18,8 @@
   },
   "dependencies": {
     "sharp": "0.35.5",
-    "zod": "4.6.7"
+    "zod": "4.6.7",
+    "@loomhelm/runtime-core": "0.1.0"
   },
   "devDependencies": {
     "@types/bun": "1.4.4",

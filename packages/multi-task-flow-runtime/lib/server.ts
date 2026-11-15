@@ -1,6 +1,6 @@
 import { observeTaskRuntime } from "../lib/task-runtime";
 import { PRDetailsCache } from "../lib/pr-details";
-import { Runtime } from "../../../skills/bin/modules/core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import {
   ConversationOutputs,
   type ConnectObserver,
@@ -17,7 +17,7 @@ import {
 import { join, resolve } from "node:path";
 import { ContractError, requireCondition } from "../lib/errors";
 import { LedgerStore, safeId } from "../lib/store";
-import { validateLedger } from "../lib/schema";
+import { parseLedger, validateLedger } from "../lib/schema";
 import { buildView } from "../lib/view";
 import { sweepConversationArchives, retryConversationArchive, retryConversationUnarchive } from "../lib/conversation-archive";
 import { z } from "zod";
@@ -39,7 +39,8 @@ import {
 export function createRunDashboard(options: DashboardOptions) {
   const headers = dashboardHeaders;
   const store = new LedgerStore(options.root, safeId(options.runId));
-  validateLedger(store.read());
+  const readLedger = (): ReturnType<typeof validateLedger> => options.readOnly ? parseLedger(JSON.parse(store.readRaw())) : validateLedger(store.read());
+  readLedger();
   const preferences = new GlobalPreferencesStore(options.root);
   const token = options.token ?? randomBytes(24).toString("base64url");
   requireCondition(
@@ -66,7 +67,7 @@ export function createRunDashboard(options: DashboardOptions) {
   const encoder = new TextEncoder();
   let watching = true;
   let watchHealthy = true;
-  let lastRevision = validateLedger(store.read()).revision;
+  let lastRevision = readLedger().revision;
   const publish = (event: string, data: unknown) => {
     const bytes = encoder.encode(
       `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
@@ -102,7 +103,7 @@ export function createRunDashboard(options: DashboardOptions) {
     } catch { /* Durable intent and resource diagnostics survive observer restarts. */ }
     finally { archiveRunning = false; }
   };
-  bindOutputs(validateLedger(store.read()));
+  bindOutputs(readLedger());
   let watcher: FSWatcher | null = null;
   const closeWatcher = (): void => {
     if (!watcher) return;
@@ -115,7 +116,7 @@ export function createRunDashboard(options: DashboardOptions) {
       watcher = watch(store.runPath, (_event, name) => {
         if (!name || name.toString() === "ledger.json") {
           try {
-            const ledger = validateLedger(store.read());
+            const ledger = readLedger();
             bindOutputs(ledger);
             if (subscribers.size) outputs.start();
             lastRevision = ledger.revision;
@@ -151,7 +152,7 @@ export function createRunDashboard(options: DashboardOptions) {
     heartbeat = setInterval(() => {
       if (!watchHealthy) watchDirectory();
       try {
-        const ledger = validateLedger(store.read());
+        const ledger = readLedger();
         bindOutputs(ledger);
         if (subscribers.size) outputs.start();
         const revision = ledger.revision;
@@ -232,7 +233,7 @@ export function createRunDashboard(options: DashboardOptions) {
         if (raw === null) return Response.json({ error: "request_body_too_large" }, { status: 413, headers });
         const parsed = z.object({ task_id: z.string().min(1), action: z.enum(["archive", "unarchive"]).default("archive") }).strict().parse(JSON.parse(raw));
         const result = await (parsed.action === "unarchive" ? retryConversationUnarchive : retryConversationArchive)(store, parsed.task_id, options.archiveProvider);
-        publish("revision", { revision: validateLedger(store.read()).revision, watching });
+        publish("revision", { revision: readLedger().revision, watching });
         return Response.json(result, { headers });
       }
       if (request.method !== "GET")
@@ -251,7 +252,7 @@ export function createRunDashboard(options: DashboardOptions) {
         if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers });
         const kind = url.searchParams.get("kind"), id = url.searchParams.get("id");
         if ((kind !== "task" && kind !== "group") || !id || [...url.searchParams.keys()].some(k => !["kind", "id", "refresh"].includes(k))) return new Response("Invalid request", { status: 400, headers });
-        const ledger = validateLedger(store.read());
+        const ledger = readLedger();
         const object = kind === "task" ? ledger.tasks.find(t => t.id === id) : ledger.groups.find(g => g.id === id);
         if (!object) return new Response("Not found", { status: 404, headers });
         const pr = kind === "task" ? (object as typeof ledger.tasks[number]).pr : (object as typeof ledger.groups[number]).parent_pr;
@@ -263,7 +264,7 @@ export function createRunDashboard(options: DashboardOptions) {
       if (path === "/api/view") {
         const selected = url.searchParams.get("plan") ?? undefined;
         if (selected) safeId(selected);
-        const ledger = validateLedger(store.read());
+        const ledger = readLedger();
         bindOutputs(ledger);
         if (subscribers.size) outputs.start();
         const snapshot = outputs.snapshot();
@@ -277,7 +278,7 @@ export function createRunDashboard(options: DashboardOptions) {
             output_epoch: snapshot.output_epoch,
             output_revision: snapshot.output_revision,
             view: {
-              ...buildView(ledger, selected, snapshot.outputs),
+              ...buildView(ledger, selected, snapshot.outputs, { readOnly: options.readOnly === true }),
               profile_read_only:
                 options.readOnly === true || !ledger.config.execution_profile,
             },
@@ -287,7 +288,7 @@ export function createRunDashboard(options: DashboardOptions) {
       }
       if (path === "/api/events") {
         activate();
-        const initialRevision = validateLedger(store.read()).revision;
+        const initialRevision = readLedger().revision;
         currentServer.timeout(request, 0);
         let current: ReadableStreamDefaultController<Uint8Array> | undefined;
         const stream = new ReadableStream<Uint8Array>({

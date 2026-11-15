@@ -26,6 +26,18 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 
 原子图、任务图和交付单元图 MUST 使用同一份 canonical 原子数据，聚合投影 MUST 保留回溯到原子节点、条件、证据和阻塞原因的路径；历史格式只能按兼容合同读取或经可恢复的显式迁移处理。
 
+### REQ-VIEWER-ATOMIC-001
+
+原子依赖图 MUST 展示 canonical `AtomicNode` 与 `AtomicEdge` 中所有已持久化的节点和边，即使图存在环、孤儿节点、缺失依赖或顺序冲突；viewer MUST 通过节点、边和详情警告标记异常区域，不得通过过滤异常事实制造一个看似合法的子图。
+
+### REQ-VIEWER-ATOMIC-002
+
+交付单元和任务详情中的原子任务列表 MUST 从同一份原子依赖图推导顺序；无环图使用以稳定节点 ID 作为并列 tie-breaker 的稳定拓扑排序，有环图使用强连通分量的稳定回退顺序，并 MUST 显示无法形成合法线性顺序的诊断。系统 MUST NOT 持久化独立的 `display_order` 作为第二个顺序事实。
+
+### REQ-VIEWER-ATOMIC-003
+
+原子任务状态 MUST 仅由状态图标表达；用户聚焦的节点使用聚焦样式；viewer MUST NOT 因节点是第一项或第一个 `planned` 节点而自动添加“当前待推进项”样式。
+
 ### REQ-SCHEDULE-001
 
 计划在批准前 MUST 通过完整理论排期校验；任一可执行节点缺少可计算的正确定时、存在悬空依赖、循环依赖、未批准计划或其他导致开始/结束偏移不可确定的情况时，批准和 scheduled 状态转换 MUST 被拒绝。
@@ -37,6 +49,22 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 ### REQ-SCHEDULE-003
 
 理论排期不完整时，viewer MUST 隐藏理论时间轴并显示逐项阻断原因，包括缺少 duration、悬空依赖、循环依赖和未批准状态；不得把未知时间渲染成零点、默认时长或看似有效的时间轴。
+
+### REQ-ATOMIC-005
+
+每个状态 MUST 归属于唯一对象边界：Run phase 归属于 Orchestration，work lifecycle 归属于 AtomicNode，TaskStatus 与 DeliveryUnitStatus 是从原子、里程碑和外部事实派生的读取投影，provider PR state 归属于外部事实，operation status 归属于一次副作用操作，runtime observation 归属于会话或资源；任何对象不得把其他对象的状态复制为第二份权威状态。
+
+### REQ-ATOMIC-006
+
+DeliveryUnit 的 `closed` 业务状态 MUST 保留已经验证的 `pr_merged` 能力，使其可以满足下游 `requires: merged` 依赖；该能力 MUST 由有效的 merge receipt、`merge_sha`、目标 PR identity 和未被后续冲突事实失效的证据共同决定，不能仅由 `group.state` 或 provider PR 的 `closed` 状态决定。
+
+### REQ-ATOMIC-007
+
+恢复 MUST 通过受审计的 reconcile 或 protected recovery 命令记录为追加事件，不得新增 `reconciling` 等临时业务状态或覆盖原始事实；有效 closeout 的 reconcile 保持 `closed`，无效 closeout 转为 `blocked`，范围变化通过显式计划修订和 successor DeliveryUnit 表达，只有受保护恢复才能使同一 DeliveryUnit 从 `blocked` 回到 `active`。
+
+### REQ-ATOMIC-008
+
+当上游 DeliveryUnit 的 merge 能力被新事实否定时，新的下游派发 MUST 被阻塞；已存在的下游 operation MUST 保持其原有 `unknown`、`succeeded` 或 `failed` 事实并单独对账，系统不得自动回滚外部副作用或删除历史证据。
 
 ## Verification
 
@@ -58,6 +86,12 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 - Method: viewer projection、原子依赖图、聚合依赖回溯、历史兼容和迁移测试。
 - Pass condition: 三种图使用同一 canonical 数据，页面可定位具体原子和证据，历史数据不会被无语义推断地覆盖或清理。
 
+### VER-VIEWER-ATOMIC-001
+
+- covers: `REQ-VIEWER-ATOMIC-001`, `REQ-VIEWER-ATOMIC-002`, `REQ-VIEWER-ATOMIC-003`
+- Method: viewer projection、原子图和详情内容测试，覆盖合法 DAG、并列节点、环、孤儿节点、缺失依赖、开始/结束节点、里程碑、选中节点和状态图标。
+- Pass condition: 所有 canonical 节点与边始终可见；合法 DAG 的详情顺序与依赖一致；非法图显示完整事实和异常原因；不产生第二顺序字段；列表不再自动高亮第一个 planned 节点。
+
 ### VER-SCHEDULE-001
 
 - covers: `REQ-SCHEDULE-001`, `REQ-SCHEDULE-003`
@@ -69,6 +103,18 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 - covers: `REQ-SCHEDULE-002`
 - Method: 排期计算、序列化、URL 状态和 timeline formatter 测试，覆盖零点、并行节点、小数小时和跨内部日期边界的长排期。
 - Pass condition: 用户可见坐标始终从 `0h` 开始并以小时显示，输出不包含日期、时区或 ISO 时间戳。
+
+### VER-ATOMIC-004
+
+- covers: `REQ-ATOMIC-005`, `REQ-ATOMIC-006`
+- Method: schema/domain 状态归属、DeliveryUnit merge capability、closed bootstrap 上游派发、provider PR closed 与业务 closeout 区分测试。
+- Pass condition: 每个状态只有一个权威对象；closed DeliveryUnit 在 merge evidence 有效时可以满足下游 merged 依赖，但自身仍不能继续普通派发；provider closed 且没有 merge evidence 的 PR 不得满足该依赖。
+
+### VER-ATOMIC-005
+
+- covers: `REQ-ATOMIC-007`, `REQ-ATOMIC-008`
+- Method: closeout-reconcile、protected recovery、计划修订、下游影响阻塞、unknown operation reconciliation 和历史事件投影测试。
+- Pass condition: 恢复只追加审计事件；有效 closeout 保持 closed；无效 closeout 进入 blocked；范围变化创建 successor；上游能力失效不会删除或自动回滚下游副作用。
 
 ## 1. 核心模型
 
@@ -99,7 +145,7 @@ AtomicNode + AtomicEdge
 Task 与 DeliveryUnit 是平级对象；delivery_unit_id 只是共同的分类、整合和验收范围标记，不表示父子、会话从属或管理权转移。
 ```
 
-网页中的任务图和交付单元图都是原子图的投影，不能反向成为新的依赖来源。聚合边必须保留对应的原子路径，以便从任务或交付单元上的阻塞回溯到具体节点、条件和证据。
+状态机图、对象状态归属和异常恢复规则集中记录在 [STATE-MACHINES.md](./STATE-MACHINES.md)，便于单独审查；数据结构和 schema 定义集中记录在 [DATA-MODEL.md](./DATA-MODEL.md)。
 
 ## 3. 统一的原因
 
@@ -131,454 +177,11 @@ Task 与 DeliveryUnit 是平级对象；delivery_unit_id 只是共同的分类�
 
 交付单元集成 PR 准备、创建、合并和收口本身不是独立的 work 原子；如果这些动作需要编排，就使用具体的外部操作证据和 milestone 条件表达。旧账本中的 coordination task 和 coordination session 只读兼容，不自动猜测业务语义；迁移必须通过显式计划修订，将其转换为 contribution、documentation、verification、release、deployment 或适当的 milestone。
 
-## 5. Canonical 数据结构
+Canonical schema、Task/DeliveryUnit 投影、外部事实和执行策略见 [DATA-MODEL.md](./DATA-MODEL.md)。
 
-### 5.1 原子节点和依赖边
+状态派生、状态优先级和非正常恢复见 [STATE-MACHINES.md](./STATE-MACHINES.md)。
 
-canonical 字段使用 `task_id` 和 `delivery_unit_id`；当前实现中的 `group_id` 只作为兼容读取名称。AtomicNode 不允许 `activity_type: null`、`execution_owner: null` 或通过 null 拼出非法组合。
-
-#### 磁盘持久化：AtomicNode 与 AtomicEdge
-
-下面代码块只定义磁盘上的 canonical 原子节点和依赖边；其中的 work 生命周期、完成结果和证据引用属于原子编排的持久化事实。运行时观察、评估结果和网页读取结构在后文单独定义，不与本代码块混用。
-
-```ts
-type AtomicNode = WorkAtom | MilestoneNode;
-
-type TaskScope = {
-  kind: "task";
-  task_id: string;
-  delivery_unit_id: string;
-};
-
-type DeliveryUnitScope = {
-  kind: "delivery_unit";
-  delivery_unit_id: string;
-};
-
-type WorkDefinition = {
-  kind: "work";
-  id: string;
-  title: string;
-  purpose: string;
-  output: string;
-  acceptance: WorkAcceptanceCriterion[];
-};
-
-type WorkLifecycle<S> =
-  | {
-      state: "design";
-      scope?: never;
-      runtime?: never;
-      blocker?: never;
-      result?: never;
-    }
-  | {
-      state: "planned";
-      scope: S;
-      runtime?: never;
-      blocker?: never;
-      result?: never;
-    }
-  | {
-      state: "starting";
-      scope: S;
-      runtime: WorkRuntime;
-      blocker?: never;
-      result?: never;
-    }
-  | {
-      state: "running";
-      scope: S;
-      runtime: WorkRuntime;
-      blocker?: never;
-      result?: never;
-    }
-  | {
-      state: "blocked";
-      scope: S;
-      runtime: WorkRuntime;
-      blocker: Blocker;
-      result?: never;
-    }
-  | {
-      state: "completed";
-      scope: S;
-      runtime: WorkRuntime;
-      blocker?: never;
-      result: WorkResult;
-    };
-
-type WorkAtom =
-  | (WorkDefinition &
-      { activity_type: "contribution" | "documentation" } &
-      WorkLifecycle<TaskScope>)
-  | (WorkDefinition &
-      { activity_type: "verification" | "release" | "deployment" } &
-      WorkLifecycle<TaskScope | DeliveryUnitScope>);
-
-type MilestoneNode =
-  | {
-      kind: "milestone";
-      id: string;
-      title: string;
-      state: "design";
-      scope?: never;
-      acceptance: MilestoneCriterion[];
-    }
-  | {
-      kind: "milestone";
-      id: string;
-      title: string;
-      state: "planned";
-      scope: TaskScope | DeliveryUnitScope;
-      acceptance: MilestoneCriterion[];
-    };
-
-type AtomicEdge = {
-  id: string;
-  from_node_id: string;
-  to_node_id: string;
-  requires: EdgeRequirement;
-};
-```
-
-contribution 和 documentation 原子只能使用 TaskScope；verification、release 和 deployment 原子可以使用 TaskScope 或 DeliveryUnitScope。每个 planned work 原子恰好拥有一个 scope；TaskScope 同时携带 task_id 和 delivery_unit_id，DeliveryUnitScope 只携带 delivery_unit_id。scope 不是父子关系，而是责任和验收分类。
-
-原子节点不创建 Agent 或执行会话，也不保存 `execution_owner`。TaskScope 的执行策略来自 TaskDefinition，DeliveryUnitScope 的执行策略来自 DeliveryUnitDefinition；运行时绑定和执行事实通过 work runtime 与 evidence 记录。
-
-这里的 `WorkRuntime` 和 `WorkResult` 指原子执行事件、结果和 evidence 的持久化事实；它们不等同于后文的 `TaskRuntimeObservation` 或 `DeliveryUnitRuntimeObservation`，后两者只描述当前运行观察。
-
-### 5.2 里程碑条件
-
-里程碑条件是显式、结构化、可验证的谓词；条件类型必须与事实来源匹配，不允许用自由文本代替必要的外部事实约束。
-
-#### 磁盘持久化：MilestoneCriterion 与 EdgeRequirement
-
-下面代码块只定义磁盘上的 milestone 条件和依赖边要求；`MilestoneEvaluation` 属于后文的运行时派生结果。
-
-```ts
-type MilestoneCriterion =
-  | { kind: "node_satisfied"; node_id: string }
-  | { kind: "pr_published"; pr_ref: ExternalRef }
-  | { kind: "pr_merged"; pr_ref: ExternalRef; merge_sha: string }
-  | { kind: "ci_passed"; target_ref: string; head_sha: string; checks: string[] }
-  | { kind: "release_published"; release_id: string; artifact_digest: string }
-  | { kind: "deployment_succeeded"; environment: string; artifact_digest: string }
-  | { kind: "online_verification_passed"; target: string; verification_id: string };
-
-type EdgeRequirement =
-  | { kind: "source_terminal_success" }
-  | { kind: "source_evidence"; criterion: MilestoneCriterion };
-```
-
-planned milestone 必须至少有一个入边条件或至少一个显式验收条件；只有入边、只有显式验收条件以及两者同时存在都合法。两者都为空的 milestone 是无效计划，必须在 schema 校验阶段拒绝，不能被当作自动满足或普通 pending。
-
-## 6. Task 与 DeliveryUnit 数据结构
-
-Task 和 DeliveryUnit 是平级领域对象。canonical 账本只保存它们的身份、执行策略、交付引用和外部资源事实；`atom_ids`、`task_ids` 和 `milestone_ids` 只存在于派生投影或带 revision 的读取缓存中，不能作为可独立修改的持久化字段。
-
-### 6.1 Task 定义与投影
-
-#### 磁盘持久化：TaskDefinition 与 TaskPrBinding
-
-```ts
-type TaskDefinition = {
-  id: string;
-  title: string;
-  execution_policy: TaskExecutionPolicy;
-  delivery_refs: TaskDeliveryRefs;
-  pr: TaskPrBinding;
-};
-
-type TaskPrBinding =
-  | { state: "unbound" }
-  | {
-      state: "shared_delivery_unit";
-      delivery_unit_id: string;
-    }
-  | {
-      state: "open";
-      pr: ExternalRef;
-      branch: string;
-      base_branch: string;
-    }
-  | {
-      state: "merged";
-      pr: ExternalRef;
-      branch: string;
-      merge_sha: string;
-    }
-  | {
-      state: "closed";
-      pr: ExternalRef;
-      branch: string;
-      closed_at: string;
-      closed_reason: "abandoned" | "superseded" | "provider_closed" | "replaced";
-    };
-```
-
-TaskDefinition 不保存 TaskKind、成员列表、delivery_unit_id 或独立编排状态。贡献任务的 `pr` 可以是独立 child PR，也可以是 `shared_delivery_unit` 绑定；后者只引用所属 DeliveryUnit，不复制 PR、分支或 SHA。
-
-#### 派生读取：TaskProjection
-
-```ts
-type TaskProjection = TaskDefinition & {
-  derived: {
-    scope:
-      | { state: "design" }
-      | { state: "planned"; delivery_unit_id: string };
-    kind: TaskKind;
-    atom_ids: string[];
-    status: TaskStatus;
-    blockers: Blocker[];
-    completed_at: string | undefined;
-  };
-};
-
-type TaskKind =
-  | "contribution"
-  | "verification"
-  | "release"
-  | "deployment";
-
-type TaskStatus =
-  | "design"
-  | "planned"
-  | "ready"
-  | "starting"
-  | "running"
-  | "blocked"
-  | "completed";
-```
-
-TaskProjection 的 scope、kind、atom_ids、status、blockers 和 completed_at 都由原子节点、依赖边和外部事实计算；它是 API/网页读取结构，不是可独立写回磁盘的定义。
-
-#### 运行时观察：TaskRuntimeObservation
-
-```ts
-type TaskRuntimeObservation =
-  | { state: "unobserved" }
-  | {
-      state: "starting" | "running" | "idle" | "waiting" | "disconnected";
-      observed_at: string;
-      source: string;
-    };
-```
-
-TaskRuntimeObservation 只描述 Agent 或对话运行观察，不覆盖 TaskProjection 的业务状态，也不属于 TaskDefinition 的 canonical 编排字段。
-
-贡献 Task 必须有 `pr` 字段，但该字段使用 `TaskPrBinding` 联合而不是可空的裸引用。design、planned、starting 和 running 阶段允许 `unbound`；共享交付拓扑使用 `shared_delivery_unit`；多任务集成拓扑使用 `open`、`merged` 或 `closed`。共享绑定解析到同一 DeliveryUnit 的 `DeliveryUnitExternalFacts.pr`，不创建第二个 PR、分支或合并操作。旧的 integrated、closed 等业务标签不属于这组 canonical 阶段。
-
-共享交付拓扑只在同一 DeliveryUnit 恰好存在一个 contribution Task 时合法；documentation 原子归入 contribution Task 后也计入该数量。verification、release 和 deployment Task 不增加 contribution Task 数量，可以继续使用 DeliveryUnitScope 或独立的 evidence 交付。共享绑定的 Task 与 DeliveryUnit 必须使用同一个 conversation、worktree、branch 和 PR，Task 的 PR 发布、检查和合并事实从该 DeliveryUnit 的 provider receipt 派生。新增第二个需要独立代码交付的 contribution Task 时，必须通过显式计划修订切换到多任务集成拓扑，不能在运行中静默创建 child PR。
-
-贡献 Task 切换到 starting 时，校验器必须解析其 `delivery_unit_id` 对应的 DeliveryUnitExternalFacts，并要求它处于 `published`，同时具有 `pr` 和 `parent_branch`；唯一例外是活跃且已完成 workspace readiness 的 main-owned bootstrap unit，其 main-owned contribution task 可以在集成 PR 创建前启动。regular unit 和 Task Agent 路径始终保留集成 PR 门禁。普通 starting 命令只需要这些交付单元集成 PR 和交付单元集成分支信息，不把提交 hash 当作启动条件；后续 provider receipt 可以补充 head SHA 或 merge SHA，但这些事实不改变 starting 的输入合同。
-
-每个 Task 只能归纳出一个 TaskKind。允许混合的活动类型必须映射到同一个 TaskKind，例如 contribution 与 documentation 一起归入 contribution；verification、release 和 deployment 不能混合成一个 Task。TaskKind 归纳函数必须是纯函数并纳入 schema 校验。
-
-### 6.2 DeliveryUnit 定义与投影
-
-#### 磁盘持久化：DeliveryUnitDefinition 与 DeliveryUnitExternalFacts
-
-```ts
-type DeliveryUnitDefinition = {
-  id: string;
-  title: string;
-  delivery_unit_kind: "bootstrap" | "regular";
-  integration_scope: IntegrationScope;
-  execution_policy: DeliveryUnitExecutionPolicy;
-};
-
-type DeliveryUnitExternalFacts =
-  | { state: "unpublished" }
-  | {
-      state: "published";
-      pr: ExternalRef;
-      parent_branch: string;
-    }
-  | {
-      state: "merged";
-      pr: ExternalRef;
-      parent_branch: string;
-      merge_sha: string;
-    }
-  | {
-      state: "closed";
-      pr: ExternalRef;
-      parent_branch: string;
-      closed_at: string;
-      closed_reason: "abandoned" | "superseded" | "provider_closed" | "replaced";
-    };
-```
-
-DeliveryUnitDefinition 不把 Task 作为子对象，也不保存 task_ids、atom_ids 或 milestone_ids。`DeliveryUnitExternalFacts.pr` 是该交付单元的集成 PR；新 canonical 模型不使用 `parent_pr` 字段。`closed` 只表示 provider 已关闭该 PR，不能直接推导为 DeliveryUnit 的 `closed` 业务状态；未重新建立有效 PR 时，交付单元应保持 blocked 或进入显式修订流程。
-
-#### 派生读取：DeliveryUnitProjection
-
-```ts
-type DeliveryUnitProjection = DeliveryUnitDefinition & {
-  derived: {
-    task_ids: string[];
-    atom_ids: string[];
-    milestone_ids: string[];
-    status: DeliveryUnitStatus;
-    blockers: Blocker[];
-    completed_at: string | undefined;
-  };
-};
-
-type DeliveryUnitStatus =
-  | "design"
-  | "planned"
-  | "ready"
-  | "active"
-  | "blocked"
-  | "merged"
-  | "closed";
-```
-
-DeliveryUnitProjection 的成员和状态由同一 delivery_unit_id 范围内的原子、里程碑和外部事实计算；它是 API/网页读取结构，不是可独立写回磁盘的定义。
-
-#### 运行时观察：DeliveryUnitRuntimeObservation
-
-```ts
-type DeliveryUnitRuntimeObservation =
-  | { state: "unobserved" }
-  | {
-      state: "starting" | "running" | "idle" | "waiting" | "disconnected";
-      observed_at: string;
-      source: string;
-    };
-```
-
-DeliveryUnitRuntimeObservation 只描述交付协调会话或 Agent 的运行观察，不覆盖 DeliveryUnitProjection 的业务状态，也不属于 DeliveryUnitDefinition 的 canonical 编排字段。`Group` 仅作为当前实现和历史账本的兼容名称，新 canonical 字段和新 API 使用 DeliveryUnit 与 delivery_unit_id。
-
-### 6.3 执行策略
-
-原子不保存 execution_owner；执行策略由原子 scope 对应的包装对象提供，并用 union 约束可用的执行责任、对话和交付方式。
-
-下面代码块属于磁盘上的 TaskDefinition 与 DeliveryUnitDefinition；它定义执行策略的合法组合，不是运行时观察或网页投影。
-
-```ts
-type TaskExecutionPolicy =
-  | { kind: "delivery_unit_shared"; conversation: "delivery_unit"; delivery: "shared_delivery_unit_pr" }
-  | { kind: "main_owned"; conversation: "current"; delivery: "delivery_unit_pr" | "evidence" }
-  | { kind: "task_agent"; conversation: "new"; delivery: "child_pr" | "evidence" }
-  | { kind: "evidence_only"; conversation: "none"; delivery: "evidence" };
-
-type DeliveryUnitExecutionPolicy =
-  | { kind: "delivery_agent"; conversation: "delivery_unit"; delivery: "delivery_unit_pr" | "evidence" }
-  | { kind: "main_owned"; conversation: "current"; delivery: "delivery_unit_pr" | "evidence" }
-  | { kind: "evidence_only"; conversation: "none"; delivery: "evidence" };
-```
-
-TaskScope 的 work 原子必须能解析到 TaskDefinition.execution_policy；DeliveryUnitScope 的 work 原子必须能解析到 DeliveryUnitDefinition.execution_policy。不存在 `execution_owner: null`、`conversation_policy: null` 或其他非法组合。
-
-## 7. 里程碑评估与状态
-
-里程碑的 canonical 数据是节点定义、入边、验收条件和外部事实引用；`pending | satisfied | blocked` 是由统一评估器生成的运行时投影。调度器、API 和网页必须使用同一评估结果，网页不能自行实现第二套规则。
-
-```text
-condition_count = incoming_edge_conditions + explicit_acceptance_conditions
-
-condition_count == 0                         -> invalid plan
-condition_count > 0 && any condition failed  -> blocked
-condition_count > 0 && all conditions true   -> satisfied
-condition_count > 0 && otherwise              -> pending
-```
-
-只有所有入边条件和所有显式验收条件都满足时，里程碑才是 satisfied；只有入边条件或只有验收条件的里程碑同样合法。里程碑不会因为“没有条件”而自动满足，也不会隐式把同一交付单元的所有原子视为前置条件。
-
-`blocked` 表示条件已明确失败、目标事实不可满足或计划事实冲突；单纯等待前置 work 或外部事实属于 pending。里程碑没有 running，也不接受执行责任认领。评估结果本身也使用判别联合，不能用可选字段拼出非法组合：
-
-下面代码块是统一评估器的运行时派生结果；它可以作为带 revision 的缓存或事件读取结果存在，但不是 milestone 的 canonical 定义，也不是独立状态写入。
-
-```ts
-type MilestoneEvaluation =
-  | {
-      status: "pending";
-      unmet: MilestoneCriterion[];
-      evidence_refs: string[];
-      plan_revision: string;
-      fact_revision: string;
-    }
-  | {
-      status: "satisfied";
-      evidence_refs: string[];
-      satisfied_at: string;
-      plan_revision: string;
-      fact_revision: string;
-    }
-  | {
-      status: "blocked";
-      blockers: Blocker[];
-      evidence_refs: string[];
-      plan_revision: string;
-      fact_revision: string;
-    };
-```
-
-若需要性能优化，可以保存带 `plan_revision` 和 `fact_revision` 的评估快照；快照过期或丢失时必须能够从 canonical 定义和事实重新计算。
-
-如果需要审计里程碑曾经达成，应记录 `milestone_satisfied` receipt 或事件及其 fact revision；该事件证明某个事实版本下曾满足，不允许反向把 milestone.status 当作独立权威状态。
-
-## 8. 状态推导
-
-### 8.1 Work 原子
-
-原子 state 必须包含 design。design 只允许存在于设计阶段，此时 scope 缺省；从 design 转为 planned 时必须一次性确定唯一 scope，之后不得回到 design。
-
-work 原子保留唯一的执行状态：
-
-```text
-planned -> starting -> running -> completed
-planned -> blocked
-starting -> blocked
-running -> blocked
-blocked -> starting
-blocked -> running
-```
-
-ready 不作为独立字段持久化；它是依赖满足、执行策略和资源可用性计算出的瞬时可执行条件。原子完成必须带有与活动类型匹配的 result/evidence：contribution 对应实现和质量结果，documentation 对应文档产物，verification 对应线上验证，release 对应发布证据，deployment 对应目标环境证据。
-
-### 8.2 Task
-
-Task 不保存独立的权威 state。TaskStatus 中可以包含 design、planned、ready、starting、running、blocked 和 completed；这些值都由 task scope 的 work 原子、里程碑和外部事实计算，不再额外保存 `ready` 布尔字段。Agent idle、waiting、disconnected 等 runtime observation 只作为独立叠加信息，不参与业务状态判定。
-
-TaskStatus 按 `design → blocked → completed → running → starting → ready → planned` 的顺序取第一个满足条件的结果，以保证状态互斥；其中 `blocked` 优先于 ready/starting/running，`completed` 只有在不存在阻塞且所有必要条件满足时才成立。
-
-- design：范围内仍存在 design 原子或任务尚未完成 scope 绑定。
-- planned：没有 design 原子、阻塞节点、starting/running 节点或可执行成员。
-- ready：至少一个成员 work 原子满足依赖并可执行，且没有 starting/running 节点。
-- starting：至少一个成员 work 原子处于 starting 且没有 running 节点；对于 contribution Task，普通路径只有在所属 DeliveryUnit 已有 `pr` 和 `parent_branch` 后才能进入该状态，活跃且 workspace readiness 已完成的 main-owned bootstrap unit 的 main-owned contribution task 除外。
-- running：至少一个成员 work 原子处于 running。
-- blocked：成员节点存在明确阻塞、拓扑错误、证据错误，或多任务拓扑中的贡献任务 child PR 已进入 `closed` 且尚未建立替代 PR。
-- completed：所有成员 work 原子完成，且该 Task 所需里程碑全部 satisfied。
-
-`integrated` 是旧账本中的业务标签，表示多任务拓扑中贡献 Task 自己的 child PR 已经合并到 DeliveryUnit 的集成分支；共享交付拓扑不需要该中间标签，因为唯一 PR 同时就是 DeliveryUnit 和 contribution Task 的交付。它不表示存在 follow-up PR，也不表示 Task 的全部工作已经完成。follow-up PR 是独立的外部资源，可以在 child PR 集成后继续存在，并由自己的发布/合并事实或里程碑决定是否阻塞 DeliveryUnit 的后续步骤。新模型不把 `integrated` 作为 canonical TaskStatus，而是用 `pr_merged` 外部事实或对应 milestone 的 satisfied 结果表达；网页如需保留旧术语，只能显示为派生标签。
-
-这三个词的边界必须固定：`integrated` 表示“child PR 已进入 DeliveryUnit 集成分支”，是过程标签；`completed` 表示“该 Task 的全部 work 原子完成，且所需 milestone 全部 satisfied”，是成功的 canonical TaskStatus；`closed` 在旧 Task 账本中表示记录被关闭或收口，可能发生在 `integrated` 或 `completed` 之后，也可能用于 abandoned、superseded 等不成功的终止，因此不能当作成功状态。新模型不把旧 Task 的 `closed` 写入 TaskStatus；成功收口使用 DeliveryUnit 的 closeout milestone，管理性关闭使用独立的 disposition/closure 事实。Task 的 `closed` 与 `TaskPrBinding.state = "closed"` 也不是一回事，后者只表示 provider 关闭了 PR。
-
-### 8.3 DeliveryUnit
-
-DeliveryUnitStatus 由同一 delivery_unit_id 范围内的全部成员节点、交付单元级里程碑和外部事实推导；Agent runtime observation 不参与业务状态判定。
-
-DeliveryUnitStatus 按 `design → blocked → closed → merged → active → ready → planned` 的顺序取第一个满足条件的结果，以保证状态互斥；`closed` 和 `merged` 只有对应的交付单元里程碑 satisfied 后才成立。
-
-- design：范围内仍存在 design 原子或交付单元尚未完成计划绑定。
-- planned：没有可执行、starting 或 running 的 work 原子。
-- ready：至少一个成员 work 原子满足依赖并可执行，且没有 starting/running 原子。
-- active：至少一个 work 原子处于 starting 或 running。
-- blocked：存在明确阻塞节点、未满足且已失败的必要里程碑、拓扑错误，或 DeliveryUnit 的集成 PR 已进入 `closed` 且尚未建立替代 PR。
-- merged：交付单元集成 PR 合并里程碑 satisfied。
-- closed：收口里程碑 satisfied 且所有必要节点完成。
-
-交付单元集成 PR、CI、发布和部署事实由外部操作和 provider evidence 记录，只作为原子完成或里程碑满足的输入，不再同步成另一份 DeliveryUnit.lifecycle 状态。
-
-### 8.4 Agent 运行观察
-
-Agent 空闲、对话连接、最新输出和观察器断开等信息属于独立 runtime_observation。页面可以同时显示“任务已完成 · Agent 空闲”或“任务执行中 · 对话断开”，但运行观察不能覆盖原子图推导出的 Task 或 DeliveryUnit 状态。
-
-## 9. 编排流程
+## 5. 编排流程
 
 ```text
 创建原子 work 与 milestone 定义
@@ -595,7 +198,7 @@ Agent 空闲、对话连接、最新输出和观察器断开等信息属于独�
 
 计划阶段允许原子处于 design，此时可以先定义目的、输出、验收条件和候选依赖，但不能调度。进入 planned 后，work 和 milestone 都必须具有明确且唯一的 scope；不存在同时属于多个 Task 或多个 DeliveryUnit 的原子。
 
-## 10. 校验合同
+## 6. 校验合同
 
 所有规则必须进入单一的 Zod/domain schema 和领域校验器，不能依赖网页或调度器各自补充隐式判断。
 
@@ -614,13 +217,18 @@ Agent 空闲、对话连接、最新输出和观察器断开等信息属于独�
 - 活动类型、完成条件、result/evidence 和外部目标必须兼容。
 - TaskScope 和 DeliveryUnitScope 必须分别解析到对应的 execution_policy；不得出现 null 组合。
 - 外部事实必须绑定正确目标、SHA、PR、环境和来源身份。
+- 状态必须绑定唯一对象边界；Run、AtomicNode、Task、DeliveryUnit、provider PR、operation 和 runtime resource 的状态不得互相复制为第二份权威状态。
+- `requires: merged` 的依赖必须使用统一的 merge capability 判定；DeliveryUnit 为 `merged` 或 `closed` 且具有有效 merge receipt 时满足，provider PR 单独为 `closed` 或 DeliveryUnit 单独为 `closed` 时不满足。
+- DeliveryUnit closeout 只能由受审计的 closeout operation 完成；有效 reconcile 保持 `closed`，无效 reconcile 只能进入 `blocked`，同一单元恢复执行必须经过 protected recovery 和完整重新验证。
+- 收口后发现的新范围必须通过 plan revision 和 successor DeliveryUnit 表达；不得通过覆盖历史 closeout、复活旧 Task identity 或新增未批准 atom 改写原责任边界。
+- 上游 merge capability 失效时，新下游派发必须阻塞，既有下游 operation 必须保留原始结果并单独 reconcile，不得自动回滚外部副作用。
 - 发布、部署和线上验证必须是显式原子，不能从普通 contribution 节点隐式推断。
 - 普通实现任务内部可以保留单元测试、静态检查和代码自测，不得因此自动生成 verification Task。
 - 孤立节点、悬空任务、无归属里程碑和空条件 planned milestone 拒绝执行。
 - 计划修订以 AtomicNode 和 AtomicEdge 为 canonical diff；Task、DeliveryUnit 和网页投影由修订后图重新生成。
 - 动态切割只能迁移尚未开始的原子节点；已开始节点保留身份、事件和证据。
 
-## 11. 网页展示
+## 7. 网页展示
 
 网页提供原子依赖图、任务依赖图和交付单元依赖图，三者使用同一份 AtomicNode + AtomicEdge 数据。
 
@@ -636,7 +244,11 @@ AtomicNode + AtomicEdge
 
 聚合边必须保留“聚合边 -> 原子路径 -> 具体节点 -> 条件 -> 证据/阻塞原因”的回溯入口。等待合并必须能明确指向交付单元集成 PR 合并 milestone，并列出前置 work、PR published、CI passed 等显式条件。
 
-## 12. 历史兼容与迁移
+页面必须分别展示 Run phase、TaskStatus、DeliveryUnitStatus、provider PR state、operation status 和 runtime observation。页面不得把 operation 的 `unknown`、provider PR 的 `closed` 或 Agent 的 idle/disconnected 显示为 Task 或 DeliveryUnit 的成功完成。
+
+当 DeliveryUnit 为 `closed` 且 merge capability 有效时，页面应同时显示“本单元已收口”和“可满足下游 merged 依赖”；该单元自身的 dispatch readiness 仍应为 blocked。closeout reconcile 的原始事件、核验依据、失效原因、受影响依赖和 protected recovery 记录必须可从 DeliveryUnit 详情回溯。
+
+## 8. 历史兼容与迁移
 
 第一阶段新增统一 `atomic_nodes` 和 `atomic_edges` canonical 存储，旧字段只读兼容，禁止新写入继续创建 `Task.atoms` 或 `Group.atoms`。
 
@@ -648,12 +260,14 @@ AtomicNode + AtomicEdge
 
 旧账本中的 `parent_pr` 只在确认它表示 DeliveryUnit 的集成 PR 时，读取为 canonical `DeliveryUnitExternalFacts.pr`；旧执行策略值 `parent_pr` 只读映射为 `delivery_unit_pr`。新 canonical 字段和策略不再使用 `parent_pr` 这个名称，也不把交付单元表达成 Task 的父对象。
 
+新增 closeout reconcile、protected recovery 或 recovery audit event 时，必须声明 contract version、viewer compatibility 和 persistent-state impact。旧 viewer 读取新事件时不得丢失原 closeout、merge receipt 或 blocked reason；无法安全读取时必须进入只读兼容或 fail closed，不得把新恢复事件解释为普通成功状态。
+
 ## Related ADRs
 
 - [Multi-task Flow task execution and delivery boundaries](../../adr/0027-multi-task-flow-task-execution-and-delivery-boundaries.md)
 - [First delivery unit is bootstrap by default](../../adr/0031-first-delivery-unit-bootstrap-by-default.md)
 
-## 13. 可行性与风险
+## 9. 可行性与风险
 
 可行性高，但这不是局部重命名，会影响 schema、计划校验、初始化和动态切割、运行时事件、merge-claim、group-close、view projection、dashboard 图和历史迁移。
 

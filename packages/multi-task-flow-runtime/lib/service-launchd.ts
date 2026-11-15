@@ -1,8 +1,8 @@
-import { Runtime } from "../../../skills/bin/modules/core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { join } from "node:path";
 import { requireCondition, ContractError } from "../lib/errors";
 import { writeAtomic } from "../lib/store";
-import { readRegularNoFollow } from "../../../skills/bin/modules/visual/secure_io";
+import { readRegularNoFollow } from "@loomhelm/runtime-core/modules/visual/secure_io";
 import type { ServiceState } from "../lib/service-state";
 
 const escape = (value: string) =>

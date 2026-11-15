@@ -4,7 +4,7 @@ import { lstatSync, realpathSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { readRegular } from "../lib/store";
 import { requireCondition } from "../lib/errors";
-import { readRegularNoFollow } from "../../../skills/bin/modules/visual/secure_io";
+import { readRegularNoFollow } from "@loomhelm/runtime-core/modules/visual/secure_io";
 import {
   releaseManifestSchema,
   type ReleaseManifest,
@@ -14,7 +14,6 @@ import { SKILL_ID, SKILL_VERSION } from "../lib/contract";
 export const releaseFiles = [
   "viewer",
   "skills/multi-task-flow/scripts/service.ts",
-  "skills/bin/plan_bunfig.toml",
   "skills/multi-task-flow/dist/index.html",
   "skills/multi-task-flow/dist/app.js",
   "skills/multi-task-flow/dist/app.css",

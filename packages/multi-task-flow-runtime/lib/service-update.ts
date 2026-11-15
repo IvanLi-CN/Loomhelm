@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { tryLockFile } from "../../../skills/bin/modules/core/security_file";
+import { tryLockFile } from "@loomhelm/runtime-core/modules/core/security_file";
 import { writeAtomic, readRegular } from "../lib/store";
 import type { ServiceState } from "../lib/service-state";
 

@@ -1,4 +1,4 @@
-import { Runtime } from "../../../skills/bin/modules/core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import {
   compatibilityReport,
   requireReport,
@@ -15,17 +15,17 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ContractError } from "../lib/errors";
-import { withExclusiveLockAsync } from "../../../skills/bin/modules/flow/storage";
+import { withExclusiveLockAsync } from "@loomhelm/runtime-core/modules/flow/storage";
 import {
   PortRegistry,
   defaultRegistryDir,
   processAlive,
-} from "../../../skills/bin/modules/workspace/port_registry";
+} from "@loomhelm/runtime-core/modules/workspace/port_registry";
 import {
   renameNoReplace,
   readRegularNoFollow,
   writeExclusiveNoFollow,
-} from "../../../skills/bin/modules/visual/secure_io";
+} from "@loomhelm/runtime-core/modules/visual/secure_io";
 import { ensureDirectory, readRegular } from "../lib/store";
 import { ServiceState } from "../lib/service-state";
 import { ServiceAuth } from "../lib/service-auth";

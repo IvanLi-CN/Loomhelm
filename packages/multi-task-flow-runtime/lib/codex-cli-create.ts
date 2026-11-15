@@ -1,5 +1,5 @@
 import { StringDecoder } from "node:string_decoder";
-import { runProcess } from "../../../skills/bin/modules/core/process";
+import { runProcess } from "@loomhelm/runtime-core/modules/core/process";
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { randomUUID } from "node:crypto";

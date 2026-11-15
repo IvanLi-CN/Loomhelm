@@ -384,9 +384,13 @@ h1 { margin: 3px 0 0; color: var(--text); font-size: 26px; line-height: 1.14; fo
 .status-row > .timestamp-wrap { flex: none; margin-left: auto; white-space: nowrap; color: var(--muted); font-size: 10px; font-weight: 400; }
 time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .timestamp-tooltip { width: max-content; max-width: calc(100vw - 32px); z-index: 70; }
-.atom-list li[data-current="true"] { border-color: var(--accent); background: var(--active); }
 .atom-list li[data-focused="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); outline: 0; scroll-margin: 16px; }
 .atom-list li[data-status="blocked"] { border-color: var(--negative); }
+.atom-list li[data-diagnostic="true"] { border-color: var(--negative); background: color-mix(in srgb, var(--negative) 10%, var(--surface)); }
+.atom-warning { display: block; margin-top: 4px; color: var(--negative); font-size: 10px; }
+.atomic-dependency-card[data-diagnostic="true"] { border-color: var(--negative); box-shadow: inset 0 0 0 1px var(--negative); }
+.atomic-graph-warning { display: flex; gap: 10px; align-items: baseline; margin: 8px 0; padding: 8px 10px; color: var(--negative); background: color-mix(in srgb, var(--negative) 10%, var(--surface)); border: 1px solid color-mix(in srgb, var(--negative) 55%, var(--border)); border-radius: 8px; font-size: 12px; }
+.atomic-graph-warning span { color: var(--muted); }
 .atom-index { color: var(--faint); font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
 .atom-title { min-width: 0; overflow-wrap: anywhere; }
 .atom-state { color: var(--muted); font-size: 10px; white-space: nowrap; }

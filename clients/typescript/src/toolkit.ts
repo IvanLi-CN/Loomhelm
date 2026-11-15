@@ -53,7 +53,7 @@ export class SkillsRuntime {
   constructor(readonly root = fileURLToPath(new URL('../toolkit/', import.meta.url))) {}
   async manifest(): Promise<ToolkitManifest> {
     const value = JSON.parse(await readFile(resolve(this.root, 'skills/resource-manifest.json'), 'utf8')) as ToolkitManifest;
-    if (value.schemaVersion !== 1 || !Array.isArray(value.skills) || value.skills.length !== 29 || new Set(value.skills).size !== 29 || !Array.isArray(value.files)) throw new Error('Invalid toolkit resource manifest');
+    if (value.schemaVersion !== 1 || !Array.isArray(value.skills) || value.skills.length !== 1 || value.skills[0] !== 'multi-task-flow' || !Array.isArray(value.files)) throw new Error('Invalid toolkit resource manifest');
     return value;
   }
   async artifact(): Promise<ToolkitArtifactManifest> {
