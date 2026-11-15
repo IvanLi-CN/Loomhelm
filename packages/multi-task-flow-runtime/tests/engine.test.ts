@@ -831,6 +831,8 @@ test("task readiness starts at the first executable atomic work", () => {
   const recoverable = readyAtomicFixture();
   recoverable.tasks[0]!.state = "blocked";
   recoverable.tasks[0]!.atoms[0]!.status = "blocked";
+  recoverable.plans[0]!.atomic_nodes.find((node) => node.id === "task-a-prepare-branch")!.state =
+    "blocked";
   expect(ready(recoverable, "a")).toBe(true);
 
   ledger.tasks[0]!.atoms[0]!.status = "planned";

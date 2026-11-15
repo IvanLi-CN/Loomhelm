@@ -156,14 +156,14 @@ function atomicNodeSatisfied(ledger: Ledger, node: any): boolean {
 function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): boolean {
   const nodes = (plan.atomic_nodes ?? []) as any[];
   const edges = (plan.atomic_edges ?? []).filter((edge: any) => "from_node_id" in edge) as any[];
+  const task = ledger.tasks.find((candidate) => candidate.id === taskId);
   if (!nodes.length && !edges.length) return true;
   if (!nodes.length) return false;
   const targets = nodes.filter(
     (node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId,
   );
   if (!targets.length) return true;
-  if (!edges.length) return false;
-  const task = ledger.tasks.find((candidate) => candidate.id === taskId);
+  if (!edges.length && task?.atoms.length !== 1) return false;
   const taskNodes = nodes.filter(
     (node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId,
   );
@@ -172,7 +172,7 @@ function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): bo
     task.atoms.some((atom) => !taskNodes.some((node) => node.id === atom.id)) ||
     taskNodes.some((node) => {
       const atom = task.atoms.find((candidate) => candidate.id === node.id);
-      return !atom || (node.state === "completed" && atom.status !== "completed");
+      return !atom || node.state !== atom.status;
     })
   )
     return false;
@@ -3464,6 +3464,10 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
         3,
       );
       atom.status = state;
+      for (const plan of ledger.plans) {
+        const node = plan.atomic_nodes?.find((item) => item.id === atom.id);
+        if (node) node.state = state;
+      }
       addEvent(ledger, request, "atom_updated", taskId, {
         task_id: taskId,
         atom_id: atom.id,
