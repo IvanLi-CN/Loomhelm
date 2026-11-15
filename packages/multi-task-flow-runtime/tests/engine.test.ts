@@ -195,6 +195,59 @@ test("planned delivery units cannot record running execution", () => {
   }, groupActor))).toThrow("Only active delivery units can record runtime execution");
 });
 
+test("protected recovery is the only blocked-to-active path", () => {
+  const ledger = fixture();
+  approve(ledger);
+  ledger.groups[0]!.state = "blocked";
+  const incoming = structuredClone(ledger.groups[0]!);
+  incoming.state = "active";
+  expect(() => apply(ledger, "group-update", request(ledger, "illegal-reopen", { group: incoming }, groupActor))).toThrow("Group merge and closeout require verified operations");
+  apply(ledger, "protected-approve", request(ledger, "approve-recovery", {
+    kind: "delivery_unit_recovery",
+    target_id: "g",
+    approval_id: "recovery-approved",
+  }));
+  expect(apply(ledger, "group-reopen", request(ledger, "reopen", {
+    group_id: "g",
+    plan_id: "plan",
+    recovery_id: "recovery-approved",
+    reason: "provider facts reconciled",
+    evidence_refs: ["evidence://recovery"],
+  }, groupActor))).toMatchObject({ result: { group_id: "g", state: "active" } });
+});
+
+test("closeout reconciliation invalidates or preserves the business state explicitly", () => {
+  const ledger = fixture();
+  ledger.groups[0]!.state = "closed";
+  ledger.events.push({
+    id: "closeout-event",
+    type: "group_updated",
+    subject_id: "g",
+    actor_id: "group-thread",
+    occurred_at: at,
+    recorded_at: at,
+    data: { state: "closed" },
+  });
+  expect(apply(ledger, "group-closeout-reconcile", request(ledger, "reconcile-invalid", {
+    group_id: "g",
+    plan_id: "plan",
+    closeout_event_id: "closeout-event",
+    reconciliation_id: "reconcile-1",
+    outcome: "invalid",
+    reason: "merge evidence mismatch",
+    evidence_refs: ["evidence://provider"],
+    provider_observation: {
+      pr: { provider: "github", repository: "example/repo", id: "1", url: null },
+      provider_state: "closed",
+      merge_sha: null,
+      source: "github",
+      observed_at: at,
+      evidence_ref: "evidence://provider",
+    },
+  }, groupActor))).toMatchObject({ result: { outcome: "invalid", state: "blocked" } });
+  expect(ledger.groups[0]!.state).toBe("blocked");
+});
+
 test("contract-3 group dispatch waits for upstream delivery-unit PR merge", () => {
   const ledger = fixture();
   ledger.contract_version = 3;

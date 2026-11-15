@@ -8,3 +8,4 @@
 | Multi-task Flow Agent 空闲与对话归档 | proposed | 记录 Codex 对话空闲观察、子任务终态归档和归档异常恢复合同 | [multi-task-flow-agent-idle-archive](multi-task-flow-agent-idle-archive/SPEC.md) | - |
 | 统一手动版本发布 | active | 统一发版实现及故障验证已接入，平台对齐与真实首发仍需对应证据 | [manual-version-release-delivery](manual-version-release-delivery/SPEC.md) | - |
 | 任务流上下文菜单与任务直达链接 | active | 已实现并通过局部验证；视觉证据已确认 | [multi-task-flow-task-links](multi-task-flow-task-links/SPEC.md) | - |
+| 统一原子编排 | active | 需求合同、数据模型、状态机与异常恢复规则已拆分记录 | [multi-task-flow-unified-atomic-orchestration](multi-task-flow-unified-atomic-orchestration/SPEC.md) | - |

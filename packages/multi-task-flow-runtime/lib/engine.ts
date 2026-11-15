@@ -417,7 +417,7 @@ function exactApprovedAction(
 }
 function protectedActionApproved(
   ledger: Ledger,
-  kind: "delivery_unit_merge" | "release" | "deploy",
+  kind: "delivery_unit_merge" | "delivery_unit_recovery" | "release" | "deploy",
   targetId: string,
   approvalId: string,
 ): void {
@@ -844,6 +844,8 @@ function factSatisfied(
 ): boolean {
   const latest = latestFact(ledger, subjectId, kind);
   if (latest?.status !== "passed" || !latest.sha) return false;
+  if (kind === "pr_merged" && ledger.groups.some((item) => item.id === subjectId))
+    return deliveryUnitPrMergedFromLedger(ledger, ledger.groups.find((item) => item.id === subjectId)!);
   const task = ledger.tasks.find((item) => item.id === subjectId);
   if (!task) {
     const expectedSha = subjectSha(ledger, subjectId);
@@ -973,6 +975,21 @@ export function deliveryUnitPrMerged(group: Ledger["groups"][number]): boolean {
   );
 }
 
+function deliveryUnitPrMergedFromLedger(ledger: Ledger, group: Ledger["groups"][number]): boolean {
+  if (legacyLedger(ledger)) return deliveryUnitPrMerged(group);
+  const latest = latestFact(ledger, group.id, "pr_merged");
+  const canonicalPr = group.pr && "state" in group.pr ? group.pr.pr : group.pr;
+  const canonicalState = group.pr && "state" in group.pr ? group.pr.state : null;
+  return Boolean(
+    ["merged", "closed"].includes(group.state) &&
+      group.merge_sha && group.lifecycle.pr_merged === "passed" &&
+      latest?.status === "passed" && latest.sha === group.merge_sha &&
+      (canonicalState === null || canonicalState === "merged" || canonicalState === "closed") &&
+      ledger.operations.some((item) => item.kind === "merge" && item.target_id === group.id && item.status === "succeeded" && item.receipt_fact_id === latest.id) &&
+      (!canonicalPr || stable(canonicalPr) === stable(canonicalPr)),
+  );
+}
+
 function requireHandoffAcknowledged(
   ledger: Ledger,
   group: Ledger["groups"][number],
@@ -1034,7 +1051,7 @@ export function requireGroupDispatchGate(
   }
   const missingUpstream = [...upstreamGroupIds].filter((groupId) => {
     const upstream = ledger.groups.find((item) => item.id === groupId);
-    return !upstream || !deliveryUnitPrMerged(upstream);
+    return !upstream || !deliveryUnitPrMergedFromLedger(ledger, upstream);
   });
   if (missingUpstream.length)
     throw new ContractError(
@@ -1587,11 +1604,11 @@ export function execute(
     case "protected-approve": {
       onlyMain(request.actor);
       const kind = z
-        .enum(["delivery_unit_merge", "release", "deploy"])
+        .enum(["delivery_unit_merge", "delivery_unit_recovery", "release", "deploy"])
         .parse(payload.kind);
       const targetId = parse(id, payload.target_id);
       const approvalId = string(payload.approval_id);
-      if (kind === "delivery_unit_merge")
+      if (kind === "delivery_unit_merge" || kind === "delivery_unit_recovery")
         find(ledger.groups, (item) => item.id === targetId, "Delivery unit");
       else
         find(ledger.tasks, (item) => item.id === targetId, "Protected task");
@@ -3647,7 +3664,7 @@ export function execute(
           (current.state === "active" &&
             ["active", "blocked"].includes(incoming.state)) ||
           (current.state === "blocked" &&
-            ["blocked", "active"].includes(incoming.state)),
+            ["blocked"].includes(incoming.state)),
         "INVALID_TRANSITION",
         "Group merge and closeout require verified operations",
         3,
@@ -5536,6 +5553,47 @@ export function execute(
         notification_status: notice?.delivery_status ?? "none",
         notification_request: notificationDeliveryRequest(notice),
       };
+    }
+    case "group-closeout-reconcile": {
+      const groupId = parse(id, payload.group_id);
+      const owner = find(ledger.groups, (item) => item.id === groupId, "Group");
+      requireCondition(ownsGroup(ledger, request.actor, owner), "FORBIDDEN", "Only the bound Delivery coordinator can reconcile closeout", 3);
+      const planId = parse(id, payload.plan_id);
+      requireCondition(planId === ledger.execution_plan_id, "PLAN_MISMATCH", "Closeout reconciliation must target the execution plan", 4);
+      const outcome = z.enum(["valid", "invalid", "unknown"]).parse(payload.outcome);
+      const observation = z.object({
+        pr: externalRef,
+        provider_state: z.enum(["merged", "closed", "open", "unknown"]),
+        merge_sha: z.string().nullable(),
+        source: z.string().min(1),
+        observed_at: z.iso.datetime({ offset: false }),
+        evidence_ref: z.string().min(1),
+      }).strict().parse(payload.provider_observation);
+      const canonicalPr = deliveryUnitPr(owner);
+      requireCondition(!canonicalPr || stable(canonicalPr) === stable(observation.pr), "TARGET_MISMATCH", "Closeout observation PR does not match the DeliveryUnit PR", 5);
+      requireCondition(observation.source === ledger.repository.provider, "EVIDENCE_MISMATCH", "Closeout evidence source does not match the bound repository", 5);
+      const closeoutEventId = parse(id, payload.closeout_event_id);
+      requireCondition(ledger.events.some((event) => event.id === closeoutEventId && event.subject_id === groupId && event.data.state === "closed"), "EVIDENCE_REQUIRED", "Original closeout event is not present", 5);
+      const previousState = owner.state;
+      if (outcome === "invalid") { owner.state = "blocked"; owner.lifecycle.closed = "blocked"; }
+      addEvent(ledger, request, "group_updated", groupId, { operation: "closeout-reconcile", group_id: groupId, plan_id: planId, closeout_event_id: closeoutEventId, reconciliation_id: parse(id, payload.reconciliation_id), outcome, reason: string(payload.reason), evidence_refs: z.array(z.string().min(1)).parse(payload.evidence_refs), provider_observation: observation, previous_state: previousState, state: owner.state, group_snapshot: structuredClone(owner) });
+      return { group_id: groupId, state: owner.state, outcome, reconciliation_id: payload.reconciliation_id };
+    }
+    case "group-reopen": {
+      const groupId = parse(id, payload.group_id);
+      const owner = find(ledger.groups, (item) => item.id === groupId, "Group");
+      requireCondition(ownsGroup(ledger, request.actor, owner), "FORBIDDEN", "Only the bound Delivery coordinator can reopen a DeliveryUnit", 3);
+      requireCondition(owner.state === "blocked", "INVALID_TRANSITION", "Only a blocked DeliveryUnit can be reopened", 3);
+      const planId = parse(id, payload.plan_id);
+      requireCondition(planId === ledger.execution_plan_id && approved(ledger).lifecycle === "approved", "PLAN_NOT_APPROVED", "Recovery requires the approved execution plan", 4);
+      protectedActionApproved(ledger, "delivery_unit_recovery", groupId, string(payload.recovery_id));
+      requireCondition(!ledger.operations.some((item) => item.target_id === groupId && activeOperation(item)), "OPERATION_PENDING", "DeliveryUnit has unresolved operations", 4);
+      const latest = ledger.events.filter((event) => event.subject_id === groupId && event.data.operation === "closeout-reconcile").at(-1);
+      requireCondition(latest?.data.outcome !== "unknown", "RECONCILIATION_REQUIRED", "Closeout reconciliation is still unknown", 5);
+      owner.state = "active";
+      owner.lifecycle.closed = "unknown";
+      addEvent(ledger, request, "group_updated", groupId, { operation: "protected-recovery", group_id: groupId, plan_id: planId, recovery_id: parse(id, payload.recovery_id), reason: string(payload.reason), evidence_refs: z.array(z.string().min(1)).parse(payload.evidence_refs), previous_state: "blocked", state: "active", group_snapshot: structuredClone(owner) });
+      return { group_id: groupId, state: owner.state, recovery_id: payload.recovery_id };
     }
     default:
       throw new ContractError(
