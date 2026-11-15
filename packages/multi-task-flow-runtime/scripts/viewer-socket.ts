@@ -23,6 +23,7 @@ import {
 
 const DEFAULT_MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const DEFAULT_CONNECT_TIMEOUT_MS = 1_500;
+const DEFAULT_STOP_DRAIN_TIMEOUT_MS = 500;
 
 const requestFrame = z
   .object({
@@ -84,6 +85,7 @@ export type UnixViewerWorkerServerOptions = {
     context: ViewerWorkerRequestContext & { generation: string },
   ): Response | Promise<Response>;
   maxFrameBytes?: number;
+  stopDrainTimeoutMs?: number;
 };
 
 export type UnixViewerWorkerServer = {
@@ -260,8 +262,14 @@ export async function startUnixViewerWorkerServer(
   viewerWorkerKeySchema.parse(options.workerKey);
   requireIdentity(options.generation, "worker generation");
   const maximum = maxFrameBytes(options.maxFrameBytes);
+  const stopDrainTimeoutMs = options.stopDrainTimeoutMs ?? DEFAULT_STOP_DRAIN_TIMEOUT_MS;
+  if (!Number.isFinite(stopDrainTimeoutMs) || stopDrainTimeoutMs <= 0)
+    throw new Error("viewer socket stop drain timeout is invalid");
   prepareSocketPath(options.socketPath);
+  const activeSockets = new Set<Socket>();
   const server: Server = createServer((socket) => {
+    activeSockets.add(socket);
+    socket.once("close", () => activeSockets.delete(socket));
     const decoder = new FrameDecoder(maximum);
     let handled = false;
     // Client cancellation is a normal stream lifecycle event. The server
@@ -319,7 +327,16 @@ export async function startUnixViewerWorkerServer(
       if (stopped) return;
       stopped = true;
       server.close();
-      await once(server, "close").catch(() => undefined);
+      await Promise.race([
+        once(server, "close").then(() => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, stopDrainTimeoutMs)),
+      ]);
+      for (const socket of activeSockets) socket.destroy();
+      if (server.listening)
+        await Promise.race([
+          once(server, "close").then(() => undefined),
+          new Promise<void>((resolve) => setTimeout(resolve, stopDrainTimeoutMs)),
+        ]);
       const stat = lstatSync(options.socketPath, { throwIfNoEntry: false });
       if (stat?.isSocket() && !stat.isSymbolicLink()) unlinkSync(options.socketPath);
     },

@@ -5,6 +5,8 @@ export type ViewerWorkerKey = string;
 export const viewerWorkerKeySchema = z.string().min(1).refine((value) => !value.includes("\0"));
 export type ViewerWorkerGeneration = string;
 
+const WORKER_STOP_TIMEOUT_MS = 500;
+
 export type ViewerWorkerRequestContext = {
   runId: string;
   workerKey: ViewerWorkerKey;
@@ -77,6 +79,14 @@ export class ViewerWorkerPool {
   private readonly restartBackoffMs: number;
   private sweepTimer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
+
+  private async stopWorker(worker: ViewerWorker): Promise<void> {
+    if (!worker.stop) return;
+    await Promise.race([
+      Promise.resolve(worker.stop()).catch(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, WORKER_STOP_TIMEOUT_MS)),
+    ]);
+  }
 
   constructor(options: ViewerWorkerPoolOptions) {
     if (!Number.isFinite(options.ttlMs ?? 300_000) || (options.ttlMs ?? 300_000) <= 0)
@@ -215,7 +225,7 @@ export class ViewerWorkerPool {
     if (!entry || (generation !== undefined && entry.generation !== generation)) return false;
     this.noteFailure(key);
     if (!entry.stopping) {
-      entry.stopping = Promise.resolve(entry.worker.stop?.()).catch(() => undefined).finally(() => {
+      entry.stopping = this.stopWorker(entry.worker).finally(() => {
         if (this.entries.get(key)?.worker === entry.worker) this.entries.delete(key);
       });
     }
@@ -235,7 +245,7 @@ export class ViewerWorkerPool {
         continue;
       }
       if (entry.activeRequests > 0 || now - entry.lastUsedAt < this.ttlMs) continue;
-      const stopping = Promise.resolve(entry.worker.stop?.()).catch(() => undefined).finally(() => {
+      const stopping = this.stopWorker(entry.worker).finally(() => {
         if (this.entries.get(key)?.worker === entry.worker) this.entries.delete(key);
       });
       entry.stopping = stopping;
@@ -252,7 +262,7 @@ export class ViewerWorkerPool {
     this.sweepTimer = undefined;
     const entries = [...this.entries.entries()];
     this.entries.clear();
-    await Promise.all(entries.map(async ([, entry]) => entry.worker.stop?.()));
+    await Promise.all(entries.map(async ([, entry]) => this.stopWorker(entry.worker)));
   }
 }
 
