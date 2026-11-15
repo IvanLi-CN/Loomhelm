@@ -7157,7 +7157,7 @@
     {
       "path": "skills/multi-task-flow/scripts/preview-source.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/preview-source.ts",
-      "installedSha256": "a3b8631b150128fe9a4157096c4535cf127d321908834384520d433af3475a28"
+      "installedSha256": "9f89b331844389687093f42c7f814fab6a19b9634f45ea1d69293f3a649173cc"
     },
     {
       "path": "skills/multi-task-flow/lib/profile-http.ts",
@@ -7611,12 +7611,12 @@
     {
       "path": "skills/multi-task-flow/web/app.css",
       "sourcePath": "packages/multi-task-flow-runtime/web/app.css",
-      "installedSha256": "3585de75ef285d51cdf3b4c9ba16a4d7df19439c18706369a92cba512dea3212"
+      "installedSha256": "ba853ba373abc7ebff1818cf6ac59892b3249ff516d3f0b5049833ace505c0f9"
     },
     {
       "path": "skills/multi-task-flow/web/app.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/app.ts",
-      "installedSha256": "429bc92fd7b8f9007b194d9f0afb6889ced99884c045cd609b6258b1365f2b81"
+      "installedSha256": "e56055251a0b07bbd3cc60ace729f8ef42cc3c4a03fa387426f566b304a2cfa5"
     },
     {
       "path": "skills/multi-task-flow/web/cards.ts",
@@ -7636,7 +7636,7 @@
     {
       "path": "skills/multi-task-flow/web/details-content.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/details-content.ts",
-      "installedSha256": "b5316781133764fe381ed9e1d589d36b2a30f014bb567f488b80c455a9d08088"
+      "installedSha256": "ff2e2bdc1d8aa32212071888803014121bfc6dba1bfe2764bcc0bb208f441367"
     },
     {
       "path": "skills/multi-task-flow/web/execution-range.ts",
@@ -7671,7 +7671,7 @@
     {
       "path": "skills/multi-task-flow/web/index.html",
       "sourcePath": "packages/multi-task-flow-runtime/web/index.html",
-      "installedSha256": "7dee491a53744acdacf7aed9a7fe5b5220f05ce412830fa5ff237acbc4d6903a"
+      "installedSha256": "d21d937fe270c080bd5dd0edbab6dddd7ed6d8bd1f0922e4acf4d62a245b0baf"
     },
     {
       "path": "skills/multi-task-flow/web/interaction-policy.ts",
@@ -8197,7 +8197,7 @@
     {
       "path": "skills/multi-task-flow/web/graph-layout.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/graph-layout.ts",
-      "installedSha256": "41553ae445f675b50793a0789429391a774b3819cec657eae69bdb384464daff"
+      "installedSha256": "9ae2dc4dcabec2c152421c08ef8d320b9d262cc394c451b081ec2908cb603b9e"
     },
     {
       "path": "skills/multi-task-flow/web/graph-view.tsx",
@@ -8777,7 +8777,7 @@
     {
       "path": "skills/multi-task-flow/web/atomic-graph-view.tsx",
       "sourcePath": "packages/multi-task-flow-runtime/web/atomic-graph-view.tsx",
-      "installedSha256": "b980a0ff93f979b92393f36fb0c99a3a32dc176dd81bbfa995fe908bb0adb3f3"
+      "installedSha256": "7f4c3e18430950acef9469e01ee02af5589880e96523b393991cef3979a62bf5"
     },
     {
       "path": "skills/multi-task-flow/lib/worker-diagnostics.ts",
