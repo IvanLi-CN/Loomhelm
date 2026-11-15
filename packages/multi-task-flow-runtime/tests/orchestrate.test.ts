@@ -159,7 +159,10 @@ describe("orchestrate init", () => {
       purpose: suffix,
       output: suffix,
     }));
-    input.payload.tasks[0].atoms = atoms.map(({ task_id, purpose, output, ...atom }: any) => ({ ...atom, status: "planned" }));
+    input.payload.tasks[0].atoms = atoms.map(({ task_id, purpose, output, ...atom }: any) => ({
+      ...atom,
+      status: "planned",
+    }));
     input.payload.initial_plan.atoms = atoms;
     const result = await runInit(root, input);
     expect(result.output).toMatchObject({ ok: false, code: "ATOMIC_GRAPH_INCOMPLETE" });
