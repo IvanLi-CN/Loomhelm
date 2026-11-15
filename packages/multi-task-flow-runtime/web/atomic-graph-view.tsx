@@ -1,5 +1,6 @@
 import React, { memo, useEffect, useState } from "react";
-import { createPortal, createRoot } from "react-dom/client";
+import { createPortal } from "react-dom";
+import { createRoot } from "react-dom/client";
 import { BaseEdge, EdgeLabelRenderer, Handle, MarkerType, Position, ReactFlow, type Edge, type EdgeProps, type Node, type NodeProps, type ReactFlowInstance } from "@xyflow/react";
 import type { AtomicEdge, AtomicNode } from "../lib/atomic-orchestration";
 import { inspectAtomicGraph } from "../lib/atomic-graph-order";
@@ -19,13 +20,13 @@ function kindGlyph(kind: AtomicCardData["nodeKind"], boundary: AtomicCardData["b
       : role === "pr-merge"
         ? "M7 5v14m0-7h10m0 0-3-3m3 3-3 3 M17 5v4"
         : role === "closeout"
-          ? "M5 12l4 4L19 6 M12 3a9 9 0 1 0 0 18 9 9 0 0 0-18Z"
+          ? "M5 12l4 4L19 6 M12 3a9 9 0 1 1 0 18a9 9 0 1 1 0-18"
           : kind === "group"
             ? "M12 3 20 7 12 11 4 7 12 3Z M4 12 12 16 20 12 M4 17 12 21 20 17"
             : kind === "milestone"
               ? "M12 3 21 12 12 21 3 12 12 3Z M12 8.5v7 M8.5 12h7"
               : kind === "boundary"
-                ? (boundary === "start" ? "M12 3a9 9 0 1 0 0 18 9 9 0 0 0-18Z M10 8l6 4-6 4Z" : "M5 5h14v14H5Z M9 9l6 6 M15 9l-6 6")
+                ? (boundary === "start" ? "M12 3a9 9 0 1 1 0 18a9 9 0 1 1 0-18 M10 8l6 4-6 4Z" : "M5 5h14v14H5Z M9 9l6 6 M15 9l-6 6")
                 : role === "verification"
                   ? "M12 3l2.2 5.2L20 10l-5.8 1.8L12 17l-2.2-5.2L4 10l5.8-1.8L12 3Z M12 17v4"
                   : "M7 3.5h7l3 3V20.5H7a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 7 3.5Z M14 3.5v4h4 M8.5 12h6 M8.5 15.5h6";
