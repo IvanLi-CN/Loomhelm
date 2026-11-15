@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { atomicNode, canonicalizeContract3Ledger, canonicalizeContract3Plan, contract3MigrationCandidate, deriveBusinessStatus, evaluateMilestone, taskPrBinding, validateAtomicGraph, validateContributionStart, validateDeliveryUnitLifecycleEdges } from "../lib/atomic-orchestration";
+import { atomicNode, canonicalizeContract3Ledger, canonicalizeContract3Plan, contract3MigrationCandidate, deriveBusinessStatus, evaluateMilestone, taskPrBinding, validateAtomicGraph, validateContributionStart, validateDeliveryUnitLifecycleEdges, validateTaskLifecycleEdges } from "../lib/atomic-orchestration";
 
 const ref = { provider: "github", repository: "org/repo", id: "pr-1", url: "https://github.com/org/repo/pull/1" };
 
@@ -163,6 +163,13 @@ test("requires an Agent-declared path across the four preset delivery-unit lifec
   expect(() => validateDeliveryUnitLifecycleEdges(atoms, [{ from_node_id: atoms[0]!.id, to_node_id: atoms[1]!.id }])).toThrow("Agent-declared dependency path");
   const edges = atoms.slice(1).map((atom, index) => ({ from_node_id: atoms[index]!.id, to_node_id: atom.id }));
   expect(() => validateDeliveryUnitLifecycleEdges(atoms, edges)).not.toThrow();
+});
+
+test("requires an Agent-declared path across the four preset task lifecycle atoms", () => {
+  const atoms = ["prepare-branch", "create-pr", "merge-pr", "closeout"].map((suffix) => ({ id: `task-1-${suffix}`, task_id: "task-1" }));
+  expect(() => validateTaskLifecycleEdges(atoms, [{ from_node_id: atoms[0]!.id, to_node_id: atoms[1]!.id }])).toThrow("Agent-declared dependency path");
+  const edges = atoms.slice(1).map((atom, index) => ({ from_node_id: atoms[index]!.id, to_node_id: atom.id }));
+  expect(() => validateTaskLifecycleEdges(atoms, edges)).not.toThrow();
 });
 
 test("does not derive delivery-unit lifecycle order when legacy group atoms have no edges", () => {
