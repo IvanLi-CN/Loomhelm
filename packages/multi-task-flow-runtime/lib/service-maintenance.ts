@@ -114,7 +114,7 @@ function packageConfig(old: ServiceConfig | null, identity: PackageIdentity, reg
   };
 }
 
-function assertPackageUpgradeCompatible(old: ServiceConfig, next: PackageIdentity): void {
+export function assertPackageUpgradeCompatible(old: ServiceConfig, next: PackageIdentity): void {
   if (!old.package_name) return;
   requireCondition(old.package_name === PACKAGE_NAME, "INCOMPATIBLE_RELEASE", "The installed service is not a supported package profile");
   requireCondition(old.compatibility_line === next.compatibility_line, "INCOMPATIBLE_RELEASE", "Package compatibility line changed; explicit migration is required");

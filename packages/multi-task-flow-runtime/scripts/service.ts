@@ -13,7 +13,7 @@ import { ServiceState } from "../lib/service-state";
 import { ServiceAuth } from "../lib/service-auth";
 import { ensureService, runDaemon, serviceStatus } from "../lib/service-lifecycle";
 import { agentLease } from "../lib/service-http";
-import { installRelease, switchRelease, installPackageRelease, upgradePackageRelease, upgradePackageReleaseAndStart, resolvePackageTarget } from "../lib/service-maintenance";
+import { installRelease, switchRelease, installPackageRelease, upgradePackageRelease, upgradePackageReleaseAndStart, resolvePackageTarget, assertPackageUpgradeCompatible } from "../lib/service-maintenance";
 import { importRun } from "../lib/service-import";
 import { ContractError, requireCondition } from "../lib/errors";
 import { requireApi, ledgerContract } from "../lib/service-contract";
@@ -63,7 +63,7 @@ export async function serviceCommand(
     triggerDaemonUpdateCheck(state);
     const identity = resolvePackageTarget(parsed.target);
     if (parsed.mode === "rollback") requireVerifiedRollback(state, identity);
-    if (parsed.mode === "dry-run") { recordVerifiedTarget(state, identity); return { surface: "gateway", changed: false, target: identity.version, requested: parsed.target, dry_run: true }; }
+    if (parsed.mode === "dry-run") { assertPackageUpgradeCompatible(state.config(), identity); recordVerifiedTarget(state, identity); return { surface: "gateway", changed: false, target: identity.version, requested: parsed.target, dry_run: true, handoff: { fixed_port: state.config().port, health_check: true } }; }
     const result = await upgradePackageReleaseAndStart(state, identity.version); recordVerifiedTarget(state, identity); return result;
   }
   if (command === "orchestration-upgrade") {
