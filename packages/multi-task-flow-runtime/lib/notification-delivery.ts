@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { tryLockFile } from "../../../skills/bin/modules/core/security_file";
+import { tryLockFile } from "@loomhelm/runtime-core/modules/core/security_file";
 import { apply, type requestSchema } from "../lib/engine";
 import type { z } from "zod";
 import { ContractError } from "../lib/errors";

@@ -15,6 +15,7 @@
     "preview:single-delivery-unit": "bun run scripts/preview-source.ts --single-delivery-unit"
   },
   "dependencies": {
+    "@loomhelm/runtime-core": "workspace:*",
     "@xyflow/react": "12.12.1",
     "elkjs": "0.12.1",
     "lucide": "1.65.0",

@@ -2,7 +2,7 @@ import { desktopHandoff } from "../lib/desktop-handoff";
 import { createCliThread, verifyRepositoryIdentity } from "../lib/codex-cli-create";
 import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import { sweepConversationArchives } from "../lib/conversation-archive";
-import { Runtime } from "../../../skills/bin/modules/core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import {
   effectiveProfile,
   materializeRecommendation,

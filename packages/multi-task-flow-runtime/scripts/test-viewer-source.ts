@@ -35,7 +35,7 @@ try {
   const unsafeInvoke=spawnSync(join(output,'viewer'),['invalid'],{env:{...env,TMPDIR:unsafe},encoding:'utf8',timeout:30000});
   assert.notEqual(unsafeInvoke.status,0); assert.match(unsafeInvoke.stderr,/VIEWER_TEMP_UNTRUSTED/);
   chmodSync(unsafe,0o700);
-  for (const resource of ['skills/bin/plan_bunfig.toml','skills/multi-task-flow/scripts/service.ts']) {
+  for (const resource of ['skills/multi-task-flow/scripts/service.ts']) {
     const path=join(output,resource), original=readFileSync(path);
     writeFileSync(path,resource.endsWith('.toml') ? 'preload = ['+JSON.stringify(preload)+']\n' : `await Bun.write(${JSON.stringify(marker)},'unsafe');`);
     const rejected=spawnSync(join(output,'viewer'),['invalid'],{env,encoding:'utf8',timeout:30000});

@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { PortRegistry, RegistryError } from "../../../skills/bin/modules/workspace/port_registry";
+import { PortRegistry, RegistryError } from "@loomhelm/runtime-core/modules/workspace/port_registry";
 import { runDaemon } from "../lib/service-lifecycle";
 import { serviceFixture, fixtureRelease } from "./service-fixture";
 

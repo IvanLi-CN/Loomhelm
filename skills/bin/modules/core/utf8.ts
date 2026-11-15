@@ -1,4 +1,4 @@
-import { Runtime } from "./runtime";
+const Runtime = Bun;
 export class InputEncodingError extends Error {
   constructor() {
     super("input is not valid UTF-8");

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { z } from "zod";
-import { readRegularNoFollow } from "../../../skills/bin/modules/visual/secure_io";
+import { readRegularNoFollow } from "@loomhelm/runtime-core/modules/visual/secure_io";
 import { packageReleaseManifest } from "../lib/service-contract";
 import { LedgerStore, safeId } from "../lib/store";
 import { ServiceState } from "../lib/service-state";

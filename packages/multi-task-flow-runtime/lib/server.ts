@@ -1,6 +1,6 @@
 import { observeTaskRuntime } from "../lib/task-runtime";
 import { PRDetailsCache } from "../lib/pr-details";
-import { Runtime } from "../../../skills/bin/modules/core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import {
   ConversationOutputs,
   type ConnectObserver,

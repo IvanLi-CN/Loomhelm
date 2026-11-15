@@ -1,6 +1,6 @@
 {
   "name": "@loomhelm/runtime-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shared Loomhelm runtime primitives for Skill packages",
   "files": ["src", "README.md", "package.json"],
   "type": "module",
@@ -9,5 +9,6 @@
   },
   "engines": { "bun": "1.4.4" },
   "publishConfig": { "access": "public" },
+  "loomhelm": { "compatibilityLine": "compat-v1" },
   "packageManager": "bun@1.4.4"
 }

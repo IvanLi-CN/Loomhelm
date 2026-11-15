@@ -14,7 +14,7 @@ import {
 } from "../lib/service-contract";
 import { requireCondition } from "../lib/errors";
 import type { ServicePaths } from "../lib/service-paths";
-import { readRegularNoFollow } from "../../../skills/bin/modules/visual/secure_io";
+import { readRegularNoFollow } from "@loomhelm/runtime-core/modules/visual/secure_io";
 
 const leaseSchema = z
   .object({
