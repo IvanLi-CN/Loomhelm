@@ -44,6 +44,7 @@ export type GraphProjectionNode = {
   evidence?: string[];
   blocker?: string | null;
   acceptance_count?: number;
+  diagnostics?: string[];
 };
 
 export type GraphDependencyPath = {
@@ -59,6 +60,7 @@ export type GraphProjectionEdge = {
   target: string;
   paths: GraphDependencyPath[];
   crossGroup: "yes" | "no";
+  diagnostics?: string[];
 };
 
 export type GraphBoundaryDependency = {
