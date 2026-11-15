@@ -36,3 +36,8 @@ test("runtime observations preserve explicit waiting, blocked and terminal task 
   expect(runtimeTaskState({ state: "agent_idle", agent_resume_state: "starting" })).toBe("agent_idle");
   expect(runtimeTaskState({ state: "running", disposition: "abandoned" }, output)).toBe("running");
 });
+
+test("stale output preserves a confirmed agent idle state", () => {
+  const output = { ...initialOutput("thread"), stale: true, agent_state: "unknown" as const };
+  expect(runtimeTaskState({ state: "agent_idle", agent_resume_state: "running" }, output)).toBe("agent_idle");
+});

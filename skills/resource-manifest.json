@@ -8282,12 +8282,12 @@
     {
       "path": "skills/multi-task-flow/scripts/viewer-socket.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/viewer-socket.ts",
-      "installedSha256": "e357d532a6d346cb5769e00c2af2148ddb1b00787c48101f2e1abc0c26dac3af"
+      "installedSha256": "a0bf92c05af5c71dee36d3b044d5866adf4d44ac46ce1288a2298e55358f0235"
     },
     {
       "path": "skills/multi-task-flow/scripts/viewer-worker.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/viewer-worker.ts",
-      "installedSha256": "33bedb00e07f334b0afce8ad4f549ffa97b312ec5aa97614cfd24b307e01d4d8"
+      "installedSha256": "b2e7dbf5d37e9c8d2cf44424d502e072a408f53719317058ee86d6ec4b156177"
     },
     {
       "path": "skills/multi-task-flow/scripts/verify-skills-modules.ts",
@@ -8332,7 +8332,7 @@
     {
       "path": "skills/multi-task-flow/tests/viewer-socket.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/viewer-socket.test.ts",
-      "installedSha256": "b9134c2a620cda0964728072a995442b4719c8d50a410f33b75b37262122076d"
+      "installedSha256": "a6f608f3a617f52ba3a1543797d9d3856cd28bc0fbb1a1a4effadd151ab50b98"
     },
     {
       "path": "skills/docs-migrate/scripts/_runtime/compatibility_cli.ts",
@@ -8742,7 +8742,7 @@
     {
       "path": "skills/multi-task-flow/web/task-state.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/task-state.ts",
-      "installedSha256": "5edf57c6072af9a9c50524ef142ca94f1368988be5aaf8e52408c6b1293b3e1d"
+      "installedSha256": "fadd1b9d58b58f01ef85c5ae55130e6c131f8162a966f929cf126573226147e2"
     },
     {
       "path": "skills/multi-task-flow/web/conversation-control.ts",
@@ -8757,7 +8757,7 @@
     {
       "path": "skills/multi-task-flow/tests/task-runtime.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/task-runtime.test.ts",
-      "installedSha256": "883e8878fbd3c4b9fc5e46fd059fccde56f98ee9ecaa89b58e5fd639d6060e21"
+      "installedSha256": "e3185dcebbc19830a487c7fa2d50d24451df5daa3ac59587217506a71d50d034"
     },
     {
       "path": "skills/multi-task-flow/lib/atomic-orchestration.ts",

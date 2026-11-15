@@ -11,6 +11,10 @@ import {
   type ViewerWorkerKey,
 } from "./viewer-runtime";
 
+type ViewerTimeoutServer = {
+  timeout(request: Request, timeout: number): void;
+};
+
 export type ViewerDataVersion = {
   dataContract: string;
   viewerContract: number;
@@ -60,7 +64,14 @@ export function createUnixViewerWorker(
     id: options.id ?? createWorkerId("unix-viewer-worker"),
     key,
     generation,
-    handle(request, _server, _path, context) {
+    handle(request, server, path, context) {
+      if (
+        path === "/api/events" &&
+        server &&
+        typeof (server as Partial<ViewerTimeoutServer>).timeout === "function"
+      ) {
+        (server as ViewerTimeoutServer).timeout(request, 0);
+      }
       return connectUnixViewerWorker(
         { ...options, id: options.id },
         request,
