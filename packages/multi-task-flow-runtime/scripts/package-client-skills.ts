@@ -99,8 +99,22 @@ function copyPackageManifest(): void {
   const packageManifest = { ...manifest, skills: [packagedSkill], files, additions, packageOmissions };
   writeGenerated('skills/resource-manifest.json', Buffer.from(JSON.stringify(packageManifest, null, 2) + '\n'));
 }
+function writeToolkitPackageMetadata(): void {
+  const metadata = {
+    name: packageMetadata.name,
+    version: buildVersion,
+    description: packageMetadata.description,
+    type: packageMetadata.type,
+    engines: packageMetadata.engines,
+    loomhelm: packageConfig,
+    dependencies: declaredDependencies,
+    packageManager: packageMetadata.packageManager,
+  };
+  writeFileSync(resolve(target, 'package.json'), JSON.stringify(metadata, null, 2) + '\n');
+}
 for (const file of packagedResources([...manifest.files, ...(manifest.additions ?? [])].filter(file => !packageOmissionPaths.has(file.path)))) copy(file.path, file.installedSha256, false, file.sourcePath ?? file.path);
 copyPackageManifest();
+writeToolkitPackageMetadata();
 const catalog = JSON.parse(readFileSync(resolve(root, 'skills/catalog.json'), 'utf8'));
 writeGenerated('skills/catalog.json', Buffer.from(JSON.stringify({ ...catalog, entries: catalog.entries.filter((entry: { name: string }) => entry.name === packagedSkill) }, null, 2) + '\n'));
 for (const name of ['index.html','app.js','app.css']) copy(`skills/multi-task-flow/dist/${name}`, undefined, false, `packages/multi-task-flow-runtime/dist/${name}`);
