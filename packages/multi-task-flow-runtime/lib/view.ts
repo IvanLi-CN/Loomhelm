@@ -18,7 +18,7 @@ import {
   type Ledger,
   type Plan,
 } from "../lib/schema";
-import { deliveryUnitPrMerged, ready } from "../lib/engine";
+import { deliveryUnitPrMerged, parentPrReady, ready } from "../lib/engine";
 import {
   deriveExecutionPhase,
   reasonRequired,
@@ -150,29 +150,6 @@ function latestParentPrFact(ledger: Ledger, groupId: string) {
     .filter((fact) => fact.kind === "pr_published" && fact.subject_id === groupId)
     .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
     .at(-1);
-}
-
-function sameExternalRef(left: { provider: string; repository: string; id: string }, right: { provider: string; repository: string; id: string }): boolean {
-  return left.provider === right.provider && left.repository === right.repository && left.id === right.id;
-}
-
-function parentPrReady(ledger: Ledger, group: Ledger["groups"][number]): boolean {
-  const pr = deliveryUnitPr(group);
-  const canonicalState = group.pr && "state" in group.pr ? group.pr.state : null;
-  const prAtom = group.atoms.find((atom) => atom.lifecycle_stage === "pr_created");
-  const latest = latestParentPrFact(ledger, group.id);
-  return Boolean(
-    group.lifecycle.pr_created === "passed" &&
-      prAtom?.status === "completed" &&
-      pr &&
-      (canonicalState === null || canonicalState === "published") &&
-      latest?.status === "passed" &&
-      latest.receipt?.resource_type === "pr" &&
-      latest.receipt.resource_id === pr.id &&
-      latest.receipt.pr &&
-      sameExternalRef(latest.receipt.pr, pr) &&
-      latest.receipt.state === "open",
-  );
 }
 
 function parentPrDefinitivelyAbsent(ledger: Ledger, group: Ledger["groups"][number]): boolean {
