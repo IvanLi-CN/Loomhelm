@@ -279,6 +279,7 @@ h1 { margin: 3px 0 0; color: var(--text); font-size: 26px; line-height: 1.14; fo
 .timeline-view .vis-panel, .timeline-view .vis-labelset .vis-label, .timeline-view .vis-foreground .vis-group { border-color: var(--rule); background: transparent; }
 .timeline-view .vis-label { color: var(--muted); font-size: 11px; }
 .timeline-view .vis-time-axis .vis-text { color: var(--muted); font-size: 11px; }
+#planned-timeline .vis-time-axis .vis-major { display: none; }
 .timeline-view .vis-time-axis .vis-grid, .timeline-view .vis-panel.vis-background .vis-grid { border-color: var(--rule); }
 .timeline-view .vis-item { border-radius: 3px; font-size: 11px; }
 .unknown { padding: 9px 2px 0; color: var(--muted); font-size: 11px; }
