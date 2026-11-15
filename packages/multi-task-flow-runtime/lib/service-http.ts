@@ -312,13 +312,13 @@ export async function startSharedViewer(
             return getRun(context.runId).handle(request, { timeout(req, timeout) { timeoutServer?.timeout(req, timeout); } }, normalizedPath);
           },
         });
-        return createUnixViewerWorker({ socketPath, workerKey, generation, stop: server.stop });
+        return createUnixViewerWorker({ socketPath, workerKey, generation, stop: async () => { workerBridges.delete(bridgeToken); await server.stop(); } });
       }
       const childCommand = selected.build_id === manifest.build_id
         ? [process.execPath, new URL("../scripts/viewer-worker-process.ts", import.meta.url).pathname]
         : [process.execPath, "x", "--bun", "--package", `@loomhelm/multi-task-flow@${selected.package_version}`, "multi-task-flow", "worker-process"];
       const child = Bun.spawn(childCommand, {
-        env: { ...process.env, MTF_WORKER_SOCKET: socketPath, MTF_WORKER_KEY: workerKey, MTF_WORKER_GENERATION: generation, MTF_WORKER_DATA_ROOT: state.paths.data, MTF_WORKER_PORT: String(gatewayPort), MTF_WORKER_ASSETS: assetsDir },
+        env: { ...process.env, MTF_WORKER_SOCKET: socketPath, MTF_WORKER_KEY: workerKey, MTF_WORKER_GENERATION: generation, MTF_WORKER_DATA_ROOT: state.paths.data, MTF_WORKER_PORT: String(gatewayPort), ...(selected.build_id === manifest.build_id ? { MTF_WORKER_ASSETS: assetsDir } : {}) },
         stdout: "ignore", stderr: "ignore",
       });
       const deadline = Date.now() + 1_500;
