@@ -7,7 +7,7 @@ import { renderTimestamp } from "./timestamp";
 import { renderStatusRow } from "./status-row";
 import { renderGroupPreview, renderTaskPreview } from "./preview-content";
 import { attachDependencyTooltip, renderDependencyTooltip, type DependencyTooltipItem } from "./dependency-tooltip";
-import type { Group, Task, View } from "./model";
+import type { AtomicTask, Group, Task, View } from "./model";
 import { dependencyLabel, groupExecutionVisualState, stateLabel, taskKindLabel } from "./labels";
 import { buildGraphProjection, nodeTitle, type GraphDependencyPath, type GraphProjectionEdge } from "./graph-projection";
 
@@ -236,12 +236,26 @@ export function createDetailContent(context: DetailContentContext) {
     const historicalTaskIds = [...new Set(data.actual_intervals.filter((row) => row.group_id === group.id).map((row) => row.task_id))];
     const executionState = groupExecutionVisualState(group.state, group.coordination_execution?.state);
     const { container, restore } = begin("group", group.id, group.title, context.labels[executionState] ?? executionState);
-    const groupAtoms = group.atoms ?? group.planned_atoms;
+    const lifecycleAtoms = group.atoms ?? group.planned_atoms ?? [];
+    const milestoneAtoms: AtomicTask[] = (data.atomic_nodes ?? [])
+      .filter((node) => node.kind === "milestone" && node.scope?.kind === "delivery_unit" && node.scope.delivery_unit_id === group.id)
+      .map((node) => ({
+        id: node.id,
+        title: node.title,
+        status: node.state === "completed" || node.state === "running" || node.state === "blocked" ? node.state : "planned",
+        completed_at: data.actual_milestones.find((milestone) => milestone.node_id === node.id)?.occurred_at ?? null,
+      }));
+    const groupAtoms: AtomicTask[] = [...lifecycleAtoms, ...milestoneAtoms];
+    const atomById = new Map(groupAtoms.map((atom) => [atom.id, atom]));
     field(container, "原子任务", atomList(groupAtoms, (index) => {
-      const atom = groupAtoms![index]!;
-      const previous = groupAtoms![index - 1];
-      const items: DependencyTooltipItem[] = previous ? [{ name: previous.title, state: "", status: previous.status, completedAt: previous.completed_at }] : [];
-      if (atom.lifecycle_stage) {
+      const atom = groupAtoms[index]!;
+      const items: DependencyTooltipItem[] = (data.atomic_edges ?? [])
+        .filter((edge) => edge.to_atom_id === atom.id)
+        .map((edge) => {
+          const source = atomById.get(edge.from_atom_id);
+          return { name: source?.title ?? edge.from_atom_id, state: "", status: source?.status ?? "planned", completedAt: source?.completed_at };
+        });
+      if ("lifecycle_stage" in atom && atom.lifecycle_stage) {
         const titles = { workspace_ready: "父分支准备就绪", pr_created: "父 PR 已创建", pr_merged: "父 PR 已合并", closed: "交付单元收口" };
         const status = group.lifecycle?.[atom.lifecycle_stage];
         items.push({ name: titles[atom.lifecycle_stage], state: "", status: status === "passed" ? "completed" : status === "failed" ? "blocked" : "planned", completedAt: group.lifecycle_completed_at?.[atom.lifecycle_stage] });
@@ -293,7 +307,7 @@ export function createDetailContent(context: DetailContentContext) {
     const data = context.getData();
     const node = data?.nodes.find((item) => item.id === nodeId && item.kind === "milestone");
     if (!data || !node) return;
-    showGroup(group, focusedAtomId);
+    showGroup(group, focusedAtomId ?? nodeId);
   };
   return { clearDetails, showTask, showGroup, showMilestone, taskPreview, groupPreview };
 }
