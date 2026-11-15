@@ -84,6 +84,7 @@ async function renew(){
   }catch{/* The dashboard owns connection and snapshot feedback. */}
 }
 fetch("api/service").then(r=>r.ok?r.json():null).then(v=>{
+  document.dispatchEvent(new CustomEvent("loomhelm-runtime",{detail:v?.runtime??null}));
   if(!v)return;
   const home=document.querySelector(".brand-mark");
   if(home)home.dataset.tooltip="编排 "+(v.current?.package_name||"multi-task-flow")+"@"+(v.current?.package_version||"unknown")+" · daemon "+(v.daemon?.package_version||"unknown");

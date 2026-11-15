@@ -140,3 +140,21 @@ test("mobile header actions use 44px touch targets and 18px icons", () => {
   expect(css).toContain(".run-profile-control { flex: 0 0 44px; width: 44px; margin-left: -8px; }");
   expect(css).toContain("width: 18px; height: 18px; flex: 0 0 18px;");
 });
+
+test("plan info content does not reserve an empty scrollbar gutter", () => {
+  const planInfo = css.match(/\.plan-info-content \{[^}]+\}/)?.[0] ?? "";
+  expect(planInfo).not.toContain("scrollbar-gutter: stable");
+});
+
+test("runtime identity state uses a compact semantic chip", () => {
+  expect(css).toContain(".plan-info-identity-state svg { width: 12px; height: 12px; }");
+  expect(css).toContain("background: var(--pill-positive-bg);");
+  expect(css).toContain("background: var(--pill-warning-bg);");
+});
+
+test("plan info section headings establish stronger hierarchy without extra content gap", () => {
+  expect(css).toContain(
+    ".plan-info-section h3 { margin: 0 0 4px; color: var(--text); font-size: 12px; font-weight: 600; line-height: 1.3; }",
+  );
+  expect(css).toContain(".plan-info-identity-summary { min-width: 0; padding: 6px 0 9px;");
+});

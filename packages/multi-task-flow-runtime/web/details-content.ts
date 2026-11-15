@@ -6,11 +6,7 @@ import {
   hasArchiveAction,
   renderArchiveAction,
 } from "./conversation-control";
-import {
-  attachDependencyTooltip,
-  type DependencyTooltipItem,
-  renderDependencyTooltip,
-} from "./dependency-tooltip";
+import { attachDependencyTooltip, type DependencyTooltipItem } from "./dependency-tooltip";
 import {
   buildGraphProjection,
   type GraphDependencyPath,
@@ -360,13 +356,97 @@ function dependenciesFor(
   );
 }
 
+function relationshipList(
+  label: string,
+  items: DependencyTooltipItem[],
+  pathOpen: boolean[],
+  pathIndex: { value: number },
+): HTMLElement {
+  const section = text("section", "", "detail-relation-list");
+  section.append(text("h4", label, "detail-relation-heading"));
+  if (!items.length) {
+    section.append(text("span", "无", "detail-placeholder"));
+    return section;
+  }
+  const list = document.createElement("ul");
+  for (const item of items) {
+    const row = document.createElement("li");
+    row.append(
+      renderStatusRow({
+        name: item.name,
+        status: item.status ?? "unknown",
+        completedAt: item.completedAt,
+      }),
+    );
+    if (item.state) {
+      const path = document.createElement("details");
+      path.className = "detail-relation-path";
+      path.open = pathOpen[pathIndex.value++] ?? false;
+      const summary = document.createElement("summary");
+      summary.textContent = "查看路径证据";
+      path.append(summary, text("span", item.state, "detail-relation-path-value"));
+      row.append(path);
+    }
+    list.append(row);
+  }
+  section.append(list);
+  return section;
+}
+
+function relationshipBody(
+  predecessors: DependencyTooltipItem[],
+  successors: DependencyTooltipItem[],
+  pathOpen: boolean[],
+): HTMLElement {
+  const body = document.createElement("div");
+  body.className = "detail-relations-body";
+  const pathIndex = { value: 0 };
+  body.append(
+    relationshipList("前驱", predecessors, pathOpen, pathIndex),
+    relationshipList("后继", successors, pathOpen, pathIndex),
+  );
+  return body;
+}
+
+function relationshipValue(
+  predecessors: DependencyTooltipItem[],
+  successors: DependencyTooltipItem[],
+): HTMLElement {
+  const count = `前驱 ${predecessors.length} · 后继 ${successors.length}`;
+  const disclosure = document.createElement("details");
+  disclosure.className = "detail-relations";
+  disclosure.open = document.getElementById("details-content")?.dataset.relationshipOpen === "true";
+  let pathOpen: boolean[] = [];
+  try {
+    const raw = document.getElementById("details-content")?.dataset.relationshipPathOpen;
+    if (raw) pathOpen = JSON.parse(raw) as boolean[];
+  } catch {
+    pathOpen = [];
+  }
+  const summary = document.createElement("summary");
+  summary.append(text("span", "关系"), text("span", count, "detail-relation-count"));
+  disclosure.append(summary, relationshipBody(predecessors, successors, pathOpen));
+  return disclosure;
+}
+
 export function createDetailContent(context: DetailContentContext) {
   function begin(kind: "task" | "group", id: string, title: string, state: string) {
     const container = document.getElementById("details-content")!;
     const selection = `${kind}:${id}`;
-    const top = container.dataset.selection === selection ? container.scrollTop : 0;
+    const sameSelection = container.dataset.selection === selection;
+    const top = sameSelection ? container.scrollTop : 0;
+    const relationshipOpen = sameSelection
+      ? (container.querySelector<HTMLDetailsElement>(".detail-relations")?.open ?? false)
+      : false;
+    const relationshipPathOpen = sameSelection
+      ? [...container.querySelectorAll<HTMLDetailsElement>(".detail-relation-path")].map(
+          (path) => path.open,
+        )
+      : [];
     container.dataset.selection = selection;
     container.dataset.detailKind = kind;
+    container.dataset.relationshipOpen = String(relationshipOpen);
+    container.dataset.relationshipPathOpen = JSON.stringify(relationshipPathOpen);
     container.replaceChildren();
     container.className = "";
     const summary = document.getElementById("details-summary")!;
@@ -417,9 +497,10 @@ export function createDetailContent(context: DetailContentContext) {
       field(facts, "任务处置", task.disposition);
     if (task.is_held && task.hold_reason) field(facts, "计划修订暂停", task.hold_reason);
     const node = data.nodes.find((item) => item.kind === "task" && item.ref_id === task.id);
-    const projection = buildGraphProjection(data);
-    const predecessors = dependenciesFor(projection, node?.id, "incoming", data);
-    const successors = dependenciesFor(projection, node?.id, "outgoing", data);
+    const projection =
+      Array.isArray(data.nodes) && Array.isArray(data.edges) ? buildGraphProjection(data) : null;
+    const predecessors = projection ? dependenciesFor(projection, node?.id, "incoming", data) : [];
+    const successors = projection ? dependenciesFor(projection, node?.id, "outgoing", data) : [];
     const scoped = scopedAtomicAtoms(data, { kind: "task", id: task.id });
     const taskAtoms = scoped.atoms.length ? scoped.atoms : (task.atoms ?? task.planned_atoms);
     field(
@@ -449,23 +530,8 @@ export function createDetailContent(context: DetailContentContext) {
       ),
     );
     container.append(facts);
-    field(
-      facts,
-      "前驱",
-      renderDependencyTooltip(
-        predecessors,
-        predecessors.length ? `查看 ${predecessors.length} 项依赖` : "无依赖",
-      ),
-    );
-    field(
-      facts,
-      "后继",
-      renderDependencyTooltip(
-        successors,
-        successors.length ? `查看 ${successors.length} 项依赖` : "无依赖",
-      ),
-    );
-    const projectedNode = projection.nodes.find((item) => item.sourceNodeId === node?.id);
+    field(facts, "关系", relationshipValue(predecessors, successors));
+    const projectedNode = projection?.nodes.find((item) => item.sourceNodeId === node?.id);
     const plannedGroup =
       projectedNode?.plannedGroupId && projectedNode.plannedGroupId !== task.group_id
         ? (data.groups.find((group) => group.id === projectedNode.plannedGroupId)?.title ??
@@ -566,6 +632,13 @@ export function createDetailContent(context: DetailContentContext) {
       group.state,
       group.coordination_execution?.state,
     );
+    const projection =
+      Array.isArray(data.nodes) && Array.isArray(data.edges) ? buildGraphProjection(data) : null;
+    const node = projection?.nodes.find(
+      (item) => item.nodeKind === "group" && item.refId === group.id,
+    );
+    const predecessors = projection ? dependenciesFor(projection, node?.id, "incoming", data) : [];
+    const successors = projection ? dependenciesFor(projection, node?.id, "outgoing", data) : [];
     const { container, restore } = begin(
       "group",
       group.id,
@@ -622,6 +695,7 @@ export function createDetailContent(context: DetailContentContext) {
       field(facts, "协调等待", group.coordination_execution.reason ?? "等待贡献任务");
     if (group.coordination_execution?.state === "blocked")
       field(facts, "协调阻塞", group.coordination_execution.reason ?? "未知原因");
+    field(facts, "关系", relationshipValue(predecessors, successors));
     field(facts, "交付协调者", coordinatorValue(group));
     field(facts, "运行就绪", readinessValue(group));
     field(

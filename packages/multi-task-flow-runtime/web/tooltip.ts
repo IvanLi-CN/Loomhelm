@@ -1,5 +1,6 @@
 let tooltipSerial = 0;
-let documentBindingInstalled = false;
+const documentBindings = new WeakSet<Document>();
+const tooltipClosers = new WeakMap<HTMLElement, (restoreFocus?: boolean) => void>();
 let touchModality = false;
 
 function text(tag: string, value: string, ...classNames: string[]): HTMLElement {
@@ -9,54 +10,99 @@ function text(tag: string, value: string, ...classNames: string[]): HTMLElement 
   return node;
 }
 
-function closeTooltips(except: HTMLElement | null = null): void {
-  for (const tooltip of document.querySelectorAll<HTMLElement>(".dependency-tooltip.is-open")) {
+function closeTooltips(
+  except: HTMLElement | null = null,
+  restoreFocus = false,
+  ownerDocument: Document = except?.ownerDocument ?? document,
+): void {
+  for (const tooltip of ownerDocument.querySelectorAll<HTMLElement>(
+    ".dependency-tooltip.is-open",
+  )) {
     const triggerId = tooltip.dataset.triggerId;
-    if (
-      except &&
-      (tooltip.contains(except) || (triggerId && document.getElementById(triggerId) === except))
-    )
+    const trigger = triggerId ? ownerDocument.getElementById(triggerId) : null;
+    if (except && (tooltip.contains(except) || trigger === except)) continue;
+    const shouldRestoreFocus =
+      restoreFocus && Boolean(trigger && tooltip.contains(ownerDocument.activeElement));
+    const close = tooltipClosers.get(tooltip);
+    if (close) {
+      close(restoreFocus && shouldRestoreFocus);
       continue;
+    }
     tooltip.classList.remove("is-open");
     tooltip.hidden = true;
-    if (triggerId && tooltip.getAttribute("role") === "dialog") {
-      document.getElementById(triggerId)?.setAttribute("aria-expanded", "false");
+    if (trigger && tooltip.getAttribute("role") === "dialog") {
+      trigger.setAttribute("aria-expanded", "false");
+      if (shouldRestoreFocus) {
+        trigger.dataset.suppressTooltipFocus = "true";
+        trigger.focus({ preventScroll: true });
+      }
     }
   }
 }
 
 function installDocumentBinding(): void {
-  if (documentBindingInstalled) return;
-  documentBindingInstalled = true;
-  document.addEventListener(
+  const ownerDocument = document;
+  if (documentBindings.has(ownerDocument)) return;
+  documentBindings.add(ownerDocument);
+  ownerDocument.addEventListener(
     "pointerdown",
     (event) => {
       touchModality = event.pointerType !== "mouse";
       const target = event.target as Element | null;
-      if (!target?.closest(".dependency-tooltip-anchor, .dependency-tooltip")) closeTooltips();
+      if (!target?.closest(".dependency-tooltip-anchor, .dependency-tooltip"))
+        closeTooltips(null, false, ownerDocument);
     },
     true,
   );
-  document.addEventListener(
+  ownerDocument.addEventListener(
     "keydown",
     (event) => {
       touchModality = false;
       if (
         event.key === "Escape" &&
-        document.querySelector(".dependency-tooltip.is-open") &&
-        !document.querySelector(".resource-popover")
+        ownerDocument.querySelector(".dependency-tooltip.is-open") &&
+        !ownerDocument.querySelector(".resource-popover")
       ) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        closeTooltips();
+        closeTooltips(null, true, ownerDocument);
       }
     },
     true,
   );
 }
 
-function positionTooltip(trigger: HTMLElement, tooltip: HTMLElement): void {
+type TooltipPlacement = "auto" | "right";
+
+function positionTooltip(
+  trigger: HTMLElement,
+  tooltip: HTMLElement,
+  placement: TooltipPlacement = "auto",
+): void {
   const rect = trigger.getBoundingClientRect();
+  if (placement === "right") {
+    const gap = 12;
+    const viewportGap = 12;
+    const owner = trigger.closest<HTMLElement>(".plan-info-panel");
+    const ownerRect = owner?.getBoundingClientRect();
+    const preferredLeft = Math.max(rect.right + gap, (ownerRect?.right ?? rect.right) + gap);
+    const availableRight = window.innerWidth - preferredLeft - viewportGap;
+    const preferredWidth = tooltip.offsetWidth;
+    if (availableRight > 0 && availableRight < preferredWidth) {
+      tooltip.style.width = `${Math.floor(availableRight)}px`;
+    } else {
+      tooltip.style.removeProperty("width");
+    }
+    const tooltipHeight = tooltip.getBoundingClientRect().height;
+    // Version details have a strict right-side contract. The owning panel
+    // reserves this lane, so never silently move the detail surface left.
+    const left = preferredLeft;
+    tooltip.dataset.placement = "right";
+    const top = Math.max(8, Math.min(window.innerHeight - tooltipHeight - 8, rect.top));
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+    return;
+  }
   tooltip.style.left = `${Math.max(8, Math.min(window.innerWidth - tooltip.offsetWidth - 8, rect.left))}px`;
   const above = rect.top - tooltip.offsetHeight - 8;
   const below = rect.bottom + 8;
@@ -68,7 +114,7 @@ export function attachTooltip(
   trigger: HTMLElement,
   content: HTMLElement,
   label: string,
-  options: { interactive?: boolean } = {},
+  options: { interactive?: boolean; placement?: TooltipPlacement } = {},
 ): HTMLElement {
   installDocumentBinding();
   trigger.classList.add("dependency-tooltip-anchor");
@@ -102,21 +148,38 @@ export function attachTooltip(
     longPressTimer = null;
     closeTimer = null;
   };
+  const reposition = (): void => {
+    if (!tooltip.hidden && tooltip.classList.contains("is-open"))
+      positionTooltip(trigger, tooltip, options.placement);
+  };
   const open = (): void => {
     cancelTimers();
     if (!trigger.isConnected) return;
     closeTooltips(trigger);
+    if (options.interactive) trigger.setAttribute("aria-expanded", "true");
     tooltip.hidden = false;
     tooltip.classList.add("is-open");
-    positionTooltip(trigger, tooltip);
-    if (options.interactive) trigger.setAttribute("aria-expanded", "true");
+    positionTooltip(trigger, tooltip, options.placement);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    trigger.closest<HTMLElement>(".plan-info-panel")?.addEventListener("scroll", reposition);
   };
-  const close = (): void => {
+  const close = (restoreFocus = true): void => {
     cancelTimers();
+    const restoreTriggerFocus =
+      restoreFocus && options.interactive && tooltip.contains(tooltip.ownerDocument.activeElement);
     tooltip.classList.remove("is-open");
     tooltip.hidden = true;
+    window.removeEventListener("resize", reposition);
+    window.removeEventListener("scroll", reposition, true);
+    trigger.closest<HTMLElement>(".plan-info-panel")?.removeEventListener("scroll", reposition);
     if (options.interactive) trigger.setAttribute("aria-expanded", "false");
+    if (restoreTriggerFocus && trigger.isConnected) {
+      trigger.dataset.suppressTooltipFocus = "true";
+      trigger.focus({ preventScroll: true });
+    }
   };
+  tooltipClosers.set(tooltip, close);
   const scheduleClose = (): void => {
     if (closeTimer) clearTimeout(closeTimer);
     closeTimer = setTimeout(() => {
@@ -196,6 +259,10 @@ export function attachTooltip(
   return tooltip;
 }
 
+export function closeAttachedTooltip(tooltip: HTMLElement): void {
+  tooltipClosers.get(tooltip)?.();
+}
+
 /** Bind explicit icon-control hints to the project tooltip.
  * Body text, titles, progress and output use their dedicated preview/detail surfaces.
  * Observe dynamic controls and text updates; remove portals when their controls leave.
@@ -214,6 +281,7 @@ export function installTextTooltips(root: HTMLElement = document.body): () => vo
       else trigger.setAttribute("aria-describedby", binding.previousAriaDescribedBy);
     }
     if (!binding.hadAnchorClass) trigger.classList.remove("dependency-tooltip-anchor");
+    closeAttachedTooltip(binding.tooltip);
     binding.tooltip.remove();
   };
   const sync = (): void => {
