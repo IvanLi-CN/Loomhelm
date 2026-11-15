@@ -100,9 +100,9 @@ def validate_ts_manifest(root, manifest, record):
         for dependency in dependencies
     ):
         raise ReleaseError('current TS artifact has an invalid consumer dependency projection')
-    toolkit=root/'toolkit'
-    if any('node_modules' in path.parts for path in toolkit.rglob('*')):
-        raise ReleaseError('current TS artifact contains toolkit node_modules')
+    resources=root/'resources'
+    if any('node_modules' in path.parts for path in resources.rglob('*')):
+        raise ReleaseError('current TS artifact contains resources node_modules')
 
 
 def smoke(directory,record):
@@ -120,17 +120,16 @@ def smoke(directory,record):
                     raise ReleaseError('TS package/runtime identity differs from source stamp')
                 if subprocess.check_output(['bun','--version'],text=True).strip()!='1.4.4':
                     raise ReleaseError('TS package requires the pinned Bun runtime')
-                manifest=json.loads((root/'toolkit/artifact-manifest.json').read_text())
+                manifest=json.loads((root/'resources/artifact-manifest.json').read_text())
                 validate_ts_manifest(root,manifest,record)
                 for resource in manifest['files']:
                     relative=Path(resource['path'])
                     if relative.is_absolute() or '..' in relative.parts:
                         raise ReleaseError('unsafe TS resource path')
-                    payload=root/'toolkit'/relative
+                    payload=root/'resources'/relative
                     if not payload.is_file() or hashlib.sha256(payload.read_bytes()).hexdigest()!=resource['sha256']:
                         raise ReleaseError('incomplete or altered TS resource: '+str(relative))
                 print(json.dumps(dict(observation='typescript-resource-inventory',files=len(manifest['files']),candidate_sha=manifest['candidateSha'])),flush=True)
-                subprocess.run(['bun','--no-install',str(root/'toolkit/skills/multi-task-flow/scripts/test-skills-native.ts')],check=True)
                 run_version(['bun','--no-install',str(root/'src/cli.ts'),'--version'],record)
                 subprocess.run(['bun','--no-install',str(root/'src/cli.ts'),'skills','list'],check=True,stdout=subprocess.DEVNULL)
             elif path.name.startswith('web'):

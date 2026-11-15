@@ -7,11 +7,11 @@ import { join, resolve } from 'node:path';
 const client = resolve(import.meta.dirname, '../../..', 'clients/typescript');
 const isolated = realpathSync(mkdtempSync(join(tmpdir(),'loomhelm-source-artifact-')));
 try {
-  for (const file of ['package.json','bun.lock','src','toolkit']) cpSync(join(client,file),join(isolated,file),{recursive:true});
+  for (const file of ['package.json','bun.lock','src','resources']) cpSync(join(client,file),join(isolated,file),{recursive:true});
   const install=spawnSync(process.execPath,['install','--frozen-lockfile','--ignore-scripts','--production','--backend=copy'],{cwd:isolated,env:process.env,encoding:'utf8'});
   assert.equal(install.status,0,install.stderr);
   assert.equal(existsSync(join(isolated,'dist')),false);
-  const inventory=JSON.parse(readFileSync(join(isolated,'toolkit/artifact-manifest.json'),'utf8'));
+  const inventory=JSON.parse(readFileSync(join(isolated,'resources/artifact-manifest.json'),'utf8'));
   assert.equal(inventory.runtime,'bun@1.4.4'); assert.ok(inventory.files.every(file=>file.path.startsWith('skills/')));
   mkdirSync(join(isolated,'host'),{mode:0o700});
   const env={...process.env,PATH:'/usr/bin:/bin',CODEX_HOME:join(isolated,'host'),LOOMHELM_CODEX_APP_SERVER_SOCKET:join(isolated,'absent.sock')};

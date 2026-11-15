@@ -27,7 +27,7 @@ export function canonicalTarballDigest(tarballPath: string): string {
     const files = walkFiles(packageRoot).sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')));
     const hash = createHash('sha256');
     for (const path of files) {
-      if (path === 'toolkit/artifact-manifest.json') continue;
+      if (path === 'resources/artifact-manifest.json') continue;
       hash.update(path);
       hash.update('\0');
       hash.update(readFileSync(resolve(packageRoot, path)));

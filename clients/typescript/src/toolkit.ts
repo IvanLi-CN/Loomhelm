@@ -50,7 +50,7 @@ function isSafePackageName(name: string): boolean {
 
 /** The packaged resources are authoritative; never fall back to a host checkout. */
 export class SkillsRuntime {
-  constructor(readonly root = fileURLToPath(new URL('../toolkit/', import.meta.url))) {}
+  constructor(readonly root = fileURLToPath(new URL('../resources/', import.meta.url))) {}
   async manifest(): Promise<ToolkitManifest> {
     const value = JSON.parse(await readFile(resolve(this.root, 'skills/resource-manifest.json'), 'utf8')) as ToolkitManifest;
     if (value.schemaVersion !== 1 || !Array.isArray(value.skills) || value.skills.length !== 1 || value.skills[0] !== 'multi-task-flow' || !Array.isArray(value.files)) throw new Error('Invalid toolkit resource manifest');
