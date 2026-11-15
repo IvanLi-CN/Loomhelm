@@ -126,6 +126,9 @@ jobs:
           test -n "$tarball"
           npm publish "$tarball" --access public --provenance --tag latest
           test "$(npm view "@loomhelm/runtime-core@$VERSION" version)" = "$VERSION"
+          npm dist-tag add "@loomhelm/runtime-core@$VERSION" compat-v1
+          test "$(npm view @loomhelm/runtime-core@compat-v1 version)" = "$VERSION"
+          test "$(npm view @loomhelm/runtime-core@latest version)" = "$VERSION"
       - name: Create immutable runtime-core tag
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}

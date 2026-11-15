@@ -1,4 +1,4 @@
-import { Runtime } from "./modules/core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { parseArguments } from "./modules/core/cli";
 import { attestNativeProfile } from "./modules/flow/profile-attest";
 import { runHook } from "./modules/flow/profile-hook";

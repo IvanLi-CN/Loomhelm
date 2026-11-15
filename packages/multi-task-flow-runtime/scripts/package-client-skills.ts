@@ -1,8 +1,8 @@
 #!/usr/bin/env -S bun --no-install
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, resolve, sep } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '../../..');
 const target = resolve(root, 'clients/typescript/toolkit');
 const manifest = JSON.parse(readFileSync(resolve(root, 'skills/resource-manifest.json'), 'utf8'));
@@ -22,6 +22,9 @@ const packageOmissions = [
   { path: 'artifact-manifest.json', reason: 'the artifact manifest validates itself through identity and inventory checks' },
 ];
 const packageOmissionPaths = new Set(packageOmissions.map(item => item.path));
+const packagedSkill = 'multi-task-flow';
+const isPackagedResource = (path: string): boolean => path === `skills/${packagedSkill}` || path.startsWith(`skills/${packagedSkill}/`);
+const packagedResources = (values: { path: string; [key: string]: unknown }[]) => values.filter(file => isPackagedResource(file.path));
 const safeSemver = (value: unknown): value is string => {
   if (typeof value !== 'string' || !exactSemver.test(value)) return false;
   const [major, minor, patch] = value.split('-', 1)[0]!.split('.').map(Number);
@@ -43,9 +46,9 @@ if (gitTag !== null && gitTag !== `multi-task-flow-v${buildVersion}`) throw new 
 const tarballDigest = process.env.LOOMHELM_TARBALL_DIGEST?.trim() || null;
 if (tarballDigest !== null && !sha256.test(tarballDigest)) throw new Error('LOOMHELM_TARBALL_DIGEST must be a SHA-256 digest');
 type ConsumerDependency = { name: string; version: string; mode: 'consumer-install' };
-const runtimeDependencyNames = ['playwright', 'sharp', 'zod'] as const;
+const runtimeDependencyNames = ['@loomhelm/runtime-core', 'playwright', 'sharp', 'zod'] as const;
 const declaredDependencies = packageMetadata.dependencies as Record<string, string> | undefined;
-if (!declaredDependencies || JSON.stringify(Object.keys(declaredDependencies).sort()) !== JSON.stringify([...runtimeDependencyNames])) throw new Error('Package production dependencies must be exactly playwright, sharp, and zod');
+if (!declaredDependencies || JSON.stringify(Object.keys(declaredDependencies).sort()) !== JSON.stringify([...runtimeDependencyNames].sort())) throw new Error('Package production dependencies must be exactly @loomhelm/runtime-core, playwright, sharp, and zod');
 const requiredDependencies: ConsumerDependency[] = runtimeDependencyNames.map(name => {
   const version = declaredDependencies[name];
   if (typeof version !== 'string' || !version) throw new Error(`Missing runtime dependency declaration: ${name}`);
@@ -69,22 +72,10 @@ function copy(path: string, expected: string | undefined, dependency = false, so
   const contents = readFileSync(source);
   const digest = createHash('sha256').update(contents).digest('hex');
   if (expected && digest !== expected) throw new Error('Toolkit resource checksum mismatch: ' + path);
-  const packagedContents = sourcePath.startsWith('packages/multi-task-flow-runtime/')
-    ? Buffer.from(contents.toString('utf8').replaceAll('../../../skills/bin/', '../../bin/'))
-    : contents;
+  const packagedContents = contents;
   const output = resolve(target, path); mkdirSync(dirname(output), { recursive: true });
   writeFileSync(output, packagedContents);
   record(path, packagedContents);
-}
-function copyRootFile(path: string): void {
-  const source = resolve(root, path);
-  if (!source.startsWith(`${root}${sep}`)) throw new Error('Unsafe package resource path');
-  const stat = lstatSync(source);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || realpathSync(source) !== source) throw new Error('Unsafe package resource: ' + path);
-  const contents = readFileSync(source);
-  const output = resolve(target, path);
-  mkdirSync(dirname(output), { recursive: true });
-  cpSync(source, output);
 }
 function writeGenerated(path: string, contents: Uint8Array): void {
   const output = resolve(target, path);
@@ -103,17 +94,17 @@ function validateInstalledDependencies(): void {
   }
 }
 function copyPackageManifest(): void {
-  const files = manifest.files.filter(file => !packageOmissionPaths.has(file.path));
-  const additions = (manifest.additions ?? []).filter(file => !packageOmissionPaths.has(file.path));
-  const packageManifest = { ...manifest, files, additions, packageOmissions };
+  const files = packagedResources(manifest.files.filter(file => !packageOmissionPaths.has(file.path)));
+  const additions = packagedResources((manifest.additions ?? []).filter(file => !packageOmissionPaths.has(file.path)));
+  const packageManifest = { ...manifest, skills: [packagedSkill], files, additions, packageOmissions };
   writeGenerated('skills/resource-manifest.json', Buffer.from(JSON.stringify(packageManifest, null, 2) + '\n'));
 }
-for (const file of [...manifest.files, ...(manifest.additions ?? [])]) if (!packageOmissionPaths.has(file.path)) copy(file.path, file.installedSha256, false, file.sourcePath ?? file.path);
+for (const file of packagedResources([...manifest.files, ...(manifest.additions ?? [])].filter(file => !packageOmissionPaths.has(file.path)))) copy(file.path, file.installedSha256, false, file.sourcePath ?? file.path);
 copyPackageManifest();
-copy('skills/catalog.json');
+const catalog = JSON.parse(readFileSync(resolve(root, 'skills/catalog.json'), 'utf8'));
+writeGenerated('skills/catalog.json', Buffer.from(JSON.stringify({ ...catalog, entries: catalog.entries.filter((entry: { name: string }) => entry.name === packagedSkill) }, null, 2) + '\n'));
 for (const name of ['index.html','app.js','app.css']) copy(`skills/multi-task-flow/dist/${name}`, undefined, false, `packages/multi-task-flow-runtime/dist/${name}`);
 if (requireDependencies) validateInstalledDependencies();
-copyRootFile('AGENTS.md');
 const packageIdentityBase = {
   packageName: packageMetadata.name,
   packageVersion: buildVersion,
@@ -127,8 +118,6 @@ const packageIdentityBase = {
   gitTag,
   canonicalDigestAlgorithm: 'path-byte-v2',
 };
-const generatedPackage = JSON.stringify({ private: true, type: 'module', packageName: packageMetadata.name, packageVersion: buildVersion, compatibilityLine: packageConfig.compatibilityLine, skillVersion: packageConfig.skillVersion }, null, 2) + '\n';
-writeFileSync(resolve(target, 'package.json'), generatedPackage);
 // Build identity must be independent of the runner's process locale.
 const finalInventory = [...outputs.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
 const buildId = createHash('sha256').update(JSON.stringify({ ...packageIdentityBase, files: finalInventory })).digest('hex');

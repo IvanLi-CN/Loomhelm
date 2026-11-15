@@ -106,16 +106,16 @@ bun --no-install src/cli.ts --config config.example.json codex retry DISPATCH_ID
 
 ## Skills 与正式任务流
 
-完整源包位于包内 `toolkit/skills/`，共享支持位于 `toolkit/skills/bin/`，预构建 viewer 资产位于对应的 Multi-task Flow dist 目录。`skills/resource-manifest.json` 记录本地资源路径和安装摘要；`skills/catalog.json` 记录入口、脚本及依赖强度；`artifact-manifest.json` 记录 schema v3 package identity、`path-byte-v2` canonical digest 和逐文件摘要。资源打包将 TS 源码、完整资源和浏览器资产复制到 `toolkit/`，不复制 production `node_modules`，不转译、不搜索仓库外执行代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根；`skills run` 原样执行 `.ts` 脚本。包的 bin、exports 和类型入口均指向 `src/`。
+`toolkit/skills/multi-task-flow/` 是包内的 Multi-task Flow Skill 源包；共享运行时由 npm 依赖 `@loomhelm/runtime-core` 提供，预构建 viewer 资产位于对应的 Multi-task Flow dist 目录。`skills/resource-manifest.json` 记录发布子集的资源路径和安装摘要；`skills/catalog.json` 只记录 `multi-task-flow` 入口、脚本及依赖强度；`artifact-manifest.json` 记录 schema v3 package identity、`path-byte-v2` canonical digest 和逐文件摘要。资源打包只复制 Skill 资源和浏览器资产，不复制其他独立 Skill、production `node_modules`，不转译、不搜索仓库外执行代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根；`skills run` 原样执行 `.ts` 脚本。包的 bin、exports 和类型入口均指向 `src/`。
 
-所有随包执行代码、合同资源和构建支持都位于 `skills/`：共享脚本在 `skills/bin/`，合同资源与维护入口在 `skills/multi-task-flow-runtime/scripts/`。vendor 仅检出 `skills/` 即可保留完整源资源，不需要修改用户的 sparse checkout 或安装配置。安装目录内执行 `bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy` 与 `bun install --cwd skills/multi-task-flow-runtime --frozen-lockfile` 准备声明的依赖，再执行 `bun --no-install run --cwd skills/multi-task-flow-runtime build` 仅构建浏览器 JS/CSS；本机 TS 无需编译。外部 Git、Codex 宿主工具及条件性 Skills 仍按既有合同检测，不复制到源包中。
+所有随包执行代码、合同资源和构建支持都位于 `skills/multi-task-flow/`；共享运行时由 npm 依赖 `@loomhelm/runtime-core` 提供。vendor 源包仍保留完整客户端 Skills 集合，但 npm 包只发布 `multi-task-flow` 子集。外部 Git、Codex 宿主工具及条件性 Skills 仍按既有合同检测，不复制到 npm 包中。
 
 `bun --no-install packages/multi-task-flow-runtime/scripts/check-skills-installation.ts --root <installation-root> --probe` 分别报告源码完整性、Bun 运行时及实际入口探测；宿主能力单独验收。该检查不会修改任何用户级安装或运行账本。
 
 ```sh
 bun --no-install src/cli.ts skills list
 bun --no-install src/cli.ts skills check project-engineering-workflow
-bun --no-install src/cli.ts skills run skills/bin/plan_contract_check.ts --plan - < plan.md
+bun --no-install src/cli.ts skills run skills/multi-task-flow/scripts/orchestrate.ts show --input - < view-request.json
 bun --no-install src/cli.ts flow view --input - < view-request.json
 ```
 

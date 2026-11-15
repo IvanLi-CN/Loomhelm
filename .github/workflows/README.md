@@ -25,7 +25,7 @@ Skill release boundary 包含 `.github/workflows/`、`clients/typescript/`、`sk
 | - | - | - |
 | `skill-release-gate.yml` | PR opened/synchronize/reopened/ready-for-review/labeled/unlabeled；merge queue checks | checkout exact PR or merge-group head，运行 `release.py gate`，校验 label、base/head projection、版本和 compatibility line |
 | `skill-release-publish.yml` | owner-approved `workflow_dispatch` | 校验已合并 main PR、构建并验证一个 candidate tarball、记录 skip/release receipt，或按 identity-first state machine 对账/发布并单调提升 dist-tags |
-| `runtime-core-release.yml` | owner-approved `workflow_dispatch` | 校验精确源码 SHA 与 `@loomhelm/runtime-core` 版本、冻结唯一 tarball、通过 npm Trusted Publishing 发布并回读精确版本，再创建 `runtime-core-vX.Y.Z` immutable tag |
+| `runtime-core-release.yml` | owner-approved `workflow_dispatch` | 校验精确源码 SHA、`@loomhelm/runtime-core` 版本与 `compat-v1` 兼容线、冻结唯一 tarball、通过 npm Trusted Publishing 发布并逐个回读 exact/`compat-v1`/`latest`，再创建 `runtime-core-vX.Y.Z` immutable tag |
 
 PR gate 使用 PR 的 exact base SHA 和 head SHA；merge queue 会重新解析唯一的 main PR 并以 queue base/head 再跑一次 gate。不要以工作区当前分支、PR title、历史 workflow 结果或本地 package version 代替 provider 传入的 SHA 和 label 证据。
 

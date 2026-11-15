@@ -21,7 +21,7 @@ import {
   identity,
   removeStagingPath,
   type FileIdentity,
-} from "../../../skills/bin/modules/visual/isolation";
+} from "@loomhelm/runtime-core/modules/visual/isolation";
 import {
   createDirectoryNoFollow,
   readRegularNoFollow,
@@ -30,7 +30,7 @@ import {
   writeAtomicNoFollow,
   writeExclusiveNoFollow,
   type DirectoryIdentity,
-} from "../../../skills/bin/modules/visual/secure_io";
+} from "@loomhelm/runtime-core/modules/visual/secure_io";
 import { normalizeLegacyLedger, validateLedger } from "../lib/schema";
 import { orchestrationRoot } from "../lib/service-paths";
 import { requireLedgerCompatibility } from "../lib/service-contract";

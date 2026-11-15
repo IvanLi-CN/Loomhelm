@@ -12,29 +12,27 @@ test('missing external commands block readiness and CLI without executing or ins
   const previous = process.env.PATH;
   try {
     process.env.PATH = '';
-    const report = await runtime.check('git-cleanup', []);
+    const report = await runtime.check('multi-task-flow', [], []);
     assert.equal(report.ready, false);
     assert.equal(report.readinessScope, 'all-declared-scenarios');
-    assert.ok(report.dependencies.some(dep => dep.kind === 'command' && dep.skill === 'gh' && !dep.available && dep.code === 'HOST_COMMAND_UNAVAILABLE'));
-    const result = spawnSync(process.execPath, [new URL('../src/cli.ts', import.meta.url).pathname, 'skills', 'check', 'git-cleanup'], { env: { ...process.env, PATH: '' }, encoding: 'utf8' });
+    assert.ok(report.dependencies.some(dep => dep.kind === 'command' && dep.skill === 'launchctl' && !dep.available && dep.code === 'HOST_COMMAND_UNAVAILABLE'));
+    const result = spawnSync(process.execPath, [new URL('../src/cli.ts', import.meta.url).pathname, 'skills', 'check', 'multi-task-flow'], { env: { ...process.env, PATH: '' }, encoding: 'utf8' });
     assert.equal(result.status, 3, result.stderr);
     assert.equal(JSON.parse(result.stdout).ready, false);
   } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 });
 
 test('native host tools require an explicit host advertisement, not just installed resources', async () => {
-  const unknown = await runtime.check('fresh-thread-dispatch', []);
+  const unknown = await runtime.check('multi-task-flow', []);
   assert.equal(unknown.ready, false);
-  assert.ok(unknown.dependencies.some(dep => dep.skill === 'mcp__codex_app__create_thread' && dep.code === 'HOST_CAPABILITY_UNVERIFIED'));
-  const advertised = await runtime.check('fresh-thread-dispatch', [], ['mcp__codex_app__create_thread']);
-  assert.equal(advertised.ready, advertised.nativeSupported);
+  assert.ok(unknown.dependencies.some(dep => dep.skill === 'codex.app_server_control' && dep.code === 'HOST_CAPABILITY_UNVERIFIED'));
+  const advertised = await runtime.check('multi-task-flow', [], ['codex.app_server_control']);
   assert.equal(advertised.dependencies.find(dep => dep.kind === 'host').code, 'HOST_ADVERTISED');
 });
-test('packaged catalog contains all approved Skills and rejects path escape', async () => {
+test('packaged catalog contains only the Multi-task Flow Skill and rejects path escape', async () => {
   const skills = await runtime.list();
-  assert.equal(skills.length, 29);
-  assert.ok(skills.some(skill => skill.name === 'dev-plan'));
-  assert.ok(skills.some(skill => skill.name === 'multi-task-flow'));
+  assert.equal(skills.length, 1);
+  assert.equal(skills[0]?.name, 'multi-task-flow');
   await assert.rejects(runtime.run('../bin/plan_contract_check.ts', []), /Unknown toolkit script/);
 });
 
@@ -55,16 +53,6 @@ test('rejects a toolkit root symlink before validating or executing resources', 
     await symlink(runtime.root, link, 'dir');
     await assert.rejects(new SkillsRuntime(link).validate(), /Unsafe toolkit root/);
   } finally { await rm(root, { recursive: true, force: true }); }
-});
-
-test('packaged plan checker preserves stdin pass and rejection with the pinned Bun runtime', async () => {
-  const plan = await readFile(join(runtime.root, 'skills/dev-plan/references/plan-cases/positive-fast-track.md'), 'utf8');
-  const pass = await runtime.run('skills/bin/plan_contract_check.ts', ['--plan', '-'], { input: plan });
-  assert.equal(pass.code, 0, pass.stderr);
-  assert.match(pass.stdout, /PASS/);
-  const reject = await runtime.run('skills/bin/plan_contract_check.ts', ['--plan', '-'], { input: 'invalid' });
-  assert.equal(reject.code, 1, reject.stderr);
-  assert.match(reject.stdout, /MISSING_FLOW_TYPE/);
 });
 
 test('canonical ledger initializes and reads unchanged schema2/contract3 state across child runtimes', async () => {
@@ -88,7 +76,7 @@ test('published toolkit declares runtime dependencies for consumer installation'
   const artifact = await runtime.artifact();
   assert.equal(artifact.schemaVersion, 3);
   assert.equal(artifact.dependenciesBundled, false);
-  assert.deepEqual(artifact.dependencies.map((dependency) => dependency.name), ['playwright', 'sharp', 'zod']);
+  assert.deepEqual(artifact.dependencies.map((dependency) => dependency.name), ['@loomhelm/runtime-core', 'playwright', 'sharp', 'zod']);
   for (const dependency of artifact.dependencies) {
     assert.equal(dependency.mode, 'consumer-install');
     assert.equal(dependency.path, undefined);
@@ -103,9 +91,9 @@ test('missing runtime dependencies fail without registry access or cache writes'
   let requests=0;
   const registry=Bun.serve({hostname:'127.0.0.1',port:0,fetch(){requests++;return new Response('{}',{status:404});}});
   try {
-    const script='skills/bin/no-install-probe.ts';
+    const script='skills/multi-task-flow/scripts/no-install-probe.ts';
     const dependency='loomhelm-missing-'+crypto.randomUUID();
-    await mkdir(join(root,'skills/bin'),{recursive:true});
+    await mkdir(join(root,'skills/multi-task-flow/scripts'),{recursive:true});
     await mkdir(join(root,'cache'));
     await mkdir(join(root,'home'));
     await writeFile(join(root,'package.json'),JSON.stringify({name:'loomhelm-no-install-test',type:'module',dependencies:Object.fromEntries((await runtime.artifact()).dependencies.map(dependency=>[dependency.name,dependency.version]))}));
@@ -117,7 +105,7 @@ test('missing runtime dependencies fail without registry access or cache writes'
     await writeFile(join(root,'skills/resource-manifest.json'),JSON.stringify({...await runtime.manifest(),files:[{path:script,installedSha256:scriptSha256}]}));
     const template=await runtime.artifact();
     const files=[
-      {path:'skills/bin/no-install-probe.ts',sha256:scriptSha256},
+      {path:'skills/multi-task-flow/scripts/no-install-probe.ts',sha256:scriptSha256},
       {path:'skills/resource-manifest.json',sha256:createHash('sha256').update(await readFile(join(root,'skills/resource-manifest.json'))).digest('hex')},
       {path:'.npmrc',sha256:createHash('sha256').update(npmrc).digest('hex')},
     ];

@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { PortRegistry } from "../../../skills/bin/modules/workspace/port_registry";
+import { PortRegistry } from "@loomhelm/runtime-core/modules/workspace/port_registry";
 import { LedgerStore } from "../lib/store";
 import { ServiceAuth } from "../lib/service-auth";
 import { startSharedViewer, listRuns, selectAssets } from "../lib/service-http";

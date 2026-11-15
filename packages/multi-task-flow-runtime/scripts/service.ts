@@ -1,4 +1,4 @@
-import { Runtime } from "../../../skills/bin/modules/core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import {
   compatibilityReport,
   selectedRelease,

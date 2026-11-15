@@ -8,7 +8,7 @@ import {
   writeAtomicNoFollow,
   writeExclusiveNoFollow,
   type DirectoryIdentity,
-} from "../../../skills/bin/modules/visual/secure_io";
+} from "@loomhelm/runtime-core/modules/visual/secure_io";
 import {
   TASK_EXECUTION_POLICY_FIELDS,
   taskExecutionPolicyDeclarationGaps,
