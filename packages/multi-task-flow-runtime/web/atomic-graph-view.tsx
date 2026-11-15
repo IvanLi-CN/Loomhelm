@@ -11,6 +11,11 @@ import { dependencyLabel } from "./labels";
 
 type AtomicCardData = { title: string; kind: string; state: string; scope: string; color: string; direction: Direction; nodeId: string; nodeKind: "task" | "group" | "milestone" | "boundary"; boundary: "start" | "end" | null; taskId: string | null; groupId: string | null; evidence: string[]; blocker: string | null; acceptanceCount: number; diagnostics: string[]; displayMode: "compact" | "full"; interaction: "current" | "related" | "dim" | "none" };
 
+function kindGlyph(kind: AtomicCardData["nodeKind"], boundary: AtomicCardData["boundary"]): React.ReactNode {
+  const path = kind === "group" ? "M4 4h16v16H4z M8 8h8v8H8z" : kind === "milestone" ? "M12 3 21 12 12 21 3 12z" : kind === "boundary" ? (boundary === "start" ? "M5 4l14 8-14 8z" : "M5 5h14v14H5z") : "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z";
+  return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d={path} /></svg>;
+}
+
 const AtomicCard = memo(function AtomicCard({ data }: NodeProps) {
   const value = data as unknown as AtomicCardData;
   if (value.nodeKind === "boundary") return <div className="dependency-card atomic-dependency-card atomic-boundary-card" data-boundary={value.boundary} data-state={value.state} data-diagnostic={value.diagnostics.length ? "true" : undefined} title={value.diagnostics.join("；")} style={{ "--node-color": value.color } as React.CSSProperties}>
@@ -22,7 +27,7 @@ const AtomicCard = memo(function AtomicCard({ data }: NodeProps) {
   const compact = value.displayMode === "compact";
   const semanticLabel = `${value.kind}：${value.title}；${value.scope}；状态：${value.state}`;
   return <div className="dependency-card atomic-dependency-card" tabIndex={0} data-context-kind={value.taskId ? "task" : undefined} data-context-id={value.taskId ?? value.nodeId} data-state={value.state} data-interaction={value.interaction} data-display-mode={value.displayMode} data-diagnostic={value.diagnostics.length ? "true" : undefined} title={semanticLabel} aria-label={semanticLabel} onFocus={() => document.dispatchEvent(new CustomEvent("loomhelm:atomic-node-focus", { detail: { nodeId: value.nodeId, action: "focus" } }))} onBlur={() => document.dispatchEvent(new CustomEvent("loomhelm:atomic-node-focus", { detail: { nodeId: value.nodeId, action: "blur" } }))} style={{ "--node-color": value.color } as React.CSSProperties}>
-    {compact ? <div className="atomic-dependency-icon" aria-hidden="true">{value.kind === "里程碑" ? "◆" : value.kind === "起点" ? "▶" : value.kind === "终点" ? "■" : value.kind === "交付单元" ? "▣" : "●"}</div> : <>
+    {compact ? <div className="atomic-dependency-icon">{kindGlyph(value.nodeKind, value.boundary)}</div> : <>
       <div className="dependency-card-meta"><span>{value.kind}</span><span>{value.state}</span></div>
       <div className="dependency-card-title">{value.diagnostics.length ? "⚠ " : ""}{value.title}</div>
       <div className="atomic-dependency-scope">{value.scope}</div>
@@ -105,7 +110,7 @@ export function createAtomicGraphController(context: GraphContext) {
   let latestNodes: readonly AtomicNode[] = [];
   let latestEdges: readonly AtomicEdge[] = [];
   let update: (() => void) | null = null;
-  let displayMode: "compact" | "full" = localStorage.getItem(`loomhelm:atomic-display-mode:${location.pathname}`) === "compact" ? "compact" : "full";
+  let displayMode: "compact" | "full" = localStorage.getItem(`loomhelm:atomic-display-mode:${location.pathname}`) === "full" ? "full" : "compact";
   let interaction: { nodeId: string | null; scopeIds: Set<string>; source: "hover" | "selection" | "details" | null } = { nodeId: null, scopeIds: new Set(), source: null };
 
   function setInteraction(nodeId: string | null, source: typeof interaction.source): void {
@@ -180,8 +185,8 @@ export function createAtomicGraphController(context: GraphContext) {
     }));
     return <>
       {projection?.warnings.length ? <div className="atomic-graph-warning" role="alert"><strong>依赖图存在异常</strong><span>{projection.warnings.length} 项节点或连线需要核查；异常事实仍保留在图中。</span></div> : null}
-      <div className="dependency-layout-tools"><span>原子任务 → 后续原子任务 · 条件连线</span><label>节点显示 <select aria-label="节点显示" value={displayMode} onChange={(event) => { displayMode = event.target.value as "compact" | "full"; localStorage.setItem(`loomhelm:atomic-display-mode:${location.pathname}`, displayMode); update?.(); }}><option value="compact">简略</option><option value="full">完整</option></select></label><label>排列方向 <select value={direction} onChange={(event) => { direction = event.target.value as Direction; signature = ""; render(latestNodes, latestEdges); }}><option value="DOWN">从上到下</option><option value="RIGHT">从左到右</option></select></label><button onClick={() => { instance?.setViewport({ x: 24, y: 24, zoom: 1 }); context.setZoom(1); }}>100% 阅读</button></div>
-      <ReactFlow className="atomic-react-flow" nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onInit={(value) => { instance = value; }} deleteKeyCode={null} nodesConnectable={false} nodesDraggable={false} elementsSelectable zoomOnScroll={false} zoomOnPinch panOnScroll panOnDrag preventScrolling={false} minZoom={0.15} maxZoom={2.5} onMoveEnd={(_, value) => context.setZoom(Math.round(value.zoom * 100) / 100)} onNodeClick={(_, node) => { const item = projection?.nodes.find((candidate) => candidate.id === node.id); if (!item) return; setInteraction(item.id, "selection"); moveToNode(item.id); if (item.nodeKind === "task" && item.refId) context.selectTask(item.refId, item.id); else if (item.nodeKind === "group" && item.refId) context.selectGroup(item.refId, item.id); else if (item.nodeKind === "milestone") context.selectMilestone(item.id); }} onNodeMouseEnter={(event, node) => { const item = projection?.nodes.find((candidate) => candidate.id === node.id); if (!item) return; setInteraction(item.id, "hover"); const view = context.getData(); if (!item.refId || item.nodeKind !== "task" || !view) return; const task = view.tasks.find((candidate) => candidate.id === item.refId); if (task) context.showHoverPreview(context.taskPreview(task), (event.currentTarget as HTMLElement).getBoundingClientRect()); }} onNodeMouseLeave={() => { if (interaction.source === "hover") setInteraction(null, null); context.hideHoverPreview(); }} proOptions={{ hideAttribution: false }} />
+      <div className="dependency-layout-tools"><span><strong>原子依赖图</strong><small>{projection?.nodes.length ?? 0} 个节点 · {projection?.edges.length ?? 0} 条依赖</small></span><label>显示 <select aria-label="节点显示" value={displayMode} onChange={(event) => { displayMode = event.target.value as "compact" | "full"; localStorage.setItem(`loomhelm:atomic-display-mode:${location.pathname}`, displayMode); signature = ""; render(latestNodes, latestEdges); }}><option value="compact">简略</option><option value="full">完整</option></select></label><label>方向 <select aria-label="排列方向" value={direction} onChange={(event) => { direction = event.target.value as Direction; signature = ""; render(latestNodes, latestEdges); }}><option value="DOWN">从上到下</option><option value="RIGHT">从左到右</option></select></label><button onClick={() => { instance?.fitView({ padding: 0.16, duration: 280 }); }}>适配画布</button></div>
+      <ReactFlow className={`atomic-react-flow ${displayMode}`} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onInit={(value) => { instance = value; }} deleteKeyCode={null} nodesConnectable={false} nodesDraggable={false} elementsSelectable zoomOnScroll={false} zoomOnPinch panOnScroll panOnDrag preventScrolling={false} minZoom={0.15} maxZoom={2.5} onMoveEnd={(_, value) => context.setZoom(Math.round(value.zoom * 100) / 100)} onNodeClick={(_, node) => { const item = projection?.nodes.find((candidate) => candidate.id === node.id); if (!item) return; setInteraction(item.id, "selection"); moveToNode(item.id); if (item.nodeKind === "task" && item.refId) context.selectTask(item.refId, item.id); else if (item.nodeKind === "group" && item.refId) context.selectGroup(item.refId, item.id); else if (item.nodeKind === "milestone") context.selectMilestone(item.id); }} onNodeMouseEnter={(event, node) => { const item = projection?.nodes.find((candidate) => candidate.id === node.id); if (!item) return; setInteraction(item.id, "hover"); const view = context.getData(); if (!item.refId || item.nodeKind !== "task" || !view) return; const task = view.tasks.find((candidate) => candidate.id === item.refId); if (task) context.showHoverPreview(context.taskPreview(task), (event.currentTarget as HTMLElement).getBoundingClientRect()); }} onNodeMouseLeave={() => { if (interaction.source === "hover") setInteraction(null, null); context.hideHoverPreview(); }} proOptions={{ hideAttribution: false }} />
       {pending ? <span className="dependency-layout-pending" role="status">正在计算布局…</span> : null}
     </>;
   }
@@ -199,7 +204,8 @@ export function createAtomicGraphController(context: GraphContext) {
     const serial = ++generation;
     pending = true;
     update?.();
-    layoutProjection(projection, direction).then((result) => {
+    if (!localStorage.getItem(`loomhelm:atomic-display-mode:${location.pathname}`) && projection.nodes.length < 40) displayMode = "full";
+    layoutProjection(projection, direction, displayMode).then((result) => {
       if (serial !== generation) return;
       layout = result;
       pending = false;

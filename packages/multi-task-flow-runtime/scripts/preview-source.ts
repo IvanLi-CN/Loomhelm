@@ -1,40 +1,39 @@
-import { createHash } from "node:crypto";
 import {
-  chmodSync,
-  copyFileSync,
   cpSync,
-  mkdirSync,
   mkdtempSync,
-  readFileSync,
-  realpathSync,
+  mkdirSync,
+  copyFileSync,
   renameSync,
-  watch,
+  readFileSync,
+  existsSync,
+  realpathSync,
   writeFileSync,
+  chmodSync,
+  watch,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { singleDeliveryUnitObserver } from "../examples/single-delivery-unit/outputs";
+import { createSingleDeliveryUnitLedger, singleDeliveryUnitName } from "../examples/single-delivery-unit/ledger";
 import {
-  defaultRegistryDir,
-  PortRegistry,
-} from "@loomhelm/runtime-core/modules/workspace/port_registry";
-import {
-  createIdleArchiveExample,
   createViewerValidationLedger,
+  createIdleArchiveExample,
   viewerValidationName,
 } from "../examples/orchestration-viewer";
-import {
-  createSingleDeliveryUnitLedger,
-  singleDeliveryUnitName,
-} from "../examples/single-delivery-unit/ledger";
-import { singleDeliveryUnitObserver } from "../examples/single-delivery-unit/outputs";
-import { versionEnvelope } from "../lib/contract";
-import { ServiceAuth } from "../lib/service-auth";
-import { compatibility, type ReleaseManifest } from "../lib/service-contract";
-import { runDaemon } from "../lib/service-lifecycle";
-import { servicePaths } from "../lib/service-paths";
-import { buildId, digest } from "../lib/service-release";
+import { validateLedger, type Ledger } from "../lib/schema";
 import { ServiceState } from "../lib/service-state";
+import { servicePaths } from "../lib/service-paths";
+import { ServiceAuth } from "../lib/service-auth";
+import { versionEnvelope } from "../lib/contract";
+import { runDaemon } from "../lib/service-lifecycle";
+import { compatibility, type ReleaseManifest } from "../lib/service-contract";
+import { buildId, digest } from "../lib/service-release";
 import { LedgerStore } from "../lib/store";
+import {
+  PortRegistry,
+  defaultRegistryDir,
+} from "@loomhelm/runtime-core/modules/workspace/port_registry";
 
 const moduleRoot = resolve(import.meta.dir, "..");
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mtf-source-preview-")));
@@ -44,32 +43,8 @@ mkdirSync(assetsDir);
 // long PR popovers without querying or depending on a live repository.
 const previewTools = join(root, "tools");
 mkdirSync(previewTools);
-const previewChecks = [
-  "Blue–Green Control Contract",
-  "Quality Gates",
-  "Product Release Contract",
-  "Compatibility Release Gate",
-  "Bootstrap Verification",
-  "React Doctor",
-  "Repository Verification",
-  "Go Race Tests",
-  "Go Shuffle Tests",
-  "Repository Contracts",
-  "TypeScript Client (Bun)",
-  "Candidate Producer",
-].flatMap((name, index) => [
-  { name, conclusion: index === 6 ? "CANCELLED" : "SUCCESS" },
-  { name, conclusion: "SUCCESS" },
-]);
-const previewPR = JSON.stringify({
-  number: 71,
-  title: "feat: refine card resource popovers",
-  url: "https://github.com/IvanLi-CN/Loomhelm/pull/71",
-  state: "MERGED",
-  mergedAt: null,
-  mergeable: "MERGEABLE",
-  statusCheckRollup: previewChecks,
-});
+const previewChecks = ["Blue–Green Control Contract", "Quality Gates", "Product Release Contract", "Compatibility Release Gate", "Bootstrap Verification", "React Doctor", "Repository Verification", "Go Race Tests", "Go Shuffle Tests", "Repository Contracts", "TypeScript Client (Bun)", "Candidate Producer"].flatMap((name, index) => [{ name, conclusion: index === 6 ? "CANCELLED" : "SUCCESS" }, { name, conclusion: "SUCCESS" }]);
+const previewPR = JSON.stringify({ number: 71, title: "feat: refine card resource popovers", url: "https://github.com/IvanLi-CN/Loomhelm/pull/71", state: "MERGED", mergedAt: null, mergeable: "MERGEABLE", statusCheckRollup: previewChecks });
 const previewGh = join(previewTools, "gh");
 writeFileSync(previewGh, `#!/bin/sh\nprintf '%s' ${JSON.stringify(previewPR)}\n`);
 chmodSync(previewGh, 0o700);
@@ -91,7 +66,9 @@ async function build() {
     },
   );
   if ((await child.exited) !== 0)
-    throw new Error("Source build failed; keeping the last successful preview revision");
+    throw new Error(
+      "Source build failed; keeping the last successful preview revision",
+    );
   for (const name of ["index.html", "app.js", "app.css"]) {
     copyFileSync(join(root, "staging", name), join(assetsDir, name + ".next"));
     renameSync(join(assetsDir, name + ".next"), join(assetsDir, name));
@@ -109,33 +86,23 @@ const auth = new ServiceAuth(state);
 auth.initialize();
 const scenarioIndex = process.argv.indexOf("--scenario");
 const scenario = scenarioIndex < 0 ? "default" : process.argv[scenarioIndex + 1];
-if (!["default", "agent-idle-archive"].includes(scenario ?? ""))
-  throw new Error("Unknown preview scenario");
+if (!["default", "agent-idle-archive"].includes(scenario ?? "")) throw new Error("Unknown preview scenario");
+const ledgerIndex = process.argv.indexOf("--ledger");
+const ledgerPath = ledgerIndex < 0 ? undefined : process.argv[ledgerIndex + 1];
+const copiedLedger = ledgerPath ? validateLedger(JSON.parse(readFileSync(resolve(ledgerPath), "utf8"))) : undefined;
 const example = scenario === "agent-idle-archive" ? createIdleArchiveExample() : null;
 const singleUnit = process.argv.includes("--single-delivery-unit");
-const run =
-  example?.ledger ??
-  (singleUnit ? createSingleDeliveryUnitLedger() : createViewerValidationLedger());
+const run: Ledger = copiedLedger ?? example?.ledger ?? (singleUnit ? createSingleDeliveryUnitLedger() : createViewerValidationLedger());
 if (!singleUnit && !example) {
-  // Exercise the authenticated PR query against the actual candidate alongside unbound cards.
-  run.repository = { ...run.repository, host: "github.com", owner: "IvanLi-CN", name: "Loomhelm" };
-  const prExample = run.tasks.find((task) => task.id === "ledger");
-  if (prExample)
-    prExample.pr = {
-      provider: "github",
-      repository: "IvanLi-CN/Loomhelm",
-      id: "71",
-      url: "https://github.com/IvanLi-CN/Loomhelm/pull/71",
-    };
+// Exercise the authenticated PR query against the actual candidate alongside unbound cards.
+run.repository = { ...run.repository, host: "github.com", owner: "IvanLi-CN", name: "Loomhelm" };
+const prExample = run.tasks.find(task => task.id === "ledger");
+if (prExample) prExample.pr = { provider: "github", repository: "IvanLi-CN/Loomhelm", id: "71", url: "https://github.com/IvanLi-CN/Loomhelm/pull/71" };
 }
 const store = new LedgerStore(state.paths.data, run.orchestration_id);
 store.create(run);
-if (!singleUnit)
-  cpSync(
-    join(moduleRoot, "examples", "orchestration-viewer", "requirements"),
-    join(store.runPath, "requirements"),
-    { recursive: true },
-  );
+const requirementsSource = ledgerPath ? join(resolve(ledgerPath, ".."), "requirements") : join(moduleRoot, "examples", "orchestration-viewer", "requirements");
+if (!singleUnit && existsSync(requirementsSource)) cpSync(requirementsSource, join(store.runPath, "requirements"), { recursive: true });
 const source = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: moduleRoot });
 if (source.exitCode !== 0) throw new Error("Cannot resolve source commit");
 const files = Object.fromEntries(
@@ -150,7 +117,8 @@ const body = {
   source_sha: source.stdout.toString().trim(),
   ledger_contract: 3,
   service_version: "source-preview",
-  platform: `${process.platform}-${process.arch}` as ReleaseManifest["platform"],
+  platform:
+    `${process.platform}-${process.arch}` as ReleaseManifest["platform"],
   ...versionEnvelope,
   ...compatibility,
   files,
@@ -190,11 +158,7 @@ state.renew(
 let revision = createHash("sha256").update(JSON.stringify(files)).digest("hex");
 const daemon = await runDaemon(state, {
   manifest,
-  name: example
-    ? "Agent 空闲与对话归档示例"
-    : singleUnit
-      ? singleDeliveryUnitName
-      : viewerValidationName,
+  name: copiedLedger ? `复制运行：${run.orchestration_id}` : example ? "Agent 空闲与对话归档示例" : singleUnit ? singleDeliveryUnitName : viewerValidationName,
   demoHooks: example?.dashboard,
   assetsDir,
   revision: () => revision,
@@ -256,11 +220,7 @@ process.once("SIGINT", stop);
 console.log(
   JSON.stringify({
     mode: "source-preview",
-    name: example
-      ? "Agent 空闲与对话归档示例"
-      : singleUnit
-        ? singleDeliveryUnitName
-        : viewerValidationName,
+    name: copiedLedger ? `复制运行：${run.orchestration_id}` : example ? "Agent 空闲与对话归档示例" : singleUnit ? singleDeliveryUnitName : viewerValidationName,
     run_id: run.orchestration_id,
     root,
     pid: process.pid,
