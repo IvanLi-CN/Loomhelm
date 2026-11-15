@@ -4,7 +4,8 @@ import type { GraphDependencyPath, GraphProjection, GraphProjectionNode } from "
 export const CARD_WIDTH = 184;
 export const CARD_HEIGHT = 76;
 
-export function cardSize(title: string): { width: number; height: number } {
+export function cardSize(title: string, compact = false): { width: number; height: number } {
+  if (compact) return { width: 36, height: 36 };
   const glyphWidth = (char: string) =>
     /[\u2e80-\uffff]/u.test(char) ? 15 : /[A-ZMW]/.test(char) ? 10 : /\s/.test(char) ? 4 : 8;
   const textWidth = Array.from(title).reduce((sum, char) => sum + glyphWidth(char), 0);
@@ -20,6 +21,10 @@ export function cardSize(title: string): { width: number; height: number } {
     used += next;
   }
   return { width, height: Math.max(CARD_HEIGHT, 38 + lines * 21) };
+}
+function compactCardSize(title: string, nodeKind: string): { width: number; height: number } {
+  const preset = nodeKind === "group" || /准备.*分支|创建.*PR|合并.*PR|收口/u.test(title);
+  return preset ? { width: 36, height: 36 } : { width: 168, height: 38 };
 }
 export type Direction = "DOWN" | "RIGHT";
 export type PlacedNode = {
@@ -48,6 +53,7 @@ const elk = new ELK();
 export async function layoutProjection(
   projection: GraphProjection,
   direction: Direction,
+  mode: "compact" | "full" = "full",
 ): Promise<GraphLayout> {
   const ports = new Map<string, NonNullable<ElkNode["ports"]>>();
   for (const n of projection.nodes) ports.set(n.id, []);
@@ -80,8 +86,13 @@ export async function layoutProjection(
         ...(n.nodeKind === "group"
           ? nonEmptyGroups.has(n.id)
             ? {}
-            : { width: CARD_WIDTH, height: CARD_HEIGHT }
-          : cardSize(n.title)),
+            : {
+                width: mode === "compact" ? 44 : CARD_WIDTH,
+                height: mode === "compact" ? 44 : CARD_HEIGHT,
+              }
+          : mode === "compact"
+            ? compactCardSize(n.title, n.nodeKind)
+            : cardSize(n.title)),
         ports: ports.get(n.id),
         layoutOptions:
           n.nodeKind === "group"
