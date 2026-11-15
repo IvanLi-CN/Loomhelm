@@ -319,14 +319,6 @@ export function defaultGroupAtoms(groupId: string) {
       status: "planned" as const,
     },
     {
-      id: `group-atom-${groupId}-verify-integration`,
-      title: "验收集成结果",
-      purpose: "核对贡献任务集成结果",
-      output: "集成结果已验收",
-      lifecycle_stage: null,
-      status: "planned" as const,
-    },
-    {
       id: `group-atom-${groupId}-merge-pr`,
       title: "合并父 PR",
       purpose: "合并已验收的父 PR",
@@ -342,6 +334,15 @@ export function defaultGroupAtoms(groupId: string) {
       lifecycle_stage: "closed" as const,
       status: "planned" as const,
     },
+  ];
+}
+
+export function defaultTaskAtoms(taskId: string) {
+  return [
+    { id: `task-atom-${taskId}-prepare-branch`, title: "准备任务分支", status: "planned" as const, lifecycle_stage: "branch_ready" as const },
+    { id: `task-atom-${taskId}-create-pr`, title: "创建任务 PR", status: "planned" as const, lifecycle_stage: "pr_created" as const },
+    { id: `task-atom-${taskId}-merge-pr`, title: "合并任务 PR", status: "planned" as const, lifecycle_stage: "pr_merged" as const },
+    { id: `task-atom-${taskId}-closeout`, title: "任务收口", status: "planned" as const, lifecycle_stage: "closed" as const },
   ];
 }
 export const task = z
@@ -394,6 +395,7 @@ export const task = z
           id,
           title: text,
           status: z.enum(["planned", "running", "completed", "blocked"]),
+          lifecycle_stage: z.enum(["branch_ready", "pr_created", "pr_merged", "closed"]).nullable().optional(),
         })
         .strict(),
     ),

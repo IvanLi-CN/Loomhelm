@@ -310,7 +310,7 @@ export function canonicalizeContract3Plan(
   return { ...rawPlan, atomic_nodes: atomicNodes, atomic_edges: atomicEdges };
 }
 
-const deliveryUnitLifecycleSuffixes = ["prepare-parent", "create-pr", "verify-integration", "merge-pr", "closeout"] as const;
+const deliveryUnitLifecycleSuffixes = ["prepare-parent", "create-pr", "merge-pr", "closeout"] as const;
 
 /** Require Agent-declared delivery-unit lifecycle ordering without inventing edges. */
 export function validateDeliveryUnitLifecycleEdges(groupAtoms: readonly any[], edges: readonly any[]): void {

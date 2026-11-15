@@ -6962,7 +6962,7 @@
     },
     {
       "path": "skills/multi-task-flow/SKILL.md",
-      "installedSha256": "d8eedd40b39ff25f6f2c1b862cae3ee47f7e94c179b2cb3916dc9e109acdd9e3"
+      "installedSha256": "23c3ed2bb7231d1eefebb339185bda221dacab3188587efdd9e17d9a05d40209"
     },
     {
       "path": "skills/multi-task-flow/bun.lock",
@@ -7187,7 +7187,7 @@
     {
       "path": "skills/multi-task-flow/lib/schema.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/schema.ts",
-      "installedSha256": "192af852668766aa0ab9382290eaf8d6c752ae5f00f72add0efa4781822a213e"
+      "installedSha256": "158752c26941be449e8c18bfd3e5ed4ae1b020664a83277e19c208fe32d72f28"
     },
     {
       "path": "skills/multi-task-flow/lib/server-contract.ts",
@@ -8172,7 +8172,7 @@
     {
       "path": "skills/multi-task-flow/tests/single-delivery-unit.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/single-delivery-unit.test.ts",
-      "installedSha256": "888575b18444b7eb4471a16fe92325829603cea2be95bb3c3d375944af09438e"
+      "installedSha256": "a683c8c3bf80b55887e78dd6718c91966e596bf33da02401e1f38652c84f7c76"
     },
     {
       "path": "skills/multi-task-flow/tests/delivery-topology.test.ts",
@@ -8232,7 +8232,7 @@
     {
       "path": "skills/multi-task-flow/scripts/check-client-skills.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/check-client-skills.ts",
-      "installedSha256": "2af36207748c6ed758d92b29772a3b590ca5e081be0d9041139aaff264dd2e26"
+      "installedSha256": "09cf8fdf218d623eb196aa679f3eda014adefd2646f84b717592a613ae3c39c8"
     },
     {
       "path": "skills/multi-task-flow/tests/check-skills-installation.test.ts",
@@ -8762,12 +8762,22 @@
     {
       "path": "skills/multi-task-flow/lib/atomic-orchestration.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/atomic-orchestration.ts",
-      "installedSha256": "2708abf1b1733446877aaf912e66fd723faca4dfbfa86dd622c30c589693664b"
+      "installedSha256": "35da756e1045449f1ecdc8da293d8f73769e52156d2557774e817c644fba7091"
+    },
+    {
+      "path": "skills/multi-task-flow/lib/atomic-graph-order.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/lib/atomic-graph-order.ts",
+      "installedSha256": "bddd02d7516828af9a768ae919f62835d7f2d57aff43f7028eeda36411bb0283"
     },
     {
       "path": "skills/multi-task-flow/tests/atomic-orchestration-schema.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/atomic-orchestration-schema.test.ts",
-      "installedSha256": "71717813e643b931f9efcfcbcd5a45e667a30331290ac3d66dc6356b560ef7c6"
+      "installedSha256": "adefa47053d7f4a5830076cb807d3dfd7d0348ddecc173d49e71661774544b6b"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/atomic-graph-order.test.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/tests/atomic-graph-order.test.ts",
+      "installedSha256": "df0fdbfb601011dd48dcde10957a7092096c673f8f10a8f716880e2a98dd50ec"
     },
     {
       "path": "skills/multi-task-flow/tests/task-kind.test.ts",
