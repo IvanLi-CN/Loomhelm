@@ -56,7 +56,7 @@ export const homePage = viewerPage(
   '<p id="status" role="status">正在读取运行。</p><ul id="runs"></ul><button id="more" hidden>加载更多</button><p><small id="build"></small></p>',
   "/home.js",
 );
-export const homeScript = `let offset=0;const status=document.getElementById("status"),more=document.getElementById("more");async function renew(){try{const r=await fetch("/api/v1/lease",{method:"POST"});if(!r.ok)throw Error();}catch{status.textContent="服务已断开。若已退出，请先调用 service ensure；如登录过期，请重新获取登录入口。"}}async function load(){try{const r=await fetch("/api/v1/runs?offset="+offset);if(!r.ok)throw Error();const v=await r.json();for(const run of v.runs){const li=document.createElement("li"),a=document.createElement("a"),meta=document.createElement("small");a.textContent=run.id;a.href="/runs/"+encodeURIComponent(run.id)+"/";meta.textContent=run.error||("revision "+run.revision+" / "+run.owner_thread_id);li.append(a,meta);document.getElementById("runs").append(li)}offset+=v.runs.length;more.hidden=offset>=v.total;status.textContent=v.total?"共 "+v.total+" 个运行":"暂无编排运行";document.getElementById("build").textContent="build "+v.build_id;}catch{status.textContent="无法读取运行。请确认服务在线并通过 service login 登录。"}}more.onclick=load;load();renew();setInterval(renew,60000);document.addEventListener("visibilitychange",()=>{if(!document.hidden)renew()});`;
+export const homeScript = `let offset=0;const status=document.getElementById("status"),more=document.getElementById("more");async function renew(){try{const r=await fetch("/api/v1/lease",{method:"POST"});if(!r.ok)throw Error();}catch{status.textContent="服务已断开。请重新获取登录入口。"}}async function load(){try{const r=await fetch("/api/v1/runs?offset="+offset);if(!r.ok)throw Error();const v=await r.json();for(const run of v.runs){const li=document.createElement("li"),a=document.createElement("a"),meta=document.createElement("small");a.textContent=run.id;a.href="/runs/"+encodeURIComponent(run.id)+"/";const binding=run.viewer_binding;meta.textContent=run.error||("revision "+run.revision+" / "+run.owner_thread_id+(binding?.package_version?" · "+binding.package_name+"@"+binding.package_version:""));li.append(a,meta);document.getElementById("runs").append(li)}offset+=v.runs.length;more.hidden=offset>=v.total;status.textContent=v.total?"共 "+v.total+" 个运行":"暂无编排运行";document.getElementById("build").textContent="daemon "+(v.gateway?.package_version||"unknown")+" · build "+(v.gateway?.build_id||"unknown");}catch{status.textContent="无法读取运行。请确认服务在线。"}}more.onclick=load;load();renew();setInterval(renew,60000);document.addEventListener("visibilitychange",()=>{if(!document.hidden)renew()});`;
 
 export const runClientScript = `
 const brand=document.querySelector(".brand-mark");
@@ -75,7 +75,7 @@ async function renew(){
 fetch("api/service").then(r=>r.ok?r.json():null).then(v=>{
   if(!v)return;
   const home=document.querySelector(".brand-mark");
-  if(home)home.dataset.tooltip="全部编排运行 · build "+v.build_id;
+  if(home)home.dataset.tooltip="编排 "+(v.current?.package_name||"multi-task-flow")+"@"+(v.current?.package_version||"unknown")+" · daemon "+(v.daemon?.package_version||"unknown");
   if(v.warning){
     const anchor=document.getElementById("connection-notice");
     if(anchor){const notice=document.createElement("div");notice.className="notice notice-warning";notice.setAttribute("role","status");notice.textContent=v.warning;anchor.after(notice)}

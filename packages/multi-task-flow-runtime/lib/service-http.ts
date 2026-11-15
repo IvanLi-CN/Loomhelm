@@ -26,11 +26,15 @@ import {
 import { readBodyWithinLimit } from "../lib/server-files";
 import { verifyRelease } from "../lib/service-release";
 import { parseViewerRoute } from "../scripts/viewer-gateway";
-import { startUnixViewerWorkerServer, viewerWorkerSocketPath } from "../scripts/viewer-socket";
+import { viewerWorkerSocketPath } from "../scripts/viewer-socket";
 import { createUnixViewerWorker, dataVersionOf, workerKeyOf } from "../scripts/viewer-worker";
+import { startUnixViewerWorkerServer } from "../scripts/viewer-socket";
 import { createWorkerGeneration, ViewerWorkerPool } from "../scripts/viewer-runtime";
 import { WorkerDiagnosticStore, workerDiagnosticFromError, type WorkerDiagnosticStage } from "./worker-diagnostics";
 import { serviceLog } from "./service-log";
+import { ensureViewerBinding, readViewerBinding } from "./viewer-binding";
+import { cachedVersionDiscovery } from "./service-update";
+import { randomUUID } from "node:crypto";
 
 const json = (
   value: unknown,
@@ -213,6 +217,8 @@ export async function startSharedViewer(
     );
   state.initialize();
   const auth = new ServiceAuth(state);
+  const serviceConfig = (() => { try { return state.config(); } catch { return {} as any; } })();
+  const versionDiscovery = (() => { try { return cachedVersionDiscovery(state); } catch { return undefined; } })();
   const diagnostics = new WorkerDiagnosticStore(state.paths);
   diagnostics.sweep(undefined, (runId) => existsSync(join(state.paths.data, "runs", runId)));
   const recordDiagnostic = (input: Parameters<WorkerDiagnosticStore["record"]>[0]) => {
@@ -242,8 +248,11 @@ export async function startSharedViewer(
     } catch { return null; }
   })();
   const resources = new Map<string, ReturnType<typeof createRunDashboard>>();
+  const workerBridges = new Map<string, (request: Request, runId: string, path: string) => Promise<Response>>();
+  const workerBuilds = new Map<string, { build_id: string; package_version: string }>();
   const warnings = new Map<string, string | null>();
   let timeoutServer: Pick<Awaited<ReturnType<typeof Runtime.serve>>, "timeout"> | undefined;
+  let gatewayPort = port;
   function getRun(id: string) {
     safeId(id);
     const existing = resources.get(id);
@@ -278,37 +287,48 @@ export async function startSharedViewer(
         workerKey,
         generation,
       );
-      const workerServer = await startUnixViewerWorkerServer({
-        socketPath,
-        workerKey,
-        generation,
-        handle: async (request, context) => {
-          const requestUrl = new URL(request.url);
-          const route = parseViewerRoute(requestUrl);
-          if (!route || route.runId !== context.runId)
-            throw new Error("viewer worker route identity mismatch");
-          const run = getRun(context.runId);
-          const path =
-            requestUrl.pathname.startsWith("/api/v1/") &&
-            !route.path.startsWith("/api/")
-              ? "/api" + route.path
-              : route.path;
-          return run.handle(
-            request,
-            {
-              timeout(request, timeout) {
-                timeoutServer?.timeout(request, timeout);
-              },
-            },
-            path,
-          );
-        },
+      const bridgeToken = randomUUID();
+      workerBridges.set(bridgeToken, async (request, runId, path) => {
+        const requestUrl = new URL(request.url);
+        const route = parseViewerRoute(requestUrl);
+        if (!route || route.runId !== runId) throw new Error("viewer worker route identity mismatch");
+        const run = getRun(runId);
+        const normalizedPath = requestUrl.pathname.startsWith("/api/v1/") && !route.path.startsWith("/api/") ? "/api" + route.path : route.path;
+        return run.handle(request, { timeout(req, timeout) { timeoutServer?.timeout(req, timeout); } }, normalizedPath);
       });
+      const selected = workerBuilds.get(workerKey) ?? { build_id: manifest.build_id, package_version: serviceConfig.package_version ?? manifest.service_version };
+      // Synthetic observers are an explicit test/preview seam. Keep the same
+      // Unix-socket contract while retaining the injected observer in-process;
+      // production workers never receive demoHooks and always use a child PID.
+      if (typeof demoHooks === "function" || (demoHooks && typeof demoHooks === "object")) {
+        const server = await startUnixViewerWorkerServer({
+          socketPath,
+          workerKey,
+          generation,
+          handle: async (request, context) => {
+            const route = parseViewerRoute(new URL(request.url));
+            if (!route || route.runId !== context.runId) throw new Error("viewer worker route identity mismatch");
+            const normalizedPath = new URL(request.url).pathname.startsWith("/api/v1/") && !route.path.startsWith("/api/") ? "/api" + route.path : route.path;
+            return getRun(context.runId).handle(request, { timeout(req, timeout) { timeoutServer?.timeout(req, timeout); } }, normalizedPath);
+          },
+        });
+        return createUnixViewerWorker({ socketPath, workerKey, generation, stop: async () => { workerBridges.delete(bridgeToken); await server.stop(); } });
+      }
+      const childCommand = selected.build_id === manifest.build_id
+        ? [process.execPath, new URL("../scripts/viewer-worker-process.ts", import.meta.url).pathname]
+        : [process.execPath, "x", "--bun", "--package", `@loomhelm/multi-task-flow@${selected.package_version}`, "multi-task-flow", "worker-process"];
+      const child = Bun.spawn(childCommand, {
+        env: { ...process.env, MTF_WORKER_SOCKET: socketPath, MTF_WORKER_KEY: workerKey, MTF_WORKER_GENERATION: generation, MTF_WORKER_DATA_ROOT: state.paths.data, MTF_WORKER_PORT: String(gatewayPort), ...(selected.build_id === manifest.build_id ? { MTF_WORKER_ASSETS: assetsDir } : {}) },
+        stdout: "ignore", stderr: "ignore",
+      });
+      const deadline = Date.now() + 1_500;
+      while (!existsSync(socketPath) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+      if (!existsSync(socketPath)) { child.kill(); workerBridges.delete(bridgeToken); throw new Error("viewer worker failed to start"); }
       return createUnixViewerWorker({
         socketPath,
         workerKey,
         generation,
-        stop: () => workerServer.stop(),
+        stop: async () => { workerBridges.delete(bridgeToken); child.kill(); await child.exited; },
       });
     },
   });
@@ -319,6 +339,7 @@ export async function startSharedViewer(
     port,
     async fetch(request, currentServer) {
       timeoutServer = currentServer;
+      gatewayPort = currentServer.port;
       const host = `127.0.0.1:${currentServer.port}`;
       const origin = request.headers.get("origin");
       if (
@@ -327,6 +348,16 @@ export async function startSharedViewer(
       )
         return json({ code: "FORBIDDEN" }, 403);
       const url = new URL(request.url);
+        if (url.pathname === "/__internal/worker" && request.method !== "OPTIONS") {
+          const token = request.headers.get("x-mtf-worker-token");
+          const runId = request.headers.get("x-mtf-worker-run-id");
+          const workerPath = request.headers.get("x-mtf-worker-path");
+          const bridge = token ? workerBridges.get(token) : undefined;
+          if (!bridge || !runId || !workerPath) return json({ code: "WORKER_BRIDGE_UNAUTHORIZED" }, 403);
+          const body = request.method === "GET" || request.method === "HEAD" ? undefined : request.body;
+          const forwarded = new Request(`http://${host}${workerPath}`, { method: request.method, headers: request.headers, ...(body ? { body, duplex: "half" as const } : {}) });
+          return await bridge(forwarded, runId, workerPath);
+        }
       let diagnosticResponse: ReturnType<WorkerDiagnosticStore["get"]> = null;
       try {
         if (url.pathname === "/login" || url.pathname === "/login.js" || url.pathname === "/resume-task.js" || url.pathname === "/api/v1/login")
@@ -441,9 +472,12 @@ export async function startSharedViewer(
           const offset = Number(url.searchParams.get("offset") ?? 0);
           if (!Number.isInteger(offset) || offset < 0)
             return json({ code: "INVALID_OFFSET" }, 400);
+          const listed = listRuns(state.paths.data, offset);
           return json({
-            ...listRuns(state.paths.data, offset),
-            build_id: manifest.build_id,
+            ...listed,
+            runs: listed.runs.map((run) => ({ ...run, viewer_binding: (() => { try { return readViewerBinding(state, run.id); } catch { return null; } })() })),
+            gateway: { package_name: serviceConfig.package_name, package_version: serviceConfig.package_version, build_id: manifest.build_id, compatibility_line: serviceConfig.compatibility_line },
+            ...(versionDiscovery ? { update_hint: { surface: "gateway", current: { package_version: serviceConfig.package_version ?? null, build_id: manifest.build_id, source_sha: manifest.source_sha, compatibility_line: serviceConfig.compatibility_line ?? null, viewer_contract: manifest.viewer_contract }, target: versionDiscovery.compatible_version ?? versionDiscovery.latest_version ?? null, compatible: versionDiscovery.compatible_version ? true : "unknown", reason: "registry_discovery", command: "multi-task-flow gateway upgrade" } } : {}),
           });
         }
         if (request.method === "GET" && url.pathname === "/")
@@ -466,11 +500,16 @@ export async function startSharedViewer(
         }
         let path = "/" + match[2]!;
         if (url.pathname.startsWith("/api/v1/")) path = "/api/" + match[2]!;
-        if (path === "/api/service" && request.method === "GET")
+        if (path === "/api/service" && request.method === "GET") {
+        const binding = ensureViewerBinding(state, id, { package_name: serviceConfig.package_name ?? "@loomhelm/multi-task-flow", package_version: serviceConfig.package_version ?? manifest.service_version, build_id: manifest.build_id, source_sha: manifest.source_sha, compatibility_line: serviceConfig.compatibility_line ?? "compat-v1", ledger_contract: manifest.ledger_contract, api_contract: manifest.api_versions[0] ?? 1, frontend_contract: manifest.frontend_contracts[0] ?? 1, viewer_contract: manifest.viewer_contract });
           return json({
-            build_id: manifest.build_id,
+            surface: "orchestration",
+            current: binding,
+            daemon: { package_name: serviceConfig.package_name, package_version: serviceConfig.package_version, build_id: manifest.build_id, compatibility_line: serviceConfig.compatibility_line },
             warning: warnings.get(id),
+            ...(versionDiscovery ? { update_hint: { surface: "orchestration", current: { package_version: binding.package_version, build_id: binding.build_id, source_sha: binding.source_sha, compatibility_line: binding.compatibility_line, viewer_contract: binding.viewer_contract }, target: versionDiscovery.compatible_version ?? versionDiscovery.latest_version ?? null, compatible: versionDiscovery.compatible_version ? true : "unknown", reason: "registry_discovery", command: "multi-task-flow orchestration upgrade --run-id" } } : {}),
           });
+        }
         if (path === "/api/diagnostics/worker" && request.method === "GET") {
           const requestedRun = url.searchParams.get("run_id") ?? id;
           if (requestedRun !== id) return json({ code: "FORBIDDEN" }, 403);
@@ -485,12 +524,15 @@ export async function startSharedViewer(
           return json(state.renewBrowser(actor.id));
         const ledger = new LedgerStore(state.paths.data, id).read();
         requireLedgerCompatibility(ledger);
+        const binding = ensureViewerBinding(state, id, { package_name: serviceConfig.package_name ?? "@loomhelm/multi-task-flow", package_version: serviceConfig.package_version ?? manifest.service_version, build_id: manifest.build_id, source_sha: manifest.source_sha, compatibility_line: serviceConfig.compatibility_line ?? "compat-v1", ledger_contract: manifest.ledger_contract, api_contract: manifest.api_versions[0] ?? 1, frontend_contract: manifest.frontend_contracts[0] ?? 1, viewer_contract: manifest.viewer_contract });
+        getRun(id); // Gateway owns lifecycle observation; the selected Worker owns response rendering.
         const version = dataVersionOf(
           ledger,
-          manifest.viewer_contract,
-          manifest.build_id,
+          binding.viewer_contract,
+          binding.build_id,
         );
         const workerKey = workerKeyOf(version);
+        workerBuilds.set(workerKey, { build_id: binding.build_id, package_version: binding.package_version });
         let workerStage: WorkerDiagnosticStage = "worker_select";
         let lease: Awaited<ReturnType<typeof workerPool.acquire>>;
         try {
@@ -567,7 +609,6 @@ export async function startSharedViewer(
                 retryable: recovered.retryable,
                 reconnect_required: recovered.reconnect_required,
                 worker_key: recovered.worker_key,
-                worker_generation: recovered.worker_generation,
                 retry_count: recovered.retry_count,
                 state: recovered.state,
                 recovered_at: recovered.recovered_at,

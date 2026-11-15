@@ -2,6 +2,18 @@
 
 ## Multi-task Flow
 
+### Stable Gateway
+
+由 daemon 提供的稳定 HTTP Gateway surface，提供 index、认证成功与失败页面、公共资源、通用错误、诊断 API 和编排入口；它不实现某个编排的版本化业务逻辑。
+
+### Per-Run Versioned Worker
+
+按单个编排绑定的 `@loomhelm/multi-task-flow` package version、build ID、source SHA 和 viewer/data contract 运行的独立进程；不同编排可以同时使用不同版本。
+
+### Gateway and Worker Supervisor
+
+负责提供 Gateway，并启动、停止、健康检查、升级和恢复 Worker 的 daemon；daemon/Gateway 直接提供公共网页，但不把具体编排版本逻辑内置为 Worker。
+
 ### Proposal
 
 尚未获得主人实施批准的候选执行计划。Proposal 可以展示依赖、估时和验收设计，但不可调度、不可派发，也不代表已经创建或绑定任何执行资源。
