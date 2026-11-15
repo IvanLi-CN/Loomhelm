@@ -6,7 +6,6 @@ import {
 } from "../lib/service-compatibility";
 import { maintenanceCheck, maintenanceApply } from "../lib/ledger-maintenance";
 import { writeFileSync, existsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
 import { servicePaths } from "../lib/service-paths";
@@ -14,7 +13,7 @@ import { ServiceState } from "../lib/service-state";
 import { ServiceAuth } from "../lib/service-auth";
 import { ensureService, runDaemon, serviceStatus } from "../lib/service-lifecycle";
 import { agentLease } from "../lib/service-http";
-import { installRelease, switchRelease, installPackageRelease, upgradePackageRelease, resolvePackageTarget } from "../lib/service-maintenance";
+import { installRelease, switchRelease, installPackageRelease, upgradePackageRelease, upgradePackageReleaseAndStart, resolvePackageTarget } from "../lib/service-maintenance";
 import { importRun } from "../lib/service-import";
 import { ContractError, requireCondition } from "../lib/errors";
 import { requireApi, ledgerContract } from "../lib/service-contract";
@@ -50,15 +49,20 @@ export async function serviceCommand(
   }
   if (command === "gateway-upgrade") {
     const parsed = upgradeRequest.parse(input);
+    triggerDaemonUpdateCheck(state);
     const identity = resolvePackageTarget(parsed.target);
     if (parsed.mode === "dry-run") return { surface: "gateway", changed: false, target: identity.version, requested: parsed.target, dry_run: true };
-    return upgradePackageRelease(state, identity.version);
+    return upgradePackageReleaseAndStart(state, identity.version);
   }
   if (command === "orchestration-upgrade") {
     const parsed = z.object({ run_id: z.string(), target: z.string().min(1), mode: z.enum(["normal", "dry-run", "rollback"]) }).strict().parse(input);
+    triggerDaemonUpdateCheck(state);
     const identity = resolvePackageTarget(parsed.target);
     const current = ensureViewerBinding(state, parsed.run_id);
+    requireCondition(identity.compatibility_line === current.compatibility_line, "INCOMPATIBLE_RELEASE", "Target package compatibility line does not match the run binding");
+    requireCondition(identity.contracts.ledger === current.ledger_contract && identity.contracts.api === current.api_contract && identity.contracts.frontend === current.frontend_contract && identity.contracts.viewer === current.viewer_contract, "INCOMPATIBLE_RELEASE", "Target package contracts do not match the run binding");
     if (parsed.mode === "dry-run") return { surface: "orchestration", run_id: parsed.run_id, changed: false, current, target: identity.version, requested: parsed.target, dry_run: true };
+    if (identity.build_id === current.build_id) return { surface: "orchestration", run_id: parsed.run_id, changed: false, current, daemon_refresh: "best-effort" };
     const next = writeViewerBinding(state, {
       schema_version: 1,
       run_id: parsed.run_id,
@@ -72,9 +76,9 @@ export async function serviceCommand(
       frontend_contract: identity.contracts.frontend,
       viewer_contract: identity.contracts.viewer,
       revision: current.revision,
-      request_id: `orchestration-upgrade-${randomUUID()}`,
+      request_id: `orchestration-upgrade-${current.revision}-${identity.build_id}`,
       updated_at: new Date().toISOString(),
-    });
+    }, { revision: current.revision, source_sha: current.source_sha });
     return { surface: "orchestration", run_id: parsed.run_id, changed: next.build_id !== current.build_id, current: next, daemon_refresh: "best-effort" };
   }
   if (command === "compatibility-check") {

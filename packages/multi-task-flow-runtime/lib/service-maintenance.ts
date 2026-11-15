@@ -170,6 +170,21 @@ export async function upgradePackageRelease(state: ServiceState, version: string
   });
 }
 
+export async function upgradePackageReleaseAndStart(state: ServiceState, version: string) {
+  const oldVersion = state.config().package_version;
+  const result = await upgradePackageRelease(state, version);
+  try {
+    startUserService(state);
+    const health = await serviceStatus(state);
+    return { ...result, started: true, health };
+  } catch (error) {
+    if (oldVersion && oldVersion !== version) {
+      try { await upgradePackageRelease(state, oldVersion); startUserService(state); } catch { /* preserve the original health failure */ }
+    }
+    throw error;
+  }
+}
+
 export function stageRelease(
   state: ServiceState,
   source: string,

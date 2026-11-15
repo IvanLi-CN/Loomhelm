@@ -82,11 +82,13 @@ export function ensureViewerBinding(state: ServiceState, runId: string, fallback
   });
 }
 
-export function writeViewerBinding(state: ServiceState, binding: ViewerBinding): ViewerBinding {
+export function writeViewerBinding(state: ServiceState, binding: ViewerBinding, expected?: { revision: number; source_sha: string }): ViewerBinding {
   viewerBindingSchema.parse(binding);
   const path = viewerBindingPath(state, binding.run_id);
   return withExclusiveLock(bindingLockPath(state, binding.run_id), () => {
     const previous = readViewerBinding(state, binding.run_id);
+    if (expected && (!previous || previous.revision !== expected.revision || previous.source_sha !== expected.source_sha))
+      throw new ContractError("VIEWER_BINDING_CONFLICT", "Run version binding changed during upgrade", 2);
     const next = viewerBindingSchema.parse({ ...binding, revision: previous ? previous.revision + 1 : binding.revision, updated_at: new Date().toISOString() });
     mkdirSync(join(state.paths.data, "runs", binding.run_id, "runtime"), { recursive: true, mode: 0o700 });
     writeAtomic(path, JSON.stringify(next) + "\n");

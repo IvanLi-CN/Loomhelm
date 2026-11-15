@@ -32,7 +32,7 @@ import { createWorkerGeneration, ViewerWorkerPool } from "../scripts/viewer-runt
 import { WorkerDiagnosticStore, workerDiagnosticFromError, type WorkerDiagnosticStage } from "./worker-diagnostics";
 import { serviceLog } from "./service-log";
 import { ensureViewerBinding, readViewerBinding } from "./viewer-binding";
-import { cachedVersionDiscovery, triggerVersionDiscoveryCheck } from "./service-update";
+import { cachedVersionDiscovery } from "./service-update";
 import { randomUUID } from "node:crypto";
 
 const json = (
@@ -217,7 +217,6 @@ export async function startSharedViewer(
   state.initialize();
   const auth = new ServiceAuth(state);
   const serviceConfig = (() => { try { return state.config(); } catch { return {} as any; } })();
-  try { triggerVersionDiscoveryCheck(state); } catch { /* optional discovery side channel */ }
   const versionDiscovery = (() => { try { return cachedVersionDiscovery(state); } catch { return undefined; } })();
   const diagnostics = new WorkerDiagnosticStore(state.paths);
   diagnostics.sweep(undefined, (runId) => existsSync(join(state.paths.data, "runs", runId)));
@@ -455,7 +454,7 @@ export async function startSharedViewer(
             ...listed,
             runs: listed.runs.map((run) => ({ ...run, viewer_binding: (() => { try { return readViewerBinding(state, run.id); } catch { return null; } })() })),
             gateway: { package_name: serviceConfig.package_name, package_version: serviceConfig.package_version, build_id: manifest.build_id, compatibility_line: serviceConfig.compatibility_line },
-            ...(versionDiscovery ? { update_hint: { surface: "index", current: serviceConfig.package_version ?? null, target: versionDiscovery.compatible_version ?? versionDiscovery.latest_version ?? null, compatible: Boolean(versionDiscovery.compatible_version), reason: "registry_discovery", command: "multi-task-flow gateway upgrade" } } : {}),
+            ...(versionDiscovery ? { update_hint: { surface: "gateway", current: { package_version: serviceConfig.package_version ?? null, build_id: manifest.build_id, source_sha: manifest.source_sha, compatibility_line: serviceConfig.compatibility_line ?? null, viewer_contract: manifest.viewer_contract }, target: versionDiscovery.compatible_version ?? versionDiscovery.latest_version ?? null, compatible: versionDiscovery.compatible_version ? true : "unknown", reason: "registry_discovery", command: "multi-task-flow gateway upgrade" } } : {}),
           });
         }
         if (request.method === "GET" && url.pathname === "/")
@@ -479,13 +478,13 @@ export async function startSharedViewer(
         let path = "/" + match[2]!;
         if (url.pathname.startsWith("/api/v1/")) path = "/api/" + match[2]!;
         if (path === "/api/service" && request.method === "GET") {
-          const binding = ensureViewerBinding(state, id, { package_name: serviceConfig.package_name ?? "@loomhelm/multi-task-flow", package_version: serviceConfig.package_version ?? manifest.service_version, build_id: manifest.build_id, source_sha: manifest.source_sha, compatibility_line: serviceConfig.compatibility_line ?? "compat-v1", ledger_contract: manifest.ledger_contract, api_contract: manifest.api_versions[0] ?? 1, frontend_contract: manifest.frontend_contracts[0] ?? 1, viewer_contract: manifest.viewer_contract });
+        const binding = ensureViewerBinding(state, id, { package_name: serviceConfig.package_name ?? "@loomhelm/multi-task-flow", package_version: serviceConfig.package_version ?? manifest.service_version, build_id: manifest.build_id, source_sha: manifest.source_sha, compatibility_line: serviceConfig.compatibility_line ?? "compat-v1", ledger_contract: manifest.ledger_contract, api_contract: manifest.api_versions[0] ?? 1, frontend_contract: manifest.frontend_contracts[0] ?? 1, viewer_contract: manifest.viewer_contract });
           return json({
             surface: "orchestration",
             current: binding,
             daemon: { package_name: serviceConfig.package_name, package_version: serviceConfig.package_version, build_id: manifest.build_id, compatibility_line: serviceConfig.compatibility_line },
             warning: warnings.get(id),
-            ...(versionDiscovery ? { update_hint: { surface: "orchestration", current: binding.package_version, target: versionDiscovery.compatible_version ?? versionDiscovery.latest_version ?? null, compatible: Boolean(versionDiscovery.compatible_version), reason: "registry_discovery", command: "multi-task-flow orchestration upgrade --run-id" } } : {}),
+            ...(versionDiscovery ? { update_hint: { surface: "orchestration", current: { package_version: binding.package_version, build_id: binding.build_id, source_sha: binding.source_sha, compatibility_line: binding.compatibility_line, viewer_contract: binding.viewer_contract }, target: versionDiscovery.compatible_version ?? versionDiscovery.latest_version ?? null, compatible: versionDiscovery.compatible_version ? true : "unknown", reason: "registry_discovery", command: "multi-task-flow orchestration upgrade --run-id" } } : {}),
           });
         }
         if (path === "/api/diagnostics/worker" && request.method === "GET") {
@@ -502,11 +501,11 @@ export async function startSharedViewer(
           return json(state.renewBrowser(actor.id));
         const ledger = new LedgerStore(state.paths.data, id).read();
         requireLedgerCompatibility(ledger);
-        ensureViewerBinding(state, id, { package_name: serviceConfig.package_name ?? "@loomhelm/multi-task-flow", package_version: serviceConfig.package_version ?? manifest.service_version, build_id: manifest.build_id, source_sha: manifest.source_sha, compatibility_line: serviceConfig.compatibility_line ?? "compat-v1", ledger_contract: manifest.ledger_contract, api_contract: manifest.api_versions[0] ?? 1, frontend_contract: manifest.frontend_contracts[0] ?? 1, viewer_contract: manifest.viewer_contract });
+        const binding = ensureViewerBinding(state, id, { package_name: serviceConfig.package_name ?? "@loomhelm/multi-task-flow", package_version: serviceConfig.package_version ?? manifest.service_version, build_id: manifest.build_id, source_sha: manifest.source_sha, compatibility_line: serviceConfig.compatibility_line ?? "compat-v1", ledger_contract: manifest.ledger_contract, api_contract: manifest.api_versions[0] ?? 1, frontend_contract: manifest.frontend_contracts[0] ?? 1, viewer_contract: manifest.viewer_contract });
         const version = dataVersionOf(
           ledger,
-          manifest.viewer_contract,
-          manifest.build_id,
+          binding.viewer_contract,
+          binding.build_id,
         );
         const workerKey = workerKeyOf(version);
         let workerStage: WorkerDiagnosticStage = "worker_select";

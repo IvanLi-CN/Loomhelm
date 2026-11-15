@@ -15,7 +15,6 @@ function target(args: string[], start: number): { value: string; mode: 'normal' 
     if (item === '--dry-run' || item === '--rollback') {
       if (mode !== 'normal') throw new Error('UPGRADE_INVALID_ARGUMENTS: --dry-run and --rollback are mutually exclusive');
       mode = item === '--dry-run' ? 'dry-run' : 'rollback';
-      value = args[++index];
       continue;
     }
     if (value !== undefined) throw new Error('UPGRADE_INVALID_ARGUMENTS: exactly one version or tag is required');
