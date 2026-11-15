@@ -828,6 +828,11 @@ test("task readiness starts at the first executable atomic work", () => {
   danglingEdge.plans[0]!.atomic_edges[0]!.from_node_id = "missing-node";
   expect(ready(danglingEdge, "a")).toBe(false);
 
+  const recoverable = readyAtomicFixture();
+  recoverable.tasks[0]!.state = "blocked";
+  recoverable.tasks[0]!.atoms[0]!.status = "blocked";
+  expect(ready(recoverable, "a")).toBe(true);
+
   ledger.tasks[0]!.atoms[0]!.status = "planned";
   ledger.tasks[0]!.thread_id = "task-a-thread";
   ledger.tasks[0]!.state = "running";

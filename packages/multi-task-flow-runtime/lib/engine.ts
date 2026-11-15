@@ -192,10 +192,16 @@ function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): bo
     })
   )
     return false;
+  const resumableTask = ["waiting", "blocked"].includes(taskExecutionState(task));
   return targets.some((target) => {
     if (atomicNodeSatisfied(ledger, target)) return false;
     const atom = task.atoms.find((candidate) => candidate.id === target.id);
-    if (!atom || atom.status !== "planned") return false;
+    if (
+      !atom ||
+      (atom.status !== "planned" &&
+        !(resumableTask && ["running", "blocked"].includes(atom.status)))
+    )
+      return false;
     const targetIndex = task.atoms.findIndex((candidate) => candidate.id === target.id);
     const incoming = edges.filter((edge) => edge.to_node_id === target.id);
     if (targetIndex > 0 && !incoming.length) return false;
