@@ -7376,7 +7376,7 @@
     {
       "path": "skills/multi-task-flow/tests/browser/card-width-regression.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/browser/card-width-regression.ts",
-      "installedSha256": "c38e3b2978202c46a191fc83361e805b95d6cc7e68bc78b7427592e213b28eda"
+      "installedSha256": "f2773a2e802544f9c10e77093c2799350250beac4e2a1b9286891da8ae60a776"
     },
     {
       "path": "skills/multi-task-flow/tests/codex-desktop-follower.test.ts",
@@ -7566,7 +7566,7 @@
     {
       "path": "skills/multi-task-flow/tests/ui/responsive-width-contract.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/ui/responsive-width-contract.test.ts",
-      "installedSha256": "9b62ea644251461e4e07a5fd0d23b2a28de3d4c5a04c0f7f46ac717f56d2cce3"
+      "installedSha256": "46d6dafc97885ce492f47ec206f106e706b1c1fc6297b2cfeb863a634fbe98f6"
     },
     {
       "path": "skills/multi-task-flow/tests/ui/service-navigation.test.ts",
@@ -7611,7 +7611,7 @@
     {
       "path": "skills/multi-task-flow/web/app.css",
       "sourcePath": "packages/multi-task-flow-runtime/web/app.css",
-      "installedSha256": "06acd24220e29ded86f71b1d9495bd03dbe1b2403b9a47fb2d17b0f343c1c03d"
+      "installedSha256": "3585de75ef285d51cdf3b4c9ba16a4d7df19439c18706369a92cba512dea3212"
     },
     {
       "path": "skills/multi-task-flow/web/app.ts",
@@ -7736,7 +7736,7 @@
     {
       "path": "skills/multi-task-flow/web/timeline.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/timeline.ts",
-      "installedSha256": "e97e0fed50f54dce9a79f10fda6349f3b377b6dab3fb2136057039b8087e2dff"
+      "installedSha256": "76dea162d4645368cc66548151a958cd3de0e0c632ec943ed62b43968b2186e1"
     },
     {
       "path": "skills/multi-task-flow/web/timestamp.ts",
@@ -8297,7 +8297,7 @@
     {
       "path": "skills/support-manifest.json",
       "sourcePath": "skills/support-manifest.json",
-      "installedSha256": "1e8c13388c5db936c86cdcb3b17d8649c4ebf26d55122ec78222f8c5d45121bf"
+      "installedSha256": "36a4b26b278de052fb4270caca8f8950db016f61943ddc77fe6df12dabe12bbd"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/output-tooltip-boundary.png",
@@ -8313,6 +8313,16 @@
       "path": "skills/multi-task-flow/tests/ui/task-context-menu.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/ui/task-context-menu.test.ts",
       "installedSha256": "71cbcb2e5d14f93dbf753fce1ee3214b207885738b8b4ee3628882821efcf689"
+    },
+    {
+      "path": "skills/multi-task-flow/web/relative-time.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/web/relative-time.ts",
+      "installedSha256": "950c7f031808bb984af648c7e180ddba9d60c16294b7669edfca276384333e46"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/relative-time.test.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/tests/relative-time.test.ts",
+      "installedSha256": "2f10cc7787d39e6488473fba716f7363ada44271950013d823888ece4f97703c"
     },
     {
       "path": "skills/multi-task-flow/tests/viewer-runtime.test.ts",

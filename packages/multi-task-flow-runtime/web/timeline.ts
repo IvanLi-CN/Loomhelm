@@ -1,6 +1,7 @@
 import { DataSet } from "vis-data";
 import { Timeline } from "vis-timeline/standalone";
 import { defaultTimelineWindow } from "./timeline-window";
+import { formatRelativeHours } from "./relative-time";
 import { MAX_TIMELINE_SPAN_MS, type DashboardTab, type ViewState } from "./view-state";
 import type { Task, View } from "./model";
 
@@ -193,16 +194,15 @@ export function createTimelineController(context: TimelineContext) {
       const actualRows = data.actual_intervals.filter((item) => item.task_id === task.id);
       if (mode === "planned") {
         if (planRow?.start && planRow.end && node) {
-          const offset = (value: number | null | undefined) => value == null ? "" : `T+${(value / 60).toFixed(value % 60 === 0 ? 0 : 2)}h`;
-          entries.push({ id: `plan-${task.id}`, task_id: task.id, group: node.id, start: planRow.start, end: planRow.end, content: text("span", `${task.title}（${offset(planRow.start_offset_minutes)}～${offset(planRow.end_offset_minutes)}）`), title: `${task.title} · ${offset(planRow.start_offset_minutes)}～${offset(planRow.end_offset_minutes)}`, style: `background-color: ${context.groupColor(node.planned_group_id ?? task.group_id)}; border-color: ${context.groupColor(node.planned_group_id ?? task.group_id)}; color: white;`, editable: false });
+          entries.push({ id: `plan-${task.id}`, task_id: task.id, group: node.id, start: planRow.start, end: planRow.end, content: text("span", `${task.title}（${formatRelativeHours(planRow.start_offset_minutes)}～${formatRelativeHours(planRow.end_offset_minutes)}）`), title: `${task.title} · ${formatRelativeHours(planRow.start_offset_minutes)}～${formatRelativeHours(planRow.end_offset_minutes)}`, style: `background-color: ${context.groupColor(node.planned_group_id ?? task.group_id)}; border-color: ${context.groupColor(node.planned_group_id ?? task.group_id)}; color: white;`, editable: false });
         }
         else unknown.push(task.title);
       } else if (actualRows.length && node) actualRows.forEach((row, index) => { const color = context.stateColor(row.state); const group = data.groups.find((item) => item.id === row.group_id); const foreground = ["waiting", "planned"].includes(row.state) ? context.css("--text", "#172129") : "#ffffff"; entries.push({ id: `actual-${task.id}-${index}`, task_id: task.id, group: node.id, start: row.start, end: row.end ?? new Date().toISOString(), content: text("span", context.labels[row.state] ?? row.state), title: group?.title ?? row.group_id, style: `background-color: ${color}; border-color: ${color}; border-left: 4px solid ${context.groupColor(row.group_id)}; color: ${foreground};`, editable: false }); });
       else if (mode === "actual") unknown.push(task.title);
     }
-    for (const node of nodes.filter((item) => item.kind !== "task")) { const planned = data.planned_intervals.find((item) => item.node_id === node.id); const date = mode === "planned" ? planned?.start : data.actual_milestones.find((item) => item.node_id === node.id)?.occurred_at; if (date) { const label = mode === "planned" && planned?.start_offset_minutes != null ? `${node.label}（T+${(planned.start_offset_minutes / 60).toFixed(planned.start_offset_minutes % 60 === 0 ? 0 : 2)}h）` : node.label; entries.push({ id: `milestone-${node.id}`, group: node.id, start: date, content: text("span", label), type: "box", style: `border-color: ${context.groupColor(node.planned_group_id)};`, editable: false }); } else unknown.push(node.label); }
+    for (const node of nodes.filter((item) => item.kind !== "task")) { const planned = data.planned_intervals.find((item) => item.node_id === node.id); const date = mode === "planned" ? planned?.start : data.actual_milestones.find((item) => item.node_id === node.id)?.occurred_at; if (date) { const label = mode === "planned" && planned?.start_offset_minutes != null ? `${node.label}（${formatRelativeHours(planned.start_offset_minutes)}）` : node.label; entries.push({ id: `milestone-${node.id}`, group: node.id, start: date, content: text("span", label), type: "box", style: `border-color: ${context.groupColor(node.planned_group_id)};`, editable: false }); } else unknown.push(node.label); }
     const unknownElement = context.element(mode === "planned" ? "planned-unknown" : "actual-unknown");
-    const scheduleBlockers = data.plan_state?.scheduling?.blockers ?? [];
+    const scheduleBlockers = (data.plan_state?.scheduling?.blockers ?? []).filter((blocker) => blocker.code.startsWith("SCHEDULE_"));
     if (mode === "planned" && scheduleBlockers.length) {
       target.replaceChildren();
       target.hidden = true;
@@ -218,7 +218,7 @@ export function createTimelineController(context: TimelineContext) {
     const initialWindow = requestedWindow.start && requestedWindow.end ? { start: new Date(requestedWindow.start), end: new Date(requestedWindow.end) } : fittedWindow.start && fittedWindow.end ? { start: fittedWindow.start, end: fittedWindow.end } : null;
     if (mode === "planned") plannedWindow = initialWindow; else actualWindow = initialWindow;
     target.style.height = `${Math.max(284, nodes.length * 28 + 76)}px`;
-    const timeline = new Timeline(target, new DataSet(entries), groups, { editable: false, stack: false, groupOrder: "order", orientation: { item: "top" }, selectable: true, moveable: true, zoomable: true, horizontalScroll: true, verticalScroll: true, zoomKey: "ctrlKey", ...(mode === "planned" ? { format: { minorLabels: { hour: "T+HH时" }, majorLabels: { day: "相对小时" } } } : {}), ...(requestedWindow.start && requestedWindow.end ? requestedWindow : fittedWindow) });
+    const timeline = new Timeline(target, new DataSet(entries), groups, { editable: false, stack: false, groupOrder: "order", orientation: { item: "top" }, selectable: true, moveable: true, zoomable: true, horizontalScroll: true, verticalScroll: true, zoomKey: "ctrlKey", ...(mode === "planned" ? { format: { minorLabels: { hour: "HH时" }, majorLabels: { day: "", month: "", year: "" } } } : {}), ...(requestedWindow.start && requestedWindow.end ? requestedWindow : fittedWindow) });
     if (mode === "planned") plannedTimeline = timeline; else actualTimeline = timeline;
     bindWheel(target, timeline, mode);
     bindPan(target, timeline, mode, renderSerial);
