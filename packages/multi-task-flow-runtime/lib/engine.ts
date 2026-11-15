@@ -467,6 +467,25 @@ function protectedActionApproved(
     4,
   );
 }
+
+function historicalGroupLineageContains(
+  ledger: Ledger,
+  groupId: string,
+  shaValue: string,
+): boolean {
+  return ledger.events.some(
+    (event) =>
+      event.subject_id === groupId &&
+      ["group_base_reconciled", "merge_resolved", "external_merge_reconciled"].includes(
+        event.type,
+      ) &&
+      [event.data.sha, event.data.merge_sha, event.data.current_sha].includes(shaValue),
+  );
+}
+
+function externalMergeFactId(requestId: string, suffix: "published" | "merged"): string {
+  return `${requestId}-${suffix}`;
+}
 function latestPublication(
   ledger: Ledger,
   targetId: string,
@@ -613,9 +632,13 @@ function lineageEventMatches(
   const snapshot = event.data.group_snapshot ? object(event.data.group_snapshot) : {};
   if (targetType === "group")
     return (
-      ["group_updated", "group_base_reconciled", "merge_resolved", "cut_applied"].includes(
-        event.type,
-      ) &&
+      [
+        "group_updated",
+        "group_base_reconciled",
+        "merge_resolved",
+        "external_merge_reconciled",
+        "cut_applied",
+      ].includes(event.type) &&
       [
         event.data.sha,
         event.data.current_sha,
@@ -3976,6 +3999,201 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
         current_sha: owner.current_sha,
       };
     }
+    case "task-external-merge-reconcile": {
+      onlyMain(request.actor);
+      const taskId = parse(id, payload.task_id);
+      const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
+      const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
+      requireCondition(
+        isContributionKind(target.kind),
+        "TASK_MISMATCH",
+        "Only contribution tasks can be reconciled",
+        3,
+      );
+      requireCondition(
+        !isSharedDeliveryTask(ledger, target),
+        "SHARED_DELIVERY_UNIT_PR",
+        "Shared delivery tasks do not have a child PR to reconcile",
+        3,
+      );
+      requireCondition(owner.state === "active", "GROUP_NOT_READY", "Task group is not active", 4);
+      protectedActionApproved(
+        ledger,
+        "delivery_unit_recovery",
+        owner.id,
+        string(payload.recovery_approval_id),
+      );
+      requireCondition(
+        ["waiting", "blocked", "running"].includes(target.state),
+        "INVALID_TRANSITION",
+        "Task is not awaiting external merge reconciliation",
+        3,
+      );
+      requireCondition(
+        !ledger.operations.some((item) => item.target_id === taskId && activeOperation(item)),
+        "OPERATION_PENDING",
+        "Task has an unresolved operation",
+        4,
+      );
+
+      const pr = parse(externalRef, payload.pr);
+      const observation = providerReceipt.parse(payload.provider_observation);
+      requireCondition(
+        observation.provider === ledger.repository.provider &&
+          observation.repository === `${ledger.repository.owner}/${ledger.repository.name}` &&
+          observation.resource_type === "pr" &&
+          observation.resource_id === pr.id &&
+          observation.pr !== null &&
+          stable(observation.pr) === stable(pr) &&
+          observation.state === "merged" &&
+          observation.base_sha !== null &&
+          observation.head_sha !== null &&
+          observation.target_branch === owner.parent_branch &&
+          observation.evidence_ref.length > 0,
+        "EVIDENCE_MISMATCH",
+        "Historical merge observation does not match the task PR and target branch",
+        5,
+      );
+      const baseSha = observation.base_sha;
+      const headSha = observation.head_sha;
+      const mergeSha = z
+        .string()
+        .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)
+        .parse(payload.merge_sha);
+      const taskPr = target.pr && "pr" in target.pr ? target.pr.pr : target.pr;
+      requireCondition(
+        target.base_sha === baseSha,
+        "BASE_CHANGED",
+        "Historical merge base does not match the task base",
+        5,
+      );
+      requireCondition(
+        !taskPr || stable(taskPr) === stable(pr),
+        "PR_MISMATCH",
+        "Historical merge PR does not match the registered task PR",
+        3,
+      );
+      requireCondition(
+        target.branch === observation.branch,
+        "BRANCH_MISMATCH",
+        "Historical merge branch does not match the task branch",
+        3,
+      );
+      requireCondition(
+        owner.current_sha === baseSha ||
+          owner.current_sha === mergeSha ||
+          historicalGroupLineageContains(ledger, owner.id, mergeSha),
+        "BASE_CHANGED",
+        "Historical merge is not present in the group's verified lineage",
+        5,
+      );
+
+      const quality = parse(fact, payload.quality_evidence);
+      requireCondition(
+        quality.kind === "task_quality" &&
+          quality.subject_id === taskId &&
+          quality.status === "passed" &&
+          quality.source === target.thread_id &&
+          quality.sha === headSha &&
+          quality.evidence_ref &&
+          quality.quality?.task_id === taskId &&
+          quality.quality.thread_id === target.thread_id &&
+          stable(quality.quality.pr) === stable(pr) &&
+          quality.quality.base_sha === baseSha &&
+          quality.quality.head_sha === headSha,
+        "EVIDENCE_REQUIRED",
+        "Historical reconciliation requires source-bound task quality evidence",
+        5,
+      );
+      const existingQuality = ledger.facts.find((item) => item.id === quality.id);
+      requireCondition(
+        !existingQuality || stable(existingQuality) === stable(quality),
+        "ID_CONFLICT",
+        "Quality fact ID already has different content",
+        3,
+      );
+      if (!existingQuality) ledger.facts.push(quality);
+
+      const publicationFact = fact.parse({
+        id: externalMergeFactId(request.request_id, "published"),
+        kind: "pr_published",
+        subject_id: taskId,
+        status: "passed",
+        source: observation.provider,
+        observed_at: quality.observed_at,
+        sha: headSha,
+        evidence_ref: observation.evidence_ref,
+        receipt: observation,
+      });
+      const mergeFact = fact.parse({
+        id: externalMergeFactId(request.request_id, "merged"),
+        kind: "pr_merged",
+        subject_id: taskId,
+        status: "passed",
+        source: observation.provider,
+        observed_at: quality.observed_at,
+        sha: mergeSha,
+        evidence_ref: observation.evidence_ref,
+        receipt: observation,
+      });
+      const priorPublication = ledger.facts.find((item) => item.id === publicationFact.id);
+      const priorMerge = ledger.facts.find((item) => item.id === mergeFact.id);
+      requireCondition(
+        !priorPublication || stable(priorPublication) === stable(publicationFact),
+        "ID_CONFLICT",
+        "Publication fact ID already has different content",
+        3,
+      );
+      requireCondition(
+        !priorMerge || stable(priorMerge) === stable(mergeFact),
+        "ID_CONFLICT",
+        "Merge fact ID already has different content",
+        3,
+      );
+      if (!priorPublication) ledger.facts.push(publicationFact);
+      if (!priorMerge) ledger.facts.push(mergeFact);
+
+      target.pr =
+        ledger.contract_version === 3
+          ? { state: "merged", pr, branch: target.branch, merge_sha: mergeSha }
+          : pr;
+      target.lifecycle.pr_created = "passed";
+      target.lifecycle.pr_merged = "passed";
+      target.state = "integrated";
+      target.finished_at = quality.observed_at;
+      const previousGroupSha = owner.current_sha;
+      if (owner.current_sha === baseSha) owner.current_sha = mergeSha;
+      addEvent(
+        ledger,
+        request,
+        "external_merge_reconciled",
+        taskId,
+        {
+          task_id: taskId,
+          group_id: owner.id,
+          pr,
+          provider_observation: observation,
+          quality_fact_id: quality.id,
+          publication_fact_id: publicationFact.id,
+          merge_fact_id: mergeFact.id,
+          previous_group_sha: previousGroupSha,
+          current_group_sha: owner.current_sha,
+          state: target.state,
+          task_snapshot: structuredClone(target),
+          group_snapshot: structuredClone(owner),
+        },
+        quality.observed_at,
+      );
+      return {
+        task_id: taskId,
+        state: target.state,
+        pr,
+        quality_fact_id: quality.id,
+        publication_fact_id: publicationFact.id,
+        merge_fact_id: mergeFact.id,
+        current_group_sha: owner.current_sha,
+      };
+    }
     case "task-pr": {
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
@@ -5751,6 +5969,7 @@ export function apply(ledger: Ledger, command: string, request: Request): unknow
     "milestone-record",
     "fact-record",
     "task-equivalent-integrate",
+    "task-external-merge-reconcile",
   ]);
   const readinessBefore = readinessCommands.has(command)
     ? new Map(
