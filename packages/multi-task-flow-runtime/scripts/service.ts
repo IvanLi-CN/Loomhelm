@@ -5,7 +5,7 @@ import {
   downgradeApproval,
 } from "../lib/service-compatibility";
 import { maintenanceCheck, maintenanceApply } from "../lib/ledger-maintenance";
-import { writeFileSync, existsSync } from "node:fs";
+import { writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { servicePaths } from "../lib/service-paths";
@@ -13,13 +13,15 @@ import { ServiceState } from "../lib/service-state";
 import { ServiceAuth } from "../lib/service-auth";
 import { ensureService, runDaemon, serviceStatus } from "../lib/service-lifecycle";
 import { agentLease } from "../lib/service-http";
-import { installRelease, switchRelease, installPackageRelease, upgradePackageRelease } from "../lib/service-maintenance";
+import { installRelease, switchRelease, installPackageRelease, upgradePackageRelease, upgradePackageReleaseAndStart, resolvePackageTarget, assertPackageUpgradeCompatible } from "../lib/service-maintenance";
 import { importRun } from "../lib/service-import";
 import { ContractError, requireCondition } from "../lib/errors";
 import { requireApi, ledgerContract } from "../lib/service-contract";
 import { buildView } from "../lib/view";
 import { validateLedger } from "../lib/schema";
 import { cachedDaemonUpdate, triggerDaemonUpdateCheck } from "../lib/service-update";
+import { ensureViewerBinding, writeViewerBinding } from "../lib/viewer-binding";
+import { withExclusiveLock, writeAtomic } from "../lib/store";
 
 const actor = z
   .object({
@@ -31,6 +33,17 @@ const actor = z
 const empty = z.object({}).strict();
 const source = z.object({ source: z.string().startsWith("/") }).strict();
 const packageVersion = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/) }).strict();
+const upgradeRequest = z.object({ target: z.string().min(1), mode: z.enum(["normal", "dry-run", "rollback"]) }).strict();
+function verifiedTargetsPath(state: ServiceState): string { return join(state.paths.state, "verified-package-targets.json"); }
+function verifiedTargets(state: ServiceState): Set<string> {
+  try { return new Set(JSON.parse(readFileSync(verifiedTargetsPath(state), "utf8")) as string[]); } catch { return new Set(); }
+}
+function recordVerifiedTarget(state: ServiceState, identity: { build_id: string; version: string }): void {
+  withExclusiveLock(join(state.paths.state, "lifecycle.lock"), () => { const targets = verifiedTargets(state); targets.add(`${identity.version}:${identity.build_id}`); writeAtomic(verifiedTargetsPath(state), JSON.stringify([...targets].sort()) + "\n"); });
+}
+function requireVerifiedRollback(state: ServiceState, identity: { build_id: string; version: string }): void {
+  withExclusiveLock(join(state.paths.state, "lifecycle.lock"), () => requireCondition(verifiedTargets(state).has(`${identity.version}:${identity.build_id}`), "ROLLBACK_TARGET_UNVERIFIED", "Rollback target must be verified by an earlier exact dry-run or upgrade"));
+}
 
 export async function serviceCommand(
   command: string,
@@ -44,6 +57,43 @@ export async function serviceCommand(
     ]).parse(input);
     if ("version" in parsed) return installPackageRelease(state, parsed.version, parsed.registry_dir);
     return installRelease(state, parsed.source, parsed.registry_dir);
+  }
+  if (command === "gateway-upgrade") {
+    const parsed = upgradeRequest.parse(input);
+    triggerDaemonUpdateCheck(state);
+    const identity = resolvePackageTarget(parsed.target);
+    if (parsed.mode === "rollback") requireVerifiedRollback(state, identity);
+    if (parsed.mode === "dry-run") { assertPackageUpgradeCompatible(state.config(), identity); recordVerifiedTarget(state, identity); return { surface: "gateway", changed: false, target: identity.version, requested: parsed.target, dry_run: true, handoff: { fixed_port: state.config().port, health_check: true } }; }
+    const result = await upgradePackageReleaseAndStart(state, identity.version); recordVerifiedTarget(state, identity); return result;
+  }
+  if (command === "orchestration-upgrade") {
+    const parsed = z.object({ run_id: z.string(), target: z.string().min(1), mode: z.enum(["normal", "dry-run", "rollback"]) }).strict().parse(input);
+    triggerDaemonUpdateCheck(state);
+    const identity = resolvePackageTarget(parsed.target);
+    const current = ensureViewerBinding(state, parsed.run_id);
+    requireCondition(identity.compatibility_line === current.compatibility_line, "INCOMPATIBLE_RELEASE", "Target package compatibility line does not match the run binding");
+    requireCondition(identity.contracts.ledger === current.ledger_contract && identity.contracts.api === current.api_contract && identity.contracts.frontend === current.frontend_contract && identity.contracts.viewer === current.viewer_contract, "INCOMPATIBLE_RELEASE", "Target package contracts do not match the run binding");
+    if (parsed.mode === "rollback") requireVerifiedRollback(state, identity);
+    if (parsed.mode === "dry-run") { recordVerifiedTarget(state, identity); return { surface: "orchestration", run_id: parsed.run_id, changed: false, current, target: identity.version, requested: parsed.target, dry_run: true }; }
+    if (identity.build_id === current.build_id) return { surface: "orchestration", run_id: parsed.run_id, changed: false, current, daemon_refresh: "best-effort" };
+    const next = writeViewerBinding(state, {
+      schema_version: 1,
+      run_id: parsed.run_id,
+      package_name: identity.package_name,
+      package_version: identity.version,
+      build_id: identity.build_id,
+      source_sha: identity.source_sha,
+      compatibility_line: identity.compatibility_line,
+      ledger_contract: identity.contracts.ledger,
+      api_contract: identity.contracts.api,
+      frontend_contract: identity.contracts.frontend,
+      viewer_contract: identity.contracts.viewer,
+      revision: current.revision,
+      request_id: `orchestration-upgrade-${current.revision}-${identity.build_id}`,
+      updated_at: new Date().toISOString(),
+    }, { revision: current.revision, source_sha: current.source_sha });
+    recordVerifiedTarget(state, identity);
+    return { surface: "orchestration", run_id: parsed.run_id, changed: next.build_id !== current.build_id, current: next, daemon_refresh: "best-effort" };
   }
   if (command === "compatibility-check") {
     const parsed = z

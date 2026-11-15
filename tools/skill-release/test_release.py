@@ -113,7 +113,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertEqual(workflow.count("set_package_metadata clients/typescript/package.json"), 2)
         self.assertIn(
             'set_package_metadata clients/typescript/package.json\n'
-            '          set_package_metadata clients/typescript/toolkit/package.json\n'
+            '          set_package_metadata clients/typescript/resources/package.json\n'
             '          (cd clients/typescript && bun pm pack --destination "$draft_dir"',
             workflow,
         )
@@ -121,7 +121,7 @@ class ReleasePolicyTests(unittest.TestCase):
             'git checkout -- clients/typescript/package.json\n'
             '          (cd clients/typescript && bun --no-install run build)\n'
             '          set_package_metadata clients/typescript/package.json\n'
-            '          set_package_metadata clients/typescript/toolkit/package.json\n'
+            '          set_package_metadata clients/typescript/resources/package.json\n'
             '          (cd clients/typescript && bun pm pack --destination "$final_dir"',
             workflow,
         )
@@ -431,9 +431,9 @@ class ReleasePolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             package_root = root / "package"
-            (package_root / "toolkit/src").mkdir(parents=True)
-            (package_root / "toolkit/src/runtime.ts").write_bytes(b"runtime")
-            files = [{"path": "src/runtime.ts", "sha256": hashlib.sha256(b"runtime").hexdigest()}]
+            (package_root / "resources/skills/src").mkdir(parents=True)
+            (package_root / "resources/skills/src/runtime.ts").write_bytes(b"runtime")
+            files = [{"path": "skills/src/runtime.ts", "sha256": hashlib.sha256(b"runtime").hexdigest()}]
             identity = {
                 "packageName": PACKAGE_NAME,
                 "packageVersion": "0.2.0",
@@ -473,8 +473,8 @@ class ReleasePolicyTests(unittest.TestCase):
                 "files": files,
             }
             (package_root / "package.json").write_text(json.dumps({"name": PACKAGE_NAME, "version": "0.2.0"}), encoding="utf-8")
-            (package_root / "toolkit/package.json").write_text(json.dumps({"name": PACKAGE_NAME, "version": "0.2.0", "dependencies": {"zod": "4.6.7"}}), encoding="utf-8")
-            (package_root / "toolkit/artifact-manifest.json").write_text(json.dumps(artifact), encoding="utf-8")
+            (package_root / "resources/package.json").write_text(json.dumps({"name": PACKAGE_NAME, "version": "0.2.0", "dependencies": {"zod": "4.6.7"}}), encoding="utf-8")
+            (package_root / "resources/artifact-manifest.json").write_text(json.dumps(artifact), encoding="utf-8")
             tarball = root / "schema3.tgz"
             with tarfile.open(tarball, "w:gz") as archive:
                 archive.add(package_root, arcname="package")
@@ -484,14 +484,14 @@ class ReleasePolicyTests(unittest.TestCase):
             artifact["tarballDigest"] = digest
             artifact["buildId"] = identity["buildId"]
             artifact["identity"] = identity
-            (package_root / "toolkit/artifact-manifest.json").write_text(json.dumps(artifact), encoding="utf-8")
+            (package_root / "resources/artifact-manifest.json").write_text(json.dumps(artifact), encoding="utf-8")
             with tarfile.open(tarball, "w:gz") as archive:
                 archive.add(package_root, arcname="package")
             validated = validate_tarball(tarball, expected_version="0.2.0", expected_merge_sha="a" * 40, expected_compatibility="compat-v1")
             self.assertTrue(validated["canonicalDigestVerified"])
             self.assertEqual(validated["canonicalDigestAlgorithm"], CANONICAL_TARBALL_DIGEST_ALGORITHM)
-            (package_root / "toolkit/node_modules").mkdir()
-            (package_root / "toolkit/node_modules/rogue.js").write_text("rogue", encoding="utf-8")
+            (package_root / "resources/skills/node_modules").mkdir()
+            (package_root / "resources/skills/node_modules/rogue.js").write_text("rogue", encoding="utf-8")
             with tarfile.open(tarball, "w:gz") as archive:
                 archive.add(package_root, arcname="package")
             with self.assertRaisesRegex(ReleaseError, "node_modules"):
@@ -501,9 +501,9 @@ class ReleasePolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             package_root = root / "package"
-            (package_root / "toolkit/src").mkdir(parents=True)
-            (package_root / "toolkit/src/runtime.ts").write_bytes(b"runtime")
-            files = [{"path": "src/runtime.ts", "sha256": hashlib.sha256(b"runtime").hexdigest()}]
+            (package_root / "resources/skills/src").mkdir(parents=True)
+            (package_root / "resources/skills/src/runtime.ts").write_bytes(b"runtime")
+            files = [{"path": "skills/src/runtime.ts", "sha256": hashlib.sha256(b"runtime").hexdigest()}]
             identity = {
                 "packageName": PACKAGE_NAME,
                 "packageVersion": "0.2.0",
@@ -543,9 +543,9 @@ class ReleasePolicyTests(unittest.TestCase):
                 "files": files,
             }
             (package_root / "package.json").write_text(json.dumps({"name": PACKAGE_NAME, "version": "0.2.0"}), encoding="utf-8")
-            (package_root / "toolkit/package.json").write_text(json.dumps({"name": PACKAGE_NAME, "version": "0.2.0", "dependencies": {"zod": "4.6.7"}}), encoding="utf-8")
-            (package_root / "toolkit/artifact-manifest.json").write_text(json.dumps(artifact), encoding="utf-8")
-            (package_root / "toolkit/unlisted.ts").write_text("rogue", encoding="utf-8")
+            (package_root / "resources/package.json").write_text(json.dumps({"name": PACKAGE_NAME, "version": "0.2.0", "dependencies": {"zod": "4.6.7"}}), encoding="utf-8")
+            (package_root / "resources/artifact-manifest.json").write_text(json.dumps(artifact), encoding="utf-8")
+            (package_root / "resources/skills/unlisted.ts").write_text("rogue", encoding="utf-8")
             tarball = root / "drift.tgz"
             with tarfile.open(tarball, "w:gz") as archive:
                 archive.add(package_root, arcname="package")

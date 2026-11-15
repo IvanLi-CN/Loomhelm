@@ -82,6 +82,8 @@ Skill 的目录将可执行命令入口放在 `scripts/`，可复用实现模块
 
 使用 `dispatch-group-claim` 或 `dispatch-claim`，然后通过本 Skill 的 CLI 调用 `conversation-create`。命令绑定原生 request identity，通过 app-server 创建并初始化对话，并解析带执行配置的真实 thread ID。初始 group/task thread ID 无效；unknown 结果保留 claim 和容量，必须用真实原生证据对账后再重试，无法确定时询问主人。不能编造 thread ID 或重复创建。`task-update` 记录实际执行、等待、阻塞和完成； `atom-update` 按顺序记录原子。普通阻塞留在负责的对话和账本中。关键进度先作为 pending notification 记账，再使用允许的原生通信工具投递或确认；sent 和 acknowledged 是不同状态。
 
+任务 Agent 收到正式派发后，先使用派发消息中的 `run_id`、`task_id`、自身 `thread_id` 和 exact package version 读取自己的作用域上下文：`printf '%s' '{"run_id":"<run-id>","actor":{"role":"task","thread_id":"<task-thread-id>"},"section":"task-context","task_id":"<task-id>"}' | bunx --bun @loomhelm/multi-task-flow@<exact-version> flow show --input -`。该只读投影是任务执行清单的入口，包含任务、所属交付单元、依赖边、原子节点和边、工作区资源、验收相关事实、阻塞原因与当前 `ready` 状态；只能读取绑定到自身对话的任务。随后按返回的原子和现有账本事实推进，使用 `task-update`、`atom-update` 及对应的 PR/事实命令记录自己的进展和证据，直到 `closeout`；不要等待固定握手回复，也不要自行创建或派发其他任务。需要主 Agent 处理时，仅通过账本产生的通知或阻塞、完成消息报告。
+
 只要仍有 ready 且未绑定的 contribution task，活跃交付单元就不能记录为 idle；应记录 running、带任务引用的 waiting 或带原因的 blocked，然后派发或对账。
 
 ## 执行配置与 CLI 创建

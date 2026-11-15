@@ -53,7 +53,7 @@ test('release validation binds the requested version to the packaged artifact', 
   const packageMetadata = JSON.parse(readFileSync(resolve(import.meta.dir, '../package.json'), 'utf8')) as { version?: unknown };
   const packageVersion = packageMetadata.version;
   assert(isExactSemVer(packageVersion));
-  const artifact = JSON.parse(readFileSync(resolve(import.meta.dir, '../toolkit/artifact-manifest.json'), 'utf8')) as { packageVersion?: unknown; identity?: { packageVersion?: unknown } };
+  const artifact = JSON.parse(readFileSync(resolve(import.meta.dir, '../resources/artifact-manifest.json'), 'utf8')) as { packageVersion?: unknown; identity?: { packageVersion?: unknown } };
   assert.equal(artifact.packageVersion, packageVersion);
   assert.equal(artifact.identity?.packageVersion, packageVersion);
 

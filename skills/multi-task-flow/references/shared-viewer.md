@@ -1,5 +1,17 @@
 # Shared viewer operations
 
+The viewer architecture is **Stable Gateway + Per-Run Versioned Workers**. The daemon is the Gateway and Worker Supervisor: it owns the HTTP port and public pages and starts and supervises only the separate Worker processes. Each run is routed by its package version, build ID, source SHA and compatibility contracts; the daemon's current package version is not a substitute for a run's version identity.
+
+Update discovery belongs to the `multi-task-flow` CLI. The CLI reads a throttled local cache and schedules an asynchronous registry check when stale; it is independent of daemon or Gateway runtime. The index page may display the Gateway hint returned by the CLI, while an orchestration page may display the run-specific hint returned by the orchestration upgrade command. Neither page performs registry discovery.
+
+The shared hint contract is `{ surface, current, target?, compatible, reason, command }`; `current` contains `package_version`, `build_id`, `source_sha`, `compatibility_line` and `viewer_contract`. The index uses `surface: "gateway"`; an authenticated run bootstrap uses `surface: "orchestration"` and its persisted run binding. `compatible: "unknown"` remains visible as an unavailable check with its reason.
+
+The CLI checker persists `checked_at`, `next_check_at`, compatible/latest candidates, status and safe failure reason. It uses a lock and bounded backoff so repeated CLI calls share one asynchronous check. Browser code and daemon runtime never fetch the registry.
+
+Gateway updates replace the daemon/Gateway package through a staged health-checked restart on the same fixed port and preserve all run/version mappings. Worker releases are side-by-side; a run changes worker version only through an explicit run-scoped operation with compatibility evidence, request draining and an auditable version mapping. There is no global worker upgrade that silently changes existing runs.
+
+The public command surface is exactly `multi-task-flow gateway upgrade <version|tag>` and `multi-task-flow orchestration upgrade --run-id <run-id> <version|tag>`. `--dry-run [version|tag]` only checks release and compatibility; `--rollback [version|tag]` restores a previously verified target. Gateway upgrade changes only the public entry process. Orchestration upgrade writes only the named run's version sidecar through the CLI and remains valid when the daemon is unavailable; concurrency identity is internal, and a best-effort daemon refresh notification may follow. Workers have no update command or self-update capability.
+
 The formal root is `~/.local/share/multi-task-flow/`: `config/`, `data/runs/`, `releases/`, `state/`, `logs/`. `CODEX_HOME` and the invoking worktree do not select a formal instance. `MULTI_TASK_FLOW_PROFILE=test|development` requires an absolute `MULTI_TASK_FLOW_ROOT`, distinct from the formal root. Isolated profiles derive separate launchd labels, port scopes and registry roots. `TASK_ORCHESTRATION_DATA_ROOT` is an explicit ledger-only fixture override; never use it to create a second formal authority.
 
 Published-package commands use only `bunx --bun @loomhelm/multi-task-flow@<exact-version> service <command> --input -`, consuming one JSON object. Do not replace this form with `npx`, `latest`, a compatibility-line tag, a bare cached binary, or a repository-local source path. Normal usage:

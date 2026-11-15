@@ -2,6 +2,18 @@
 
 ## Multi-task Flow
 
+### Stable Gateway
+
+由 daemon 提供的稳定 HTTP Gateway surface，提供 index、认证成功与失败页面、公共资源、通用错误、诊断 API 和编排入口；它不实现某个编排的版本化业务逻辑。
+
+### Per-Run Versioned Worker
+
+按单个编排绑定的 `@loomhelm/multi-task-flow` package version、build ID、source SHA 和 viewer/data contract 运行的独立进程；不同编排可以同时使用不同版本。
+
+### Gateway and Worker Supervisor
+
+负责提供 Gateway，并启动、停止、健康检查、升级和恢复 Worker 的 daemon；daemon/Gateway 直接提供公共网页，但不把具体编排版本逻辑内置为 Worker。
+
 ### Proposal
 
 尚未获得主人实施批准的候选执行计划。Proposal 可以展示依赖、估时和验收设计，但不可调度、不可派发，也不代表已经创建或绑定任何执行资源。
@@ -31,6 +43,22 @@ regular 交付单元在激活前已经具备其 delivery-unit scoped work 所需
 拥有一个独立实现任务完整生命周期的唯一执行 Agent，负责任务实现、任务验收、自证、创建并合并自己的 child PR，以及记录合并结果。并非每个任务都需要 Task Agent；main-owned、交付 Agent-owned 和只产出验证证据的任务可以使用其他执行策略。
 
 _Avoid_: 子任务审核人、临时接管 Agent
+
+### 任务上下文
+
+面向任务 Agent 的只读编排投影，包含当前任务、所属交付单元、直接依赖、开发基线、工作区与分支事实、验收合同、可执行原子和阻塞原因。任务上下文让任务 Agent 能按账本自主推进，不改变原子图、任务图或其他任务的责任边界。
+
+### 任务就绪
+
+任务的任务级依赖和原子级前置条件均已满足、可以请求派发的状态。任务就绪不表示已经获得派发授权，也不表示已经创建对话或占用执行容量。
+
+### 可派发通知
+
+账本提交使一个或多个任务首次进入任务就绪状态后产生的持久通知意图。它只报告调度机会；主 Agent 仍须重新校验当前账本并单独决定是否派发。
+
+### 任务完成
+
+任务完成原子 `closeout` 已完成并且任务生命周期的验收、自证和外部交付事实均已记录的状态。任务的 `merge-pr` 完成可以提前满足后继任务的依赖，但不等于当前任务完成。
 
 ### 交付 Agent
 
