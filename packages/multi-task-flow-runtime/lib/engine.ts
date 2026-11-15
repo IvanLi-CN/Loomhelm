@@ -169,7 +169,12 @@ function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): bo
     if (atom ? atom.status !== "planned" : target.state !== "planned") return false;
     return edges
       .filter((edge) => edge.to_node_id === target.id)
-      .every((edge) => atomicNodeSatisfied(ledger, nodes.find((node) => node.id === edge.from_node_id)));
+      .every((edge) =>
+        atomicNodeSatisfied(
+          ledger,
+          nodes.find((node) => node.id === edge.from_node_id),
+        ),
+      );
   });
 }
 function approved(ledger: Ledger): Plan {

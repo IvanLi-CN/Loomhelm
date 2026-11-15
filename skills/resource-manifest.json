@@ -7122,7 +7122,7 @@
     {
       "path": "skills/multi-task-flow/lib/engine.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/engine.ts",
-      "installedSha256": "de8e7614bf665124ae6094edb1dd90042ba648338a4a9a797f3d91bce7b0d897"
+      "installedSha256": "55238da3fca11bcdc361c96131d309c9bc3326d6ce8e521c6853807f8483b960"
     },
     {
       "path": "skills/multi-task-flow/lib/errors.ts",
@@ -7421,7 +7421,7 @@
     {
       "path": "skills/multi-task-flow/tests/engine.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/engine.test.ts",
-      "installedSha256": "36fcfd3e3e03cd16eea8ebec9b2e01e09c2d4c816da29cd6430be203649d47c5"
+      "installedSha256": "862b8a93770ee4e336616a64f961bb77ed709d465b636c6e569b2dd306550fb3"
     },
     {
       "path": "skills/multi-task-flow/tests/graph-projection.test.ts",

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import {
   apply,
   deliveryUnitPrMerged,
@@ -7,7 +8,6 @@ import {
   requireGroupDispatchGate,
 } from "../lib/engine";
 import { deriveExecutionPhase } from "../lib/revisions";
-import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import {
   type Ledger,
   type Plan,
@@ -799,11 +799,22 @@ test("task readiness starts at the first executable atomic work", () => {
   ledger.tasks[0]!.atoms[0]!.status = "planned";
   ledger.tasks[0]!.thread_id = "task-a-thread";
   ledger.tasks[0]!.state = "running";
-  expect(() => apply(ledger, "atom-update", request(ledger, "blocked-later-atom", {
-    task_id: "a",
-    atom_id: "task-a-create-pr",
-    state: "running",
-  }, { role: "task", thread_id: "task-a-thread" }))).toThrow("Earlier atoms must complete first");
+  expect(() =>
+    apply(
+      ledger,
+      "atom-update",
+      request(
+        ledger,
+        "blocked-later-atom",
+        {
+          task_id: "a",
+          atom_id: "task-a-create-pr",
+          state: "running",
+        },
+        { role: "task", thread_id: "task-a-thread" },
+      ),
+    ),
+  ).toThrow("Earlier atoms must complete first");
 });
 
 test("contribution dispatch is blocked until the parent PR gate is complete", () => {
