@@ -106,9 +106,9 @@ bun --no-install src/cli.ts --config config.example.json codex retry DISPATCH_ID
 
 ## Skills 与正式任务流
 
-`toolkit/skills/multi-task-flow/` 是包内的 Multi-task Flow Skill 源包；共享运行时由 npm 依赖 `@loomhelm/runtime-core` 提供，预构建 viewer 资产位于对应的 Multi-task Flow dist 目录。`skills/resource-manifest.json` 记录发布子集的资源路径和安装摘要；`skills/catalog.json` 只记录 `multi-task-flow` 入口、脚本及依赖强度；`artifact-manifest.json` 记录 schema v3 package identity、`path-byte-v2` canonical digest 和逐文件摘要。资源打包只复制 Skill 资源和浏览器资产，不复制其他独立 Skill、production `node_modules`，不转译、不搜索仓库外执行代码。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向该资源根；`skills run` 原样执行 `.ts` 脚本。包的 bin、exports 和类型入口均指向 `src/`。
+`resources/skills/multi-task-flow/` 是包内的 Multi-task Flow Skill 运行时资源；共享运行时由 npm 依赖 `@loomhelm/runtime-core` 提供，预构建 viewer 资产位于对应的 Multi-task Flow dist 目录。`resources/skills/resource-manifest.json` 记录发布子集的资源路径和安装摘要；`resources/skills/catalog.json` 只记录 `multi-task-flow` 入口、脚本及依赖强度；`resources/artifact-manifest.json` 记录 schema v3 package identity、`path-byte-v2` canonical digest 和逐文件摘要。资源打包只复制 Skill 运行所需的 Skill 资源和浏览器资产，并排除测试、示例、开发构建脚本、源工作区元数据及 production `node_modules`。Skill 文档中的 `LOOMHELM_TOOLKIT_ROOT` 指向 `resources/`；`skills run` 原样执行 `.ts` 脚本。包的 bin、exports 和类型入口均指向 `src/`。
 
-所有随包执行代码、合同资源和构建支持都位于 `skills/multi-task-flow/`；共享运行时由 npm 依赖 `@loomhelm/runtime-core` 提供。vendor 源包仍保留完整客户端 Skills 集合，但 npm 包只发布 `multi-task-flow` 子集。外部 Git、Codex 宿主工具及条件性 Skills 仍按既有合同检测，不复制到 npm 包中。
+所有随包执行代码和合同资源都位于 `resources/skills/multi-task-flow/`；共享运行时由 npm 依赖 `@loomhelm/runtime-core` 提供。vendor 源包仍保留完整客户端 Skills 集合，但 npm 包只发布 `multi-task-flow` 子集。外部 Git、Codex 宿主工具及条件性 Skills 仍按既有合同检测，不复制到 npm 包中。
 
 `bun --no-install packages/multi-task-flow-runtime/scripts/check-skills-installation.ts --root <installation-root> --probe` 分别报告源码完整性、Bun 运行时及实际入口探测；宿主能力单独验收。该检查不会修改任何用户级安装或运行账本。
 

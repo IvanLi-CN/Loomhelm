@@ -114,7 +114,7 @@ def build(record, part, output):
             run('bun','install','--cwd','clients/typescript','--frozen-lockfile','--ignore-scripts','--backend=copy')
             run('bun','run','--cwd','clients/typescript','build')
             shutil.copytree(ROOT/'clients/typescript/src',stage/'src')
-            shutil.copytree(ROOT/'clients/typescript/toolkit',stage/'toolkit')
+            shutil.copytree(ROOT/'clients/typescript/resources',stage/'resources')
             shutil.copy2(ROOT/'clients/typescript/package.json',stage/'package.json')
             shutil.copy2(ROOT/'clients/typescript/bun.lock',stage/'bun.lock')
             metadata=json.loads((stage/'package.json').read_text())
