@@ -1,166 +1,43 @@
-import {
-  Archive,
-  ArchiveRestore,
-  ArchiveX,
-  ChevronDown,
-  CircleAlert,
-  CircleCheck,
-  CircleDashed,
-  CircleDot,
-  CircleHelp,
-  CirclePlay,
-  Columns3,
-  Contrast,
-  createIcons,
-  GitMerge,
-  GitPullRequest,
-  Hourglass,
-  Info,
-  LayoutGrid,
-  LoaderCircle,
-  Maximize2,
-  MessageCircle,
-  Minus,
-  Moon,
-  Network,
-  Plus,
-  RefreshCw,
-  Search,
-  Settings2,
-  Sun,
-  SunMoon,
-  TreePalm,
-  X,
-} from "lucide";
-import moment from "moment";
-import {
-  initialOutput,
-  type OutputSnapshot,
-  OutputSnapshots,
-  refreshOutputNodes,
-} from "./agent-output";
-import { createAtomicGraphController } from "./atomic-graph-view";
-import { createCardRenderer } from "./cards";
-import { hasArchiveAction } from "./conversation-control";
-import { applyDetailSurface, installDetailViewport } from "./detail-surface";
-import { createDetailContent } from "./details-content";
-import { firstVisibleElement, focusAfterRerender } from "./focus";
-import { createGraphController } from "./graph";
-import { createHoverController } from "./hover-controller";
-import { createHoverPreviewBridge, type HoverPreviewBridge } from "./hover-preview";
-import {
-  DETAILS_PANEL_BREAKPOINT,
-  detailsPanelFits,
-  resolveDetailSurface,
-  selectedObjectFocusSelector,
-} from "./interaction-policy";
-import { STATE_LABELS, taskKindLabel } from "./labels";
-import {
-  deriveConnectionStatus,
-  type Task,
-  type Theme,
-  type View,
-  type ViewResponse,
-} from "./model";
-import { installViewStateNavigation } from "./navigation";
-import { type DisplayPhase, defaultTabForPhase, derivePhase } from "./phase";
-import type { ProfileCapabilities, ProfileTarget } from "./profile-editor";
-import { createProfileEditor } from "./profile-editor";
-import { refreshResourcePopover } from "./resource-popover";
-import { planStateSeverity, renderPlanInfoContent } from "./status-row";
 import { installTaskContextMenu } from "./task-context-menu";
-import { runtimeTaskState } from "./task-state";
-import { formatDuration, formatLocalTime } from "./time";
-import { createTimelineController } from "./timeline";
-import { refreshTimestamps, renderTimestamp } from "./timestamp";
+import { hasArchiveAction } from "./conversation-control";
 import { installTextTooltips } from "./tooltip";
-import {
-  canonicalViewUrl,
-  type DashboardTab,
-  DEFAULT_VIEW_STATE,
-  defaultTaskLayout,
-  hasValidLayoutParam,
-  hasValidTabParam,
-  parseViewState,
-  replaceViewState,
-  sanitizeViewState,
-  type TaskLayout,
-  type ViewState,
-} from "./view-state";
-
-const ICONS = {
-  Contrast,
-  Network,
-  Search,
-  X,
-  Plus,
-  Minus,
-  Maximize2,
-  ChevronDown,
-  CircleDashed,
-  CircleDot,
-  CirclePlay,
-  LoaderCircle,
-  Hourglass,
-  CircleAlert,
-  CircleHelp,
-  CircleCheck,
-  GitMerge,
-  Columns3,
-  LayoutGrid,
-  MessageCircle,
-  GitPullRequest,
-  TreePalm,
-  ArchiveX,
-  ArchiveRestore,
-  Archive,
-  RefreshCw,
-  Info,
-  Settings2,
-  SunMoon,
-  Sun,
-  Moon,
-};
+import { runtimeTaskState } from "./task-state";
+import { refreshResourcePopover } from "./resource-popover";
+import { OutputSnapshots, initialOutput, refreshOutputNodes, type OutputSnapshot } from "./agent-output";
+import { createProfileEditor } from "./profile-editor";
+import type { ProfileCapabilities, ProfileTarget } from "./profile-editor";
+import moment from "moment";
+import { createIcons, Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleHelp, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, TreePalm, ArchiveX, ArchiveRestore, Archive, RefreshCw, Info, Settings2, SunMoon, Sun, Moon } from "lucide";
+import { createCardRenderer } from "./cards";
+import { createTimelineController } from "./timeline";
+import { createGraphController } from "./graph";
+import { createAtomicGraphController } from "./atomic-graph-view";
+import { createHoverController } from "./hover-controller";
+import { createDetailContent } from "./details-content";
+import { deriveConnectionStatus, type Task, type View, type ViewResponse, type Theme } from "./model";
+import { defaultTabForPhase, derivePhase, type DisplayPhase } from "./phase";
+import { DETAILS_PANEL_BREAKPOINT, detailsPanelFits, resolveDetailSurface, selectedObjectFocusSelector } from "./interaction-policy";
+import { applyDetailSurface, installDetailViewport } from "./detail-surface";
+import { firstVisibleElement, focusAfterRerender } from "./focus";
+import { installViewStateNavigation } from "./navigation";
+import { createHoverPreviewBridge, type HoverPreviewBridge } from "./hover-preview";
+import { formatDuration, formatLocalTime } from "./time";
+import { renderTimestamp, refreshTimestamps } from "./timestamp";
+import { planStateSeverity, renderPlanInfoContent } from "./status-row";
+import { taskKindLabel, STATE_LABELS } from "./labels";
+import { DEFAULT_VIEW_STATE, defaultTaskLayout, hasValidLayoutParam, canonicalViewUrl, hasValidTabParam, parseViewState, replaceViewState, sanitizeViewState, type DashboardTab, type TaskLayout, type ViewState } from "./view-state";
+const ICONS = { Contrast, Network, Search, X, Plus, Minus, Maximize2, ChevronDown, CircleDashed, CircleDot, CirclePlay, LoaderCircle, Hourglass, CircleAlert, CircleHelp, CircleCheck, GitMerge, Columns3, LayoutGrid, MessageCircle, GitPullRequest, TreePalm, ArchiveX, ArchiveRestore, Archive, RefreshCw, Info, Settings2, SunMoon, Sun, Moon };
 installTextTooltips();
 createIcons({ icons: ICONS });
-moment.defineLocale("zh-task", {
-  parentLocale: "en",
-  months: "一月_二月_三月_四月_五月_六月_七月_八月_九月_十月_十一月_十二月".split("_"),
-  monthsShort: "1月_2月_3月_4月_5月_6月_7月_8月_9月_10月_11月_12月".split("_"),
-  weekdays: "星期日_星期一_星期二_星期三_星期四_星期五_星期六".split("_"),
-  weekdaysShort: "周日_周一_周二_周三_周四_周五_周六".split("_"),
-  weekdaysMin: "日_一_二_三_四_五_六".split("_"),
-});
+moment.defineLocale("zh-task", { parentLocale: "en", months: "一月_二月_三月_四月_五月_六月_七月_八月_九月_十月_十一月_十二月".split("_"), monthsShort: "1月_2月_3月_4月_5月_6月_7月_8月_9月_10月_11月_12月".split("_"), weekdays: "星期日_星期一_星期二_星期三_星期四_星期五_星期六".split("_"), weekdaysShort: "周日_周一_周二_周三_周四_周五_周六".split("_"), weekdaysMin: "日_一_二_三_四_五_六".split("_") });
 moment.locale("zh-task");
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 installDetailViewport($("details"));
 const palette = ["#1b6c80", "#2f70bb", "#a86f0c", "#6f7880", "#1e7b4f", "#8a6470"];
 const labels = STATE_LABELS;
-const statusColors: Record<string, string> = {
-  agent_idle: "#a86f0c",
-  planned: "#8a9295",
-  ready: "#2f70bb",
-  starting: "#2f70bb",
-  running: "#2f70bb",
-  waiting: "#a86f0c",
-  blocked: "#c4242a",
-  integrated: "#1e7b4f",
-  completed: "#1e7b4f",
-  closed: "#71797d",
-  merged: "#1e7b4f",
-};
-const defaultStates = new Set(
-  Object.keys(labels).filter((key) => !["active", "merged", "unknown", "idle"].includes(key)),
-);
-const defaultKinds = new Set([
-  "contribution",
-  "release",
-  "deployment",
-  "verification",
-  "coordination",
-  "development",
-  "other",
-]);
+const statusColors: Record<string, string> = { agent_idle: "#a86f0c", planned: "#8a9295", ready: "#2f70bb", starting: "#2f70bb", running: "#2f70bb", waiting: "#a86f0c", blocked: "#c4242a", integrated: "#1e7b4f", completed: "#1e7b4f", closed: "#71797d", merged: "#1e7b4f" };
+const defaultStates = new Set(Object.keys(labels).filter((key) => !["active", "merged", "unknown", "idle"].includes(key)));
+const defaultKinds = new Set(["contribution", "release", "deployment", "verification", "coordination", "development", "other"]);
 let data: View | null = null;
 let revision = -1;
 const outputSnapshots = new OutputSnapshots();
@@ -172,36 +49,26 @@ function applyOutputs(next: OutputSnapshot, requestEpoch?: string | null): void 
     const previousState = task.state;
     const previousArchiveAction = hasArchiveAction(task);
     const output = outputSnapshot.outputs[`task:${task.id}`] ?? outputSnapshot.outputs[task.id];
-    task.latest_agent_output =
-      output?.thread_id === task.thread_id ? output : initialOutput(task.thread_id);
+    task.latest_agent_output = output?.thread_id === task.thread_id ? output : initialOutput(task.thread_id);
     const observedState = runtimeTaskState(task, task.latest_agent_output);
-    if (observedState === "agent_idle" && previousState !== "agent_idle")
-      task.agent_resume_state = previousState as "starting" | "running";
+    if (observedState === "agent_idle" && previousState !== "agent_idle") task.agent_resume_state = previousState as "starting" | "running";
     task.state = observedState;
     if (observedState !== "agent_idle") delete task.agent_resume_state;
-    idleChanged ||=
-      previousState !== task.state || previousArchiveAction !== hasArchiveAction(task);
+    idleChanged ||= previousState !== task.state || previousArchiveAction !== hasArchiveAction(task);
   }
   for (const group of data.groups) {
-    const thread =
-      group.delivery_unit_kind === "bootstrap"
-        ? data.orchestration.owner_thread_id
-        : group.agent_thread_id;
+    const thread = group.delivery_unit_kind === "bootstrap" ? data.orchestration.owner_thread_id : group.agent_thread_id;
     const output = outputSnapshot.outputs[`group:${group.id}`];
-    group.latest_agent_output =
-      output?.thread_id === thread ? output : initialOutput(thread ?? null);
+    group.latest_agent_output = output?.thread_id === thread ? output : initialOutput(thread ?? null);
   }
   refreshOutputNodes(document, data.tasks);
   if (hydrated && idleChanged) render();
   refreshResourcePopover();
 }
 let viewState: ViewState = parseViewState(window.location.search);
-let selectedTask: string | null =
-  viewState.selected?.kind === "task" ? viewState.selected.id : null;
-let selectedGroup: string | null =
-  viewState.selected?.kind === "group" ? viewState.selected.id : null;
-let selectedMilestone: string | null =
-  viewState.selected?.kind === "milestone" ? viewState.selected.id : null;
+let selectedTask: string | null = viewState.selected?.kind === "task" ? viewState.selected.id : null;
+let selectedGroup: string | null = viewState.selected?.kind === "group" ? viewState.selected.id : null;
+let selectedMilestone: string | null = viewState.selected?.kind === "milestone" ? viewState.selected.id : null;
 let activePlan = viewState.plan ?? "";
 let activePlanId = "";
 let connected = false;
@@ -222,30 +89,12 @@ let restoreClosedDetailsOnNextRender = false;
 let planInfoLastFocus: HTMLElement | null = null;
 const anyHoverCapability = window.matchMedia("(any-hover: hover)");
 const anyFinePointerCapability = window.matchMedia("(any-pointer: fine)");
-function text(tag: string, value: string, ...classNames: string[]): HTMLElement {
-  const element = document.createElement(tag);
-  if (classNames.length) element.className = classNames.join(" ");
-  element.textContent = value;
-  return element;
-}
-function clear(id: string): HTMLElement {
-  const element = $(id);
-  element.replaceChildren();
-  return element;
-}
-function label(task: Task): string {
-  return task.state === "planned" && task.is_ready ? "就绪" : (labels[task.state] ?? task.state);
-}
-async function archiveConversation(
-  taskId: string,
-  action: "archive" | "unarchive" = "archive",
-): Promise<void> {
+function text(tag: string, value: string, ...classNames: string[]): HTMLElement { const element = document.createElement(tag); if (classNames.length) element.className = classNames.join(" "); element.textContent = value; return element; }
+function clear(id: string): HTMLElement { const element = $(id); element.replaceChildren(); return element; }
+function label(task: Task): string { return task.state === "planned" && task.is_ready ? "就绪" : labels[task.state] ?? task.state; }
+async function archiveConversation(taskId: string, action: "archive" | "unarchive" = "archive"): Promise<void> {
   try {
-    const response = await fetch("api/conversation-archive", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ task_id: taskId, action }),
-    });
+    const response = await fetch("api/conversation-archive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ task_id: taskId, action }) });
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       await refresh();
@@ -254,29 +103,13 @@ async function archiveConversation(
     await refresh();
   } catch (error) {
     const notice = document.getElementById("connection-notice");
-    if (notice) {
-      notice.hidden = false;
-      notice.textContent = `对话归档未完成：${error instanceof Error ? error.message : "请稍后重试并检查资源状态"}`;
-    }
+    if (notice) { notice.hidden = false; notice.textContent = `对话归档未完成：${error instanceof Error ? error.message : "请稍后重试并检查资源状态"}`; }
   }
 }
-function groupColor(groupId: string | null): string {
-  if (!data || !groupId) return "#87978f";
-  const index = data.groups.findIndex((item) => item.id === groupId);
-  return palette[Math.max(0, index) % palette.length] ?? "#87978f";
-}
+function groupColor(groupId: string | null): string { if (!data || !groupId) return "#87978f"; const index = data.groups.findIndex((item) => item.id === groupId); return palette[Math.max(0, index) % palette.length] ?? "#87978f"; }
 function stateColor(state: string, ready = false): string {
   const normalized = ready && state === "planned" ? "ready" : state;
-  const token =
-    normalized === "blocked"
-      ? "--negative"
-      : ["waiting"].includes(normalized)
-        ? "--warning"
-        : ["integrated", "completed", "closed", "merged"].includes(normalized)
-          ? "--positive"
-          : normalized === "planned"
-            ? "--control"
-            : "--accent";
+  const token = normalized === "blocked" ? "--negative" : ["waiting"].includes(normalized) ? "--warning" : ["integrated", "completed", "closed", "merged"].includes(normalized) ? "--positive" : normalized === "planned" ? "--control" : "--accent";
   return css(token, statusColors[normalized] ?? "#87978f");
 }
 function time(value: string | null): string {
@@ -284,28 +117,9 @@ function time(value: string | null): string {
   return formatLocalTime(value);
 }
 let serviceSessionExpired = false;
-let workerDiagnostic: {
-  diagnostic_id: string;
-  run_id: string;
-  stage: string;
-  worker_key?: string;
-  worker_generation?: string;
-  error_code?: string;
-  safe_summary?: string;
-  retry_count?: number;
-  state?: string;
-  retryable: boolean;
-  reconnect_required: boolean;
-} | null = null;
+let workerDiagnostic: { diagnostic_id: string; run_id: string; stage: string; worker_key?: string; worker_generation?: string; error_code?: string; safe_summary?: string; retry_count?: number; state?: string; retryable: boolean; reconnect_required: boolean } | null = null;
 let reconnectBlocked = false;
-function showWorkerDiagnostic(
-  value: Partial<typeof workerDiagnostic> & {
-    diagnostic_id?: string;
-    run_id?: string;
-    stage?: string;
-    code?: string;
-  },
-): void {
+function showWorkerDiagnostic(value: Partial<typeof workerDiagnostic> & { diagnostic_id?: string; run_id?: string; stage?: string; code?: string }): void {
   workerDiagnostic = {
     ...workerDiagnostic,
     ...value,
@@ -316,249 +130,111 @@ function showWorkerDiagnostic(
     retryable: value.retryable ?? false,
     reconnect_required: value.reconnect_required ?? true,
   };
-  reconnectBlocked =
-    value.code === "RUN_WORKER_UNAVAILABLE" ||
-    (Boolean(value.diagnostic_id) && value.state !== "recovered");
+  reconnectBlocked = value.code === "RUN_WORKER_UNAVAILABLE" || (Boolean(value.diagnostic_id) && value.state !== "recovered");
   const card = $("worker-diagnostic");
-  $("worker-diagnostic-summary").textContent =
-    `运行 ${workerDiagnostic.run_id} · 诊断 ${workerDiagnostic.diagnostic_id} · 阶段 ${workerDiagnostic.stage}：${workerDiagnostic.safe_summary}`;
+  $("worker-diagnostic-summary").textContent = `运行 ${workerDiagnostic.run_id} · 诊断 ${workerDiagnostic.diagnostic_id} · 阶段 ${workerDiagnostic.stage}：${workerDiagnostic.safe_summary}`;
   card.hidden = false;
   connection("stale");
 }
 async function reconnectViewer(): Promise<void> {
   const target = location.pathname + location.search;
-  const response = await fetch(`/api/v1/reconnect?target=${encodeURIComponent(target)}`, {
-    method: "POST",
-  });
-  const result = (await response.json().catch(() => ({}))) as { login_url?: string };
+  const response = await fetch(`/api/v1/reconnect?target=${encodeURIComponent(target)}`, { method: "POST" });
+  const result = await response.json().catch(() => ({})) as { login_url?: string };
   if (!response.ok || !result.login_url) throw new Error("无法创建新的连接入口");
   location.assign(result.login_url);
 }
 document.addEventListener("service-session", (event) => {
   serviceSessionExpired = Boolean((event as CustomEvent).detail?.expired);
-  connection(
-    serviceSessionExpired
-      ? "stale"
-      : ($("connection").dataset.state as "live" | "stale" | "connecting") || "connecting",
-  );
+  connection(serviceSessionExpired ? "stale" : ($("connection").dataset.state as "live" | "stale" | "connecting") || "connecting");
 });
 function connection(status: "live" | "stale" | "connecting"): void {
   if (serviceSessionExpired) status = "stale";
-  const element = $("connection");
-  element.dataset.state = status;
-  element.replaceChildren(
-    text("span", "", "connection-dot"),
-    document.createTextNode(
-      status === "live" ? "实时" : status === "stale" ? "数据过期" : "连接中",
-    ),
-  );
-  const notice = $("connection-notice");
-  notice.hidden = status !== "stale";
-  if (status === "stale")
-    notice.textContent = serviceSessionExpired
-      ? "登录已过期，请重新连接。当前显示最后一次有效快照。"
-      : data
-        ? "连接中断，当前显示最后一次有效快照。恢复连接后会重新获取视图。"
-        : "首次加载失败，暂时无法读取编排视图。";
+  const element = $("connection"); element.dataset.state = status;
+  element.replaceChildren(text("span", "", "connection-dot"), document.createTextNode(status === "live" ? "实时" : status === "stale" ? "数据过期" : "连接中"));
+  const notice = $("connection-notice"); notice.hidden = status !== "stale";
+  if (status === "stale") notice.textContent = serviceSessionExpired ? "登录已过期，请重新连接。当前显示最后一次有效快照。" : data ? "连接中断，当前显示最后一次有效快照。恢复连接后会重新获取视图。" : "首次加载失败，暂时无法读取编排视图。";
 }
 function stateValidation() {
-  return {
-    groups: new Set(data?.groups.map((item) => item.id) ?? []),
-    states: defaultStates,
-    kinds: defaultKinds,
-    plans: new Set(data?.plans.map((item) => item.id) ?? []),
-    tasks: new Set(data?.tasks.map((item) => item.id) ?? []),
-    milestones: new Set(
-      data?.nodes.filter((item) => item.kind === "milestone").map((item) => item.id) ?? [],
-    ),
-  };
+  return { groups: new Set(data?.groups.map((item) => item.id) ?? []), states: defaultStates, kinds: defaultKinds, plans: new Set(data?.plans.map((item) => item.id) ?? []), tasks: new Set(data?.tasks.map((item) => item.id) ?? []), milestones: new Set(data?.nodes.filter((item) => item.kind === "milestone").map((item) => item.id) ?? []) };
 }
 function syncUrl(): void {
   const phaseDefaultTab = phase === "execution" ? "actual" : DEFAULT_VIEW_STATE.tab;
-  replaceViewState(
-    viewState,
-    activePlanId || null,
-    phaseDefaultTab,
-    defaultTaskLayout(data?.groups.length ?? 0),
-  );
+  replaceViewState(viewState, activePlanId || null, phaseDefaultTab, defaultTaskLayout(data?.groups.length ?? 0));
 }
 function filterFromControls(): void {
-  viewState = {
-    ...viewState,
-    query: $<HTMLInputElement>("search").value.trim(),
-    group: menuValue("group-filter"),
-    state: menuValue("state-filter"),
-    kind: menuValue("kind-filter"),
-  };
+  viewState = { ...viewState, query: $<HTMLInputElement>("search").value.trim(), group: menuValue("group-filter"), state: menuValue("state-filter"), kind: menuValue("kind-filter") };
   syncUrl();
 }
 function filteredTasks(): Task[] {
   if (!data) return [];
   const query = viewState.query.toLocaleLowerCase();
-  return data.tasks.filter(
-    (task) =>
-      (!query || `${task.title} ${task.id}`.toLocaleLowerCase().includes(query)) &&
-      (!viewState.group || task.group_id === viewState.group) &&
-      (!viewState.kind || task.kind === viewState.kind) &&
-      (!viewState.state ||
-        (viewState.state === "ready"
-          ? task.is_ready && task.state === "planned"
-          : task.state === viewState.state)),
-  );
+  return data.tasks.filter((task) => (!query || `${task.title} ${task.id}`.toLocaleLowerCase().includes(query)) && (!viewState.group || task.group_id === viewState.group) && (!viewState.kind || task.kind === viewState.kind) && (!viewState.state || (viewState.state === "ready" ? task.is_ready && task.state === "planned" : task.state === viewState.state)));
 }
 type MenuId = "theme" | "version" | "group-filter" | "state-filter" | "kind-filter";
 type MenuItem = { value: string; label: string };
-const menuValues: Record<MenuId, string> = {
-  theme: "system",
-  version: "",
-  "group-filter": "",
-  "state-filter": "",
-  "kind-filter": "",
-};
-function menuTrigger(id: MenuId): HTMLButtonElement {
-  return $(`${id}-trigger`) as HTMLButtonElement;
-}
-function menuValue(id: MenuId): string {
-  return menuTrigger(id).dataset.value ?? menuValues[id];
-}
+const menuValues: Record<MenuId, string> = { theme: "system", version: "", "group-filter": "", "state-filter": "", "kind-filter": "" };
+function menuTrigger(id: MenuId): HTMLButtonElement { return $(`${id}-trigger`) as HTMLButtonElement; }
+function menuValue(id: MenuId): string { return menuTrigger(id).dataset.value ?? menuValues[id]; }
 function setMenuValue(id: MenuId, value: string): void {
   const trigger = menuTrigger(id);
   trigger.dataset.value = value;
   menuValues[id] = value;
-  const option = document.querySelector<HTMLElement>(
-    `#${id}-menu [data-menu-value="${CSS.escape(value)}"]`,
-  );
+  const option = document.querySelector<HTMLElement>(`#${id}-menu [data-menu-value="${CSS.escape(value)}"]`);
   $(`${id}-value`).textContent = option?.textContent ?? value;
-  for (const item of document.querySelectorAll<HTMLElement>(`#${id}-menu [role="option"]`))
-    item.setAttribute("aria-selected", String(item.dataset.menuValue === value));
+  for (const item of document.querySelectorAll<HTMLElement>(`#${id}-menu [role="option"]`)) item.setAttribute("aria-selected", String(item.dataset.menuValue === value));
 }
 function closeMenus(): void {
   for (const menu of document.querySelectorAll<HTMLElement>(".custom-menu")) menu.hidden = true;
-  for (const trigger of document.querySelectorAll<HTMLButtonElement>(
-    ".menu-trigger, .theme-trigger",
-  ))
-    trigger.setAttribute("aria-expanded", "false");
+  for (const trigger of document.querySelectorAll<HTMLButtonElement>(".menu-trigger, .theme-trigger")) trigger.setAttribute("aria-expanded", "false");
 }
 function openMenu(id: MenuId): void {
   closeMenus();
-  const menu = $(`${id}-menu`);
-  const trigger = menuTrigger(id);
-  menu.hidden = false;
-  trigger.setAttribute("aria-expanded", "true");
-  const selected = menu.querySelector<HTMLElement>(
-    `[data-menu-value="${CSS.escape(menuValue(id))}"]`,
-  );
+  const menu = $(`${id}-menu`); const trigger = menuTrigger(id);
+  menu.hidden = false; trigger.setAttribute("aria-expanded", "true");
+  const selected = menu.querySelector<HTMLElement>(`[data-menu-value="${CSS.escape(menuValue(id))}"]`);
   (selected ?? menu.querySelector<HTMLElement>("[role=option]"))?.focus();
 }
 function chooseMenu(id: MenuId, value: string): void {
   const trigger = menuTrigger(id);
-  setMenuValue(id, value);
-  closeMenus();
-  if (id === "theme") {
-    focusAfterRerender(trigger, trigger);
-    void saveTheme(value as Theme);
-    return;
-  }
-  viewState = {
-    ...viewState,
-    ...(id === "group-filter"
-      ? { group: value }
-      : id === "state-filter"
-        ? { state: value }
-        : { kind: value }),
-  };
-  syncUrl();
-  render();
-  focusAfterRerender(trigger, trigger);
+  setMenuValue(id, value); closeMenus();
+  if (id === "theme") { focusAfterRerender(trigger, trigger); void saveTheme(value as Theme); return; }
+  viewState = { ...viewState, ...(id === "group-filter" ? { group: value } : id === "state-filter" ? { state: value } : { kind: value }) };
+  syncUrl(); render(); focusAfterRerender(trigger, trigger);
 }
 function updateVersionMenu(): void {
   if (!data) return;
-  const menu = $("version-menu");
-  menu.replaceChildren();
+  const menu = $("version-menu"); menu.replaceChildren();
   const defaultPlan = activePlanId || data.selected_plan_id;
   for (const plan of data.plans) {
-    const listItem = document.createElement("li");
-    const option = document.createElement("a");
+    const listItem = document.createElement("li"); const option = document.createElement("a");
     const selected = (activePlan || defaultPlan) === plan.id;
-    option.href = canonicalViewUrl(
-      window.location.href,
-      { ...viewState, plan: plan.id === defaultPlan ? null : plan.id },
-      defaultPlan,
-      phase === "execution" ? "actual" : DEFAULT_VIEW_STATE.tab,
-      defaultTaskLayout(data?.groups.length ?? 0),
-    );
-    option.role = "option";
-    option.dataset.menuValue = plan.id;
-    option.setAttribute("aria-selected", String(selected));
-    option.textContent = plan.id;
+    option.href = canonicalViewUrl(window.location.href, { ...viewState, plan: plan.id === defaultPlan ? null : plan.id }, defaultPlan, phase === "execution" ? "actual" : DEFAULT_VIEW_STATE.tab, defaultTaskLayout(data?.groups.length ?? 0));
+    option.role = "option"; option.dataset.menuValue = plan.id; option.setAttribute("aria-selected", String(selected)); option.textContent = plan.id;
     option.addEventListener("click", (event) => {
-      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
-        return;
-      event.preventDefault();
-      activePlan = plan.id === defaultPlan ? "" : plan.id;
-      viewState = { ...viewState, plan: activePlan || null };
-      closeMenus();
-      syncUrl();
-      focusAfterRerender($("version-trigger"), $("version-trigger"));
-      void refresh();
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault(); activePlan = plan.id === defaultPlan ? "" : plan.id; viewState = { ...viewState, plan: activePlan || null }; closeMenus(); syncUrl(); focusAfterRerender($("version-trigger"), $("version-trigger")); void refresh();
     });
-    listItem.append(option);
-    menu.append(listItem);
+    listItem.append(option); menu.append(listItem);
   }
   setMenuValue("version", activePlan || defaultPlan);
 }
 function updateMenu(id: MenuId, items: MenuItem[], placeholder?: string): void {
   if (id === "theme" || id === "version") return;
-  const menu = $(`${id}-menu`);
-  menu.replaceChildren();
+  const menu = $(`${id}-menu`); menu.replaceChildren();
   const options = placeholder ? [{ value: "", label: placeholder }, ...items] : items;
   for (const item of options) {
-    const listItem = document.createElement("li");
-    const option = document.createElement("button");
-    option.type = "button";
-    option.role = "option";
-    option.dataset.menuValue = item.value;
-    option.textContent = item.label;
-    option.addEventListener("click", () => chooseMenu(id, item.value));
-    listItem.append(option);
-    menu.append(listItem);
+    const listItem = document.createElement("li"); const option = document.createElement("button");
+    option.type = "button"; option.role = "option"; option.dataset.menuValue = item.value; option.textContent = item.label;
+    option.addEventListener("click", () => chooseMenu(id, item.value)); listItem.append(option); menu.append(listItem);
   }
 }
 function renderSummary(): void {
   if (!data) return;
   const summary = clear("summary");
   const tasks = data.tasks;
-  const entries = [
-    ["Agent 空闲", tasks.filter((task) => task.state === "agent_idle").length, "agent_idle"],
-    ["就绪", tasks.filter((task) => task.is_ready && task.state === "planned").length, "ready"],
-    [
-      "执行中",
-      `${tasks.filter((task) => ["starting", "running"].includes(task.state)).length}/${data.orchestration.max_running_tasks}`,
-      "running",
-    ],
-    ["阻塞", tasks.filter((task) => task.state === "blocked").length, "blocked"],
-    ["已集成", tasks.filter((task) => task.state === "integrated").length, "integrated"],
-    ["已收口", tasks.filter((task) => task.state === "closed").length, "closed"],
-  ] as const;
-  const iconNames: Record<string, string> = {
-    agent_idle: "tree-palm",
-    ready: "circle-dot",
-    running: "circle-play",
-    blocked: "circle-alert",
-    integrated: "git-merge",
-    closed: "circle-check",
-  };
-  for (const [name, count, status] of entries) {
-    const row = text("div", "", "summary-item");
-    row.dataset.status = status;
-    const icon = text("span", "", "summary-icon");
-    icon.setAttribute("aria-hidden", "true");
-    const iconElement = document.createElement("i");
-    iconElement.dataset.lucide = iconNames[status];
-    icon.append(iconElement);
-    row.append(icon, text("span", name, "summary-label"), text("strong", String(count)));
-    summary.append(row);
-  }
+  const entries = [["Agent 空闲", tasks.filter(task => task.state === "agent_idle").length, "agent_idle"], ["就绪", tasks.filter((task) => task.is_ready && task.state === "planned").length, "ready"], ["执行中", `${tasks.filter((task) => ["starting", "running"].includes(task.state)).length}/${data.orchestration.max_running_tasks}`, "running"], ["阻塞", tasks.filter((task) => task.state === "blocked").length, "blocked"], ["已集成", tasks.filter((task) => task.state === "integrated").length, "integrated"], ["已收口", tasks.filter((task) => task.state === "closed").length, "closed"]] as const;
+  const iconNames: Record<string, string> = { agent_idle: "tree-palm", ready: "circle-dot", running: "circle-play", blocked: "circle-alert", integrated: "git-merge", closed: "circle-check" };
+  for (const [name, count, status] of entries) { const row = text("div", "", "summary-item"); row.dataset.status = status; const icon = text("span", "", "summary-icon"); icon.setAttribute("aria-hidden", "true"); const iconElement = document.createElement("i"); iconElement.dataset.lucide = iconNames[status]; icon.append(iconElement); row.append(icon, text("span", name, "summary-label"), text("strong", String(count))); summary.append(row); }
 }
 function refreshCardDurations(): void {
   refreshTimestamps();
@@ -570,11 +246,7 @@ function refreshCardDurations(): void {
   }
 }
 function updateTaskLayoutControls(): void {
-  for (const [id, layout] of [
-    ["task-layout-board", "board"],
-    ["task-layout-grid", "grid"],
-  ] as const)
-    $<HTMLButtonElement>(id).setAttribute("aria-pressed", String(viewState.layout === layout));
+  for (const [id, layout] of [["task-layout-board", "board"], ["task-layout-grid", "grid"]] as const) $<HTMLButtonElement>(id).setAttribute("aria-pressed", String(viewState.layout === layout));
   $("group-section").hidden = viewState.layout === "board";
 }
 function syncStableGridCardWidth(): void {
@@ -585,9 +257,7 @@ function syncStableGridCardWidth(): void {
     workspace.style.removeProperty("--stable-task-card-width");
     return;
   }
-  const surfaceIsOpen =
-    workspace.classList.contains("has-details") ||
-    workspace.classList.contains("has-overlay-selection");
+  const surfaceIsOpen = workspace.classList.contains("has-details") || workspace.classList.contains("has-overlay-selection");
   const existing = workspace.style.getPropertyValue("--stable-task-card-width");
   if (surfaceIsOpen && existing) return;
   const wasDetails = workspace.classList.contains("has-details");
@@ -605,22 +275,9 @@ function setTaskLayout(layout: TaskLayout): void {
   if (viewState.layout === layout) return;
   viewState = { ...viewState, layout };
   syncUrl();
-  if (data) {
-    hideHoverPreview();
-    hoverBridge?.resetTargets();
-    renderList(filteredTasks());
-    syncStableGridCardWidth();
-    createIcons({ icons: ICONS });
-    showCurrentSelectionPreview();
-  }
+  if (data) { hideHoverPreview(); hoverBridge?.resetTargets(); renderList(filteredTasks()); syncStableGridCardWidth(); createIcons({ icons: ICONS }); showCurrentSelectionPreview(); }
 }
-const taskContextMenu = installTaskContextMenu({
-  getData: () => data,
-  beforeOpen: () => {
-    hideHoverPreview();
-    closeMenus();
-  },
-});
+const taskContextMenu = installTaskContextMenu({ getData: () => data, beforeOpen: () => { hideHoverPreview(); closeMenus(); } });
 const cardRenderer = createCardRenderer({
   getData: () => data,
   getLayout: () => viewState.layout,
@@ -631,95 +288,39 @@ const cardRenderer = createCardRenderer({
   archiveConversation,
   selectTask: (id, atomId) => selectTask(id, atomId),
   selectGroup: (id) => selectGroup(id),
-  setKeyboardSelection: () => {
-    keyboardSelection = true;
-  },
+  setKeyboardSelection: () => { keyboardSelection = true; },
   updateTaskLayoutControls,
   bindTaskHover: (target, task) => hoverController.bindHoverTarget(target, taskPreview(task)),
   bindGroupHover: (target, group) => hoverController.bindHoverTarget(target, groupPreview(group)),
 });
 const { renderList, renderGroups } = cardRenderer;
-function css(name: string, fallback: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
-}
-function safeExternal(url: string | null): string | null {
-  if (!url || !data) return null;
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "https:" &&
-      parsed.hostname === data.orchestration.repository.host &&
-      !parsed.port &&
-      !parsed.username &&
-      !parsed.password
-      ? parsed.href
-      : null;
-  } catch {
-    return null;
-  }
-}
+function css(name: string, fallback: string): string { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback; }
+function safeExternal(url: string | null): string | null { if (!url || !data) return null; try { const parsed = new URL(url); return parsed.protocol === "https:" && parsed.hostname === data.orchestration.repository.host && !parsed.port && !parsed.username && !parsed.password ? parsed.href : null; } catch { return null; } }
 let profileCapabilities: ProfileCapabilities | null = null;
 let profileCapabilityError = "正在读取模型能力…";
 async function loadProfileCapabilities(): Promise<void> {
   try {
     const response = await fetch("api/execution-profile");
     const result = await response.json();
-    if (!response.ok || !Array.isArray(result.capabilities))
-      throw new Error(result.message ?? "模型能力目录不可用，暂时无法编辑");
+    if (!response.ok || !Array.isArray(result.capabilities)) throw new Error(result.message ?? "模型能力目录不可用，暂时无法编辑");
     profileCapabilities = result.capabilities;
     profileCapabilityError = "";
-  } catch (cause) {
-    profileCapabilityError = cause instanceof Error ? cause.message : String(cause);
-  }
+  } catch (cause) { profileCapabilityError = cause instanceof Error ? cause.message : String(cause); }
 }
-async function updateProfile(
-  targetType: ProfileTarget,
-  targetId: string,
-  profile: { model: string; thinking: string } | null,
-  recommend = false,
-): Promise<void> {
+async function updateProfile(targetType: ProfileTarget, targetId: string, profile: { model: string; thinking: string } | null, recommend = false): Promise<void> {
   if (!data?.orchestration.owner_thread_id) throw new Error("主会话身份不可用");
-  const response = await fetch("api/execution-profile", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      run_id: data.orchestration.id,
-      actor: { role: "main", thread_id: data.orchestration.owner_thread_id },
-      request_id: `profile-${crypto.randomUUID()}`,
-      expected_revision: data.orchestration.revision,
-      payload: {
-        target_type: targetType,
-        target_id: targetId,
-        execution_profile: profile,
-        recommend,
-      },
-    }),
-  });
+  const response = await fetch("api/execution-profile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run_id: data.orchestration.id, actor: { role: "main", thread_id: data.orchestration.owner_thread_id }, request_id: `profile-${crypto.randomUUID()}`, expected_revision: data.orchestration.revision, payload: { target_type: targetType, target_id: targetId, execution_profile: profile, recommend } }) });
   const result = await response.json();
   if (!response.ok) throw new Error(result.message ?? result.error ?? "配置保存失败");
   await refresh();
 }
-const detailContent = createDetailContent({
-  getData: () => data,
-  labels,
-  labelTask: label,
-  time,
-  safeExternal,
-  archiveConversation,
-  profileContext: () => ({
-    capabilities: profileCapabilities,
-    capabilityError: profileCapabilityError,
-    update: updateProfile,
-  }),
-});
-const { clearDetails, showTask, showGroup, showMilestone, taskPreview, groupPreview } =
-  detailContent;
-const hasSelectedObject = (): boolean =>
-  Boolean(
-    (selectedTask && data?.tasks.some((task) => task.id === selectedTask)) ||
-      (selectedGroup && data?.groups.some((group) => group.id === selectedGroup)) ||
-      (selectedMilestone &&
-        data?.nodes.some((node) => node.kind === "milestone" && node.id === selectedMilestone)),
-  );
+const detailContent = createDetailContent({ getData: () => data, labels, labelTask: label, time, safeExternal, archiveConversation, profileContext: () => ({ capabilities: profileCapabilities, capabilityError: profileCapabilityError, update: updateProfile }) });
+const { clearDetails, showTask, showGroup, showMilestone, taskPreview, groupPreview } = detailContent;
+const hasSelectedObject = (): boolean => Boolean(
+  (selectedTask && data?.tasks.some((task) => task.id === selectedTask))
+  || (selectedGroup && data?.groups.some((group) => group.id === selectedGroup))
+  || (selectedMilestone && data?.nodes.some((node) => node.kind === "milestone" && node.id === selectedMilestone)),
+);
 function canUseDetailsPanel(): boolean {
   const workspace = document.querySelector<HTMLElement>(".workspace");
   return detailsPanelFits(workspace?.getBoundingClientRect().width ?? 0);
@@ -728,85 +329,31 @@ const DETAILS_MIN_HEIGHT = 120;
 const detailsHeightKey = `loomhelm:details-height:${location.pathname}`;
 function detailsHeightBounds(): { min: number; max: number } {
   const workspace = document.querySelector<HTMLElement>(".workspace");
-  const available = Math.max(
-    DETAILS_MIN_HEIGHT,
-    workspace?.getBoundingClientRect().height ?? window.innerHeight,
-  );
-  return {
-    min: DETAILS_MIN_HEIGHT,
-    max: Math.max(DETAILS_MIN_HEIGHT, Math.min(window.innerHeight * 0.6, available - 240)),
-  };
+  const available = Math.max(DETAILS_MIN_HEIGHT, workspace?.getBoundingClientRect().height ?? window.innerHeight);
+  return { min: DETAILS_MIN_HEIGHT, max: Math.max(DETAILS_MIN_HEIGHT, Math.min(window.innerHeight * 0.6, available - 240)) };
 }
 function setDetailsHeight(value: number, persist = true): void {
-  const bounds = detailsHeightBounds();
-  const height = Math.round(Math.max(bounds.min, Math.min(bounds.max, value)));
+  const bounds = detailsHeightBounds(); const height = Math.round(Math.max(bounds.min, Math.min(bounds.max, value)));
   document.documentElement.style.setProperty("--details-height", `${height}px`);
   const separator = document.getElementById("details-resize");
-  separator?.setAttribute("aria-valuemin", String(bounds.min));
-  separator?.setAttribute("aria-valuemax", String(bounds.max));
-  separator?.setAttribute("aria-valuenow", String(height));
+  separator?.setAttribute("aria-valuemin", String(bounds.min)); separator?.setAttribute("aria-valuemax", String(bounds.max)); separator?.setAttribute("aria-valuenow", String(height));
   if (persist) localStorage.setItem(detailsHeightKey, String(height));
 }
 const savedDetailsHeight = Number(localStorage.getItem(detailsHeightKey));
-setDetailsHeight(
-  Number.isFinite(savedDetailsHeight) && savedDetailsHeight > 0
-    ? savedDetailsHeight
-    : window.innerHeight * 0.4,
-  false,
-);
+setDetailsHeight(Number.isFinite(savedDetailsHeight) && savedDetailsHeight > 0 ? savedDetailsHeight : window.innerHeight * 0.4, false);
 const detailsResize = document.getElementById("details-resize");
 if (detailsResize) {
-  let startY = 0;
-  let startHeight = 0;
-  const move = (event: PointerEvent) => {
-    event.preventDefault();
-    setDetailsHeight(startHeight + startY - event.clientY);
-  };
-  const end = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", end);
-  };
-  detailsResize.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    startY = event.clientY;
-    startHeight =
-      Number.parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue("--details-height"),
-      ) || window.innerHeight * 0.4;
-    detailsResize.setPointerCapture?.(event.pointerId);
-    window.addEventListener("pointermove", move, { passive: false });
-    window.addEventListener("pointerup", end);
-  });
-  detailsResize.addEventListener("keydown", (event) => {
-    const current =
-      Number.parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue("--details-height"),
-      ) || window.innerHeight * 0.4;
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setDetailsHeight(current + 24);
-    } else if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setDetailsHeight(current - 24);
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      setDetailsHeight(detailsHeightBounds().min);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      setDetailsHeight(detailsHeightBounds().max);
-    }
-  });
+  let startY = 0; let startHeight = 0;
+  const move = (event: PointerEvent) => { event.preventDefault(); setDetailsHeight(startHeight + startY - event.clientY); };
+  const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
+  detailsResize.addEventListener("pointerdown", event => { event.preventDefault(); startY = event.clientY; startHeight = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.4; detailsResize.setPointerCapture?.(event.pointerId); window.addEventListener("pointermove", move, { passive: false }); window.addEventListener("pointerup", end); });
+  detailsResize.addEventListener("keydown", event => { const current = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.4; if (event.key === "ArrowUp") { event.preventDefault(); setDetailsHeight(current + 24); } else if (event.key === "ArrowDown") { event.preventDefault(); setDetailsHeight(current - 24); } else if (event.key === "Home") { event.preventDefault(); setDetailsHeight(detailsHeightBounds().min); } else if (event.key === "End") { event.preventDefault(); setDetailsHeight(detailsHeightBounds().max); } });
 }
 const hoverController = createHoverController({
   element: $,
   getData: () => data,
   getViewState: () => viewState,
-  getSelected: () => ({
-    task: selectedTask,
-    group: selectedGroup,
-    milestone: selectedMilestone,
-    atom: viewState.atom,
-  }),
+  getSelected: () => ({ task: selectedTask, group: selectedGroup, milestone: selectedMilestone, atom: viewState.atom }),
   getKeyboardSelection: () => keyboardSelection,
   getBridge: () => hoverBridge,
   getAnyHover: () => anyHoverCapability.matches,
@@ -817,59 +364,20 @@ const hoverController = createHoverController({
   updateDetailsSurface,
   focusSelectedObject: () => hoverController.focusSelectedObject(),
 });
-const {
-  supportsHoverDetails,
-  showHoverPreview,
-  hideHoverPreview,
-  recordPointerType,
-  showCurrentSelectionPreview,
-  dismiss: dismissHoverPreview,
-  pointerTypeFromEvent,
-} = hoverController;
-function updateDetailsSurface(
-  open: boolean,
-  focus = false,
-): ReturnType<typeof resolveDetailSurface> {
+const { supportsHoverDetails, showHoverPreview, hideHoverPreview, recordPointerType, showCurrentSelectionPreview, dismiss: dismissHoverPreview, pointerTypeFromEvent } = hoverController;
+function updateDetailsSurface(open: boolean, focus = false): ReturnType<typeof resolveDetailSurface> {
   const detailPanelViewport = canUseDetailsPanel();
-  const mediumShort =
-    window.innerWidth >= DETAILS_PANEL_BREAKPOINT &&
-    window.innerWidth <= 1444 &&
-    window.innerHeight <= 960;
+  const mediumShort = window.innerWidth >= DETAILS_PANEL_BREAKPOINT && window.innerWidth <= 1444 && window.innerHeight <= 960;
   const drawerViewport = window.innerWidth < DETAILS_PANEL_BREAKPOINT || mediumShort;
-  const surface = resolveDetailSurface({
-    selected: hasSelectedObject(),
-    detailOpen: open,
-    hoverCapable: supportsHoverDetails(),
-    keyboardSelection,
-    detailPanelViewport,
-    drawerViewport,
-  });
-  applyDetailSurface(
-    {
-      workspace: document.querySelector<HTMLElement>(".workspace")!,
-      background: [
-        document.querySelector<HTMLElement>(".topbar")!,
-        document.querySelector<HTMLElement>(".overview")!,
-        document.querySelector<HTMLElement>(".workspace-main")!,
-      ],
-      details: $("details"),
-      detailsBackdrop: $("details-backdrop"),
-      hoverPreview: $("hover-preview"),
-      closeDetails: $("close-details"),
-    },
-    surface,
-    detailPanelViewport,
-    focus,
-  );
+  const surface = resolveDetailSurface({ selected: hasSelectedObject(), detailOpen: open, hoverCapable: supportsHoverDetails(), keyboardSelection, detailPanelViewport, drawerViewport });
+  applyDetailSurface({ workspace: document.querySelector<HTMLElement>(".workspace")!, background: [document.querySelector<HTMLElement>(".topbar")!, document.querySelector<HTMLElement>(".overview")!, document.querySelector<HTMLElement>(".workspace-main")!], details: $("details"), detailsBackdrop: $("details-backdrop"), hoverPreview: $("hover-preview"), closeDetails: $("close-details") }, surface, detailPanelViewport, focus);
   return surface;
 }
 const timelineController = createTimelineController({
   taskContextMenu: (event, id, target) => taskContextMenu.open(event, id, target),
   getData: () => data,
   getViewState: () => viewState,
-  setViewState: (next) => {
-    viewState = next;
-  },
+  setViewState: (next) => { viewState = next; },
   syncUrl,
   element: $,
   css,
@@ -886,10 +394,7 @@ const graphController = createGraphController({
   element: $,
   getData: () => data,
   getViewState: () => viewState,
-  setZoom: (zoom) => {
-    viewState = { ...viewState, zoom };
-    syncUrl();
-  },
+  setZoom: (zoom) => { viewState = { ...viewState, zoom }; syncUrl(); },
   css,
   stateColor,
   groupColor,
@@ -901,21 +406,13 @@ const graphController = createGraphController({
   selectTask,
   selectGroup,
   selectMilestone,
-  getSelected: () => ({
-    task: selectedTask,
-    group: selectedGroup,
-    milestone: selectedMilestone,
-    atom: viewState.atom,
-  }),
+  getSelected: () => ({ task: selectedTask, group: selectedGroup, milestone: selectedMilestone, atom: viewState.atom }),
 });
 const atomicGraphController = createAtomicGraphController({
   element: $,
   getData: () => data,
   getViewState: () => viewState,
-  setZoom: (zoom) => {
-    viewState = { ...viewState, zoom };
-    syncUrl();
-  },
+  setZoom: (zoom) => { viewState = { ...viewState, zoom }; syncUrl(); },
   css,
   stateColor,
   groupColor,
@@ -927,52 +424,23 @@ const atomicGraphController = createAtomicGraphController({
   selectTask,
   selectGroup,
   selectMilestone,
-  getSelected: () => ({
-    task: selectedTask,
-    group: selectedGroup,
-    milestone: selectedMilestone,
-    atom: viewState.atom,
-  }),
+  getSelected: () => ({ task: selectedTask, group: selectedGroup, milestone: selectedMilestone, atom: viewState.atom }),
 });
-function openDetails(): void {
-  updateDetailsSurface(true, true);
-}
+function openDetails(): void { updateDetailsSurface(true, true); }
 function restoreClosedDetails(): void {
-  const selection = selectedTask
-    ? { kind: "task" as const, id: selectedTask }
-    : selectedGroup
-      ? { kind: "group" as const, id: selectedGroup }
-      : null;
+  const selection = selectedTask ? { kind: "task" as const, id: selectedTask } : selectedGroup ? { kind: "group" as const, id: selectedGroup } : null;
   const fallback = selectedObjectFocusSelector(selection);
-  focusAfterRerender(
-    lastFocus,
-    (fallback ? firstVisibleElement(document, fallback) : null) ?? $("search"),
-  );
+  focusAfterRerender(lastFocus, (fallback ? firstVisibleElement(document, fallback) : null) ?? $("search"));
 }
-function closeDetails(): void {
-  hideHoverPreview();
-  keyboardSelection = false;
-  viewState = { ...viewState, detail: false };
-  syncUrl();
-  updateDetailsSurface(false);
-  syncStableGridCardWidth();
-  restoreClosedDetails();
-}
-function planInfoIsOpen(): boolean {
-  return $("plan-info-panel").classList.contains("open");
-}
-function planInfoIsDrawer(): boolean {
-  return window.innerWidth < DETAILS_PANEL_BREAKPOINT;
-}
+function closeDetails(): void { hideHoverPreview(); keyboardSelection = false; viewState = { ...viewState, detail: false }; syncUrl(); updateDetailsSurface(false); syncStableGridCardWidth(); restoreClosedDetails(); }
+function planInfoIsOpen(): boolean { return $("plan-info-panel").classList.contains("open"); }
+function planInfoIsDrawer(): boolean { return window.innerWidth < DETAILS_PANEL_BREAKPOINT; }
 function positionPlanInfo(): void {
   const trigger = $("plan-info-trigger");
   const panel = $("plan-info-panel");
   if (!planInfoIsOpen() || planInfoIsDrawer()) return;
   const rect = trigger.getBoundingClientRect();
-  const left = Math.max(
-    12,
-    Math.min(window.innerWidth - panel.offsetWidth - 12, rect.right - panel.offsetWidth),
-  );
+  const left = Math.max(12, Math.min(window.innerWidth - panel.offsetWidth - 12, rect.right - panel.offsetWidth));
   panel.style.left = `${left}px`;
   panel.style.top = `${Math.max(12, Math.min(window.innerHeight - panel.offsetHeight - 12, rect.bottom + 8))}px`;
 }
@@ -1012,44 +480,23 @@ function closePlanInfo(restoreFocus = true): void {
   panel.setAttribute("aria-hidden", "true");
   $("plan-info-trigger").setAttribute("aria-expanded", "false");
   $("plan-info-backdrop").hidden = true;
-  if (restoreFocus && planInfoLastFocus && document.contains(planInfoLastFocus))
-    planInfoLastFocus.focus({ preventScroll: true });
+  if (restoreFocus && planInfoLastFocus && document.contains(planInfoLastFocus)) planInfoLastFocus.focus({ preventScroll: true });
   planInfoLastFocus = null;
 }
 function trapPlanInfoFocus(event: KeyboardEvent): void {
   if (event.key !== "Tab" || !planInfoIsOpen()) return;
   const panel = $("plan-info-panel");
-  const focusable = [
-    ...panel.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
-    ),
-  ].filter((element) => !element.hidden);
-  if (!focusable.length) {
-    event.preventDefault();
-    panel.focus();
-    return;
-  }
-  const first = focusable[0]!;
-  const last = focusable[focusable.length - 1]!;
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
+  const focusable = [...panel.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')].filter((element) => !element.hidden);
+  if (!focusable.length) { event.preventDefault(); panel.focus(); return; }
+  const first = focusable[0]!; const last = focusable[focusable.length - 1]!;
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
 }
 function renderPlanInfo(): void {
   const trigger = $("plan-info-trigger");
   const severity = planStateSeverity(data?.plan_state);
-  const iconName =
-    severity === "blocked" ? "circle-alert" : severity === "unknown" ? "circle-help" : "info";
-  const label =
-    severity === "blocked"
-      ? "查看编排问题"
-      : severity === "unknown"
-        ? "查看编排状态"
-        : "查看编排信息";
+  const iconName = severity === "blocked" ? "circle-alert" : severity === "unknown" ? "circle-help" : "info";
+  const label = severity === "blocked" ? "查看编排问题" : severity === "unknown" ? "查看编排状态" : "查看编排信息";
   trigger.dataset.status = severity;
   trigger.dataset.tooltip = label;
   trigger.setAttribute("aria-label", label);
@@ -1060,8 +507,7 @@ function renderPlanInfo(): void {
   icon.setAttribute("aria-hidden", "true");
   trigger.replaceChildren(icon);
   if (data) {
-    $("plan-info-title").textContent =
-      `${data.orchestration.repository.owner} / ${data.orchestration.repository.name}`;
+    $("plan-info-title").textContent = `${data.orchestration.repository.owner} / ${data.orchestration.repository.name}`;
     renderPlanInfoContent($("plan-info-content"), data);
   } else $("plan-info-content").replaceChildren();
 }
@@ -1069,149 +515,30 @@ function trapDetailsFocus(event: KeyboardEvent): void {
   if (event.key !== "Tab") return;
   const details = $("details");
   if (!details.classList.contains("open")) return;
-  const focusable = [
-    ...details.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
-    ),
-  ].filter((element) => !element.hidden);
-  if (!focusable.length) {
-    event.preventDefault();
-    details.focus();
-    return;
-  }
-  const first = focusable[0]!;
-  const last = focusable[focusable.length - 1]!;
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
+  const focusable = [...details.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')].filter((element) => !element.hidden);
+  if (!focusable.length) { event.preventDefault(); details.focus(); return; }
+  const first = focusable[0]!; const last = focusable[focusable.length - 1]!;
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
 }
 function refreshResponsiveDetails(): void {
   hideHoverPreview();
   if (!data) return;
   const surface = updateDetailsSurface(viewState.detail);
   if (surface === "hover-preview" && viewState.detail) {
-    const selection = selectedTask
-      ? { kind: "task" as const, id: selectedTask }
-      : selectedGroup
-        ? { kind: "group" as const, id: selectedGroup }
-        : selectedMilestone
-          ? { kind: "milestone" as const, id: selectedMilestone }
-          : null;
+    const selection = selectedTask ? { kind: "task" as const, id: selectedTask } : selectedGroup ? { kind: "group" as const, id: selectedGroup } : selectedMilestone ? { kind: "milestone" as const, id: selectedMilestone } : null;
     const selector = selectedObjectFocusSelector(selection);
     const selectedTarget = selector ? firstVisibleElement(document, selector) : null;
-    focusAfterRerender(
-      null,
-      selectedTarget ??
-        firstVisibleElement(document, ".task-card-select, .task-column-select") ??
-        $("search"),
-    );
+    focusAfterRerender(null, selectedTarget ?? firstVisibleElement(document, ".task-card-select, .task-column-select") ?? $("search"));
     showCurrentSelectionPreview();
   }
 }
-function restoreSelectedFocus(selection: {
-  kind: "task" | "group" | "milestone";
-  id: string;
-}): void {
-  const selector = selectedObjectFocusSelector(selection);
-  focusAfterRerender(lastFocus, selector ? firstVisibleElement(document, selector) : null);
-}
-function dismissTaskLinkNotice(): void {
-  missingLinkedTask = null;
-  const notice = document.getElementById("task-link-notice");
-  if (notice) notice.hidden = true;
-}
-function selectGroup(id: string, atomId: string | null = null): void {
-  if (!data) return;
-  dismissTaskLinkNotice();
-  if (selectedGroup === id && viewState.detail && viewState.atom === atomId) {
-    closeDetails();
-    return;
-  }
-  const group = data.groups.find((item) => item.id === id);
-  if (!group) return;
-  hideHoverPreview();
-  hoverBridge?.resetTargets();
-  lastFocus = document.activeElement as HTMLElement;
-  lastScrollTop = window.scrollY;
-  selectedGroup = id;
-  selectedTask = null;
-  selectedMilestone = null;
-  viewState = { ...viewState, selected: { kind: "group", id }, atom: atomId, detail: true };
-  syncUrl();
-  showGroup(group, atomId);
-  renderGroups();
-  renderList(filteredTasks());
-  syncStableGridCardWidth();
-  graphController.highlightSelection();
-  atomicGraphController.highlightSelection();
-  createIcons({ icons: ICONS });
-  openDetails();
-  restoreSelectedFocus({ kind: "group", id });
-  showCurrentSelectionPreview();
-}
-function selectTask(id: string, atomId: string | null = null): void {
-  if (!data) return;
-  dismissTaskLinkNotice();
-  if (selectedTask === id && viewState.detail && viewState.atom === atomId) {
-    closeDetails();
-    return;
-  }
-  const task = data.tasks.find((item) => item.id === id);
-  if (!task) return;
-  hideHoverPreview();
-  hoverBridge?.resetTargets();
-  lastFocus = document.activeElement as HTMLElement;
-  lastScrollTop = window.scrollY;
-  selectedTask = id;
-  selectedGroup = null;
-  selectedMilestone = null;
-  viewState = { ...viewState, selected: { kind: "task", id }, atom: atomId, detail: true };
-  syncUrl();
-  showTask(task, atomId);
-  renderGroups();
-  renderList(filteredTasks());
-  syncStableGridCardWidth();
-  graphController.highlightSelection();
-  atomicGraphController.highlightSelection();
-  createIcons({ icons: ICONS });
-  openDetails();
-  restoreSelectedFocus({ kind: "task", id });
-  showCurrentSelectionPreview();
-}
-function selectMilestone(id: string, atomId: string | null = null): void {
-  if (!data) return;
-  const node = data.nodes.find((item) => item.kind === "milestone" && item.id === id);
-  const group = node?.group_id ? data.groups.find((item) => item.id === node.group_id) : null;
-  if (!node || !group) return;
-  hideHoverPreview();
-  hoverBridge?.resetTargets();
-  lastFocus = document.activeElement as HTMLElement;
-  selectedMilestone = id;
-  selectedTask = null;
-  selectedGroup = null;
-  viewState = { ...viewState, selected: { kind: "milestone", id }, atom: atomId, detail: true };
-  syncUrl();
-  showMilestone(id, group, atomId);
-  renderGroups();
-  renderList(filteredTasks());
-  syncStableGridCardWidth();
-  graphController.highlightSelection();
-  atomicGraphController.highlightSelection();
-  createIcons({ icons: ICONS });
-  openDetails();
-  restoreSelectedFocus({ kind: "milestone", id });
-  showCurrentSelectionPreview();
-}
-function applyStateToControls(): void {
-  $<HTMLInputElement>("search").value = viewState.query;
-  setMenuValue("group-filter", viewState.group);
-  setMenuValue("state-filter", viewState.state);
-  setMenuValue("kind-filter", viewState.kind);
-}
+function restoreSelectedFocus(selection: { kind: "task" | "group" | "milestone"; id: string }): void { const selector = selectedObjectFocusSelector(selection); focusAfterRerender(lastFocus, selector ? firstVisibleElement(document, selector) : null); }
+function dismissTaskLinkNotice(): void { missingLinkedTask = null; const notice = document.getElementById("task-link-notice"); if (notice) notice.hidden = true; }
+function selectGroup(id: string, atomId: string | null = null): void { if (!data) return; dismissTaskLinkNotice(); if (selectedGroup === id && viewState.detail && viewState.atom === atomId) { closeDetails(); return; } const group = data.groups.find((item) => item.id === id); if (!group) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; lastScrollTop = window.scrollY; selectedGroup = id; selectedTask = null; selectedMilestone = null; viewState = { ...viewState, selected: { kind: "group", id }, atom: atomId, detail: true }; syncUrl(); showGroup(group, atomId); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); atomicGraphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "group", id }); showCurrentSelectionPreview(); }
+function selectTask(id: string, atomId: string | null = null): void { if (!data) return; dismissTaskLinkNotice(); if (selectedTask === id && viewState.detail && viewState.atom === atomId) { closeDetails(); return; } const task = data.tasks.find((item) => item.id === id); if (!task) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; lastScrollTop = window.scrollY; selectedTask = id; selectedGroup = null; selectedMilestone = null; viewState = { ...viewState, selected: { kind: "task", id }, atom: atomId, detail: true }; syncUrl(); showTask(task, atomId); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); atomicGraphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "task", id }); showCurrentSelectionPreview(); }
+function selectMilestone(id: string, atomId: string | null = null): void { if (!data) return; const node = data.nodes.find((item) => item.kind === "milestone" && item.id === id); const group = node?.group_id ? data.groups.find((item) => item.id === node.group_id) : null; if (!node || !group) return; hideHoverPreview(); hoverBridge?.resetTargets(); lastFocus = document.activeElement as HTMLElement; selectedMilestone = id; selectedTask = null; selectedGroup = null; viewState = { ...viewState, selected: { kind: "milestone", id }, atom: atomId, detail: true }; syncUrl(); showMilestone(id, group, atomId); renderGroups(); renderList(filteredTasks()); syncStableGridCardWidth(); graphController.highlightSelection(); atomicGraphController.highlightSelection(); createIcons({ icons: ICONS }); openDetails(); restoreSelectedFocus({ kind: "milestone", id }); showCurrentSelectionPreview(); }
+function applyStateToControls(): void { $<HTMLInputElement>("search").value = viewState.query; setMenuValue("group-filter", viewState.group); setMenuValue("state-filter", viewState.state); setMenuValue("kind-filter", viewState.kind); }
 type ListFocus = { kind: "task" | "group"; id: string; href: string | null } | null;
 function captureListFocus(): ListFocus {
   const active = document.activeElement as HTMLElement | null;
@@ -1223,20 +550,12 @@ function captureListFocus(): ListFocus {
 }
 function restoreListFocus(focus: ListFocus): void {
   if (!focus) return;
-  const selector =
-    focus.kind === "task"
-      ? `[data-task-id="${CSS.escape(focus.id)}"]`
-      : `[data-group-id="${CSS.escape(focus.id)}"]`;
+  const selector = focus.kind === "task" ? `[data-task-id="${CSS.escape(focus.id)}"]` : `[data-group-id="${CSS.escape(focus.id)}"]`;
   const container = firstVisibleElement(document, selector);
-  const target =
-    (focus.href && container
-      ? [...container.querySelectorAll<HTMLAnchorElement>("a[href]")].find(
-          (link) => link.href === focus.href,
-        )
-      : null) ??
-    (container ? container.querySelector<HTMLElement>("button") : null) ??
-    firstVisibleElement(document, ".task-card-select, .task-column-select") ??
-    $("search");
+  const target = (focus.href && container ? [...container.querySelectorAll<HTMLAnchorElement>("a[href]")].find((link) => link.href === focus.href) : null)
+    ?? (container ? container.querySelector<HTMLElement>("button") : null)
+    ?? firstVisibleElement(document, ".task-card-select, .task-column-select")
+    ?? $("search");
   target.focus({ preventScroll: true });
 }
 type MenuFocus = { id: MenuId; value: string } | null;
@@ -1245,15 +564,11 @@ function captureMenuFocus(): MenuFocus {
   const container = active?.closest<HTMLElement>("[data-menu]");
   const option = active?.closest<HTMLElement>("[role=option]");
   const id = container?.dataset.menu as MenuId | undefined;
-  return id && option?.dataset.menuValue !== undefined
-    ? { id, value: option.dataset.menuValue }
-    : null;
+  return id && option?.dataset.menuValue !== undefined ? { id, value: option.dataset.menuValue } : null;
 }
 function restoreMenuFocus(focus: MenuFocus): void {
   if (!focus || menuTrigger(focus.id).getAttribute("aria-expanded") !== "true") return;
-  const option = [
-    ...document.querySelectorAll<HTMLElement>(`#${focus.id}-menu [role=option]`),
-  ].find((item) => item.dataset.menuValue === focus.value);
+  const option = [...document.querySelectorAll<HTMLElement>(`#${focus.id}-menu [role=option]`)].find((item) => item.dataset.menuValue === focus.value);
   option?.focus();
 }
 type DetailFocus = { href: string } | { id: string } | null;
@@ -1265,31 +580,14 @@ function captureDetailFocus(): DetailFocus {
 }
 function restoreDetailFocus(focus: DetailFocus): void {
   if (!focus || !viewState.detail) return;
-  const target =
-    "href" in focus
-      ? [...document.querySelectorAll<HTMLAnchorElement>("#details a")].find(
-          (link) => link.href === focus.href,
-        )
-      : document.getElementById(focus.id);
+  const target = "href" in focus
+    ? [...document.querySelectorAll<HTMLAnchorElement>("#details a")].find((link) => link.href === focus.href)
+    : document.getElementById(focus.id);
   target?.focus();
 }
 function render(): void {
   const runProfileControl = document.getElementById("run-profile-control");
-  if (runProfileControl && data)
-    runProfileControl.replaceChildren(
-      createProfileEditor(
-        {
-          capabilities: profileCapabilities,
-          capabilityError: profileCapabilityError,
-          update: updateProfile,
-        },
-        "run",
-        data.orchestration.id,
-        data.orchestration.execution_profile ?? null,
-        data.orchestration.execution_profile ?? null,
-        data.profile_read_only ? "当前视图只读或尚未迁移" : null,
-      ),
-    );
+  if (runProfileControl && data) runProfileControl.replaceChildren(createProfileEditor({ capabilities: profileCapabilities, capabilityError: profileCapabilityError, update: updateProfile }, "run", data.orchestration.id, data.orchestration.execution_profile ?? null, data.orchestration.execution_profile ?? null, data.profile_read_only ? "当前视图只读或尚未迁移" : null));
   if (!data) return;
   taskContextMenu.close();
   const listFocus = captureListFocus();
@@ -1297,145 +595,45 @@ function render(): void {
   const detailFocus = captureDetailFocus();
   hideHoverPreview();
   hoverBridge?.resetTargets();
-  $("project-name").textContent =
-    `${data.orchestration.repository.owner} / ${data.orchestration.repository.name}`;
-  $("updated").replaceChildren(
-    document.createTextNode("数据更新 "),
-    renderTimestamp(data.orchestration.updated_at),
-  );
+  $("project-name").textContent = `${data.orchestration.repository.owner} / ${data.orchestration.repository.name}`; $("updated").replaceChildren(document.createTextNode("数据更新 "), renderTimestamp(data.orchestration.updated_at));
   $("revision").textContent = `rev ${data.orchestration.revision}`;
-  const currentPhase = derivePhase(data.tasks, data.execution_phase);
-  phase = currentPhase;
-  if (data.orchestration.version)
-    $("updated").append(
-      document.createTextNode(
-        ` · Skill ${data.orchestration.version.skill_version} · Viewer contract ${data.orchestration.version.viewer_contract}`,
-      ),
-    );
+  const currentPhase = derivePhase(data.tasks, data.execution_phase); phase = currentPhase;
+  if (data.orchestration.version) $("updated").append(document.createTextNode(` · Skill ${data.orchestration.version.skill_version} · Viewer contract ${data.orchestration.version.viewer_contract}`));
   if (data.orchestration.version_status?.state !== "current") {
     const reason = data.orchestration.version_status?.reason ?? "版本状态未知";
     $("operation-warning").hidden = false;
     $("operation-warning").textContent = `版本诊断：${reason}`;
   }
-  $("operation-warning").hidden = data.warnings.length === 0;
-  $("operation-warning").textContent = data.warnings.length
-    ? `${data.warnings.length} 项外部操作结果待核实。`
-    : "";
+  $("operation-warning").hidden = data.warnings.length === 0; $("operation-warning").textContent = data.warnings.length ? `${data.warnings.length} 项外部操作结果待核实。` : "";
   const planWarnings = data.plan_warnings ?? [];
   const planWarning = $("plan-warning");
   const planState = data.plan_state;
   renderPlanInfo();
-  const authorizationLabel =
-    planState?.authorization_label ??
+  const authorizationLabel = planState?.authorization_label ??
     (planState?.approval_pending ? "Not approved" : "Schedulable");
-  const runtimeBlockers =
-    planState?.runtime_readiness?.status === "blocked"
-      ? planState.runtime_readiness.blockers.map((blocker) => blocker.message)
-      : [];
+  const runtimeBlockers = planState?.runtime_readiness?.status === "blocked"
+    ? planState.runtime_readiness.blockers.map((blocker) => blocker.message)
+    : [];
   const warningReasons = planWarnings.length
     ? planWarnings.map((warning) => warning.reason)
     : planState?.approval_pending
       ? ["Owner approval 尚未完成。"]
       : runtimeBlockers;
-  planWarning.hidden =
-    viewState.tab !== "planned" || (!warningReasons.length && authorizationLabel === "Schedulable");
+  planWarning.hidden = viewState.tab !== "planned" ||
+    (!warningReasons.length && authorizationLabel === "Schedulable");
   planWarning.textContent = [
     authorizationLabel,
     ...(warningReasons.length ? warningReasons : ["计划完整性检查通过。"]),
   ].join(" · ");
-  updateMenu(
-    "group-filter",
-    data.groups.map((group) => ({ value: group.id, label: group.title })),
-    "全部交付单元",
-  );
-  updateMenu(
-    "state-filter",
-    [...defaultStates]
-      .filter((key) => !["active", "merged", "unknown", "idle"].includes(key))
-      .map((value) => ({ value, label: value === "ready" ? "就绪" : (labels[value] ?? value) })),
-    "全部状态",
-  );
-  updateMenu(
-    "kind-filter",
-    ["contribution", "release", "deployment", "verification"].map((value) => ({
-      value,
-      label: taskKindLabel(value),
-    })),
-    "全部任务类型",
-  );
-  updateVersionMenu();
-  setMenuValue("group-filter", viewState.group);
-  setMenuValue("state-filter", viewState.state);
-  setMenuValue("kind-filter", viewState.kind);
-  $("graph-tools").hidden = !["graph", "atomic"].includes(viewState.tab);
-  $("timeline-tools").hidden = !["planned", "actual"].includes(viewState.tab);
-  applyStateToControls();
-  renderSummary();
-  const tasks = filteredTasks();
-  $("task-count").textContent = `${tasks.length} / ${data.tasks.length} 个任务`;
-  $("view-context").textContent = ["graph", "atomic"].includes(viewState.tab)
-    ? "依赖关系"
-    : viewState.tab === "planned"
-      ? "理论安排"
-      : viewState.tab === "actual"
-        ? "实际运行"
-        : "任务";
-  $("view-count").textContent = `${tasks.length} 项任务 · ${data.groups.length} 个交付单元`;
-  renderGroups();
-  renderList(tasks);
-  syncStableGridCardWidth();
-  setTabAria(viewState.tab);
-  const aggregateGraph = $("graph");
-  const atomicGraph = $("atomic-graph");
-  if (["graph", "atomic"].includes(viewState.tab)) {
-    aggregateGraph.hidden = viewState.tab !== "graph";
-    atomicGraph.hidden = viewState.tab !== "atomic";
-    if (viewState.tab === "atomic") renderAtomicGraph();
-    else graphController.render(tasks, viewState.group ? new Set([viewState.group]) : undefined);
-  } else {
-    aggregateGraph.hidden = true;
-    atomicGraph.hidden = true;
-    if (["planned", "actual"].includes(viewState.tab))
-      timelineController.renderTimeline(tasks, viewState.tab);
-  }
-  const focusDetails = focusDetailsOnNextRender;
-  focusDetailsOnNextRender = false;
-  updateDetailsSurface(viewState.detail, focusDetails);
-  const selectedTaskData = selectedTask
-    ? data.tasks.find((item) => item.id === selectedTask)
-    : null;
-  const selectedGroupData = selectedGroup
-    ? data.groups.find((item) => item.id === selectedGroup)
-    : null;
-  const selectedMilestoneData = selectedMilestone
-    ? data.nodes.find((item) => item.kind === "milestone" && item.id === selectedMilestone)
-    : null;
-  const selectedMilestoneGroup = selectedMilestoneData?.group_id
-    ? data.groups.find((item) => item.id === selectedMilestoneData.group_id)
-    : null;
-  if (selectedTaskData) showTask(selectedTaskData, viewState.atom);
-  else if (selectedGroupData) showGroup(selectedGroupData, viewState.atom);
-  else if (selectedMilestoneData && selectedMilestoneGroup)
-    showMilestone(selectedMilestoneData.id, selectedMilestoneGroup, viewState.atom);
-  else clearDetails();
-  createIcons({ icons: ICONS });
-  showCurrentSelectionPreview();
-  restoreListFocus(listFocus);
+  updateMenu("group-filter", data.groups.map((group) => ({ value: group.id, label: group.title })), "全部交付单元"); updateMenu("state-filter", [...defaultStates].filter((key) => !["active", "merged", "unknown", "idle"].includes(key)).map((value) => ({ value, label: value === "ready" ? "就绪" : labels[value] ?? value })), "全部状态"); updateMenu("kind-filter", ["contribution", "release", "deployment", "verification"].map((value) => ({ value, label: taskKindLabel(value) })), "全部任务类型"); updateVersionMenu();
+  setMenuValue("group-filter", viewState.group); setMenuValue("state-filter", viewState.state); setMenuValue("kind-filter", viewState.kind); $("graph-tools").hidden = !["graph", "atomic"].includes(viewState.tab); $("atomic-view-tools").hidden = viewState.tab !== "atomic"; $("timeline-tools").hidden = !["planned", "actual"].includes(viewState.tab); applyStateToControls(); renderSummary(); const tasks = filteredTasks(); $("task-count").textContent = `${tasks.length} / ${data.tasks.length} 个任务`; $("view-context").textContent = ["graph", "atomic"].includes(viewState.tab) ? "依赖关系" : viewState.tab === "planned" ? "理论安排" : viewState.tab === "actual" ? "实际运行" : "任务"; $("view-count").textContent = `${tasks.length} 项任务 · ${data.groups.length} 个交付单元`; renderGroups(); renderList(tasks); syncStableGridCardWidth(); setTabAria(viewState.tab); const aggregateGraph = $("graph"); const atomicGraph = $("atomic-graph"); if (["graph", "atomic"].includes(viewState.tab)) { aggregateGraph.hidden = viewState.tab !== "graph"; atomicGraph.hidden = viewState.tab !== "atomic"; if (viewState.tab === "atomic") renderAtomicGraph(); else graphController.render(tasks, viewState.group ? new Set([viewState.group]) : undefined); } else { aggregateGraph.hidden = true; atomicGraph.hidden = true; if (["planned", "actual"].includes(viewState.tab)) timelineController.renderTimeline(tasks, viewState.tab); } const focusDetails = focusDetailsOnNextRender; focusDetailsOnNextRender = false; updateDetailsSurface(viewState.detail, focusDetails); const selectedTaskData = selectedTask ? data.tasks.find((item) => item.id === selectedTask) : null; const selectedGroupData = selectedGroup ? data.groups.find((item) => item.id === selectedGroup) : null; const selectedMilestoneData = selectedMilestone ? data.nodes.find((item) => item.kind === "milestone" && item.id === selectedMilestone) : null; const selectedMilestoneGroup = selectedMilestoneData?.group_id ? data.groups.find((item) => item.id === selectedMilestoneData.group_id) : null; if (selectedTaskData) showTask(selectedTaskData, viewState.atom); else if (selectedGroupData) showGroup(selectedGroupData, viewState.atom); else if (selectedMilestoneData && selectedMilestoneGroup) showMilestone(selectedMilestoneData.id, selectedMilestoneGroup, viewState.atom); else clearDetails(); createIcons({ icons: ICONS }); showCurrentSelectionPreview(); restoreListFocus(listFocus);
   restoreMenuFocus(menuFocus);
   restoreDetailFocus(detailFocus);
-  if (restoreClosedDetailsOnNextRender) {
-    restoreClosedDetailsOnNextRender = false;
-    restoreClosedDetails();
-  }
-  if (phaseTransition) {
-    $("phase-notice").hidden = false;
-    $("phase-notice-text").textContent =
-      "已有真实任务开始执行，阶段已切换；当前视图和筛选保持不变。";
-  } else $("phase-notice").hidden = true;
+  if (restoreClosedDetailsOnNextRender) { restoreClosedDetailsOnNextRender = false; restoreClosedDetails(); }
+  if (phaseTransition) { $("phase-notice").hidden = false; $("phase-notice-text").textContent = "已有真实任务开始执行，阶段已切换；当前视图和筛选保持不变。"; } else $("phase-notice").hidden = true;
 }
 function setTabAria(tab: DashboardTab): void {
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-tab]"))
-    button.setAttribute("aria-selected", String(button.dataset.tab === tab));
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-tab]")) button.setAttribute("aria-selected", String(button.dataset.tab === tab));
   const graphView = $("graph-view");
   const graphVisible = ["graph", "atomic"].includes(tab);
   graphView.hidden = !graphVisible;
@@ -1446,439 +644,101 @@ function setTabAria(tab: DashboardTab): void {
 
 function renderAtomicGraph(): void {
   if (!data) return;
-  const allNodes = (data.atomic_nodes ??
-    []) as unknown as import("../lib/atomic-orchestration").AtomicNode[];
+  const allNodes = (data.atomic_nodes ?? []) as unknown as import("../lib/atomic-orchestration").AtomicNode[];
   const taskById = new Map(data.tasks.map((task) => [task.id, task]));
   const nodes = allNodes.filter((node) => {
     const scope = node.kind === "work" || node.kind === "milestone" ? node.scope : undefined;
     const taskId = scope?.kind === "task" ? scope.task_id : null;
-    const deliveryUnitId =
-      scope?.kind === "task"
-        ? scope.delivery_unit_id
-        : scope?.kind === "delivery_unit"
-          ? scope.delivery_unit_id
-          : null;
+    const deliveryUnitId = scope?.kind === "task" ? scope.delivery_unit_id : scope?.kind === "delivery_unit" ? scope.delivery_unit_id : null;
     if (viewState.group && deliveryUnitId !== viewState.group) return false;
     if (node.kind === "work" && taskId) {
       const task = taskById.get(taskId);
       if (!task) return false;
       if (viewState.kind && task.kind !== viewState.kind) return false;
-      if (viewState.state && task.state !== viewState.state && node.state !== viewState.state)
-        return false;
+      if (viewState.state && task.state !== viewState.state && node.state !== viewState.state) return false;
     }
     return true;
   });
   const visible = new Set(nodes.map((node) => node.id));
-  const edges = (
-    (data.canonical_atomic_edges ??
-      []) as unknown as import("../lib/atomic-orchestration").AtomicEdge[]
-  ).filter((edge) => visible.has(edge.from_node_id) && visible.has(edge.to_node_id));
+  const edges = ((data.canonical_atomic_edges ?? []) as unknown as import("../lib/atomic-orchestration").AtomicEdge[]).filter((edge) => visible.has(edge.from_node_id) && visible.has(edge.to_node_id));
   atomicGraphController.render(nodes, edges);
 }
-function setTab(tab: DashboardTab, user = true): void {
-  viewState = {
-    ...viewState,
-    tab,
-    ...(tab === "atomic"
-      ? { graphMode: "atomic" as const }
-      : tab === "graph"
-        ? { graphMode: "aggregate" as const }
-        : {}),
-  };
-  if (user) userChangedTab = true;
-  syncUrl();
-  render();
-}
+function setTab(tab: DashboardTab, user = true): void { viewState = { ...viewState, tab, ...(tab === "atomic" ? { graphMode: "atomic" as const } : tab === "graph" ? { graphMode: "aggregate" as const } : {}) }; if (user) userChangedTab = true; syncUrl(); render(); }
 async function refresh(): Promise<void> {
   if (reconnectBlocked) return;
   const serial = ++requestSerial;
   const outputEpoch = outputSnapshots.epoch;
   const requestedPlan = activePlan;
   try {
-    const query = requestedPlan ? `?plan=${encodeURIComponent(requestedPlan)}` : "";
-    let response = await fetch(`api/view${query}`, { cache: "no-store" });
-    if (response.status === 404 && requestedPlan) {
-      if (serial !== requestSerial) return;
-      activePlan = "";
-      viewState = { ...viewState, plan: null };
-      syncUrl();
-      response = await fetch("api/view", { cache: "no-store" });
-    }
+    const query = requestedPlan ? `?plan=${encodeURIComponent(requestedPlan)}` : ""; let response = await fetch(`api/view${query}`, { cache: "no-store" });
+    if (response.status === 404 && requestedPlan) { if (serial !== requestSerial) return; activePlan = ""; viewState = { ...viewState, plan: null }; syncUrl(); response = await fetch("api/view", { cache: "no-store" }); }
     if (!response.ok) {
-      const failure = (await response.json().catch(() => ({}))) as {
-        code?: string;
-        diagnostic_id?: string;
-        run_id?: string;
-        stage?: string;
-        retryable?: boolean;
-        reconnect_required?: boolean;
-      };
-      if (failure.code === "RUN_WORKER_UNAVAILABLE" && failure.diagnostic_id)
-        showWorkerDiagnostic(failure);
+      const failure = await response.json().catch(() => ({})) as { code?: string; diagnostic_id?: string; run_id?: string; stage?: string; retryable?: boolean; reconnect_required?: boolean };
+      if (failure.code === "RUN_WORKER_UNAVAILABLE" && failure.diagnostic_id) showWorkerDiagnostic(failure);
       throw new Error(`HTTP ${response.status}`);
     }
-    let result = (await response.json()) as ViewResponse;
+    let result = await response.json() as ViewResponse;
     if (!viewState.plan && requestedPlan && result.active_plan_id !== requestedPlan) {
       if (serial !== requestSerial) return;
       activePlan = "";
       response = await fetch("api/view", { cache: "no-store" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      result = (await response.json()) as ViewResponse;
+      result = await response.json() as ViewResponse;
     }
     if (serial !== requestSerial || result.revision < revision) return;
-    const previousPhase = phase;
-    revision = result.revision;
-    activePlanId = result.active_plan_id;
-    data = result.view;
-    applyOutputs(
-      {
-        output_epoch: result.output_epoch ?? "static-demo",
-        output_revision: result.output_revision ?? 0,
-        outputs: Object.fromEntries([
-          ...data.tasks.map((t) => [t.id, t.latest_agent_output ?? initialOutput(t.thread_id)]),
-          ...data.groups.map((g) => [
-            `group:${g.id}`,
-            g.latest_agent_output ?? initialOutput(g.agent_thread_id),
-          ]),
-        ]),
-      },
-      outputEpoch,
-    );
-    const currentPhase = derivePhase(data.tasks, data.execution_phase);
+    const previousPhase = phase; revision = result.revision; activePlanId = result.active_plan_id; data = result.view; applyOutputs({ output_epoch: result.output_epoch ?? "static-demo", output_revision: result.output_revision ?? 0, outputs: Object.fromEntries([...data.tasks.map(t => [t.id, t.latest_agent_output ?? initialOutput(t.thread_id)]), ...data.groups.map(g => [`group:${g.id}`, g.latest_agent_output ?? initialOutput(g.agent_thread_id)])]) }, outputEpoch); const currentPhase = derivePhase(data.tasks, data.execution_phase);
     const explicitUrlState = parseViewState(window.location.search);
-    if (hasValidTabParam(window.location.search))
-      viewState = { ...viewState, tab: explicitUrlState.tab };
-    else if (!hydrated && !userChangedTab)
-      viewState = { ...viewState, tab: defaultTabForPhase(currentPhase) };
-    if (!hasValidLayoutParam(window.location.search))
-      viewState = { ...viewState, layout: defaultTaskLayout(data.groups.length) };
-    const requestedTask =
-      viewState.selected?.kind === "task" ? viewState.selected.id : missingLinkedTask;
-    const missingTask = requestedTask && !data.tasks.some((task) => task.id === requestedTask);
+    if (hasValidTabParam(window.location.search)) viewState = { ...viewState, tab: explicitUrlState.tab };
+    else if (!hydrated && !userChangedTab) viewState = { ...viewState, tab: defaultTabForPhase(currentPhase) };
+    if (!hasValidLayoutParam(window.location.search)) viewState = { ...viewState, layout: defaultTaskLayout(data.groups.length) };
+    const requestedTask = viewState.selected?.kind === "task" ? viewState.selected.id : missingLinkedTask;
+    const missingTask = requestedTask && !data.tasks.some(task => task.id === requestedTask);
     missingLinkedTask = missingTask ? requestedTask : null;
     let taskNotice = document.getElementById("task-link-notice");
-    if (!taskNotice) {
-      taskNotice = document.createElement("div");
-      taskNotice.id = "task-link-notice";
-      taskNotice.className = "notice notice-warning";
-      taskNotice.role = "status";
-      $("connection-notice").after(taskNotice);
-    }
+    if (!taskNotice) { taskNotice = document.createElement("div"); taskNotice.id = "task-link-notice"; taskNotice.className = "notice notice-warning"; taskNotice.role = "status"; $("connection-notice").after(taskNotice); }
     taskNotice.hidden = !missingTask;
     taskNotice.textContent = missingTask ? `任务 ${requestedTask} 不存在或已不可用。` : "";
-    if (!hydrated && requestedTask && !missingTask && viewState.detail)
-      viewState = { ...viewState, query: "", group: "", kind: "", state: "" };
-    viewState = sanitizeViewState(viewState, stateValidation());
-    selectedTask = viewState.selected?.kind === "task" ? viewState.selected.id : null;
-    selectedGroup = viewState.selected?.kind === "group" ? viewState.selected.id : null;
-    selectedMilestone = viewState.selected?.kind === "milestone" ? viewState.selected.id : null;
-    activePlan = viewState.plan ?? data.selected_plan_id;
-    if (previousPhase === "planning" && currentPhase === "execution") phaseTransition = true;
-    phase = currentPhase;
-    const shouldFocusRestoredDetails = !hydrated && viewState.detail;
-    hydrated = true;
-    if (shouldFocusRestoredDetails) focusDetailsOnNextRender = true;
-    syncUrl();
-    connection(result.watching ? "live" : "stale");
-    $("load-error").hidden = true;
-    render();
+    if (!hydrated && requestedTask && !missingTask && viewState.detail) viewState = { ...viewState, query: "", group: "", kind: "", state: "" };
+    viewState = sanitizeViewState(viewState, stateValidation()); selectedTask = viewState.selected?.kind === "task" ? viewState.selected.id : null; selectedGroup = viewState.selected?.kind === "group" ? viewState.selected.id : null; selectedMilestone = viewState.selected?.kind === "milestone" ? viewState.selected.id : null; activePlan = viewState.plan ?? data.selected_plan_id;
+    if (previousPhase === "planning" && currentPhase === "execution") phaseTransition = true; phase = currentPhase; const shouldFocusRestoredDetails = !hydrated && viewState.detail; hydrated = true; if (shouldFocusRestoredDetails) focusDetailsOnNextRender = true; syncUrl(); connection(result.watching ? "live" : "stale"); $("load-error").hidden = true; render();
     if (shouldFocusRestoredDetails && selectedTask) {
-      const card = document.querySelector<HTMLElement>(
-        `[data-task-id="${CSS.escape(selectedTask)}"]`,
-      );
+      const card = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(selectedTask)}"]`);
       card?.scrollIntoView({ block: "center", inline: "center" });
       card?.querySelector<HTMLElement>(".task-card-select")?.focus({ preventScroll: true });
     }
-  } catch (error) {
-    if (serial !== requestSerial) return;
-    connection("stale");
-    if (!data && !workerDiagnostic) {
-      $("load-error").hidden = false;
-      $("load-error").textContent =
-        `首次加载失败：${error instanceof Error ? error.message : "无法读取数据"}`;
-    }
-  }
+  } catch (error) { if (serial !== requestSerial) return; connection("stale"); if (!data && !workerDiagnostic) { $("load-error").hidden = false; $("load-error").textContent = `首次加载失败：${error instanceof Error ? error.message : "无法读取数据"}`; } }
 }
-async function loadTheme(): Promise<void> {
-  const serial = ++themeRequestSerial;
-  await themeWriteQueue;
-  try {
-    const response = await fetch("api/preferences", { cache: "no-store" });
-    if (!response.ok) return;
-    const loaded = ((await response.json()) as { theme: Theme }).theme;
-    if (serial === themeRequestSerial) applyTheme(loaded);
-  } catch {}
-}
-function applyTheme(theme: Theme): void {
-  document.documentElement.dataset.theme = theme;
-  setMenuValue("theme", theme);
-}
-async function saveTheme(theme: Theme): Promise<void> {
-  const serial = ++themeRequestSerial;
-  const trigger = menuTrigger("theme");
-  applyTheme(theme);
-  trigger.removeAttribute("aria-invalid");
-  const write = async (): Promise<void> => {
-    try {
-      const response = await fetch("api/preferences", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ theme }),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    } catch {
-      if (serial === themeRequestSerial) trigger.setAttribute("aria-invalid", "true");
-    }
-  };
-  themeWriteQueue = themeWriteQueue.then(write, write);
-  await themeWriteQueue;
-}
+async function loadTheme(): Promise<void> { const serial = ++themeRequestSerial; await themeWriteQueue; try { const response = await fetch("api/preferences", { cache: "no-store" }); if (!response.ok) return; const loaded = (await response.json() as { theme: Theme }).theme; if (serial === themeRequestSerial) applyTheme(loaded); } catch {} }
+function applyTheme(theme: Theme): void { document.documentElement.dataset.theme = theme; setMenuValue("theme", theme); }
+async function saveTheme(theme: Theme): Promise<void> { const serial = ++themeRequestSerial; const trigger = menuTrigger("theme"); applyTheme(theme); trigger.removeAttribute("aria-invalid"); const write = async (): Promise<void> => { try { const response = await fetch("api/preferences", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ theme }) }); if (!response.ok) throw new Error(`HTTP ${response.status}`); } catch { if (serial === themeRequestSerial) trigger.setAttribute("aria-invalid", "true"); } }; themeWriteQueue = themeWriteQueue.then(write, write); await themeWriteQueue; }
 
-for (const button of document.querySelectorAll<HTMLButtonElement>("[data-tab]"))
-  button.addEventListener("click", () => setTab(button.dataset.tab as DashboardTab));
-$("search").addEventListener("input", () => {
-  filterFromControls();
-  render();
-});
-for (const id of ["theme", "version", "group-filter", "state-filter", "kind-filter"] as MenuId[])
-  menuTrigger(id).addEventListener("click", () => {
-    if (menuTrigger(id).getAttribute("aria-expanded") === "true") closeMenus();
-    else openMenu(id);
-  });
-for (const option of document.querySelectorAll<HTMLButtonElement>("#theme-menu [role=option]"))
-  option.addEventListener("click", () => chooseMenu("theme", option.dataset.menuValue ?? "system"));
-$("version-menu").addEventListener(
-  "keydown",
-  (event) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    const option = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[role=option]");
-    if (!option) return;
-    event.preventDefault();
-    event.stopPropagation();
-    option.click();
-  },
-  true,
-);
-$("task-layout-board").addEventListener("click", () => setTaskLayout("board"));
-$("task-layout-grid").addEventListener("click", () => setTaskLayout("grid"));
-$("plan-info-trigger").addEventListener("click", (event) => {
-  event.stopPropagation();
-  if (planInfoIsOpen()) closePlanInfo(false);
-  else openPlanInfo();
-});
-$("close-plan-info").addEventListener("click", () => closePlanInfo());
-$("plan-info-backdrop").addEventListener("click", () => closePlanInfo());
-$("plan-info-panel").addEventListener("click", (event) => event.stopPropagation());
-document.addEventListener("click", (event) => {
-  const target = event.target as HTMLElement;
-  if (!target.closest("[data-menu]")) closeMenus();
-  if (planInfoIsOpen() && !target.closest("#plan-info-panel, #plan-info-trigger")) closePlanInfo();
-});
-document.addEventListener(
-  "pointerdown",
-  (event) => {
-    keyboardSelection = false;
-    recordPointerType(event.pointerType);
-  },
-  true,
-);
-document.addEventListener("pointermove", (event) => recordPointerType(event.pointerType), true);
-document.addEventListener(
-  "keydown",
-  (event) => {
-    if (
-      (event.key === "Enter" || event.key === " ") &&
-      (event.target as HTMLElement).closest(".task-card-select, .task-column-select, .task-row")
-    )
-      keyboardSelection = true;
-  },
-  true,
-);
-document.addEventListener("keydown", (event) => {
-  const target = event.target as HTMLElement;
-  const trigger = target.closest<HTMLButtonElement>(".menu-trigger, .theme-trigger");
-  const option = target.closest<HTMLButtonElement>("[role=option]");
-  if (event.key === "Escape" && trigger) {
-    event.preventDefault();
-    event.stopPropagation();
-    closeMenus();
-    trigger.focus();
-  } else if (
-    trigger &&
-    (event.key === "ArrowDown" ||
-      event.key === "ArrowUp" ||
-      event.key === "Enter" ||
-      event.key === " ")
-  ) {
-    event.preventDefault();
-    const id = trigger.id.replace(/-trigger$/, "") as MenuId;
-    openMenu(id);
-  } else if (option && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
-    event.preventDefault();
-    const options = [
-      ...option
-        .closest<HTMLElement>("[role=listbox]")!
-        .querySelectorAll<HTMLButtonElement>("[role=option]"),
-    ];
-    const index = options.indexOf(option);
-    options[
-      (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length
-    ]?.focus();
-  } else if (option && (event.key === "Enter" || event.key === " ")) {
-    event.preventDefault();
-    const menu = option.closest<HTMLElement>("[role=listbox]");
-    const id = menu?.id.replace(/-menu$/, "") as MenuId;
-    chooseMenu(id, option.dataset.menuValue ?? "");
-  } else if (option && event.key === "Escape") {
-    event.preventDefault();
-    event.stopPropagation();
-    closeMenus();
-    menuTrigger(
-      option.closest<HTMLElement>("[role=listbox]")?.id.replace(/-menu$/, "") as MenuId,
-    ).focus();
-  }
-});
-$("close-details").addEventListener("click", closeDetails);
-$("details-backdrop").addEventListener("click", closeDetails);
-$("phase-jump").addEventListener("click", () => {
-  phaseTransition = false;
-  setTab("actual");
-});
-$("zoom-in").addEventListener("click", () =>
-  viewState.tab === "atomic" ? atomicGraphController.zoomIn() : graphController.zoomIn(),
-);
-$("zoom-out").addEventListener("click", () =>
-  viewState.tab === "atomic" ? atomicGraphController.zoomOut() : graphController.zoomOut(),
-);
-$("fit").addEventListener("click", () =>
-  viewState.tab === "atomic" ? atomicGraphController.fit() : graphController.fit(),
-);
-$("timeline-zoom-in").addEventListener("click", () => timelineController.adjustWindow("in"));
-$("timeline-zoom-out").addEventListener("click", () => timelineController.adjustWindow("out"));
-$("timeline-fit").addEventListener("click", () => timelineController.fit());
-installViewStateNavigation(window, {
-  getSearch: () => window.location.search,
-  getValidation: (search) => {
-    const targetPlan = search ? new URLSearchParams(search).get("plan") : null;
-    if ((targetPlan ?? activePlanId) !== (viewState.plan ?? activePlanId))
-      return { plans: new Set(data?.plans.map((plan) => plan.id) ?? []) };
-    return data ? stateValidation() : {};
-  },
-  getPhase: () => (data ? (phase ?? derivePhase(data.tasks)) : null),
-  restore: (next, hasExplicitTab) => {
-    const planChanged = next.plan !== viewState.plan;
-    const closingDetails = viewState.detail && !next.detail;
-    userChangedTab = hasExplicitTab;
-    if (closingDetails) {
-      keyboardSelection = false;
-      hideHoverPreview();
-      restoreClosedDetailsOnNextRender = true;
-    }
-    viewState = next;
-    selectedTask = next.selected?.kind === "task" ? next.selected.id : null;
-    selectedGroup = next.selected?.kind === "group" ? next.selected.id : null;
-    selectedMilestone = next.selected?.kind === "milestone" ? next.selected.id : null;
-    activePlan = next.plan ?? "";
-    if (next.detail) focusDetailsOnNextRender = true;
-    if (planChanged) void refresh();
-    else if (data) render();
-  },
-});
-window.addEventListener("keydown", (event) => {
-  trapDetailsFocus(event);
-  trapPlanInfoFocus(event);
-  if (event.key === "Escape" && planInfoIsOpen()) {
-    event.preventDefault();
-    closePlanInfo();
-  } else if (event.key === "Escape" && viewState.detail) closeDetails();
-});
-window.addEventListener("resize", () => {
-  setDetailsHeight(
-    Number.parseFloat(
-      getComputedStyle(document.documentElement).getPropertyValue("--details-height"),
-    ) || window.innerHeight * 0.4,
-    false,
-  );
-  refreshResponsiveDetails();
-  syncPlanInfoSurface();
-  if (
-    data &&
-    viewState.tab === "graph" &&
-    graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")
-  )
-    graphController.render(
-      filteredTasks(),
-      viewState.group ? new Set([viewState.group]) : undefined,
-    );
-  window.requestAnimationFrame(() => timelineController.redraw());
-});
-anyHoverCapability.addEventListener("change", refreshResponsiveDetails);
-anyFinePointerCapability.addEventListener("change", refreshResponsiveDetails);
-const stream = new EventSource("api/events");
-stream.addEventListener("open", () => {
-  if (reconnectBlocked) return;
-  connected = true;
-  connection("live");
-  void refresh();
-});
-stream.addEventListener("revision", () => void refresh());
-stream.addEventListener("stale", () => {
-  connected = false;
-  connection("stale");
-});
-stream.addEventListener("heartbeat", (event) => {
-  try {
-    if (!reconnectBlocked && JSON.parse((event as MessageEvent).data).watching && !connected) {
-      connected = true;
-      void refresh();
-    }
-  } catch {
-    connection("stale");
-  }
-});
-stream.addEventListener("error", () => {
-  connected = false;
-  connection("stale");
-  void fetch(
-    "api/diagnostics/worker?run_id=" + encodeURIComponent(location.pathname.split("/")[2] ?? ""),
-  )
-    .then((response) => (response.ok ? response.json() : null))
-    .then((value) => {
-      if (value?.diagnostic) {
-        stream.close();
-        showWorkerDiagnostic(value.diagnostic);
-      }
-    });
-});
+for (const button of document.querySelectorAll<HTMLButtonElement>("[data-tab]")) button.addEventListener("click", () => setTab(button.dataset.tab as DashboardTab));
+$("search").addEventListener("input", () => { filterFromControls(); render(); });
+for (const id of ["theme", "version", "group-filter", "state-filter", "kind-filter"] as MenuId[]) menuTrigger(id).addEventListener("click", () => { if (menuTrigger(id).getAttribute("aria-expanded") === "true") closeMenus(); else openMenu(id); });
+for (const option of document.querySelectorAll<HTMLButtonElement>("#theme-menu [role=option]")) option.addEventListener("click", () => chooseMenu("theme", option.dataset.menuValue ?? "system"));
+$("version-menu").addEventListener("keydown", (event) => { if (event.key !== "Enter" && event.key !== " ") return; const option = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[role=option]"); if (!option) return; event.preventDefault(); event.stopPropagation(); option.click(); }, true);
+$("task-layout-board").addEventListener("click", () => setTaskLayout("board")); $("task-layout-grid").addEventListener("click", () => setTaskLayout("grid"));
+$("plan-info-trigger").addEventListener("click", (event) => { event.stopPropagation(); if (planInfoIsOpen()) closePlanInfo(false); else openPlanInfo(); });
+$("close-plan-info").addEventListener("click", () => closePlanInfo()); $("plan-info-backdrop").addEventListener("click", () => closePlanInfo()); $("plan-info-panel").addEventListener("click", (event) => event.stopPropagation());
+document.addEventListener("click", (event) => { const target = event.target as HTMLElement; if (!target.closest("[data-menu]")) closeMenus(); if (planInfoIsOpen() && !target.closest("#plan-info-panel, #plan-info-trigger")) closePlanInfo(); });
+document.addEventListener("pointerdown", (event) => { keyboardSelection = false; recordPointerType(event.pointerType); }, true); document.addEventListener("pointermove", (event) => recordPointerType(event.pointerType), true);
+document.addEventListener("keydown", (event) => { if ((event.key === "Enter" || event.key === " ") && (event.target as HTMLElement).closest(".task-card-select, .task-column-select, .task-row")) keyboardSelection = true; }, true);
+document.addEventListener("keydown", (event) => { const target = event.target as HTMLElement; const trigger = target.closest<HTMLButtonElement>(".menu-trigger, .theme-trigger"); const option = target.closest<HTMLButtonElement>("[role=option]"); if (event.key === "Escape" && trigger) { event.preventDefault(); event.stopPropagation(); closeMenus(); trigger.focus(); } else if (trigger && (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter" || event.key === " ")) { event.preventDefault(); const id = trigger.id.replace(/-trigger$/, "") as MenuId; openMenu(id); } else if (option && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); const options = [...option.closest<HTMLElement>("[role=listbox]")!.querySelectorAll<HTMLButtonElement>("[role=option]")]; const index = options.indexOf(option); options[(index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length]?.focus(); } else if (option && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); const menu = option.closest<HTMLElement>("[role=listbox]"); const id = menu?.id.replace(/-menu$/, "") as MenuId; chooseMenu(id, option.dataset.menuValue ?? ""); } else if (option && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeMenus(); menuTrigger(option.closest<HTMLElement>("[role=listbox]")?.id.replace(/-menu$/, "") as MenuId).focus(); } });
+$("close-details").addEventListener("click", closeDetails); $("details-backdrop").addEventListener("click", closeDetails); $("phase-jump").addEventListener("click", () => { phaseTransition = false; setTab("actual"); });
+$("zoom-in").addEventListener("click", () => (viewState.tab === "atomic" ? atomicGraphController.zoomIn() : graphController.zoomIn())); $("zoom-out").addEventListener("click", () => (viewState.tab === "atomic" ? atomicGraphController.zoomOut() : graphController.zoomOut())); $("fit").addEventListener("click", () => (viewState.tab === "atomic" ? atomicGraphController.fit() : graphController.fit()));
+$("timeline-zoom-in").addEventListener("click", () => timelineController.adjustWindow("in")); $("timeline-zoom-out").addEventListener("click", () => timelineController.adjustWindow("out")); $("timeline-fit").addEventListener("click", () => timelineController.fit());
+installViewStateNavigation(window, { getSearch: () => window.location.search, getValidation: (search) => { const targetPlan = search ? new URLSearchParams(search).get("plan") : null; if ((targetPlan ?? activePlanId) !== (viewState.plan ?? activePlanId)) return { plans: new Set(data?.plans.map((plan) => plan.id) ?? []) }; return data ? stateValidation() : {}; }, getPhase: () => data ? phase ?? derivePhase(data.tasks) : null, restore: (next, hasExplicitTab) => { const planChanged = next.plan !== viewState.plan; const closingDetails = viewState.detail && !next.detail; userChangedTab = hasExplicitTab; if (closingDetails) { keyboardSelection = false; hideHoverPreview(); restoreClosedDetailsOnNextRender = true; } viewState = next; selectedTask = next.selected?.kind === "task" ? next.selected.id : null; selectedGroup = next.selected?.kind === "group" ? next.selected.id : null; selectedMilestone = next.selected?.kind === "milestone" ? next.selected.id : null; activePlan = next.plan ?? ""; if (next.detail) focusDetailsOnNextRender = true; if (planChanged) void refresh(); else if (data) render(); } });
+window.addEventListener("keydown", (event) => { trapDetailsFocus(event); trapPlanInfoFocus(event); if (event.key === "Escape" && planInfoIsOpen()) { event.preventDefault(); closePlanInfo(); } else if (event.key === "Escape" && viewState.detail) closeDetails(); });
+window.addEventListener("resize", () => { setDetailsHeight(Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--details-height")) || window.innerHeight * 0.4, false); refreshResponsiveDetails(); syncPlanInfoSurface(); if (data && viewState.tab === "graph" && graphController.rankDir() !== (window.innerWidth < 768 ? "TB" : "LR")) graphController.render(filteredTasks(), viewState.group ? new Set([viewState.group]) : undefined); window.requestAnimationFrame(() => timelineController.redraw()); });
+anyHoverCapability.addEventListener("change", refreshResponsiveDetails); anyFinePointerCapability.addEventListener("change", refreshResponsiveDetails);
+const stream = new EventSource("api/events"); stream.addEventListener("open", () => { if (reconnectBlocked) return; connected = true; connection("live"); void refresh(); }); stream.addEventListener("revision", () => void refresh()); stream.addEventListener("stale", () => { connected = false; connection("stale"); }); stream.addEventListener("heartbeat", (event) => { try { if (!reconnectBlocked && JSON.parse((event as MessageEvent).data).watching && !connected) { connected = true; void refresh(); } } catch { connection("stale"); } }); stream.addEventListener("error", () => { connected = false; connection("stale"); void fetch("api/diagnostics/worker?run_id=" + encodeURIComponent(location.pathname.split("/")[2] ?? "")).then((response) => response.ok ? response.json() : null).then((value) => { if (value?.diagnostic) { stream.close(); showWorkerDiagnostic(value.diagnostic); } }); });
 hoverBridge = createHoverPreviewBridge($("hover-preview"), dismissHoverPreview);
-window.setInterval(refreshCardDurations, 60_000);
-window.setInterval(() => {
-  if (!connected && !reconnectBlocked) void refresh();
-}, 5_000);
-$("worker-diagnostic-copy").addEventListener("click", async () => {
-  if (!workerDiagnostic) return;
-  await navigator.clipboard?.writeText(JSON.stringify(workerDiagnostic));
-});
-$("worker-diagnostic-reconnect").addEventListener("click", () => {
-  reconnectBlocked = false;
-  void reconnectViewer().catch((error) =>
-    showWorkerDiagnostic({
-      ...workerDiagnostic,
-      safe_summary: error instanceof Error ? error.message : "无法重新连接",
-    }),
-  );
-});
-connection("connecting");
-void loadTheme();
-void refresh();
+window.setInterval(refreshCardDurations, 60_000); window.setInterval(() => { if (!connected && !reconnectBlocked) void refresh(); }, 5_000);
+$("worker-diagnostic-copy").addEventListener("click", async () => { if (!workerDiagnostic) return; await navigator.clipboard?.writeText(JSON.stringify(workerDiagnostic)); });
+$("worker-diagnostic-reconnect").addEventListener("click", () => { reconnectBlocked = false; void reconnectViewer().catch((error) => showWorkerDiagnostic({ ...workerDiagnostic, safe_summary: error instanceof Error ? error.message : "无法重新连接" })); });
+connection("connecting"); void loadTheme(); void refresh();
 
-stream.addEventListener("agent-output", (event) => {
-  try {
-    applyOutputs(JSON.parse((event as MessageEvent).data) as OutputSnapshot);
-  } catch {
-    connection("stale");
-  }
+stream.addEventListener("agent-output", event => {
+  try { applyOutputs(JSON.parse((event as MessageEvent).data) as OutputSnapshot); } catch { connection("stale"); }
 });
-void loadProfileCapabilities().then(() => {
-  if (data) render();
-});
+void loadProfileCapabilities().then(() => { if (data) render(); });

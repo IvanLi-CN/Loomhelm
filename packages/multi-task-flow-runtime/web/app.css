@@ -217,6 +217,12 @@ h1 { margin: 3px 0 0; color: var(--text); font-size: 26px; line-height: 1.14; fo
 .filters > .menu-control .menu-trigger { min-width: 100px; border: 1px solid var(--control); border-radius: 999px; }
 .filters > .menu-control .menu-trigger:hover { border-color: var(--accent); }
 .graph-tools, .timeline-tools { margin-left: auto; display: flex; gap: 2px; }
+.atomic-view-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; color: var(--muted); font-size: 11px; }
+.workspace[data-view-tab="atomic"] .graph-tools { margin-left: 0; }
+.atomic-view-tools label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.atomic-view-tools select { min-height: 32px; padding: 0 28px 0 10px; border: 1px solid var(--control); border-radius: var(--radius-control); background: var(--raised); color: var(--text); }
+.atomic-view-tools button { min-height: 32px; padding: 0 10px; border: 1px solid var(--control); border-radius: var(--radius-control); background: var(--raised); color: var(--muted); }
+.atomic-view-tools button:hover { border-color: var(--accent); color: var(--text); }
 .icon-button { width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); }
 .icon-button:hover { background: var(--active); color: var(--text); }
 .icon-button svg { width: 15px; height: 15px; }
