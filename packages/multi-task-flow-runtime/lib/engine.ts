@@ -139,6 +139,7 @@ function executionPlan(ledger: Ledger): Plan {
   return find(ledger.plans, (item) => item.id === ledger.execution_plan_id, "Execution plan");
 }
 function atomicNodeSatisfied(ledger: Ledger, node: any): boolean {
+  if (!node) return false;
   if (node.kind === "boundary")
     return (
       node.boundary === "start" || ledger.events.some((event) => event.type === "run_completed")
@@ -149,27 +150,71 @@ function atomicNodeSatisfied(ledger: Ledger, node: any): boolean {
     scope?.kind === "task"
       ? ledger.tasks.find((task) => task.id === scope.task_id)?.atoms
       : ledger.groups.find((group) => group.id === scope?.delivery_unit_id)?.atoms;
-  return (
-    atoms?.find((atom) => atom.id === node.id)?.status === "completed" || node.state === "completed"
-  );
+  const atom = atoms?.find((candidate) => candidate.id === node.id);
+  return atom ? atom.status === "completed" : false;
 }
 function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): boolean {
   const nodes = (plan.atomic_nodes ?? []) as any[];
   const edges = (plan.atomic_edges ?? []).filter((edge: any) => "from_node_id" in edge) as any[];
-  if (!nodes.length || !edges.length) return true;
+  const task = ledger.tasks.find((candidate) => candidate.id === taskId);
+  if (!nodes.length && !edges.length)
+    return !(
+      ledger.contract_version === 3 && task?.atoms.some((atom) => atom.status !== "completed")
+    );
+  if (!nodes.length) return false;
   const targets = nodes.filter(
     (node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId,
   );
-  return targets.every((target) =>
-    edges
-      .filter((edge) => edge.to_node_id === target.id)
-      .every((edge) =>
-        atomicNodeSatisfied(
-          ledger,
-          nodes.find((node) => node.id === edge.from_node_id),
-        ),
-      ),
+  if (!targets.length) return !(task?.atoms.length && nodes.length);
+  if (!edges.length && task?.atoms.length !== 1) return false;
+  const taskNodes = nodes.filter(
+    (node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId,
   );
+  if (
+    !task ||
+    task.atoms.some((atom) => !taskNodes.some((node) => node.id === atom.id)) ||
+    taskNodes.some((node) => {
+      const atom = task.atoms.find((candidate) => candidate.id === node.id);
+      return !atom || (node.state === "completed" && atom.status !== "completed");
+    })
+  )
+    return false;
+  if (
+    edges.some(
+      (edge) =>
+        !nodes.some((node) => node.id === edge.from_node_id) ||
+        !nodes.some((node) => node.id === edge.to_node_id),
+    )
+  )
+    return false;
+  if (
+    task.atoms.some((atom, index) => {
+      if (index === 0) return false;
+      const node = taskNodes.find((candidate) => candidate.id === atom.id);
+      return !node || !edges.some((edge) => edge.to_node_id === node.id);
+    })
+  )
+    return false;
+  const resumableTask = ["waiting", "blocked"].includes(taskExecutionState(task));
+  return targets.some((target) => {
+    if (atomicNodeSatisfied(ledger, target)) return false;
+    const atom = task.atoms.find((candidate) => candidate.id === target.id);
+    if (
+      !atom ||
+      (atom.status !== "planned" &&
+        !(resumableTask && ["running", "blocked"].includes(atom.status)))
+    )
+      return false;
+    const targetIndex = task.atoms.findIndex((candidate) => candidate.id === target.id);
+    const incoming = edges.filter((edge) => edge.to_node_id === target.id);
+    if (targetIndex > 0 && !incoming.length) return false;
+    return incoming.every((edge) =>
+      atomicNodeSatisfied(
+        ledger,
+        nodes.find((node) => node.id === edge.from_node_id),
+      ),
+    );
+  });
 }
 function approved(ledger: Ledger): Plan {
   const current = executionPlan(ledger);

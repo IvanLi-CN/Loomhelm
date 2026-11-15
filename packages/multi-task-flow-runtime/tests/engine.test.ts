@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import {
   apply,
   deliveryUnitPrMerged,
@@ -753,6 +754,120 @@ function readyBootstrapFixture() {
   approveV2(ledger);
   return ledger;
 }
+
+function readyAtomicFixture() {
+  const ledger = v2Fixture();
+  const task = ledger.tasks[0]!;
+  const suffixes = ["prepare-branch", "create-pr", "merge-pr", "closeout"];
+  const lifecycle = ["branch_ready", "pr_created", "pr_merged", "closed"] as const;
+  const atoms = suffixes.map((suffix, index) => ({
+    id: `task-a-${suffix}`,
+    title: suffix,
+    status: "planned" as const,
+    lifecycle_stage: lifecycle[index],
+  }));
+  task.atoms = atoms;
+  ledger.plans[0].atoms = [
+    ...ledger.plans[0].atoms.filter((atom) => atom.task_id !== task.id),
+    ...atoms.map((atom) => ({
+      id: atom.id,
+      title: atom.title,
+      task_id: task.id,
+      purpose: atom.title,
+      output: atom.title,
+    })),
+  ];
+  ledger.plans[0].atomic_edges = atoms.slice(1).map((atom, index) => ({
+    id: `task-a-edge-${index}`,
+    from_atom_id: atoms[index]!.id,
+    to_atom_id: atom.id,
+  }));
+  ledger.plans[0] = canonicalizeContract3Plan(ledger.plans[0], ledger.tasks);
+  approveV2(ledger);
+  return ledger;
+}
+
+test("task readiness starts at the first executable atomic work", () => {
+  const ledger = readyAtomicFixture();
+
+  expect(ready(ledger, "a")).toBe(true);
+  ledger.tasks[0]!.atoms[0]!.status = "running";
+  expect(ready(ledger, "a")).toBe(false);
+  ledger.tasks[0]!.atoms[0]!.status = "blocked";
+  expect(ready(ledger, "a")).toBe(false);
+
+  const missingAtom = readyAtomicFixture();
+  missingAtom.tasks[0]!.atoms = missingAtom.tasks[0]!.atoms.slice(1);
+  expect(ready(missingAtom, "a")).toBe(false);
+
+  const missingEdges = readyAtomicFixture();
+  missingEdges.plans[0]!.atomic_edges = [];
+  expect(ready(missingEdges, "a")).toBe(false);
+
+  const missingLaterAtom = readyAtomicFixture();
+  missingLaterAtom.tasks[0]!.atoms = missingLaterAtom.tasks[0]!.atoms.slice(0, -1);
+  expect(ready(missingLaterAtom, "a")).toBe(false);
+
+  const partialEdges = readyAtomicFixture();
+  partialEdges.plans[0]!.atomic_edges = partialEdges.plans[0]!.atomic_edges.slice(1);
+  expect(ready(partialEdges, "a")).toBe(false);
+
+  const conflictingState = readyAtomicFixture();
+  conflictingState.plans[0]!.atomic_nodes.find(
+    (node) => node.id === "task-a-prepare-branch",
+  )!.state = "completed";
+  expect(ready(conflictingState, "a")).toBe(false);
+
+  const missingCanonicalNode = readyAtomicFixture();
+  missingCanonicalNode.plans[0]!.atomic_nodes = missingCanonicalNode.plans[0]!.atomic_nodes.filter(
+    (node) => node.id !== "task-a-prepare-branch",
+  );
+  expect(ready(missingCanonicalNode, "a")).toBe(false);
+
+  const missingCanonicalTargets = readyAtomicFixture();
+  missingCanonicalTargets.plans[0]!.atomic_nodes =
+    missingCanonicalTargets.plans[0]!.atomic_nodes.filter(
+      (node) => node.scope?.kind !== "task" || node.scope.task_id !== "a",
+    );
+  expect(ready(missingCanonicalTargets, "a")).toBe(false);
+
+  const missingCanonicalGraph = readyAtomicFixture();
+  missingCanonicalGraph.contract_version = 3;
+  missingCanonicalGraph.plans[0]!.atomic_nodes = [];
+  missingCanonicalGraph.plans[0]!.atomic_edges = [];
+  expect(ready(missingCanonicalGraph, "a")).toBe(false);
+
+  const danglingEdge = readyAtomicFixture();
+  danglingEdge.plans[0]!.atomic_edges[0]!.from_node_id = "missing-node";
+  expect(ready(danglingEdge, "a")).toBe(false);
+
+  const recoverable = readyAtomicFixture();
+  recoverable.tasks[0]!.state = "blocked";
+  recoverable.tasks[0]!.atoms[0]!.status = "blocked";
+  recoverable.plans[0]!.atomic_nodes.find((node) => node.id === "task-a-prepare-branch")!.state =
+    "blocked";
+  expect(ready(recoverable, "a")).toBe(true);
+
+  ledger.tasks[0]!.atoms[0]!.status = "planned";
+  ledger.tasks[0]!.thread_id = "task-a-thread";
+  ledger.tasks[0]!.state = "running";
+  expect(() =>
+    apply(
+      ledger,
+      "atom-update",
+      request(
+        ledger,
+        "blocked-later-atom",
+        {
+          task_id: "a",
+          atom_id: "task-a-create-pr",
+          state: "running",
+        },
+        { role: "task", thread_id: "task-a-thread" },
+      ),
+    ),
+  ).toThrow("Earlier atoms must complete first");
+});
 
 test("contribution dispatch is blocked until the parent PR gate is complete", () => {
   const ledger = v2Fixture();
