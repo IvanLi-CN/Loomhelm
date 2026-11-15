@@ -13,6 +13,10 @@ export function cardSize(title: string, compact = false): {width:number;height:n
   for(const char of title){const next=glyphWidth(char);if(used+next>width-24){lines++;used=0;}used+=next;}
   return {width,height:Math.max(CARD_HEIGHT,38+lines*21)};
 }
+function compactCardSize(title: string, nodeKind: string): {width:number;height:number} {
+  const preset = nodeKind === 'group' || /准备.*分支|创建.*PR|合并.*PR|收口/u.test(title);
+  return preset ? { width: 36, height: 36 } : { width: 168, height: 38 };
+}
 export type Direction = 'DOWN' | 'RIGHT';
 export type PlacedNode = { node: GraphProjectionNode; x: number; y: number; width: number; height: number };
 export type RoutedEdge = { id: string; source: string; target: string; path: string; paths: GraphDependencyPath[] };
@@ -32,7 +36,7 @@ export async function layoutProjection(projection: GraphProjection, direction: D
   const nonEmptyGroups = new Set(projection.nodes.map(n => n.parentId).filter((id): id is string => !!id));
   // ELK gives empty compound nodes zero size; keep their graph endpoint visible.
   const entries = new Map(projection.nodes.map(n => [n.id, {
-    id: n.id, ...(n.nodeKind === 'group' ? (nonEmptyGroups.has(n.id) ? {} : { width: mode === 'compact' ? 44 : CARD_WIDTH, height: mode === 'compact' ? 44 : CARD_HEIGHT }) : cardSize(n.title, mode === 'compact')),
+    id: n.id, ...(n.nodeKind === 'group' ? (nonEmptyGroups.has(n.id) ? {} : { width: mode === 'compact' ? 44 : CARD_WIDTH, height: mode === 'compact' ? 44 : CARD_HEIGHT }) : mode === 'compact' ? compactCardSize(n.title, n.nodeKind) : cardSize(n.title)),
     ports: ports.get(n.id),
     layoutOptions: n.nodeKind === 'group' ? { 'elk.padding': '[top=38,left=16,bottom=16,right=16]' } : { 'elk.portConstraints': 'FIXED_SIDE' },
     ...(n.nodeKind === 'group' ? {children: []} : {}),
