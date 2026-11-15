@@ -7157,7 +7157,7 @@
     {
       "path": "skills/multi-task-flow/scripts/preview-source.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/preview-source.ts",
-      "installedSha256": "9f89b331844389687093f42c7f814fab6a19b9634f45ea1d69293f3a649173cc"
+      "installedSha256": "6854fe8e37740fb02f5aec88f0d2c088838996d4a6a08e7b08b074ebfdc7aada"
     },
     {
       "path": "skills/multi-task-flow/lib/profile-http.ts",
@@ -7616,7 +7616,7 @@
     {
       "path": "skills/multi-task-flow/web/app.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/app.ts",
-      "installedSha256": "e56055251a0b07bbd3cc60ace729f8ef42cc3c4a03fa387426f566b304a2cfa5"
+      "installedSha256": "23928889e3696ec2c85974b9b3a123197b3b830e96ab6dacbade08f87156851e"
     },
     {
       "path": "skills/multi-task-flow/web/cards.ts",
@@ -7636,7 +7636,7 @@
     {
       "path": "skills/multi-task-flow/web/details-content.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/details-content.ts",
-      "installedSha256": "ff2e2bdc1d8aa32212071888803014121bfc6dba1bfe2764bcc0bb208f441367"
+      "installedSha256": "febf1e433d273e340d56a130e5dfef619331573b3c4ded513f8d1bcd40121ff9"
     },
     {
       "path": "skills/multi-task-flow/web/execution-range.ts",
@@ -8197,7 +8197,7 @@
     {
       "path": "skills/multi-task-flow/web/graph-layout.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/graph-layout.ts",
-      "installedSha256": "9ae2dc4dcabec2c152421c08ef8d320b9d262cc394c451b081ec2908cb603b9e"
+      "installedSha256": "11791d5851e6aaff5be11aac630c9565764f332c6f15274b2ff32476fd321977"
     },
     {
       "path": "skills/multi-task-flow/web/graph-view.tsx",
@@ -8777,7 +8777,7 @@
     {
       "path": "skills/multi-task-flow/web/atomic-graph-view.tsx",
       "sourcePath": "packages/multi-task-flow-runtime/web/atomic-graph-view.tsx",
-      "installedSha256": "7f4c3e18430950acef9469e01ee02af5589880e96523b393991cef3979a62bf5"
+      "installedSha256": "7cb42b74c892b4b863792e3fab91590ec64037d738761180e091003bc7981bd5"
     },
     {
       "path": "skills/multi-task-flow/lib/worker-diagnostics.ts",

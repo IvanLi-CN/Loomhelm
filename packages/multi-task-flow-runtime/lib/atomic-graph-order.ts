@@ -41,7 +41,7 @@ function stronglyConnectedComponents(
   const outgoing = new Map(ids.map((id) => [id, [] as string[]]));
   for (const edge of edges) {
     if (outgoing.has(edge.from_node_id) && outgoing.has(edge.to_node_id))
-      outgoing.get(edge.from_node_id)!.push(edge.to_node_id);
+      outgoing.get(edge.from_node_id)?.push(edge.to_node_id);
   }
   for (const targets of outgoing.values()) targets.sort((left, right) => left.localeCompare(right));
   let index = 0;
@@ -91,12 +91,12 @@ function componentOrder(
   for (const edge of edges) {
     const from = componentByNode.get(edge.from_node_id);
     const to = componentByNode.get(edge.to_node_id);
-    if (from === undefined || to === undefined || from === to || outgoing.get(from)!.has(to))
+    if (from === undefined || to === undefined || from === to || outgoing.get(from)?.has(to))
       continue;
-    outgoing.get(from)!.add(to);
+    outgoing.get(from)?.add(to);
     incoming.set(to, incoming.get(to)! + 1);
   }
-  const key = (index: number) => components[index]![0]!;
+  const key = (index: number) => components[index]?.[0] ?? "";
   const queue = components
     .map((_, index) => index)
     .filter((index) => incoming.get(index) === 0)
@@ -171,8 +171,8 @@ export function inspectAtomicGraph(
   const outgoing = new Map(ids.map((id) => [id, [] as string[]]));
   const incoming = new Map(ids.map((id) => [id, [] as string[]]));
   for (const edge of validEdges) {
-    outgoing.get(edge.from_node_id)!.push(edge.to_node_id);
-    incoming.get(edge.to_node_id)!.push(edge.from_node_id);
+    outgoing.get(edge.from_node_id)?.push(edge.to_node_id);
+    incoming.get(edge.to_node_id)?.push(edge.from_node_id);
   }
   const reachable = (sources: string[], direction: "outgoing" | "incoming"): Set<string> => {
     const seen = new Set<string>();
