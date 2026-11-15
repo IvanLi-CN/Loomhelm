@@ -765,10 +765,12 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 #atomic-graph .atomic-dependency-card[data-interaction="dim"] { opacity:.22; filter:saturate(.45); }
 #atomic-graph .atomic-dependency-card[data-interaction="related"] { opacity:.72; box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent), 0 3px 10px #00000022; }
 #atomic-graph .atomic-dependency-card[data-interaction="current"] { opacity:1; box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 72%, transparent), 0 5px 18px #00000044; }
-#atomic-graph .atomic-dependency-card[data-display-mode="compact"] { width:36px; min-height:36px; padding:7px; display:grid; place-items:center; border-radius:50%; background:color-mix(in srgb, var(--raised) 88%, var(--node-color, var(--accent)) 12%); box-shadow:0 2px 7px #00000030; }
-#atomic-graph .atomic-dependency-card[data-display-mode="compact"] .atomic-dependency-icon { color:var(--node-color, var(--accent)); width:20px; height:20px; display:grid; place-items:center; }
-#atomic-graph .atomic-dependency-card[data-display-mode="compact"] .atomic-dependency-icon svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linejoin:round; }
-#atomic-graph .atomic-dependency-card[data-display-mode="compact"][data-context-kind="task"] .atomic-dependency-icon svg { fill:currentColor; stroke:none; }
+#atomic-graph .atomic-dependency-card[data-display-mode="compact"] { width:36px !important; height:36px !important; min-height:36px; padding:0; display:grid; place-items:center; border:0 !important; border-radius:0; background:transparent; box-shadow:none; overflow:visible; }
+#atomic-graph .react-flow__node.selected .atomic-dependency-card[data-display-mode="compact"] { outline:0; }
+#atomic-graph .atomic-dependency-card[data-display-mode="compact"] .atomic-dependency-icon { color:var(--node-color, var(--accent)); width:32px; height:32px; display:grid; place-items:center; line-height:0; }
+#atomic-graph .atomic-dependency-card[data-display-mode="compact"] .atomic-dependency-icon svg { display:block; width:32px; height:32px; aspect-ratio:1 / 1; overflow:visible; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+#atomic-graph .atomic-dependency-card[data-display-mode="compact"][data-interaction="current"] .atomic-dependency-icon { filter:drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 80%, transparent)); transform:scale(1.16); }
+#atomic-graph .atomic-dependency-card[data-display-mode="compact"][data-interaction="related"] .atomic-dependency-icon { filter:drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 38%, transparent)); }
 #atomic-graph .atomic-dependency-card[data-state="planned"] { border-style: dashed; }
 #atomic-graph .atomic-dependency-card[data-state="blocked"] { background: color-mix(in srgb, var(--raised) 92%, var(--negative) 8%); }
 #atomic-graph .atomic-boundary-card { min-height:56px; padding:10px 18px; border:2px solid var(--node-color, var(--accent)); border-radius:999px; background:color-mix(in srgb, var(--raised) 86%, var(--node-color, var(--accent)) 14%); text-align:center; box-shadow:0 4px 14px #00000030; }

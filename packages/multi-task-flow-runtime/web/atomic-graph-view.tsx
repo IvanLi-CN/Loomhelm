@@ -12,7 +12,13 @@ import { dependencyLabel } from "./labels";
 type AtomicCardData = { title: string; kind: string; state: string; scope: string; color: string; direction: Direction; nodeId: string; nodeKind: "task" | "group" | "milestone" | "boundary"; boundary: "start" | "end" | null; taskId: string | null; groupId: string | null; evidence: string[]; blocker: string | null; acceptanceCount: number; diagnostics: string[]; displayMode: "compact" | "full"; interaction: "current" | "related" | "dim" | "none" };
 
 function kindGlyph(kind: AtomicCardData["nodeKind"], boundary: AtomicCardData["boundary"]): React.ReactNode {
-  const path = kind === "group" ? "M4 4h16v16H4z M8 8h8v8H8z" : kind === "milestone" ? "M12 3 21 12 12 21 3 12z" : kind === "boundary" ? (boundary === "start" ? "M5 4l14 8-14 8z" : "M5 5h14v14H5z") : "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z";
+  const path = kind === "group"
+    ? "M12 3 20 7 12 11 4 7 12 3Z M4 12 12 16 20 12 M4 17 12 21 20 17"
+    : kind === "milestone"
+      ? "M12 3 21 12 12 21 3 12 12 3Z M12 8.5v7 M8.5 12h7"
+      : kind === "boundary"
+        ? (boundary === "start" ? "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M10 8l6 4-6 4Z" : "M5 5h14v14H5Z M9 9l6 6 M15 9l-6 6")
+        : "M7 3.5h7l3 3V20.5H7a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 7 3.5Z M14 3.5v4h4 M8.5 12h6 M8.5 15.5h6";
   return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d={path} /></svg>;
 }
 
