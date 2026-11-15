@@ -349,6 +349,27 @@ jobs:
               raise SystemExit('resumed release receipt has invalid dist-tag state')
           PY
           printf 'artifact_name=skill-release-%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Verify isolated consumer installation and runtime imports
+        if: steps.gate.outputs.decision == 'release:skill' || steps.gate.outputs.decision == 'release:skill-initial-publication'
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/skill-package.tgz"
+          consumer="$RUNNER_TEMP/skill-consumer"
+          rm -rf "$consumer"
+          mkdir -p "$consumer"
+          tar -xzf "$tarball" -C "$consumer"
+          test -f "$consumer/package/package.json"
+          test -f "$consumer/package/toolkit/package.json"
+          test -f "$consumer/package/toolkit/artifact-manifest.json"
+          test ! -e "$consumer/package/toolkit/node_modules"
+          (cd "$consumer/package" && bun install --frozen-lockfile --ignore-scripts --backend=copy)
+          (cd "$consumer/package" && bun --no-install -e '
+            const client = await import("@loomhelm/multi-task-flow");
+            const runtime = await import("@loomhelm/runtime-core/modules/core/runtime");
+            if (typeof client.SkillsRuntime !== "function" || !runtime.Runtime || typeof runtime.Runtime !== "object") throw new Error("consumer imports are incomplete");
+            const skills = await new client.SkillsRuntime().list();
+            if (skills.length !== 1 || skills[0]?.name !== "multi-task-flow") throw new Error("consumer Skill inventory is incomplete");
+          ')
       - name: Upload the verified candidate tarball
         if: steps.gate.outputs.decision == 'release:skill' || steps.gate.outputs.decision == 'release:skill-initial-publication'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
