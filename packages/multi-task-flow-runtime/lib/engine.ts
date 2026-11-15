@@ -164,7 +164,11 @@ function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): bo
   const edges = (plan.atomic_edges ?? []).filter((edge: any) => "from_node_id" in edge) as any[];
   if (!nodes.length || !edges.length) return true;
   const targets = nodes.filter((node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId);
-  return targets.every((target) => edges.filter((edge) => edge.to_node_id === target.id).every((edge) => atomicNodeSatisfied(ledger, nodes.find((node) => node.id === edge.from_node_id))));
+  if (!targets.length) return true;
+  return targets.some((target) => {
+    if (atomicNodeSatisfied(ledger, target)) return false;
+    return edges.filter((edge) => edge.to_node_id === target.id).every((edge) => atomicNodeSatisfied(ledger, nodes.find((node) => node.id === edge.from_node_id)));
+  });
 }
 function approved(ledger: Ledger): Plan {
   const current = executionPlan(ledger);

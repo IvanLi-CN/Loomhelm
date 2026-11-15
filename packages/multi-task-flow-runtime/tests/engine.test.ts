@@ -7,6 +7,7 @@ import {
   type Plan,
   type Task,
 } from "../lib/schema";
+import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import { deriveExecutionPhase } from "../lib/revisions";
 
 test("task execution policy rejects contradictory ownership and preserves legacy absence", () => {
@@ -511,6 +512,52 @@ function readyBootstrapFixture() {
   approveV2(ledger);
   return ledger;
 }
+
+function readyAtomicFixture() {
+  const ledger = v2Fixture();
+  const task = ledger.tasks[0]!;
+  const suffixes = ["prepare-branch", "create-pr", "merge-pr", "closeout"];
+  const lifecycle = ["branch_ready", "pr_created", "pr_merged", "closed"] as const;
+  const atoms = suffixes.map((suffix, index) => ({
+    id: `task-a-${suffix}`,
+    title: suffix,
+    status: "planned" as const,
+    lifecycle_stage: lifecycle[index],
+  }));
+  task.atoms = atoms;
+  ledger.plans[0].atoms = [
+    ...ledger.plans[0].atoms.filter((atom) => atom.task_id !== task.id),
+    ...atoms.map((atom) => ({
+      id: atom.id,
+      title: atom.title,
+      task_id: task.id,
+      purpose: atom.title,
+      output: atom.title,
+    })),
+  ];
+  ledger.plans[0].atomic_edges = atoms.slice(1).map((atom, index) => ({
+    id: `task-a-edge-${index}`,
+    from_atom_id: atoms[index]!.id,
+    to_atom_id: atom.id,
+  }));
+  ledger.plans[0] = canonicalizeContract3Plan(ledger.plans[0], ledger.tasks);
+  approveV2(ledger);
+  return ledger;
+}
+
+test("task readiness starts at the first executable atomic work", () => {
+  const ledger = readyAtomicFixture();
+
+  expect(ready(ledger, "a")).toBe(true);
+
+  ledger.tasks[0]!.thread_id = "task-a-thread";
+  ledger.tasks[0]!.state = "running";
+  expect(() => apply(ledger, "atom-update", request(ledger, "blocked-later-atom", {
+    task_id: "a",
+    atom_id: "task-a-create-pr",
+    state: "running",
+  }, { role: "task", thread_id: "task-a-thread" }))).toThrow("Earlier atoms must complete first");
+});
 
 test("contribution dispatch is blocked until the parent PR gate is complete", () => {
   const ledger = v2Fixture();
