@@ -74,7 +74,11 @@ export type PlanState = {
     change_class: string;
     approval_required: boolean;
     reason: { category: string; summary: string; evidence_refs: string[] } | null;
-    change_set: { added: { path: string }[]; removed: { path: string }[]; modified: { path: string }[] };
+    change_set: {
+      added: { path: string }[];
+      removed: { path: string }[];
+      modified: { path: string }[];
+    };
     paused_task_ids: string[];
   } | null;
 };
@@ -99,7 +103,16 @@ export type Task = {
     id: string;
     kind: "conversation";
     target: string | null;
-    status: "unknown" | "active" | "pending" | "closed" | "archive_failed" | "archive_unknown" | "unarchive_failed" | "unarchive_unknown" | "not_applicable";
+    status:
+      | "unknown"
+      | "active"
+      | "pending"
+      | "closed"
+      | "archive_failed"
+      | "archive_unknown"
+      | "unarchive_failed"
+      | "unarchive_unknown"
+      | "not_applicable";
     evidence_ref: string | null;
     error?: string | null;
     last_attempt_at?: string | null;
@@ -154,8 +167,18 @@ export type Group = {
   dispatch_readiness?: "ready" | "blocked" | "unknown";
   pr_merged_availability?: "available" | "unavailable";
   dispatch_diagnostics?: { code: string; message: string }[];
-  merge_capability?: { status: "satisfied" | "blocked" | "unknown"; merge_sha: string | null; evidence_refs: string[]; reason: string | null };
-  closeout_reconciliation?: { status: "valid" | "invalid" | "unknown" | "unreconciled"; reconciliation_id: string | null; reason: unknown; evidence_refs: string[] };
+  merge_capability?: {
+    status: "satisfied" | "blocked" | "unknown";
+    merge_sha: string | null;
+    evidence_refs: string[];
+    reason: string | null;
+  };
+  closeout_reconciliation?: {
+    status: "valid" | "invalid" | "unknown" | "unreconciled";
+    reconciliation_id: string | null;
+    reason: unknown;
+    evidence_refs: string[];
+  };
   recovery?: { eligible: boolean; blockers: string[] };
 };
 
@@ -188,7 +211,10 @@ export type View = {
     conversation_links_verified: boolean;
     contract_version?: number;
     version?: { skill_id: string; skill_version: string; viewer_contract: number } | null;
-    version_status?: { state: "current" | "mismatch" | "historical_read_only"; reason: string | null };
+    version_status?: {
+      state: "current" | "mismatch" | "historical_read_only";
+      reason: string | null;
+    };
     execution_profile?: { model: string; thinking: string } | null;
   };
   groups: Group[];
@@ -197,23 +223,60 @@ export type View = {
   active_plan_id?: string;
   execution_plan_id?: string;
   plan_state?: PlanState;
-  plans: { id: string; created_at: string; approval_id?: string | null; lifecycle?: string; is_active?: boolean; is_execution?: boolean; change_class?: string | null }[];
+  plans: {
+    id: string;
+    created_at: string;
+    approval_id?: string | null;
+    lifecycle?: string;
+    is_active?: boolean;
+    is_execution?: boolean;
+    change_class?: string | null;
+  }[];
   selected_plan_id: string;
-  follow_prs: { origin_task_id: string; origin_group_id: string; state: string; pr: { url: string | null } }[];
+  follow_prs: {
+    origin_task_id: string;
+    origin_group_id: string;
+    state: string;
+    pr: { url: string | null };
+  }[];
   nodes: Node[];
   edges: Edge[];
   atomic_edges?: { id: string; from_atom_id: string; to_atom_id: string }[];
-  atomic_nodes?: { kind: string; id: string; title: string; state: string; scope?: { kind: string; task_id?: string; delivery_unit_id: string } }[];
-  canonical_atomic_edges?: { id: string; from_node_id: string; to_node_id: string; requires: { kind: string } }[];
-  planned_intervals: { node_id: string; start: string | null; end: string | null; start_offset_minutes?: number | null; end_offset_minutes?: number | null }[];
-  actual_intervals: { task_id: string; group_id: string; state: string; start: string; end: string | null }[];
+  atomic_nodes?: {
+    kind: string;
+    id: string;
+    title: string;
+    state: string;
+    scope?: { kind: string; task_id?: string; delivery_unit_id: string };
+  }[];
+  canonical_atomic_edges?: {
+    id: string;
+    from_node_id: string;
+    to_node_id: string;
+    requires: { kind: string };
+  }[];
+  planned_intervals: {
+    node_id: string;
+    start: string | null;
+    end: string | null;
+    start_offset_minutes?: number | null;
+    end_offset_minutes?: number | null;
+  }[];
+  actual_intervals: {
+    task_id: string;
+    group_id: string;
+    state: string;
+    start: string;
+    end: string | null;
+  }[];
   actual_milestones: { node_id: string; occurred_at: string | null }[];
   plan_warnings?: { code: string; reason: string }[];
   warnings: { reason: string }[];
 };
 
 export type ViewResponse = {
-  output_epoch?: string; output_revision?: number;
+  output_epoch?: string;
+  output_revision?: number;
   revision: number;
   watching: boolean;
   active_plan_id: string;

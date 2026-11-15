@@ -1,4 +1,4 @@
-import { record, type JsonRecord } from "../lib/codex-socket";
+import { type JsonRecord, record } from "../lib/codex-socket";
 
 type Path = Array<string | number>;
 const safe = (key: string | number) =>
@@ -48,17 +48,12 @@ function project(path: Path, value: unknown): unknown {
   if (last === "turns") return Array.isArray(value) ? value.map(turn) : [];
   if (last === "turnHistory") return state({ turnHistory: value }).turnHistory;
   if (last === "history")
-    return record(state({ turnHistory: { history: value } }).turnHistory)
-      ?.history;
+    return record(state({ turnHistory: { history: value } }).turnHistory)?.history;
   if (last === "entitiesByKey")
     return record(
-      record(
-        state({ turnHistory: { history: { entitiesByKey: value } } })
-          .turnHistory,
-      )?.history,
+      record(state({ turnHistory: { history: { entitiesByKey: value } } }).turnHistory)?.history,
     )?.entitiesByKey;
-  if (path.at(-2) === "entitiesByKey" || path.at(-2) === "turns")
-    return turn(value);
+  if (path.at(-2) === "entitiesByKey" || path.at(-2) === "turns") return turn(value);
   if (last === "items") return Array.isArray(value) ? value.map(item) : [];
   if (path.at(-2) === "items") return item(value);
   return value;
@@ -66,9 +61,7 @@ function project(path: Path, value: unknown): unknown {
 function patch(root: JsonRecord, change: JsonRecord): JsonRecord {
   if (
     !Array.isArray(change.path) ||
-    !change.path.every(
-      (k) => (typeof k === "string" || Number.isInteger(k)) && safe(k),
-    )
+    !change.path.every((k) => (typeof k === "string" || Number.isInteger(k)) && safe(k))
   )
     throw new Error("Invalid desktop patch path");
   const path = change.path as Path;
@@ -82,8 +75,7 @@ function patch(root: JsonRecord, change: JsonRecord): JsonRecord {
     target = target[key];
   }
   if (target === null) return root;
-  if (!target || typeof target !== "object")
-    throw new Error("Invalid desktop patch target");
+  if (!target || typeof target !== "object") throw new Error("Invalid desktop patch target");
   const key = path.at(-1)!;
   if (
     path.includes("items") &&
@@ -97,11 +89,7 @@ function patch(root: JsonRecord, change: JsonRecord): JsonRecord {
   } else if (change.op === "add" || change.op === "replace") {
     const value = project(path, change.value);
     if (Array.isArray(target)) {
-      if (
-        !Number.isInteger(key) ||
-        Number(key) < 0 ||
-        Number(key) > target.length
-      )
+      if (!Number.isInteger(key) || Number(key) < 0 || Number(key) > target.length)
         throw new Error("Invalid desktop array index");
       if (change.op === "add") target.splice(Number(key), 0, value);
       else target[Number(key)] = value;
@@ -112,15 +100,10 @@ function patch(root: JsonRecord, change: JsonRecord): JsonRecord {
 export class DesktopOutputState {
   revision: number | null = null;
   private value: JsonRecord = {};
-  update(
-    change: JsonRecord,
-  ): { turnId: string; item: JsonRecord; complete: boolean } | null {
-    if (!Number.isSafeInteger(change.revision))
-      throw new Error("Invalid desktop revision");
-    if (this.revision !== null && Number(change.revision) <= this.revision)
-      return null;
-    if (change.type === "snapshot")
-      this.value = state(change.conversationState);
+  update(change: JsonRecord): { turnId: string; item: JsonRecord; complete: boolean } | null {
+    if (!Number.isSafeInteger(change.revision)) throw new Error("Invalid desktop revision");
+    if (this.revision !== null && Number(change.revision) <= this.revision) return null;
+    if (change.type === "snapshot") this.value = state(change.conversationState);
     else if (
       change.type === "patches" &&
       change.baseRevision === this.revision &&
@@ -138,9 +121,7 @@ export class DesktopOutputState {
     const islands = Array.isArray(history?.islands) ? history.islands : [];
     const ordered = islands.flatMap((i) =>
       Array.isArray(record(i)?.entries)
-        ? (record(i)!.entries as unknown[]).map(
-            (e) => entities[String(record(e)?.value)],
-          )
+        ? (record(i)!.entries as unknown[]).map((e) => entities[String(record(e)?.value)])
         : [],
     );
     const turns = ordered.length

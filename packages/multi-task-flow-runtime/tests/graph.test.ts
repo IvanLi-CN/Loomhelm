@@ -7,16 +7,31 @@ describe("task dependencies", () => {
   });
 
   test("rejects a grouping that creates a task-level cycle", () => {
-    expect(() => validateGrouping(
-      [{ id: "a1", task_id: "a" }, { id: "b1", task_id: "b" }, { id: "a2", task_id: "a" }],
-      [{ from_atom_id: "a1", to_atom_id: "b1" }, { from_atom_id: "b1", to_atom_id: "a2" }],
-    )).toThrow("cycle");
+    expect(() =>
+      validateGrouping(
+        [
+          { id: "a1", task_id: "a" },
+          { id: "b1", task_id: "b" },
+          { id: "a2", task_id: "a" },
+        ],
+        [
+          { from_atom_id: "a1", to_atom_id: "b1" },
+          { from_atom_id: "b1", to_atom_id: "a2" },
+        ],
+      ),
+    ).toThrow("cycle");
   });
 
   test("allows a grouped dependency that delays a downstream task", () => {
-    expect(() => validateGrouping(
-      [{ id: "a1", task_id: "a" }, { id: "a2", task_id: "a" }, { id: "b1", task_id: "b" }],
-      [{ from_atom_id: "a1", to_atom_id: "b1" }],
-    )).not.toThrow();
+    expect(() =>
+      validateGrouping(
+        [
+          { id: "a1", task_id: "a" },
+          { id: "a2", task_id: "a" },
+          { id: "b1", task_id: "b" },
+        ],
+        [{ from_atom_id: "a1", to_atom_id: "b1" }],
+      ),
+    ).not.toThrow();
   });
 });

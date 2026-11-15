@@ -14,6 +14,7 @@
     "storybook": "bun run --filter @loomhelm/web storybook",
     "typecheck": "bun run --filter @loomhelm/web typecheck",
     "check:client": "scripts/checks client",
+    "check:multi-task-flow": "bun run --cwd packages/multi-task-flow-runtime check:style",
     "skills:build": "bun run --cwd skills build",
     "skills:package": "bun run --cwd clients/typescript build",
     "skills:test": "bun test ./skills/bin/tests ./skills/bin/native-tests && bun run --cwd skills/multi-task-flow test:all",

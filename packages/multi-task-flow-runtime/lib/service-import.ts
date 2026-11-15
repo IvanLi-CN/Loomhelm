@@ -1,44 +1,36 @@
-import { recoverImport } from "../lib/service-import-recovery";
-import { existsSync, lstatSync, readdirSync, mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import {
-  LedgerStore,
-  ensureDirectory,
-  readRegular,
-  safeId,
-  withExclusiveLock,
-  writeAtomic,
-  syncDirectory,
-} from "../lib/store";
+import { existsSync, lstatSync, mkdirSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { identity } from "@loomhelm/runtime-core/modules/visual/isolation";
 import {
   readRegularNoFollow,
-  writeExclusiveNoFollow,
   renameNoReplace,
+  writeExclusiveNoFollow,
 } from "@loomhelm/runtime-core/modules/visual/secure_io";
-import { identity } from "@loomhelm/runtime-core/modules/visual/isolation";
-import { requireLedgerCompatibility } from "../lib/service-contract";
-import { validateLedger } from "../lib/schema";
 import { requireCondition } from "../lib/errors";
+import { validateLedger } from "../lib/schema";
+import { requireLedgerCompatibility } from "../lib/service-contract";
+import { recoverImport } from "../lib/service-import-recovery";
 import { digest } from "../lib/service-release";
 import type { ServiceState } from "../lib/service-state";
+import {
+  ensureDirectory,
+  LedgerStore,
+  readRegular,
+  safeId,
+  syncDirectory,
+  withExclusiveLock,
+  writeAtomic,
+} from "../lib/store";
 
 function files(root: string, directory = root): string[] {
   const result: string[] = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
-    requireCondition(
-      !entry.isSymbolicLink(),
-      "UNSAFE_IMPORT",
-      "Import cannot contain symlinks",
-    );
+    requireCondition(!entry.isSymbolicLink(), "UNSAFE_IMPORT", "Import cannot contain symlinks");
     if (entry.isDirectory()) result.push(...files(root, path));
     else {
-      requireCondition(
-        entry.isFile(),
-        "UNSAFE_IMPORT",
-        "Import requires regular files",
-      );
+      requireCondition(entry.isFile(), "UNSAFE_IMPORT", "Import requires regular files");
       result.push(path.slice(root.length + 1));
     }
   }
@@ -49,10 +41,7 @@ function contentDigest(root: string): string {
     JSON.stringify(
       files(root)
         .filter((path) => !path.startsWith("locks/"))
-        .map((path) => [
-          path,
-          digest(readRegularNoFollow(join(root, path), root)),
-        ]),
+        .map((path) => [path, digest(readRegularNoFollow(join(root, path), root))]),
     ),
   );
 }
@@ -116,8 +105,7 @@ export function importRun(
       () => {
         const current = identity(source.runPath);
         requireCondition(
-          current.dev === sourceIdentity.dev &&
-            current.ino === sourceIdentity.ino,
+          current.dev === sourceIdentity.dev && current.ino === sourceIdentity.ino,
           "SOURCE_CHANGED",
           "Import source identity changed",
         );
@@ -182,8 +170,7 @@ export function importRun(
           }),
         );
         ensureDirectory(join(state.paths.data, "runs"));
-        if (!existingTarget)
-          renameNoReplace(staging, target.runPath, state.paths.data);
+        if (!existingTarget) renameNoReplace(staging, target.runPath, state.paths.data);
         syncDirectory(join(state.paths.data, "runs"));
         writeAtomic(
           journal,

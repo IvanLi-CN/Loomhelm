@@ -1,39 +1,31 @@
-import { serviceStatus } from "../lib/service-lifecycle";
-import { ServiceAuth } from "../lib/service-auth";
-import { compatibilityReport } from "../lib/service-compatibility";
-import { maintenanceCheck, maintenanceApply } from "../lib/ledger-maintenance";
 // CI-only empirical acceptance: every target is an isolated user service.
 import {
+  chmodSync,
   copyFileSync,
-  mkdirSync,
   existsSync,
-  readFileSync,
+  mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   writeFileSync,
-  chmodSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { servicePaths } from "../lib/service-paths";
-import { ServiceState } from "../lib/service-state";
-import {
-  buildId,
-  verifyRelease,
-  releaseFiles,
-  digest,
-} from "../lib/service-release";
+import { maintenanceApply, maintenanceCheck } from "../lib/ledger-maintenance";
+import { ServiceAuth } from "../lib/service-auth";
+import { compatibilityReport } from "../lib/service-compatibility";
+import { launchdTarget, unloadUserService } from "../lib/service-launchd";
+import { serviceStatus } from "../lib/service-lifecycle";
 import { installRelease, switchRelease } from "../lib/service-maintenance";
-import { unloadUserService, launchdTarget } from "../lib/service-launchd";
+import { servicePaths } from "../lib/service-paths";
+import { buildId, digest, releaseFiles, verifyRelease } from "../lib/service-release";
+import { ServiceState } from "../lib/service-state";
 import { fixtureRun } from "../tests/service-fixture";
 
-if (process.platform !== "darwin")
-  throw new Error("Native acceptance requires macOS");
+if (process.platform !== "darwin") throw new Error("Native acceptance requires macOS");
 const bundle = resolve(process.argv[2]!);
 const evidence = resolve(process.argv[3]!);
-const root = realpathSync(
-  mkdtempSync(join(realpathSync(tmpdir()), "mtf-native-")),
-);
+const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "mtf-native-")));
 const env = {
   ...process.env,
   MULTI_TASK_FLOW_PROFILE: "test",
@@ -43,9 +35,7 @@ const env = {
 };
 const state = new ServiceState(servicePaths(env));
 const card: Record<string, unknown> = {
-  candidate_sha: Bun.spawnSync(["git", "rev-parse", "HEAD"])
-    .stdout.toString()
-    .trim(),
+  candidate_sha: Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim(),
   root,
   platform: `${process.platform}-${process.arch}`,
   scenarios: [],
@@ -58,9 +48,7 @@ const call = async (command: string, run = "first") => {
     stdout: "pipe",
     stderr: "pipe",
   });
-  process.stdin.write(
-    JSON.stringify({ run_id: run, thread_id: "native-ci", api_version: 1 }),
-  );
+  process.stdin.write(JSON.stringify({ run_id: run, thread_id: "native-ci", api_version: 1 }));
   process.stdin.end();
   const output = await new Response(process.stdout).text();
   const error = await new Response(process.stderr).text();
@@ -74,15 +62,9 @@ async function waitFor(predicate: () => boolean, description: string) {
   }
   throw new Error(`Timed out: ${description}`);
 }
-function cloneBundle(
-  source: string,
-  target: string,
-  patch: object,
-  broken = false,
-) {
+function cloneBundle(source: string, target: string, patch: object, broken = false) {
   mkdirSync(join(target, "dist"), { recursive: true });
-  for (const file of releaseFiles)
-    copyFileSync(join(source, file), join(target, file));
+  for (const file of releaseFiles) copyFileSync(join(source, file), join(target, file));
   const { build_id, ...manifest } = verifyRelease(source);
   if (broken) {
     writeFileSync(join(target, "viewer"), "#!/bin/sh\nexit 1\n");
@@ -111,10 +93,7 @@ async function verifyMigrationRollback() {
   try {
     await installRelease(isolated, old);
     const item = fixtureRun(isolated.paths.data, "migration-run");
-    writeFileSync(
-      item.store.ledgerPath,
-      JSON.stringify({ ...item.run, contract_version: 1 }),
-    );
+    writeFileSync(item.store.ledgerPath, JSON.stringify({ ...item.run, contract_version: 1 }));
     const manifest = verifyRelease(bundle);
     const report = compatibilityReport(isolated, manifest, bundle);
     await switchRelease(isolated, bundle, false, undefined, {
@@ -155,46 +134,34 @@ try {
   fixtureRun(state.paths.data, "first");
   fixtureRun(state.paths.data, "second");
   const legacy = fixtureRun(state.paths.data, "legacy");
-  writeFileSync(
-    legacy.store.ledgerPath,
-    JSON.stringify({ ...legacy.run, contract_version: 1 }),
-  );
+  writeFileSync(legacy.store.ledgerPath, JSON.stringify({ ...legacy.run, contract_version: 1 }));
   const legacyBytes = readFileSync(legacy.store.ledgerPath, "utf8");
   card.label = state.paths.label;
   card.target = launchdTarget(state);
   card.port = installed.port;
   card.initial_build_id = installed.build_id;
   const results = await Promise.all(
-    Array.from({ length: 6 }, (_, index) =>
-      call("ensure", index % 2 ? "first" : "second"),
-    ),
+    Array.from({ length: 6 }, (_, index) => call("ensure", index % 2 ? "first" : "second")),
   );
   if (new Set(results.map((result) => result.pid)).size !== 1)
     throw new Error("Concurrent ensure created different processes");
   card.initial_pid = results[0].pid;
   scenarios.push("concurrent ensure and detached command survival");
   await call("release", "first");
-  if (
-    state.runtime().leases.length !== 1 ||
-    state.runtime().phase !== "running"
-  )
+  if (state.runtime().leases.length !== 1 || state.runtime().phase !== "running")
     throw new Error("Release affected another run");
   scenarios.push("independent run leases");
   process.kill(results[0].pid, "SIGKILL");
   await Bun.sleep(500);
   const recovered = await call("ensure", "second");
-  if (
-    recovered.pid === results[0].pid ||
-    recovered.generation === results[0].generation
-  )
+  if (recovered.pid === results[0].pid || recovered.generation === results[0].generation)
     throw new Error("Crash recovery reused identity");
   card.recovered_pid = recovered.pid;
   scenarios.push("next ensure recovers crashed daemon");
   const expiry = state.runtime().leases[0]!.expires_at;
   const next = join(root, "upgrade-bundle");
   mkdirSync(join(next, "dist"), { recursive: true });
-  for (const file of releaseFiles)
-    copyFileSync(join(bundle, file), join(next, file));
+  for (const file of releaseFiles) copyFileSync(join(bundle, file), join(next, file));
   const { build_id, ...manifest } = verifyRelease(bundle);
   const upgraded = { ...manifest, service_version: "0.0.1-ci" };
   writeFileSync(
@@ -206,22 +173,14 @@ try {
   if (readFileSync(legacy.store.ledgerPath, "utf8") !== legacyBytes)
     throw new Error("Upgrade rewrote legacy data");
   const runtime = state.runtime();
-  const response = await fetch(
-    `http://127.0.0.1:${installed.port}/api/v1/runs`,
-    {
-      headers: {
-        authorization: "Bearer " + new ServiceAuth(state).credential(),
-      },
+  const response = await fetch(`http://127.0.0.1:${installed.port}/api/v1/runs`, {
+    headers: {
+      authorization: "Bearer " + new ServiceAuth(state).credential(),
     },
-  );
-  if (
-    !response.ok ||
-    ((await response.json()) as any).runs.some((run: any) => run.error)
-  )
+  });
+  if (!response.ok || ((await response.json()) as any).runs.some((run: any) => run.error))
     throw new Error("Mixed-contract runs are unreadable");
-  scenarios.push(
-    "old read-only ledger and mixed contracts upgrade without data writes",
-  );
+  scenarios.push("old read-only ledger and mixed contracts upgrade without data writes");
   const rejected = join(root, "unreadable-bundle");
   cloneBundle(next, rejected, { readable: ["schema-2/contract-2"] });
   try {
@@ -230,8 +189,7 @@ try {
   } catch (error: any) {
     if (error.code !== "INCOMPATIBLE_RELEASE") throw error;
   }
-  if (state.runtime().pid !== runtime.pid)
-    throw new Error("Preflight stopped the old process");
+  if (state.runtime().pid !== runtime.pid) throw new Error("Preflight stopped the old process");
   scenarios.push("unreadable upgrade rejected before stopping the process");
   const broken = join(root, "broken-bundle");
   cloneBundle(next, broken, { service_version: "0.0.2-ci" }, true);
@@ -250,28 +208,21 @@ try {
   if (state.runtime().leases[0]?.expires_at !== expiry)
     throw new Error("Upgrade changed original lease expiry");
   await switchRelease(state, "", true);
-  if (
-    state.config().current_build !== build_id ||
-    state.runtime().leases[0]?.expires_at !== expiry
-  )
+  if (state.config().current_build !== build_id || state.runtime().leases[0]?.expires_at !== expiry)
     throw new Error("Rollback changed build identity or lease expiry");
   scenarios.push("live upgrade and rollback preserve original lease deadlines");
   await verifyMigrationRollback();
   card.preserved_lease_expiry = expiry;
   state.saveConfig({ ...state.config(), agent_ttl_ms: 1000 });
   const idleExpiry = (await call("renew", "second")).expires_at;
-  await waitFor(
-    () => state.runtime().phase === "stopped",
-    "lease expiry shuts down daemon",
-  );
+  await waitFor(() => state.runtime().phase === "stopped", "lease expiry shuts down daemon");
   if (Date.now() < idleExpiry) throw new Error("Exited before lease expiry");
   scenarios.push("idle TTL exit without autostart");
   card.result = "passed";
 } catch (error) {
   card.runtime = state.runtime();
   const failure = join(state.paths.state, "startup-failure.json");
-  if (existsSync(failure))
-    card.startup_failure = JSON.parse(readFileSync(failure, "utf8"));
+  if (existsSync(failure)) card.startup_failure = JSON.parse(readFileSync(failure, "utf8"));
   const info = Bun.spawnSync(["/bin/launchctl", "print", launchdTarget(state)]);
   card.launchd_diagnostic = info.stdout.toString().slice(0, 16000);
   card.result = "failed";

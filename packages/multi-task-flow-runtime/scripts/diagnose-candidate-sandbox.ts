@@ -13,9 +13,7 @@ try {
   console.log(
     JSON.stringify(
       {
-        candidate_sha: Bun.spawnSync(["git", "rev-parse", "HEAD"])
-          .stdout.toString()
-          .trim(),
+        candidate_sha: Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim(),
         platform: `${process.platform}-${process.arch}`,
         scenario: "fixed sandbox Bun bootstrap before any test import",
         returncode: result.exitCode,

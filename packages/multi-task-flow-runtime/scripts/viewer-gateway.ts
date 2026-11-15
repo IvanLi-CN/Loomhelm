@@ -1,5 +1,5 @@
 import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
-import { ViewerWorkerPool, type ViewerWorker, type ViewerWorkerKey } from "./viewer-runtime";
+import { type ViewerWorker, type ViewerWorkerKey, ViewerWorkerPool } from "./viewer-runtime";
 
 export type ViewerRoute = {
   runId: string;
@@ -34,7 +34,9 @@ const gateways = new Map<string, GatewayEntry>();
 const gatewayStarts = new Map<string, Promise<SharedViewerGatewayImpl>>();
 
 function routePath(url: URL): { runId: string; path: string } | null {
-  const match = url.pathname.match(/^\/(?:api\/v1\/)?runs\/([A-Za-z0-9][A-Za-z0-9_.-]{0,127})(\/.*)?$/);
+  const match = url.pathname.match(
+    /^\/(?:api\/v1\/)?runs\/([A-Za-z0-9][A-Za-z0-9_.-]{0,127})(\/.*)?$/,
+  );
   if (!match) return null;
   const path = "/" + (match[2] ?? "").replace(/^\/+/, "");
   return { runId: match[1]!, path: path === "/" ? "/" : path };
@@ -95,7 +97,10 @@ class SharedViewerGatewayImpl implements SharedViewerGateway {
     this.server = server;
   }
 
-  static async create(options: ViewerGatewayOptions, pool: ViewerWorkerPool): Promise<SharedViewerGatewayImpl> {
+  static async create(
+    options: ViewerGatewayOptions,
+    pool: ViewerWorkerPool,
+  ): Promise<SharedViewerGatewayImpl> {
     const server = await Runtime.serve({
       hostname: options.hostname ?? "127.0.0.1",
       port: options.port,
@@ -114,10 +119,8 @@ class SharedViewerGatewayImpl implements SharedViewerGateway {
             workerKey: resolved.workerKey,
             generation: lease.generation,
           });
-          return releaseAfterBody(
-            response,
-            lease.release,
-            () => pool.invalidate(resolved.workerKey, lease.generation),
+          return releaseAfterBody(response, lease.release, () =>
+            pool.invalidate(resolved.workerKey, lease.generation),
           );
         } catch (error) {
           lease.release();
@@ -161,7 +164,9 @@ class SharedViewerGatewayImpl implements SharedViewerGateway {
 }
 
 /** Start or retain the one gateway associated with a singleton key. */
-export async function startSharedViewerGateway(options: ViewerGatewayOptions): Promise<SharedViewerGateway> {
+export async function startSharedViewerGateway(
+  options: ViewerGatewayOptions,
+): Promise<SharedViewerGateway> {
   const key = options.singletonKey;
   if (key) {
     const existing = gateways.get(key);
@@ -177,11 +182,15 @@ export async function startSharedViewerGateway(options: ViewerGatewayOptions): P
       return gateway;
     }
   }
-  const pool = options.pool ?? new ViewerWorkerPool({
-    workerFactory: options.workerFactory ?? (async () => {
-      throw new Error("A worker pool or worker factory is required");
-    }),
-  });
+  const pool =
+    options.pool ??
+    new ViewerWorkerPool({
+      workerFactory:
+        options.workerFactory ??
+        (async () => {
+          throw new Error("A worker pool or worker factory is required");
+        }),
+    });
   const creating = SharedViewerGatewayImpl.create(options, pool);
   if (key) gatewayStarts.set(key, creating);
   let gateway: SharedViewerGatewayImpl;

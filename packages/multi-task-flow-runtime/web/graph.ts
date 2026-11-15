@@ -1,6 +1,7 @@
-import type { Task, View } from "./model";
-import { dependencyLabel, taskKindLabel } from "./labels";
 import type { GraphDependencyPath, GraphProjection, GraphProjectionNode } from "./graph-projection";
+import { dependencyLabel, taskKindLabel } from "./labels";
+import type { Task, View } from "./model";
+
 export { createGraphController } from "./graph-view";
 
 export type GraphContext = {
@@ -19,7 +20,12 @@ export type GraphContext = {
   selectTask: (id: string, atomId?: string | null) => void;
   selectGroup: (id: string, atomId?: string | null) => void;
   selectMilestone: (id: string) => void;
-  getSelected: () => { task: string | null; group: string | null; milestone: string | null; atom?: string | null };
+  getSelected: () => {
+    task: string | null;
+    group: string | null;
+    milestone: string | null;
+    atom?: string | null;
+  };
 };
 
 function nodeKindLabel(node: GraphProjectionNode): string {
@@ -31,23 +37,33 @@ function nodeKindLabel(node: GraphProjectionNode): string {
 }
 
 function pathLabel(path: GraphDependencyPath): string {
-  const conditions = path.requires.length ? path.requires.map(dependencyLabel).join(" → ") : "未声明条件";
+  const conditions = path.requires.length
+    ? path.requires.map(dependencyLabel).join(" → ")
+    : "未声明条件";
   const edges = path.sourceEdgeIds.length ? path.sourceEdgeIds.join("、") : "无";
   return `条件：${conditions}；原始边：${edges}${path.truncated ? "；其余路径已省略" : ""}`;
 }
 
-function dependencyLabels(projection: GraphProjection, nodeId: string, direction: "incoming" | "outgoing"): string[] {
+function dependencyLabels(
+  projection: GraphProjection,
+  nodeId: string,
+  direction: "incoming" | "outgoing",
+): string[] {
   const values = projection.edges
-    .filter((edge) => direction === "incoming" ? edge.target === nodeId : edge.source === nodeId)
+    .filter((edge) => (direction === "incoming" ? edge.target === nodeId : edge.source === nodeId))
     .map((edge) => {
       const neighborId = direction === "incoming" ? edge.source : edge.target;
-      const neighbor = projection.nodes.find((node) => node.id === neighborId)?.fullLabel ?? neighborId;
+      const neighbor =
+        projection.nodes.find((node) => node.id === neighborId)?.fullLabel ?? neighborId;
       return `${neighbor}（${edge.paths.map(pathLabel).join("；")}）`;
     });
   return values;
 }
 
-export function accessibleNodeLabel(node: GraphProjectionNode, projection: GraphProjection): string {
+export function accessibleNodeLabel(
+  node: GraphProjectionNode,
+  projection: GraphProjection,
+): string {
   const parts = [`${nodeKindLabel(node)}：${node.title}`];
   if (node.stateLabel) parts.push(`状态：${node.stateLabel}`);
   if (node.acceptance_count !== undefined) parts.push(`验收条件：${node.acceptance_count}`);
@@ -76,8 +92,12 @@ export function renderAccessibleNodes(projection: GraphProjection, context: Grap
     button.type = "button";
     button.className = "graph-a11y-node";
     button.dataset.graphNodeId = node.id;
-    if ((node.nodeKind === "task" || node.nodeKind === "group" || node.nodeKind === "milestone") && node.refId) {
-      button.dataset.contextKind = node.nodeKind === "task" ? "task" : node.nodeKind === "milestone" ? "milestone" : "group";
+    if (
+      (node.nodeKind === "task" || node.nodeKind === "group" || node.nodeKind === "milestone") &&
+      node.refId
+    ) {
+      button.dataset.contextKind =
+        node.nodeKind === "task" ? "task" : node.nodeKind === "milestone" ? "milestone" : "group";
       button.dataset.contextId = node.nodeKind === "milestone" ? node.id : node.refId;
       if (node.nodeKind === "task") button.dataset.contextTask = node.refId;
     }
@@ -92,11 +112,25 @@ export function renderAccessibleNodes(projection: GraphProjection, context: Grap
   }
 }
 
-export function highlightAccessibleSelection(projection: GraphProjection | null, context: GraphContext): void {
+export function highlightAccessibleSelection(
+  projection: GraphProjection | null,
+  context: GraphContext,
+): void {
   const selected = context.getSelected();
-  for (const button of context.element("graph-a11y").querySelectorAll<HTMLButtonElement>("[data-graph-node-id]")) {
+  for (const button of context
+    .element("graph-a11y")
+    .querySelectorAll<HTMLButtonElement>("[data-graph-node-id]")) {
     const node = projection?.nodes.find((item) => item.id === button.dataset.graphNodeId);
-    const active = Boolean(node && ((node.nodeKind === "task" && node.refId === selected.task && (!selected.atom || selected.atom === node.id)) || (node.nodeKind === "group" && node.refId === selected.group && (!selected.atom || selected.atom === node.id)) || (node.nodeKind === "milestone" && node.id === selected.milestone)));
+    const active = Boolean(
+      node &&
+        ((node.nodeKind === "task" &&
+          node.refId === selected.task &&
+          (!selected.atom || selected.atom === node.id)) ||
+          (node.nodeKind === "group" &&
+            node.refId === selected.group &&
+            (!selected.atom || selected.atom === node.id)) ||
+          (node.nodeKind === "milestone" && node.id === selected.milestone)),
+    );
     button.setAttribute("aria-pressed", String(active));
   }
 }

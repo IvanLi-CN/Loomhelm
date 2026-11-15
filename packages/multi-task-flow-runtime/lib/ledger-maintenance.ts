@@ -1,35 +1,35 @@
 import { join } from "node:path";
-import { z } from "zod";
 import { readRegularNoFollow } from "@loomhelm/runtime-core/modules/visual/secure_io";
-import { packageReleaseManifest } from "../lib/service-contract";
-import { LedgerStore, safeId } from "../lib/store";
-import { ServiceState } from "../lib/service-state";
-import { digest, verifyRelease } from "../lib/service-release";
-import { ledgerContract, requireLedgerCompatibility } from "../lib/service-contract";
-import {
-  stable,
-  contractMigrationCandidate,
-  contractV3MigrationCandidate,
-  commitMigration,
-  migrationBackupName,
-  verifyMigrationBackup,
-  type LockedLedgerMigrationContext,
-} from "../lib/store-migration";
+import { z } from "zod";
+import { canonicalizeContract3Ledger } from "../lib/atomic-orchestration";
+import { readCodexCapabilities } from "../lib/codex-agent-api";
+import { ContractError, requireCondition } from "../lib/errors";
+import { type ProfileCapabilities, validateProfileCapability } from "../lib/execution-profile";
+import { migrateProfile } from "../lib/profile-migration";
 import {
   executionProfile,
-  taskExecutionPolicyDeclarationGaps,
   TASK_EXECUTION_POLICY_FIELDS,
-  validateTaskExecutionPolicies,
+  taskExecutionPolicyDeclarationGaps,
   validateLedger,
+  validateTaskExecutionPolicies,
 } from "../lib/schema";
-import { migrateProfile } from "../lib/profile-migration";
-import { ContractError, requireCondition } from "../lib/errors";
-import { readCodexCapabilities } from "../lib/codex-agent-api";
 import {
-  validateProfileCapability,
-  type ProfileCapabilities,
-} from "../lib/execution-profile";
-import { canonicalizeContract3Ledger } from "../lib/atomic-orchestration";
+  ledgerContract,
+  packageReleaseManifest,
+  requireLedgerCompatibility,
+} from "../lib/service-contract";
+import { digest, verifyRelease } from "../lib/service-release";
+import type { ServiceState } from "../lib/service-state";
+import { LedgerStore, safeId } from "../lib/store";
+import {
+  commitMigration,
+  contractMigrationCandidate,
+  contractV3MigrationCandidate,
+  type LockedLedgerMigrationContext,
+  migrationBackupName,
+  stable,
+  verifyMigrationBackup,
+} from "../lib/store-migration";
 
 const text = z.string().trim().min(1);
 const sha = z.string().regex(/^[a-f0-9]{64}$/);
@@ -47,10 +47,7 @@ const operation = z.object({
   execution_profile: executionProfile.optional(),
 });
 function validAction(value: { action: string; execution_profile?: unknown }) {
-  return (
-    (value.action === "execution-profile") ===
-    (value.execution_profile !== undefined)
-  );
+  return (value.action === "execution-profile") === (value.execution_profile !== undefined);
 }
 export const maintenanceCheckSchema = operation
   .strict()
@@ -95,9 +92,7 @@ function installedManifest(state: ServiceState) {
   const config = state.config();
   if (config.package_name && config.package_version) return packageReleaseManifest(config);
   try {
-    return verifyRelease(
-      join(state.paths.releases, state.config().current_build),
-    );
+    return verifyRelease(join(state.paths.releases, state.config().current_build));
   } catch {
     throw new ContractError(
       "SERVICE_NOT_COMPATIBLE",
@@ -106,12 +101,7 @@ function installedManifest(state: ServiceState) {
     );
   }
 }
-function prepare(
-  state: ServiceState,
-  op: Operation,
-  raw: any,
-  content: string,
-) {
+function prepare(state: ServiceState, op: Operation, raw: any, content: string) {
   const ledger = validateLedger(raw);
   requireCondition(
     ledger.control.ownership === "bound" && ledger.control.owner_thread_id,
@@ -121,7 +111,11 @@ function prepare(
   );
   const taskExecutionPolicyGaps =
     op.action === "contract" ? taskExecutionPolicyDeclarationGaps(raw) : [];
-  if (op.action === "contract" && ledger.contract_version === 2 && taskExecutionPolicyGaps.length === 0) {
+  if (
+    op.action === "contract" &&
+    ledger.contract_version === 2 &&
+    taskExecutionPolicyGaps.length === 0
+  ) {
     try {
       validateTaskExecutionPolicies(raw.tasks ?? []);
     } catch (error) {
@@ -143,7 +137,7 @@ function prepare(
           })
       : op.action === "atomic"
         ? canonicalizeContract3Ledger(raw)
-      : structuredClone(ledger);
+        : structuredClone(ledger);
   if (op.action === "atomic")
     requireCondition(
       ledger.contract_version === 3,
@@ -182,14 +176,15 @@ function prepare(
           tasks: taskExecutionPolicyGaps,
         }
       : null,
-    atomic_projection_migration: op.action === "atomic"
-      ? {
-          mode: "materialize-canonical-graph",
-          plan_count: candidate.plans.length,
-          atomic_node_count: candidate.atomic_nodes.length,
-          atomic_edge_count: candidate.atomic_edges.length,
-        }
-      : null,
+    atomic_projection_migration:
+      op.action === "atomic"
+        ? {
+            mode: "materialize-canonical-graph",
+            plan_count: candidate.plans.length,
+            atomic_node_count: candidate.atomic_nodes.length,
+            atomic_edge_count: candidate.atomic_edges.length,
+          }
+        : null,
   };
   return {
     candidate,
@@ -202,13 +197,10 @@ export function maintenanceCheck(state: ServiceState, input: unknown) {
   return prepare(state, op, raw, content).report;
 }
 function findPrior(raw: any, request: Apply, canonical: string) {
-  const prior = validateLedger(raw).requests.find(
-    (item) => item.request_id === request.request_id,
-  );
+  const prior = validateLedger(raw).requests.find((item) => item.request_id === request.request_id);
   if (!prior) return null;
   requireCondition(
-    prior.command === "ledger-maintenance-apply" &&
-      prior.canonical_input === canonical,
+    prior.command === "ledger-maintenance-apply" && prior.canonical_input === canonical,
     "ID_CONFLICT",
     "Request ID has different content",
     3,
@@ -232,9 +224,7 @@ function replay(
       command: "ledger-maintenance-apply",
       canonical_input: canonical,
     },
-    typeof priorResult.ledger_sha256 === "string"
-      ? priorResult.ledger_sha256
-      : undefined,
+    typeof priorResult.ledger_sha256 === "string" ? priorResult.ledger_sha256 : undefined,
   );
   return {
     ok: true,
@@ -256,8 +246,7 @@ export async function maintenanceApply(
   const prior = findPrior(first.raw, request, canonical);
   const capabilities =
     prior || request.action !== "execution-profile" ? null : await getCapabilities();
-  const store =
-    storeOverride ?? new LedgerStore(state.paths.data, request.run_id);
+  const store = storeOverride ?? new LedgerStore(state.paths.data, request.run_id);
   requireCondition(
     store.rootPath === state.paths.data &&
       store.runPath === join(state.paths.data, "runs", request.run_id),
@@ -314,14 +303,10 @@ export async function maintenanceApply(
         3,
         report,
       );
-    if (capabilities)
-      validateProfileCapability(request.execution_profile!, capabilities);
+    if (capabilities) validateProfileCapability(request.execution_profile!, capabilities);
     candidate.revision += 1;
     candidate.updated_at = new Date().toISOString();
-    const backup = migrationBackupName(
-      "ledger-maintenance-apply",
-      request.request_id,
-    );
+    const backup = migrationBackupName("ledger-maintenance-apply", request.request_id);
     const result = {
       ...report,
       revision: candidate.revision,

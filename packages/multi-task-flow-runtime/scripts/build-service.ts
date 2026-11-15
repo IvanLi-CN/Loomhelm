@@ -1,32 +1,78 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync, lstatSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
-import { compatibility } from "../lib/service-contract";
-import { buildId, digest, verifyRelease } from "../lib/service-release";
+import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
 import { requireCondition } from "../lib/errors";
 import { copySkillSources } from "../lib/package-source.ts";
-import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
+import { compatibility } from "../lib/service-contract";
+import { buildId, digest, verifyRelease } from "../lib/service-release";
 
 const args = process.argv.slice(2);
 const option = (name: string) => args[args.indexOf(name) + 1];
 const output = args.includes("--output") ? resolve(option("--output")!) : null;
 const version = args.includes("--service-version") ? option("--service-version") : null;
-requireCondition(output && version && /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(version), "INVALID_ARGUMENTS", "build-service.ts --output <new-directory> --service-version <semver>");
-requireCondition(process.env.LOOMHELM_SERVICE_BUNDLE_BUILD === "1", "RELEASE_BUILD_ONLY", "Service bundles are produced by the protected release workflow; user-side builds are not supported");
+requireCondition(
+  output && version && /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(version),
+  "INVALID_ARGUMENTS",
+  "build-service.ts --output <new-directory> --service-version <semver>",
+);
+requireCondition(
+  process.env.LOOMHELM_SERVICE_BUNDLE_BUILD === "1",
+  "RELEASE_BUILD_ONLY",
+  "Service bundles are produced by the protected release workflow; user-side builds are not supported",
+);
 requireCondition(!existsSync(output), "OUTPUT_EXISTS", "Build output must be a new directory");
 requireCondition(Bun.version === "1.4.4", "RUNTIME_REQUIRED", "Bun 1.4.4 is required");
 const root = resolve(import.meta.dir, "../../..");
 const source = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: root });
-requireCondition(source.exitCode === 0, "SOURCE_IDENTITY_REQUIRED", "Build requires a source commit");
+requireCondition(
+  source.exitCode === 0,
+  "SOURCE_IDENTITY_REQUIRED",
+  "Build requires a source commit",
+);
 const clean = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: root });
-requireCondition(clean.exitCode === 0 && !clean.stdout.toString().trim(), "DIRTY_SOURCE", "Release builds require committed clean source");
+requireCondition(
+  clean.exitCode === 0 && !clean.stdout.toString().trim(),
+  "DIRTY_SOURCE",
+  "Release builds require committed clean source",
+);
 const executable = realpathSync(process.execPath);
 const runtime = lstatSync(executable);
-requireCondition(runtime.isFile() && runtime.nlink === 1 && (runtime.mode & 0o022) === 0 && (runtime.uid === 0 || runtime.uid === process.getuid?.()), "RUNTIME_UNTRUSTED", "Bun runtime must be a trusted regular file");
+requireCondition(
+  runtime.isFile() &&
+    runtime.nlink === 1 &&
+    (runtime.mode & 0o022) === 0 &&
+    (runtime.uid === 0 || runtime.uid === process.getuid?.()),
+  "RUNTIME_UNTRUSTED",
+  "Bun runtime must be a trusted regular file",
+);
 mkdirSync(output, { recursive: true, mode: 0o700 });
-const files: Record<string,string> = copySkillSources(root, output, { dependencies: true });
+const files: Record<string, string> = copySkillSources(root, output, { dependencies: true });
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const runtimeSha = digest(readFileSync(executable));
-const manifest = { schema_version: 2 as const, source_sha: source.stdout.toString().trim(), skill_id: SKILL_ID, skill_version: SKILL_VERSION, ledger_contract: 3, viewer_contract: VIEWER_CONTRACT, service_version: version, platform: `${process.platform}-${process.arch}` as "darwin-arm64", api_versions: compatibility.api_versions, frontend_contracts: compatibility.frontend_contracts, readable: compatibility.readable, writable: compatibility.writable, readable_releases: [version], migration_guides: [], files };
+const manifest = {
+  schema_version: 2 as const,
+  source_sha: source.stdout.toString().trim(),
+  skill_id: SKILL_ID,
+  skill_version: SKILL_VERSION,
+  ledger_contract: 3,
+  viewer_contract: VIEWER_CONTRACT,
+  service_version: version,
+  platform: `${process.platform}-${process.arch}` as "darwin-arm64",
+  api_versions: compatibility.api_versions,
+  frontend_contracts: compatibility.frontend_contracts,
+  readable: compatibility.readable,
+  writable: compatibility.writable,
+  readable_releases: [version],
+  migration_guides: [],
+  files,
+};
 // Bind resource metadata before adding the launcher itself, avoiding a self-hash cycle.
 const resourceIdentity = buildId(manifest);
 const bootstrap = `import * as fs from "node:fs";import * as path from "node:path";import{createHash}from"node:crypto";
@@ -102,8 +148,14 @@ version=$("$temporary/bun" --version)
 LOOMHELM_VIEWER_RELEASE="$viewer_dir" LOOMHELM_VIEWER_RUNTIME_TEMP="$temporary" exec "$temporary/bun" --preload=${quote(bootstrapUrl)} --no-install "$viewer_dir/skills/multi-task-flow/scripts/service.ts" "$@"
 `;
 
-writeFileSync(join(output,"viewer"), launcher, { mode: 0o700 });
+writeFileSync(join(output, "viewer"), launcher, { mode: 0o700 });
 files.viewer = digest(launcher);
-writeFileSync(join(output,"manifest.json"), JSON.stringify({ ...manifest, build_id: buildId(manifest) },null,2)+'\n', {mode:0o600});
+writeFileSync(
+  join(output, "manifest.json"),
+  JSON.stringify({ ...manifest, build_id: buildId(manifest) }, null, 2) + "\n",
+  { mode: 0o600 },
+);
 const verified = verifyRelease(output);
-console.log(JSON.stringify({ok:true, build_id:verified.build_id, output, runtime:'bun@1.4.4'}));
+console.log(
+  JSON.stringify({ ok: true, build_id: verified.build_id, output, runtime: "bun@1.4.4" }),
+);

@@ -1,17 +1,13 @@
+import { readCodexCapabilities } from "../lib/codex-agent-api";
 import { apply, requestSchema } from "../lib/engine";
+import { requireCondition } from "../lib/errors";
 import {
   effectiveProfile,
-  validateProfileCapability,
   type ProfileCapabilities,
+  validateProfileCapability,
 } from "../lib/execution-profile";
-import { readCodexCapabilities } from "../lib/codex-agent-api";
-import { LedgerStore } from "../lib/store";
-import {
-  executionProfile,
-  recommendedExecutionProfile,
-  validateLedger,
-} from "../lib/schema";
-import { requireCondition } from "../lib/errors";
+import { executionProfile, recommendedExecutionProfile, validateLedger } from "../lib/schema";
+import type { LedgerStore } from "../lib/store";
 
 export async function mutateExecutionProfile(
   store: LedgerStore,
@@ -45,8 +41,7 @@ export async function mutateExecutionProfile(
         effectiveProfile(ledger, { execution_profile: null }),
       );
     }
-    if (profile === null)
-      profile = effectiveProfile(ledger, { execution_profile: null });
+    if (profile === null) profile = effectiveProfile(ledger, { execution_profile: null });
     validateProfileCapability(executionProfile.parse(profile), capabilities);
     return apply(raw, command, parsed);
   });

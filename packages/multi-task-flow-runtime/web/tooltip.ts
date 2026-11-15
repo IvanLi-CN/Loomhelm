@@ -12,7 +12,11 @@ function text(tag: string, value: string, ...classNames: string[]): HTMLElement 
 function closeTooltips(except: HTMLElement | null = null): void {
   for (const tooltip of document.querySelectorAll<HTMLElement>(".dependency-tooltip.is-open")) {
     const triggerId = tooltip.dataset.triggerId;
-    if (except && (tooltip.contains(except) || (triggerId && document.getElementById(triggerId) === except))) continue;
+    if (
+      except &&
+      (tooltip.contains(except) || (triggerId && document.getElementById(triggerId) === except))
+    )
+      continue;
     tooltip.classList.remove("is-open");
     tooltip.hidden = true;
     if (triggerId && tooltip.getAttribute("role") === "dialog") {
@@ -24,19 +28,31 @@ function closeTooltips(except: HTMLElement | null = null): void {
 function installDocumentBinding(): void {
   if (documentBindingInstalled) return;
   documentBindingInstalled = true;
-  document.addEventListener("pointerdown", (event) => {
-    touchModality = event.pointerType !== "mouse";
-    const target = event.target as Element | null;
-    if (!target?.closest(".dependency-tooltip-anchor, .dependency-tooltip")) closeTooltips();
-  }, true);
-  document.addEventListener("keydown", (event) => {
-    touchModality = false;
-    if (event.key === "Escape" && document.querySelector(".dependency-tooltip.is-open") && !document.querySelector(".resource-popover")) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      closeTooltips();
-    }
-  }, true);
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      touchModality = event.pointerType !== "mouse";
+      const target = event.target as Element | null;
+      if (!target?.closest(".dependency-tooltip-anchor, .dependency-tooltip")) closeTooltips();
+    },
+    true,
+  );
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      touchModality = false;
+      if (
+        event.key === "Escape" &&
+        document.querySelector(".dependency-tooltip.is-open") &&
+        !document.querySelector(".resource-popover")
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeTooltips();
+      }
+    },
+    true,
+  );
 }
 
 function positionTooltip(trigger: HTMLElement, tooltip: HTMLElement): void {
@@ -48,7 +64,12 @@ function positionTooltip(trigger: HTMLElement, tooltip: HTMLElement): void {
   tooltip.style.top = `${Math.max(8, top)}px`;
 }
 
-export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label: string, options: { interactive?: boolean } = {}): HTMLElement {
+export function attachTooltip(
+  trigger: HTMLElement,
+  content: HTMLElement,
+  label: string,
+  options: { interactive?: boolean } = {},
+): HTMLElement {
   installDocumentBinding();
   trigger.classList.add("dependency-tooltip-anchor");
   trigger.setAttribute("aria-label", label);
@@ -98,20 +119,27 @@ export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label:
   };
   const scheduleClose = (): void => {
     if (closeTimer) clearTimeout(closeTimer);
-    closeTimer = setTimeout(() => { closeTimer = null; close(); }, 180);
+    closeTimer = setTimeout(() => {
+      closeTimer = null;
+      close();
+    }, 180);
   };
   trigger.addEventListener("pointerenter", (event) => {
     if (closeTimer) {
       clearTimeout(closeTimer);
       closeTimer = null;
     }
-    if (event.pointerType === "mouse" && !suppressUntilPointerLeave) hoverTimer = setTimeout(open, 250);
+    if (event.pointerType === "mouse" && !suppressUntilPointerLeave)
+      hoverTimer = setTimeout(open, 250);
   });
   trigger.addEventListener("pointerleave", () => {
     suppressUntilPointerLeave = false;
     scheduleClose();
   });
-  tooltip.addEventListener("pointerenter", () => { if (closeTimer) clearTimeout(closeTimer); closeTimer = null; });
+  tooltip.addEventListener("pointerenter", () => {
+    if (closeTimer) clearTimeout(closeTimer);
+    closeTimer = null;
+  });
   tooltip.addEventListener("pointerleave", scheduleClose);
   trigger.addEventListener("pointerdown", (event) => {
     pointerStart = { x: event.clientX, y: event.clientY };
@@ -133,7 +161,10 @@ export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label:
     if (longPressTimer) clearTimeout(longPressTimer);
     longPressTimer = null;
   });
-  trigger.addEventListener("pointercancel", () => { pointerStart = null; cancelTimers(); });
+  trigger.addEventListener("pointercancel", () => {
+    pointerStart = null;
+    cancelTimers();
+  });
   trigger.addEventListener("focus", () => {
     if (trigger.dataset.suppressTooltipFocus === "true") {
       delete trigger.dataset.suppressTooltipFocus;
@@ -142,23 +173,28 @@ export function attachTooltip(trigger: HTMLElement, content: HTMLElement, label:
     if (suppressUntilPointerLeave) return;
     if (!touchModality) open();
   });
-  if (options.interactive) trigger.addEventListener("click", event => {
-    event.stopPropagation();
-    open();
-  });
-  tooltip.addEventListener("click", event => event.stopPropagation());
-  tooltip.addEventListener("focusout", event => {
+  if (options.interactive)
+    trigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      open();
+    });
+  tooltip.addEventListener("click", (event) => event.stopPropagation());
+  tooltip.addEventListener("focusout", (event) => {
     const next = event.relatedTarget as Node | null;
     if (next !== trigger && !tooltip.contains(next)) close();
   });
   trigger.addEventListener("blur", () => {
     window.setTimeout(() => {
-      if (document.activeElement !== trigger && !tooltip.contains(document.activeElement) && !tooltip.matches(":hover")) close();
+      if (
+        document.activeElement !== trigger &&
+        !tooltip.contains(document.activeElement) &&
+        !tooltip.matches(":hover")
+      )
+        close();
     }, 0);
   });
   return tooltip;
 }
-
 
 /** Bind explicit icon-control hints to the project tooltip.
  * Body text, titles, progress and output use their dedicated preview/detail surfaces.
@@ -181,7 +217,11 @@ export function installTextTooltips(root: HTMLElement = document.body): () => vo
     binding.tooltip.remove();
   };
   const sync = (): void => {
-    const eligible = new Set(root.querySelectorAll<HTMLElement>("button.icon-button[data-tooltip], a.icon-button[data-tooltip], a.brand-mark[data-tooltip], summary.profile-trigger[data-tooltip]"));
+    const eligible = new Set(
+      root.querySelectorAll<HTMLElement>(
+        "button.icon-button[data-tooltip], a.icon-button[data-tooltip], a.brand-mark[data-tooltip], summary.profile-trigger[data-tooltip]",
+      ),
+    );
     for (const [trigger, binding] of bindings) {
       if (!root.contains(trigger) || !eligible.has(trigger)) {
         removeBinding(trigger, binding);
@@ -206,7 +246,12 @@ export function installTextTooltips(root: HTMLElement = document.body): () => vo
   };
   sync();
   const observer = new window.MutationObserver(sync);
-  observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "data-tooltip"] });
+  observer.observe(root, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class", "data-tooltip"],
+  });
   return () => {
     observer.disconnect();
     for (const [trigger, binding] of bindings) {

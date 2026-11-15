@@ -1,5 +1,5 @@
-import { executionProfile, type Ledger } from "../lib/schema";
 import { requireCondition } from "../lib/errors";
+import { executionProfile, type Ledger } from "../lib/schema";
 
 export function migrateProfile(ledger: Ledger, profile: unknown): void {
   requireCondition(

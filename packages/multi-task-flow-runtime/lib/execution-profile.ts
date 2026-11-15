@@ -1,10 +1,10 @@
-import {
-  executionProfile,
-  recommendedExecutionProfile,
-  type ExecutionProfile,
-  type Ledger,
-} from "../lib/schema";
 import { requireCondition } from "../lib/errors";
+import {
+  type ExecutionProfile,
+  executionProfile,
+  type Ledger,
+  recommendedExecutionProfile,
+} from "../lib/schema";
 
 export const RECOMMENDATION_VERSION = "kind-v1";
 export type ProfileCapabilities = { model: string; thinking: string[] }[];
@@ -14,10 +14,7 @@ export function validateProfileCapability(
 ): ExecutionProfile {
   const pair = executionProfile.parse(profile);
   requireCondition(
-    capabilities.some(
-      (item) =>
-        item.model === pair.model && item.thinking.includes(pair.thinking),
-    ),
+    capabilities.some((item) => item.model === pair.model && item.thinking.includes(pair.thinking)),
     "PROFILE_UNAVAILABLE",
     `Unsupported execution profile: ${pair.model}/${pair.thinking}`,
     3,
@@ -52,8 +49,7 @@ export function profileFreezeReason(
     (item) =>
       item.kind === "dispatch" &&
       item.target_id === targetId &&
-      (item.request.target_type === "group" ? "group" : "task") ===
-        targetType &&
+      (item.request.target_type === "group" ? "group" : "task") === targetType &&
       !!item.request.native_request_id &&
       item.status !== "failed",
   );
@@ -63,16 +59,9 @@ export function materializeRecommendation(
   ledger: Ledger,
   target: Ledger["tasks"][number] | Ledger["groups"][number],
 ): void {
-  if (
-    target.execution_profile !== null &&
-    target.execution_profile !== undefined
-  )
-    return;
+  if (target.execution_profile !== null && target.execution_profile !== undefined) return;
   const kind = "kind" in target ? target.kind : "other";
-  target.execution_profile = recommendedExecutionProfile(
-    kind,
-    effectiveProfile(ledger, target),
-  );
+  target.execution_profile = recommendedExecutionProfile(kind, effectiveProfile(ledger, target));
   target.execution_profile_source = "recommendation";
   target.execution_profile_rule = RECOMMENDATION_VERSION;
 }

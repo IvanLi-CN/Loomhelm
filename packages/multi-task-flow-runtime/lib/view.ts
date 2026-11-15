@@ -1,33 +1,35 @@
 import { conversationArchiveEligibility } from "../lib/conversation-eligibility";
-import { runtimeTaskState } from "../web/task-state";
 import { planWarnings } from "../lib/view-warnings";
-export { planWarnings, type PlanWarning } from "../lib/view-warnings";
-import { createAtomProjection } from "../lib/view-atoms";
+import { runtimeTaskState } from "../web/task-state";
+
+export { type PlanWarning, planWarnings } from "../lib/view-warnings";
+
 import {
-  profileProjection,
-  profileMigrationWarnings,
-} from "../lib/execution-profile";
+  type AtomicBoundaryNode,
+  type AtomicEdge,
+  type AtomicNode,
+  canonicalizeContract3Plan,
+  deriveBusinessStatus,
+  evaluateMilestone,
+  type MilestoneEvaluation,
+} from "../lib/atomic-orchestration";
+import { localSemanticProjection, SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
+import { deliveryUnitPrMerged, parentPrReady, ready } from "../lib/engine";
 import { ContractError, requireCondition } from "../lib/errors";
+import { profileMigrationWarnings, profileProjection } from "../lib/execution-profile";
+import { deriveExecutionPhase, evidenceRequired, reasonRequired } from "../lib/revisions";
 import {
   isContributionKind,
+  type Ledger,
+  type Plan,
+  parseLedger,
   planCompletenessIssues,
   taskExecutionPolicyIssues,
   theoreticalScheduleIssues,
-  parseLedger,
   validateLedger,
-  type Ledger,
-  type Plan,
 } from "../lib/schema";
-import { deliveryUnitPrMerged, parentPrReady, ready } from "../lib/engine";
-import {
-  deriveExecutionPhase,
-  reasonRequired,
-  evidenceRequired,
-} from "../lib/revisions";
-import { initialOutput, type AgentOutput } from "../web/agent-output";
-import { localSemanticProjection } from "../lib/contract";
-import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
-import { canonicalizeContract3Plan, deriveBusinessStatus, evaluateMilestone, type AtomicBoundaryNode, type AtomicEdge, type AtomicNode, type MilestoneEvaluation } from "../lib/atomic-orchestration";
+import { createAtomProjection } from "../lib/view-atoms";
+import { type AgentOutput, initialOutput } from "../web/agent-output";
 
 export type PlannedInterval = {
   node_id: string;
@@ -41,47 +43,85 @@ const RELATIVE_EPOCH = Date.parse("2000-01-01T00:00:00.000Z");
 
 function compatibilityAtomicNodeState(node: AtomicNode, ledger: Ledger): AtomicNode {
   if (node.kind === "boundary") {
-    const started = ledger.events.some((event) => event.type === "task_started") || ledger.tasks.some((task) => task.started_at !== null);
+    const started =
+      ledger.events.some((event) => event.type === "task_started") ||
+      ledger.tasks.some((task) => task.started_at !== null);
     const finished = ledger.events.some((event) => event.type === "run_completed");
-    return { ...node, state: node.boundary === "start" ? (started ? "completed" : "planned") : (finished ? "completed" : "planned") };
+    return {
+      ...node,
+      state:
+        node.boundary === "start"
+          ? started
+            ? "completed"
+            : "planned"
+          : finished
+            ? "completed"
+            : "planned",
+    };
   }
   if (node.kind !== "work") return node;
-  const scope = (node as any).scope as { kind: "task" | "delivery_unit"; task_id?: string; delivery_unit_id: string } | undefined;
-  const task = scope?.kind === "task"
-    ? ledger.tasks.find((item) => item.id === scope.task_id)
-    : undefined;
+  const scope = (node as any).scope as
+    | { kind: "task" | "delivery_unit"; task_id?: string; delivery_unit_id: string }
+    | undefined;
+  const task =
+    scope?.kind === "task" ? ledger.tasks.find((item) => item.id === scope.task_id) : undefined;
   const taskAtom = task?.atoms.find((atom) => atom.id === node.id);
-  const groupAtom = scope?.kind === "delivery_unit"
-    ? ledger.groups.find((item) => item.id === scope.delivery_unit_id)?.atoms.find((atom) => atom.id === node.id)
-    : undefined;
+  const groupAtom =
+    scope?.kind === "delivery_unit"
+      ? ledger.groups
+          .find((item) => item.id === scope.delivery_unit_id)
+          ?.atoms.find((atom) => atom.id === node.id)
+      : undefined;
   const status = taskAtom?.status ?? groupAtom?.status ?? "planned";
   if (status === "planned") return { ...node, state: "planned", scope } as AtomicNode;
   const startedAt = task?.started_at ?? new Date(RELATIVE_EPOCH).toISOString();
   const updatedAt = task?.finished_at ?? startedAt;
   const runtime = { started_at: startedAt, updated_at: updatedAt, evidence_refs: [] };
   if (status === "running") return { ...node, state: "running", scope, runtime } as AtomicNode;
-  if (status === "blocked") return {
-    ...node,
-    state: "blocked",
-    scope,
-    runtime,
-    blocker: { code: "LEGACY_BLOCKED", message: task?.blocker ?? "Atomic work is blocked", evidence_refs: [] },
-  } as AtomicNode;
+  if (status === "blocked")
+    return {
+      ...node,
+      state: "blocked",
+      scope,
+      runtime,
+      blocker: {
+        code: "LEGACY_BLOCKED",
+        message: task?.blocker ?? "Atomic work is blocked",
+        evidence_refs: [],
+      },
+    } as AtomicNode;
   return {
     ...node,
     state: "completed",
     scope,
     runtime,
-    result: { completed_at: task?.finished_at ?? updatedAt, evidence_refs: [`legacy:atomic:${node.id}`] },
+    result: {
+      completed_at: task?.finished_at ?? updatedAt,
+      evidence_refs: [`legacy:atomic:${node.id}`],
+    },
   } as AtomicNode;
 }
 
 function syntheticAtomicBoundaries(ledger: Ledger): AtomicBoundaryNode[] {
-  const started = ledger.events.some((event) => event.type === "task_started") || ledger.tasks.some((task) => task.started_at !== null);
+  const started =
+    ledger.events.some((event) => event.type === "task_started") ||
+    ledger.tasks.some((task) => task.started_at !== null);
   const finished = ledger.events.some((event) => event.type === "run_completed");
   return [
-    { kind: "boundary", id: "atomic-start", title: "开始", boundary: "start", state: started ? "completed" : "planned" },
-    { kind: "boundary", id: "atomic-end", title: "结束", boundary: "end", state: finished ? "completed" : "planned" },
+    {
+      kind: "boundary",
+      id: "atomic-start",
+      title: "开始",
+      boundary: "start",
+      state: started ? "completed" : "planned",
+    },
+    {
+      kind: "boundary",
+      id: "atomic-end",
+      title: "结束",
+      boundary: "end",
+      state: finished ? "completed" : "planned",
+    },
   ];
 }
 
@@ -90,8 +130,12 @@ function appendAtomicBoundaryEdges(
   nodes: readonly AtomicNode[],
   existing: readonly AtomicEdge[],
 ): AtomicEdge[] {
-  const boundaryStart = nodes.find((node): node is AtomicBoundaryNode => node.kind === "boundary" && node.boundary === "start");
-  const boundaryEnd = nodes.find((node): node is AtomicBoundaryNode => node.kind === "boundary" && node.boundary === "end");
+  const boundaryStart = nodes.find(
+    (node): node is AtomicBoundaryNode => node.kind === "boundary" && node.boundary === "start",
+  );
+  const boundaryEnd = nodes.find(
+    (node): node is AtomicBoundaryNode => node.kind === "boundary" && node.boundary === "end",
+  );
   if (!boundaryStart || !boundaryEnd) return [...existing];
   const atomicIds = new Set(nodes.map((node) => node.id));
   const planToAtomic = new Map<string, string>();
@@ -99,17 +143,33 @@ function appendAtomicBoundaryEdges(
     if (node.kind === "main_start") planToAtomic.set(node.id, boundaryStart.id);
     else if (node.kind === "main_end") planToAtomic.set(node.id, boundaryEnd.id);
     else if (node.kind === "task" && node.ref_id) {
-      const atomic = nodes.find((candidate) => candidate.kind === "work" && candidate.scope?.kind === "task" && candidate.scope.task_id === node.ref_id);
+      const atomic = nodes.find(
+        (candidate) =>
+          candidate.kind === "work" &&
+          candidate.scope?.kind === "task" &&
+          candidate.scope.task_id === node.ref_id,
+      );
       if (atomic) planToAtomic.set(node.id, atomic.id);
-    } else if (node.kind === "milestone" && atomicIds.has(node.id)) planToAtomic.set(node.id, node.id);
+    } else if (node.kind === "milestone" && atomicIds.has(node.id))
+      planToAtomic.set(node.id, node.id);
   }
   const outgoing = new Map<string, Plan["edges"]>();
-  for (const edge of plan.edges) outgoing.set(edge.from_node_id, [...(outgoing.get(edge.from_node_id) ?? []), edge]);
-  const hidden = new Set(plan.nodes.filter((node) => ["group_start", "group_end"].includes(node.kind)).map((node) => node.id));
+  for (const edge of plan.edges)
+    outgoing.set(edge.from_node_id, [...(outgoing.get(edge.from_node_id) ?? []), edge]);
+  const hidden = new Set(
+    plan.nodes
+      .filter((node) => ["group_start", "group_end"].includes(node.kind))
+      .map((node) => node.id),
+  );
   const derived: AtomicEdge[] = [];
   const add = (id: string, from: string, to: string) => {
     if (from === to || !atomicIds.has(from) || !atomicIds.has(to)) return;
-    derived.push({ id, from_node_id: from, to_node_id: to, requires: { kind: "source_terminal_success" } });
+    derived.push({
+      id,
+      from_node_id: from,
+      to_node_id: to,
+      requires: { kind: "source_terminal_success" },
+    });
   };
   const walk = (sourcePlanId: string, currentPlanId: string, visited: Set<string>) => {
     if (visited.has(currentPlanId)) return;
@@ -134,8 +194,20 @@ function appendAtomicBoundaryEdges(
   const outgoingIds = new Set(result.map((edge) => edge.from_node_id));
   for (const node of nodes) {
     if (node.kind === "boundary") continue;
-    if (!incoming.has(node.id)) result.push({ id: `atomic-boundary-start-${node.id}`, from_node_id: boundaryStart.id, to_node_id: node.id, requires: { kind: "source_terminal_success" } });
-    if (!outgoingIds.has(node.id)) result.push({ id: `atomic-boundary-end-${node.id}`, from_node_id: node.id, to_node_id: boundaryEnd.id, requires: { kind: "source_terminal_success" } });
+    if (!incoming.has(node.id))
+      result.push({
+        id: `atomic-boundary-start-${node.id}`,
+        from_node_id: boundaryStart.id,
+        to_node_id: node.id,
+        requires: { kind: "source_terminal_success" },
+      });
+    if (!outgoingIds.has(node.id))
+      result.push({
+        id: `atomic-boundary-end-${node.id}`,
+        from_node_id: node.id,
+        to_node_id: boundaryEnd.id,
+        requires: { kind: "source_terminal_success" },
+      });
   }
   return result;
 }
@@ -176,8 +248,22 @@ function mergeCapabilityProjection(ledger: Ledger, group: Ledger["groups"][numbe
     .filter((fact) => fact.kind === "pr_merged" && fact.subject_id === group.id)
     .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
     .at(-1);
-  const receipt = latest && ledger.operations.some((operation) => operation.kind === "merge" && operation.target_id === group.id && operation.status === "succeeded" && operation.receipt_fact_id === latest.id);
-  const satisfied = Boolean((group.state === "merged" || group.state === "closed") && group.merge_sha && latest?.status === "passed" && latest.sha === group.merge_sha && receipt);
+  const receipt =
+    latest &&
+    ledger.operations.some(
+      (operation) =>
+        operation.kind === "merge" &&
+        operation.target_id === group.id &&
+        operation.status === "succeeded" &&
+        operation.receipt_fact_id === latest.id,
+    );
+  const satisfied = Boolean(
+    (group.state === "merged" || group.state === "closed") &&
+      group.merge_sha &&
+      latest?.status === "passed" &&
+      latest.sha === group.merge_sha &&
+      receipt,
+  );
   return {
     status: satisfied ? "satisfied" : latest?.status === "unknown" ? "unknown" : "blocked",
     merge_sha: group.merge_sha,
@@ -187,7 +273,9 @@ function mergeCapabilityProjection(ledger: Ledger, group: Ledger["groups"][numbe
 }
 
 function closeoutReconciliationProjection(ledger: Ledger, groupId: string) {
-  const event = ledger.events.filter((item) => item.subject_id === groupId && item.data.operation === "closeout-reconcile").at(-1);
+  const event = ledger.events
+    .filter((item) => item.subject_id === groupId && item.data.operation === "closeout-reconcile")
+    .at(-1);
   return {
     status: event?.data.outcome ?? "unreconciled",
     reconciliation_id: event?.data.reconciliation_id ?? null,
@@ -215,10 +303,7 @@ function allowsBootstrapMainOwnedStart(
   );
 }
 
-function allowsBootstrapGroupStart(
-  ledger: Ledger,
-  group: Ledger["groups"][number],
-): boolean {
+function allowsBootstrapGroupStart(ledger: Ledger, group: Ledger["groups"][number]): boolean {
   const workspaceAtom = group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
   return Boolean(
     group.state === "active" &&
@@ -240,10 +325,20 @@ function deliveryGateDiagnostics(
   if (group.state !== "active")
     diagnostics.push({ code: "DELIVERY_UNIT_NOT_ACTIVE", message: "交付单元尚未进入 active 状态" });
   if (group.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
-    diagnostics.push({ code: "DELIVERY_WORKSPACE_GATE_PENDING", message: "交付单元尚未完成 workspace_ready 原子任务" });
+    diagnostics.push({
+      code: "DELIVERY_WORKSPACE_GATE_PENDING",
+      message: "交付单元尚未完成 workspace_ready 原子任务",
+    });
   const bootstrapGroupException = !task && allowsBootstrapGroupStart(ledger, group);
-  if (!allowsBootstrapMainOwnedStart(ledger, group, task) && !bootstrapGroupException && !parentPrReady(ledger, group))
-    diagnostics.push({ code: "DELIVERY_PARENT_PR_GATE_PENDING", message: "父 PR 尚未创建、核验并完成交付原子任务" });
+  if (
+    !allowsBootstrapMainOwnedStart(ledger, group, task) &&
+    !bootstrapGroupException &&
+    !parentPrReady(ledger, group)
+  )
+    diagnostics.push({
+      code: "DELIVERY_PARENT_PR_GATE_PENDING",
+      message: "父 PR 尚未创建、核验并完成交付原子任务",
+    });
   return diagnostics;
 }
 
@@ -264,8 +359,7 @@ function taskPrProjection(
 
 function formalExecutionWarnings(ledger: Ledger): Record<string, unknown>[] {
   return ledger.groups.flatMap((group) => {
-    if (group.state !== "active" || group.coordination_execution.state !== "running")
-      return [];
+    if (group.state !== "active" || group.coordination_execution.state !== "running") return [];
     const tasks = ledger.tasks.filter(
       (task) =>
         task.group_id === group.id &&
@@ -276,16 +370,17 @@ function formalExecutionWarnings(ledger: Ledger): Record<string, unknown>[] {
     const taskIds = new Set(tasks.map((task) => task.id));
     const hasDispatch = ledger.operations.some(
       (operation) =>
-        operation.kind === "dispatch" &&
-        [group.id, ...taskIds].includes(operation.target_id),
+        operation.kind === "dispatch" && [group.id, ...taskIds].includes(operation.target_id),
     );
     if (hasDispatch || tasks.some((task) => task.thread_id)) return [];
-    return [{
-      code: "formal_execution_missing",
-      group_id: group.id,
-      task_ids: tasks.map((task) => task.id),
-      reason: "交付单元正在运行，但没有正式 task dispatch 或任务对话记录。",
-    }];
+    return [
+      {
+        code: "formal_execution_missing",
+        group_id: group.id,
+        task_ids: tasks.map((task) => task.id),
+        reason: "交付单元正在运行，但没有正式 task dispatch 或任务对话记录。",
+      },
+    ];
   });
 }
 
@@ -307,9 +402,7 @@ type RuntimeReadiness = {
 
 function planGroupIds(ledger: Ledger, plan: Plan): Set<string> {
   const taskIds = new Set(
-    plan.nodes
-      .filter((node) => node.kind === "task" && node.ref_id)
-      .map((node) => node.ref_id),
+    plan.nodes.filter((node) => node.kind === "task" && node.ref_id).map((node) => node.ref_id),
   );
   const groupIds = new Set(
     plan.nodes
@@ -335,30 +428,34 @@ function planSchedulingIssues(ledger: Ledger, plan: Plan): PlanCompletenessIssue
   const missing: string[] = [];
   for (const groupId of groupIds) {
     for (const kind of ["publish_branch", "publish_pr"] as const) {
-      if (!plan.actions.some(
-        (action) =>
-          action.kind === kind &&
-          action.group_id === groupId &&
-          action.task_id === null,
-      )) missing.push(`${kind}:group:${groupId}`);
+      if (
+        !plan.actions.some(
+          (action) =>
+            action.kind === kind && action.group_id === groupId && action.task_id === null,
+        )
+      )
+        missing.push(`${kind}:group:${groupId}`);
     }
   }
   for (const task of contributionTasks) {
     if (!plan.actions.some((action) => action.task_id === task.id)) continue;
     for (const kind of ["publish_branch", "publish_pr"] as const) {
-      if (!plan.actions.some(
-        (action) =>
-          action.kind === kind &&
-          action.task_id === task.id &&
-          action.group_id === null,
-      )) missing.push(`${kind}:task:${task.id}`);
+      if (
+        !plan.actions.some(
+          (action) =>
+            action.kind === kind && action.task_id === task.id && action.group_id === null,
+        )
+      )
+        missing.push(`${kind}:task:${task.id}`);
     }
   }
   return missing.length
-    ? [{
-        code: "PLAN_NOT_DISPATCHABLE",
-        message: `贡献任务执行需要批准的发布动作：${missing.join(", ")}`,
-      }]
+    ? [
+        {
+          code: "PLAN_NOT_DISPATCHABLE",
+          message: `贡献任务执行需要批准的发布动作：${missing.join(", ")}`,
+        },
+      ]
     : [];
 }
 
@@ -369,17 +466,16 @@ function taskSchedulingIssues(ledger: Ledger): Array<PlanCompletenessIssue & { g
   );
 }
 
-function activeGroupDispatch(
-  ledger: Ledger,
-  groupId: string,
-): Ledger["operations"][number] | null {
-  return ledger.operations.find(
-    (operation) =>
-      operation.kind === "dispatch" &&
-      operation.target_id === groupId &&
-      operation.request.target_type === "group" &&
-      ["claimed", "unknown", "succeeded"].includes(operation.status),
-  ) ?? null;
+function activeGroupDispatch(ledger: Ledger, groupId: string): Ledger["operations"][number] | null {
+  return (
+    ledger.operations.find(
+      (operation) =>
+        operation.kind === "dispatch" &&
+        operation.target_id === groupId &&
+        operation.request.target_type === "group" &&
+        ["claimed", "unknown", "succeeded"].includes(operation.status),
+    ) ?? null
+  );
 }
 
 function coordinatorProjection(ledger: Ledger, group: Ledger["groups"][number]) {
@@ -392,7 +488,7 @@ function coordinatorProjection(ledger: Ledger, group: Ledger["groups"][number]) 
     ? { status: "bound" as const, thread_id: group.agent_thread_id }
     : activeGroupDispatch(ledger, group.id)
       ? { status: "unknown" as const, thread_id: null }
-    : { status: "not_created" as const, thread_id: null };
+      : { status: "not_created" as const, thread_id: null };
 }
 
 function blockerResource(
@@ -404,7 +500,9 @@ function blockerResource(
     kind,
     status: ledger.resources.some(
       (resource) => resource.kind === kind && resource.target === targetId,
-    ) ? "unknown" : "not_created",
+    )
+      ? "unknown"
+      : "not_created",
     target_id: targetId,
   };
 }
@@ -440,9 +538,7 @@ function groupWorkspaceBlockers(
 
   const worktreeReady = ledger.resources.some(
     (resource) =>
-      resource.kind === "worktree" &&
-      resource.target === group.id &&
-      resource.status === "active",
+      resource.kind === "worktree" && resource.target === group.id && resource.status === "active",
   );
   if (!worktreeReady) {
     blockers.push({
@@ -479,10 +575,7 @@ function groupWorkspaceBlockers(
 
   if (hasContributionWork && group.parent_branch && group.current_sha) {
     const publication = ledger.facts
-      .filter(
-        (fact) =>
-          fact.kind === "branch_published" && fact.subject_id === group.id,
-      )
+      .filter((fact) => fact.kind === "branch_published" && fact.subject_id === group.id)
       .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
       .at(-1);
     const branchPublished =
@@ -492,13 +585,13 @@ function groupWorkspaceBlockers(
       publication.receipt.branch === group.parent_branch;
     if (!branchPublished) {
       blockers.push({
-        code: publication?.status === "unknown"
-          ? "BRANCH_PUBLICATION_UNKNOWN"
-          : "BRANCH_NOT_PUBLISHED",
+        code:
+          publication?.status === "unknown" ? "BRANCH_PUBLICATION_UNKNOWN" : "BRANCH_NOT_PUBLISHED",
         group_id: group.id,
-        message: publication?.status === "unknown"
-          ? `交付单元「${group.title}」的父分支发布回执未知。`
-          : `交付单元「${group.title}」尚未取得匹配当前基线的父分支发布回执。`,
+        message:
+          publication?.status === "unknown"
+            ? `交付单元「${group.title}」的父分支发布回执未知。`
+            : `交付单元「${group.title}」尚未取得匹配当前基线的父分支发布回执。`,
         resource: blockerResource(ledger, "branch", group.parent_branch),
       });
     }
@@ -526,7 +619,9 @@ function groupWorkspaceBlockers(
 function blockersReadiness(blockers: ReadinessBlocker[]): RuntimeReadiness {
   return {
     status: blockers.some((item) => item.code.endsWith("UNKNOWN"))
-      ? blockers.some((item) => !item.code.endsWith("UNKNOWN")) ? "blocked" : "unknown"
+      ? blockers.some((item) => !item.code.endsWith("UNKNOWN"))
+        ? "blocked"
+        : "unknown"
       : "blocked",
     blockers,
   };
@@ -541,12 +636,14 @@ function groupRuntimeReadiness(
   if (group.state === "closed") {
     return {
       status: "blocked",
-      blockers: [{
-        code: "GROUP_CLOSED",
-        group_id: group.id,
-        message: `交付单元「${group.title}」已经收口，不能继续运行时派发。`,
-        resource: null,
-      }],
+      blockers: [
+        {
+          code: "GROUP_CLOSED",
+          group_id: group.id,
+          message: `交付单元「${group.title}」已经收口，不能继续运行时派发。`,
+          resource: null,
+        },
+      ],
     };
   }
   if (
@@ -555,57 +652,67 @@ function groupRuntimeReadiness(
   ) {
     return {
       status: "unknown",
-      blockers: [{
-        code: "CONTROL_OWNERSHIP_UNKNOWN",
-        group_id: group.id,
-        message: "编排控制权尚未确认，运行时派发保持未知。",
-        resource: null,
-      }],
+      blockers: [
+        {
+          code: "CONTROL_OWNERSHIP_UNKNOWN",
+          group_id: group.id,
+          message: "编排控制权尚未确认，运行时派发保持未知。",
+          resource: null,
+        },
+      ],
     };
   }
   const coordinator = coordinatorProjection(ledger, group);
   if (coordinator.status === "not_created") {
     return {
       status: "blocked",
-      blockers: [{
-        code: "COORDINATOR_NOT_BOUND",
-        group_id: group.id,
-        message: `普通交付单元「${group.title}」尚未绑定交付协调者，运行时派发保持阻断。`,
-        resource: { kind: "conversation", status: "not_created", target_id: group.id },
-      }],
+      blockers: [
+        {
+          code: "COORDINATOR_NOT_BOUND",
+          group_id: group.id,
+          message: `普通交付单元「${group.title}」尚未绑定交付协调者，运行时派发保持阻断。`,
+          resource: { kind: "conversation", status: "not_created", target_id: group.id },
+        },
+      ],
     };
   }
   if (coordinator.status === "unknown") {
     return {
       status: "unknown",
-      blockers: [{
-        code: "COORDINATOR_UNKNOWN",
-        group_id: group.id,
-        message: `交付单元「${group.title}」的交付协调者绑定未知。`,
-        resource: { kind: "conversation", status: "unknown", target_id: group.id },
-      }],
+      blockers: [
+        {
+          code: "COORDINATOR_UNKNOWN",
+          group_id: group.id,
+          message: `交付单元「${group.title}」的交付协调者绑定未知。`,
+          resource: { kind: "conversation", status: "unknown", target_id: group.id },
+        },
+      ],
     };
   }
   if (group.state === "planned") {
     return {
       status: "blocked",
-      blockers: [{
-        code: "GROUP_NOT_ACTIVE",
-        group_id: group.id,
-        message: `交付单元「${group.title}」尚未激活，任务运行时派发保持阻断。`,
-        resource: null,
-      }],
+      blockers: [
+        {
+          code: "GROUP_NOT_ACTIVE",
+          group_id: group.id,
+          message: `交付单元「${group.title}」尚未激活，任务运行时派发保持阻断。`,
+          resource: null,
+        },
+      ],
     };
   }
   if (group.state === "blocked") {
     return {
       status: "blocked",
-      blockers: [{
-        code: "GROUP_BLOCKED",
-        group_id: group.id,
-        message: `交付单元「${group.title}」当前处于阻塞状态。`,
-        resource: null,
-      }],
+      blockers: [
+        {
+          code: "GROUP_BLOCKED",
+          group_id: group.id,
+          message: `交付单元「${group.title}」当前处于阻塞状态。`,
+          resource: null,
+        },
+      ],
     };
   }
   const workspaceBlockers = groupWorkspaceBlockers(ledger, group);
@@ -614,26 +721,37 @@ function groupRuntimeReadiness(
     : { status: "ready", blockers: [] };
 }
 
-function runtimeReadinessProjection(ledger: Ledger, plan: Plan): {
+function runtimeReadinessProjection(
+  ledger: Ledger,
+  plan: Plan,
+): {
   summary: RuntimeReadiness;
   byGroup: Map<string, RuntimeReadiness>;
 } {
   const groupIds = planGroupIds(ledger, plan);
   const byGroup = new Map(
-    ledger.groups.map((group) => [group.id, groupRuntimeReadiness(ledger, group, groupIds.has(group.id))]),
+    ledger.groups.map((group) => [
+      group.id,
+      groupRuntimeReadiness(ledger, group, groupIds.has(group.id)),
+    ]),
   );
   const summaries = [...byGroup.values()].filter((item) => item.blockers.length > 0);
   const blockers = summaries
     .filter((item) => {
       const group = ledger.groups.find((candidate) => candidate.id === item.blockers[0]?.group_id);
       if (!group) return true;
-      if (group.state === "planned" && item.blockers.every((blocker) => blocker.code === "COORDINATOR_NOT_BOUND")) return false;
+      if (
+        group.state === "planned" &&
+        item.blockers.every((blocker) => blocker.code === "COORDINATOR_NOT_BOUND")
+      )
+        return false;
       if (group.state === "closed" || group.state === "blocked") {
-        return ledger.tasks.some((task) =>
-          task.group_id === group.id &&
-          task.disposition === "active" &&
-          ["planned", "ready"].includes(task.state) &&
-          !task.thread_id,
+        return ledger.tasks.some(
+          (task) =>
+            task.group_id === group.id &&
+            task.disposition === "active" &&
+            ["planned", "ready"].includes(task.state) &&
+            !task.thread_id,
         );
       }
       return true;
@@ -642,8 +760,12 @@ function runtimeReadinessProjection(ledger: Ledger, plan: Plan): {
   return {
     summary: {
       status: blockers.some((item) => item.code.endsWith("UNKNOWN"))
-        ? blockers.some((item) => !item.code.endsWith("UNKNOWN")) ? "blocked" : "unknown"
-        : blockers.length ? "blocked" : "ready",
+        ? blockers.some((item) => !item.code.endsWith("UNKNOWN"))
+          ? "blocked"
+          : "unknown"
+        : blockers.length
+          ? "blocked"
+          : "ready",
       blockers,
     },
     byGroup,
@@ -654,17 +776,9 @@ export function plannedIntervals(plan: Plan, maxRunning: number): PlannedInterva
   const start = 0;
   const order = new Map(plan.nodes.map((node, index) => [node.id, index]));
   const remaining = new Set(plan.nodes.map((node) => node.id));
-  const results = new Map<
-    string,
-    { start: number | null; end: number | null }
-  >();
+  const results = new Map<string, { start: number | null; end: number | null }>();
   const lanes = Array.from({ length: maxRunning }, () => start);
-  const instant = new Set([
-    "main_start",
-    "main_end",
-    "group_start",
-    "group_end",
-  ]);
+  const instant = new Set(["main_start", "main_end", "group_start", "group_end"]);
   while (remaining.size) {
     const candidates = plan.nodes.filter(
       (node) =>
@@ -679,22 +793,18 @@ export function plannedIntervals(plan: Plan, maxRunning: number): PlannedInterva
         const predecessors = plan.edges
           .filter((edge) => edge.to_node_id === node.id)
           .map((edge) => results.get(edge.from_node_id)!.end);
-        const predecessorEnd =
-          predecessors.some((time) => time === null)
-            ? null
-            : Math.max(start, ...(predecessors as number[]));
-        const lane =
-          node.kind === "task" ? lanes.indexOf(Math.min(...lanes)) : -1;
+        const predecessorEnd = predecessors.some((time) => time === null)
+          ? null
+          : Math.max(start, ...(predecessors as number[]));
+        const lane = node.kind === "task" ? lanes.indexOf(Math.min(...lanes)) : -1;
         const laneStart = lane >= 0 ? lanes[lane] : undefined;
         const available =
           lane < 0
             ? predecessorEnd
-              : predecessorEnd === null || laneStart === undefined
+            : predecessorEnd === null || laneStart === undefined
               ? null
               : Math.max(predecessorEnd, laneStart);
-        const priority = plan.edges.filter(
-          (edge) => edge.from_node_id === node.id,
-        ).length;
+        const priority = plan.edges.filter((edge) => edge.from_node_id === node.id).length;
         return { node, available, lane, priority };
       })
       .sort(
@@ -705,18 +815,10 @@ export function plannedIntervals(plan: Plan, maxRunning: number): PlannedInterva
           a.node.id.localeCompare(b.node.id),
       );
     const chosen = choices[0];
-    requireCondition(
-      chosen !== undefined,
-      "CYCLE",
-      "Cannot choose a plan node",
-    );
-    const duration = instant.has(chosen.node.kind)
-      ? 0
-      : chosen.node.estimate_minutes;
+    requireCondition(chosen !== undefined, "CYCLE", "Cannot choose a plan node");
+    const duration = instant.has(chosen.node.kind) ? 0 : chosen.node.estimate_minutes;
     const end =
-      chosen.available === null || duration === null
-        ? null
-        : chosen.available + duration * 60_000;
+      chosen.available === null || duration === null ? null : chosen.available + duration * 60_000;
     if (chosen.lane >= 0) lanes[chosen.lane] = end ?? Infinity;
     results.set(chosen.node.id, { start: chosen.available, end });
     remaining.delete(chosen.node.id);
@@ -725,7 +827,8 @@ export function plannedIntervals(plan: Plan, maxRunning: number): PlannedInterva
     const interval = results.get(node.id)!;
     return {
       node_id: node.id,
-      start: interval.start === null ? null : new Date(RELATIVE_EPOCH + interval.start).toISOString(),
+      start:
+        interval.start === null ? null : new Date(RELATIVE_EPOCH + interval.start).toISOString(),
       end: interval.end === null ? null : new Date(RELATIVE_EPOCH + interval.end).toISOString(),
       start_offset_minutes: interval.start === null ? null : interval.start / 60000,
       end_offset_minutes: interval.end === null ? null : interval.end / 60000,
@@ -756,9 +859,7 @@ export function actualIntervals(ledger: Ledger): {
         event.data.reassigned_task_ids.includes(task.id),
     );
     let groupId =
-      typeof cuts[0]?.data.old_group_id === "string"
-        ? cuts[0].data.old_group_id
-        : task.group_id;
+      typeof cuts[0]?.data.old_group_id === "string" ? cuts[0].data.old_group_id : task.group_id;
     const events = ledger.events
       .filter(
         (event) =>
@@ -773,8 +874,7 @@ export function actualIntervals(ledger: Ledger): {
                 "task_blocked",
                 "task_completed",
               ].includes(event.type) ||
-                (event.type === "merge_resolved" &&
-                  event.data.outcome === "succeeded")))),
+                (event.type === "merge_resolved" && event.data.outcome === "succeeded")))),
       )
       .sort((a, b) => a.occurred_at!.localeCompare(b.occurred_at!));
     for (const event of events) {
@@ -795,10 +895,18 @@ export function actualIntervals(ledger: Ledger): {
         intervals.push(current);
         current = null;
       }
-      if (typeof event.data.group_id === "string")
-        groupId = event.data.group_id;
-      if (event.type === "task_runtime_observed" && ["running", "agent_idle"].includes(String(event.data.state)))
-        current = { task_id: task.id, group_id: groupId, state: String(event.data.state), start: time, end: null };
+      if (typeof event.data.group_id === "string") groupId = event.data.group_id;
+      if (
+        event.type === "task_runtime_observed" &&
+        ["running", "agent_idle"].includes(String(event.data.state))
+      )
+        current = {
+          task_id: task.id,
+          group_id: groupId,
+          state: String(event.data.state),
+          start: time,
+          end: null,
+        };
       if (["task_started", "task_resumed"].includes(event.type))
         current = {
           task_id: task.id,
@@ -828,19 +936,13 @@ export function buildView(
   options: { readOnly?: boolean } = {},
 ): Record<string, unknown> {
   const ledger = options.readOnly ? parseLedger(input) : validateLedger(input);
-  const plan = ledger.plans.find(
-    (item) => item.id === (planId ?? ledger.active_plan_id),
-  );
+  const plan = ledger.plans.find((item) => item.id === (planId ?? ledger.active_plan_id));
   if (!plan) throw new ContractError("PLAN_NOT_FOUND", "Plan not found", 2);
   const atomProjection = createAtomProjection(ledger, plan);
   const { atomTime } = atomProjection;
   const phase = deriveExecutionPhase(ledger);
-  const activePlan = ledger.plans.find(
-    (item) => item.id === ledger.active_plan_id,
-  )!;
-  const executionPlan = ledger.plans.find(
-    (item) => item.id === ledger.execution_plan_id,
-  )!;
+  const activePlan = ledger.plans.find((item) => item.id === ledger.active_plan_id)!;
+  const executionPlan = ledger.plans.find((item) => item.id === ledger.execution_plan_id)!;
   const completenessIssues = planCompletenessIssues(plan);
   const schedulingPlanIssues = planSchedulingIssues(ledger, plan);
   const theoreticalIssues = theoreticalScheduleIssues(plan);
@@ -848,16 +950,17 @@ export function buildView(
   const isApprovedExecution =
     activePlan.id === executionPlan.id && activePlan.lifecycle === "approved";
   const runtimeProjection = runtimeReadinessProjection(ledger, plan);
-  const approvalPending =
-    activePlan.id !== executionPlan.id || activePlan.lifecycle !== "approved";
+  const approvalPending = activePlan.id !== executionPlan.id || activePlan.lifecycle !== "approved";
   const schedulingBlockers: ReadinessBlocker[] = [
     ...(approvalPending
-      ? [{
-          code: "OWNER_APPROVAL_PENDING",
-          group_id: null,
-          message: "Owner approval 尚未完成，运行时派发保持阻断。",
-          resource: null,
-        }]
+      ? [
+          {
+            code: "OWNER_APPROVAL_PENDING",
+            group_id: null,
+            message: "Owner approval 尚未完成，运行时派发保持阻断。",
+            resource: null,
+          },
+        ]
       : []),
     ...completenessIssues.map((issue) => ({
       code: issue.code,
@@ -871,7 +974,12 @@ export function buildView(
       message: issue.message,
       resource: null,
     })),
-    ...theoreticalIssues.map((issue) => ({ code: issue.code, group_id: null, message: issue.message, resource: issue.node_id })),
+    ...theoreticalIssues.map((issue) => ({
+      code: issue.code,
+      group_id: null,
+      message: issue.message,
+      resource: issue.node_id,
+    })),
     ...schedulingTaskIssues.map((issue) => ({
       code: issue.code,
       group_id: issue.group_id,
@@ -880,52 +988,90 @@ export function buildView(
     })),
     ...runtimeProjection.summary.blockers,
   ];
-  const schedulingStatus = approvalPending || completenessIssues.length || schedulingPlanIssues.length || schedulingTaskIssues.length || theoreticalIssues.length
-    ? "blocked"
-    : runtimeProjection.summary.status === "ready"
-      ? "eligible"
-      : runtimeProjection.summary.status;
-  const hasLegacyAtomicProjection = !plan.atomic_nodes.length && (plan.atoms.length > 0 || plan.group_atoms.length > 0);
+  const schedulingStatus =
+    approvalPending ||
+    completenessIssues.length ||
+    schedulingPlanIssues.length ||
+    schedulingTaskIssues.length ||
+    theoreticalIssues.length
+      ? "blocked"
+      : runtimeProjection.summary.status === "ready"
+        ? "eligible"
+        : runtimeProjection.summary.status;
+  const hasLegacyAtomicProjection =
+    !plan.atomic_nodes.length && (plan.atoms.length > 0 || plan.group_atoms.length > 0);
   const compatibilityPlan = hasLegacyAtomicProjection
     ? canonicalizeContract3Plan(plan, ledger.tasks)
     : null;
-  const canonicalAtomicNodes: AtomicNode[] = (plan.atomic_nodes.length
-    ? plan.atomic_nodes.map((node) => compatibilityAtomicNodeState(node, ledger))
-    : hasLegacyAtomicProjection
-      ? (compatibilityPlan.atomic_nodes as AtomicNode[]).map((node) => compatibilityAtomicNodeState(node, ledger))
-      : plan.nodes
-        .filter((node) => node.kind === "task" || node.kind === "milestone")
-        .map((node) => {
-          const task = node.kind === "task" && node.ref_id ? ledger.tasks.find((item) => item.id === node.ref_id) : undefined;
-          if (node.kind === "milestone") {
-            return {
-              kind: "milestone" as const,
-              id: node.id,
-              title: node.label,
-              state: "planned" as const,
-              scope: { kind: "delivery_unit" as const, delivery_unit_id: node.group_id ?? "unassigned" },
-              acceptance: [],
-            };
-          }
-          return {
-            kind: "work" as const,
-            id: node.id,
-            title: node.label,
-            purpose: node.label,
-            output: task?.owned_surfaces?.join(", ") ?? node.label,
-            acceptance: [],
-            activity_type: (task?.kind === "verification" || task?.kind === "release" || task?.kind === "deployment" ? task.kind : "contribution") as "contribution" | "verification" | "release" | "deployment",
-            state: task?.state === "starting" ? "starting" : task?.state === "running" ? "running" : task?.state === "blocked" ? "blocked" : ["integrated", "completed", "closed"].includes(task?.state ?? "") ? "completed" : "planned",
-            scope: { kind: "task" as const, task_id: node.ref_id ?? node.id, delivery_unit_id: task?.group_id ?? node.group_id ?? "unassigned" },
-          };
-        })) as AtomicNode[];
+  const canonicalAtomicNodes: AtomicNode[] = (
+    plan.atomic_nodes.length
+      ? plan.atomic_nodes.map((node) => compatibilityAtomicNodeState(node, ledger))
+      : hasLegacyAtomicProjection
+        ? (compatibilityPlan.atomic_nodes as AtomicNode[]).map((node) =>
+            compatibilityAtomicNodeState(node, ledger),
+          )
+        : plan.nodes
+            .filter((node) => node.kind === "task" || node.kind === "milestone")
+            .map((node) => {
+              const task =
+                node.kind === "task" && node.ref_id
+                  ? ledger.tasks.find((item) => item.id === node.ref_id)
+                  : undefined;
+              if (node.kind === "milestone") {
+                return {
+                  kind: "milestone" as const,
+                  id: node.id,
+                  title: node.label,
+                  state: "planned" as const,
+                  scope: {
+                    kind: "delivery_unit" as const,
+                    delivery_unit_id: node.group_id ?? "unassigned",
+                  },
+                  acceptance: [],
+                };
+              }
+              return {
+                kind: "work" as const,
+                id: node.id,
+                title: node.label,
+                purpose: node.label,
+                output: task?.owned_surfaces?.join(", ") ?? node.label,
+                acceptance: [],
+                activity_type: (task?.kind === "verification" ||
+                task?.kind === "release" ||
+                task?.kind === "deployment"
+                  ? task.kind
+                  : "contribution") as "contribution" | "verification" | "release" | "deployment",
+                state:
+                  task?.state === "starting"
+                    ? "starting"
+                    : task?.state === "running"
+                      ? "running"
+                      : task?.state === "blocked"
+                        ? "blocked"
+                        : ["integrated", "completed", "closed"].includes(task?.state ?? "")
+                          ? "completed"
+                          : "planned",
+                scope: {
+                  kind: "task" as const,
+                  task_id: node.ref_id ?? node.id,
+                  delivery_unit_id: task?.group_id ?? node.group_id ?? "unassigned",
+                },
+              };
+            })
+  ) as AtomicNode[];
   const nodeData = plan.nodes.map((node) => ({
     ...node,
     planned_group_id: node.group_id,
-    group_id: node.kind === "task" ? (ledger.tasks.find((task) => task.id === node.ref_id)?.group_id ?? null) : node.group_id,
+    group_id:
+      node.kind === "task"
+        ? (ledger.tasks.find((task) => task.id === node.ref_id)?.group_id ?? null)
+        : node.group_id,
   }));
   const existingAtomicNodeIds = new Set(canonicalAtomicNodes.map((node) => node.id));
-  for (const node of plan.nodes.filter((item) => item.kind === "milestone" && !existingAtomicNodeIds.has(item.id))) {
+  for (const node of plan.nodes.filter(
+    (item) => item.kind === "milestone" && !existingAtomicNodeIds.has(item.id),
+  )) {
     canonicalAtomicNodes.push({
       kind: "milestone",
       id: node.id,
@@ -936,57 +1082,114 @@ export function buildView(
     });
   }
   for (const boundary of syntheticAtomicBoundaries(ledger)) {
-    if (!canonicalAtomicNodes.some((node) => node.id === boundary.id)) canonicalAtomicNodes.push(boundary);
+    if (!canonicalAtomicNodes.some((node) => node.id === boundary.id))
+      canonicalAtomicNodes.push(boundary);
   }
   const canonicalAtomicNodeIds = new Set(canonicalAtomicNodes.map((node) => node.id));
-  const sourceAtomicEdges: Plan["atomic_edges"] = compatibilityPlan?.atomic_edges ?? plan.atomic_edges;
+  const sourceAtomicEdges: Plan["atomic_edges"] =
+    compatibilityPlan?.atomic_edges ?? plan.atomic_edges;
   const declaredAtomicEdges: AtomicEdge[] = sourceAtomicEdges.map((edge) =>
     "from_node_id" in edge
       ? edge
-      : { id: edge.id, from_node_id: edge.from_atom_id, to_node_id: edge.to_atom_id, requires: { kind: "source_terminal_success" as const } },
+      : {
+          id: edge.id,
+          from_node_id: edge.from_atom_id,
+          to_node_id: edge.to_atom_id,
+          requires: { kind: "source_terminal_success" as const },
+        },
   );
   const legacyAtomicEdges: AtomicEdge[] = plan.edges
-    .filter((edge) => canonicalAtomicNodeIds.has(edge.from_node_id) && canonicalAtomicNodeIds.has(edge.to_node_id))
-    .map((edge) => ({ id: edge.id, from_node_id: edge.from_node_id, to_node_id: edge.to_node_id, requires: { kind: edge.requires as "source_terminal_success" } }));
-  const seenAtomicEdges = new Set(declaredAtomicEdges.map((edge) => `${edge.from_node_id}->${edge.to_node_id}`));
-  const baseAtomicEdges: AtomicEdge[] = [...declaredAtomicEdges, ...legacyAtomicEdges.filter((edge) => {
-    const key = `${edge.from_node_id}->${edge.to_node_id}`;
-    if (seenAtomicEdges.has(key)) return false;
-    seenAtomicEdges.add(key);
-    return true;
-  })];
-  const canonicalAtomicEdges = appendAtomicBoundaryEdges(plan, canonicalAtomicNodes, baseAtomicEdges);
+    .filter(
+      (edge) =>
+        canonicalAtomicNodeIds.has(edge.from_node_id) &&
+        canonicalAtomicNodeIds.has(edge.to_node_id),
+    )
+    .map((edge) => ({
+      id: edge.id,
+      from_node_id: edge.from_node_id,
+      to_node_id: edge.to_node_id,
+      requires: { kind: edge.requires as "source_terminal_success" },
+    }));
+  const seenAtomicEdges = new Set(
+    declaredAtomicEdges.map((edge) => `${edge.from_node_id}->${edge.to_node_id}`),
+  );
+  const baseAtomicEdges: AtomicEdge[] = [
+    ...declaredAtomicEdges,
+    ...legacyAtomicEdges.filter((edge) => {
+      const key = `${edge.from_node_id}->${edge.to_node_id}`;
+      if (seenAtomicEdges.has(key)) return false;
+      seenAtomicEdges.add(key);
+      return true;
+    }),
+  ];
+  const canonicalAtomicEdges = appendAtomicBoundaryEdges(
+    plan,
+    canonicalAtomicNodes,
+    baseAtomicEdges,
+  );
   const atomicNodeById = new Map(canonicalAtomicNodes.map((node) => [node.id, node]));
   const milestoneEvaluations = new Map<string, MilestoneEvaluation>();
-  for (const milestone of canonicalAtomicNodes.filter((node): node is Extract<AtomicNode, { kind: "milestone" }> => node.kind === "milestone")) {
-    const incoming = canonicalAtomicEdges.filter((edge) => edge.to_node_id === milestone.id).map((edge) => {
-      const source = atomicNodeById.get(edge.from_node_id);
-      const satisfied = source?.kind === "work" ? source.state === "completed" : false;
-      return { satisfied, blocked: source?.kind === "work" && source.state === "blocked", evidence_refs: source?.kind === "work" ? source.result?.evidence_refs ?? source.runtime?.evidence_refs ?? [] : [] };
-    });
-    const acceptance = milestone.acceptance.map(() => ({ satisfied: false, evidence_refs: [] as string[] }));
-    try { milestoneEvaluations.set(milestone.id, evaluateMilestone(milestone, incoming, acceptance)); } catch { /* invalid legacy milestones remain pending in the compatibility view */ }
+  for (const milestone of canonicalAtomicNodes.filter(
+    (node): node is Extract<AtomicNode, { kind: "milestone" }> => node.kind === "milestone",
+  )) {
+    const incoming = canonicalAtomicEdges
+      .filter((edge) => edge.to_node_id === milestone.id)
+      .map((edge) => {
+        const source = atomicNodeById.get(edge.from_node_id);
+        const satisfied = source?.kind === "work" ? source.state === "completed" : false;
+        return {
+          satisfied,
+          blocked: source?.kind === "work" && source.state === "blocked",
+          evidence_refs:
+            source?.kind === "work"
+              ? (source.result?.evidence_refs ?? source.runtime?.evidence_refs ?? [])
+              : [],
+        };
+      });
+    const acceptance = milestone.acceptance.map(() => ({
+      satisfied: false,
+      evidence_refs: [] as string[],
+    }));
+    try {
+      milestoneEvaluations.set(milestone.id, evaluateMilestone(milestone, incoming, acceptance));
+    } catch {
+      /* invalid legacy milestones remain pending in the compatibility view */
+    }
   }
-  const canonicalDisplayNodes = plan.atomic_nodes.length ? canonicalAtomicNodes.map((node) => ({
+  const canonicalDisplayNodes = plan.atomic_nodes.length
+    ? canonicalAtomicNodes.map((node) => ({
         id: node.id,
-        kind: node.kind === "work" ? "task" as const : "milestone" as const,
+        kind: node.kind === "work" ? ("task" as const) : ("milestone" as const),
         ref_id: node.kind === "work" && node.scope?.kind === "task" ? node.scope.task_id : null,
         group_id: node.scope?.delivery_unit_id ?? null,
         label: node.title,
         estimate_minutes: null,
         estimate_basis: null,
         estimate_confidence: null,
-      })) : nodeData;
-  const canonicalDisplayEdges = plan.atomic_nodes.length ? canonicalAtomicEdges.map((edge) => ({
+      }))
+    : nodeData;
+  const canonicalDisplayEdges = plan.atomic_nodes.length
+    ? canonicalAtomicEdges.map((edge) => ({
         id: edge.id,
         from_node_id: edge.from_node_id,
         to_node_id: edge.to_node_id,
-        requires: edge.requires.kind === "source_terminal_success" ? "completed" as const : edge.requires.criterion.kind === "pr_published" || edge.requires.criterion.kind === "release_published" ? "published" as const : edge.requires.criterion.kind === "pr_merged" ? "merged" as const : edge.requires.criterion.kind === "ci_passed" ? "ci_passed" as const : edge.requires.criterion.kind === "deployment_succeeded" ? "deployed" as const : "verified" as const,
-      })) : plan.edges;
+        requires:
+          edge.requires.kind === "source_terminal_success"
+            ? ("completed" as const)
+            : edge.requires.criterion.kind === "pr_published" ||
+                edge.requires.criterion.kind === "release_published"
+              ? ("published" as const)
+              : edge.requires.criterion.kind === "pr_merged"
+                ? ("merged" as const)
+                : edge.requires.criterion.kind === "ci_passed"
+                  ? ("ci_passed" as const)
+                  : edge.requires.criterion.kind === "deployment_succeeded"
+                    ? ("deployed" as const)
+                    : ("verified" as const),
+      }))
+    : plan.edges;
   const selectedTaskIds = new Set(
-    plan.nodes
-      .filter((node) => node.kind === "task")
-      .map((node) => node.ref_id),
+    plan.nodes.filter((node) => node.kind === "task").map((node) => node.ref_id),
   );
   const tasks = ledger.tasks
     .filter((task) => selectedTaskIds.has(task.id))
@@ -1001,8 +1204,7 @@ export function buildView(
           const owner = ledger.groups.find((item) => item.id === task.group_id);
           const groupReady =
             !!owner &&
-            (owner.delivery_unit_kind === "bootstrap" ||
-              !!owner.agent_thread_id) &&
+            (owner.delivery_unit_kind === "bootstrap" || !!owner.agent_thread_id) &&
             (["release", "deployment", "verification"].includes(task.kind)
               ? owner.state === "merged" && !!owner.merge_sha
               : owner.state === "active" &&
@@ -1013,9 +1215,7 @@ export function buildView(
           isReady = false;
         }
       }
-      const plannedAtoms = plan.atoms.filter(
-        (atom) => atom.task_id === task.id,
-      );
+      const plannedAtoms = plan.atoms.filter((atom) => atom.task_id === task.id);
       const runtimeAtoms = new Map(task.atoms.map((atom) => [atom.id, atom]));
       const atoms = plannedAtoms.length
         ? plannedAtoms.map((atom) => ({
@@ -1026,34 +1226,54 @@ export function buildView(
             status: runtimeAtoms.get(atom.id)?.status ?? "planned",
           }))
         : [];
-      const derivedStatus = deriveBusinessStatus(canonicalAtomicNodes, { kind: "task", task_id: task.id }, milestoneEvaluations);
+      const derivedStatus = deriveBusinessStatus(
+        canonicalAtomicNodes,
+        { kind: "task", task_id: task.id },
+        milestoneEvaluations,
+      );
       return {
         ...task,
         pr: taskPrProjection(task, owner),
         ...(() => {
-          const gateDiagnostics = owner && isContributionKind(task.kind) ? deliveryGateDiagnostics(ledger, owner, task) : [];
+          const gateDiagnostics =
+            owner && isContributionKind(task.kind)
+              ? deliveryGateDiagnostics(ledger, owner, task)
+              : [];
           return { gateDiagnostics };
         })(),
         dispatch_diagnostics: [
           ...taskExecutionPolicyIssues(task),
           ...(owner && owner.delivery_unit_kind === "regular" && !owner.agent_thread_id
-            ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }]
+            ? [
+                {
+                  code: "DELIVERY_AGENT_NOT_BOUND",
+                  message: "regular delivery unit 未绑定交付 Agent",
+                },
+              ]
             : []),
-          ...((owner && isContributionKind(task.kind)) ? deliveryGateDiagnostics(ledger, owner, task) : []),
+          ...(owner && isContributionKind(task.kind)
+            ? deliveryGateDiagnostics(ledger, owner, task)
+            : []),
         ],
         dispatch_readiness:
-          task.execution_owner === null && task.conversation_policy === null && task.delivery_policy === null
+          task.execution_owner === null &&
+          task.conversation_policy === null &&
+          task.delivery_policy === null
             ? "unknown"
             : taskExecutionPolicyIssues(task).length > 0
               ? "blocked"
-              : owner && isContributionKind(task.kind) && deliveryGateDiagnostics(ledger, owner, task).length > 0
+              : owner &&
+                  isContributionKind(task.kind) &&
+                  deliveryGateDiagnostics(ledger, owner, task).length > 0
                 ? "blocked"
-              : owner && (owner.delivery_unit_kind === "bootstrap" || !!owner.agent_thread_id)
-              ? "ready"
-              : "blocked",
+                : owner && (owner.delivery_unit_kind === "bootstrap" || !!owner.agent_thread_id)
+                  ? "ready"
+                  : "blocked",
         state: runtimeTaskState(task, outputs[task.id]),
         derived_status: derivedStatus,
-        ...(runtimeTaskState(task, outputs[task.id]) === "agent_idle" && task.state !== "agent_idle" ? { agent_resume_state: task.state } : {}),
+        ...(runtimeTaskState(task, outputs[task.id]) === "agent_idle" && task.state !== "agent_idle"
+          ? { agent_resume_state: task.state }
+          : {}),
         atoms: atoms.map((atom) => ({
           ...atom,
           completed_at: atomTime(task.id, atom),
@@ -1066,19 +1286,17 @@ export function buildView(
         latest_output: outputs[task.id]?.text ?? null,
         conversation_archive: conversationArchiveEligibility(ledger, task.id),
         conversation_resource: task.thread_id
-          ? ledger.resources.find(
-              (resource) =>
-                resource.kind === "conversation" && resource.target === task.thread_id,
-            ) ?? null
+          ? (ledger.resources.find(
+              (resource) => resource.kind === "conversation" && resource.target === task.thread_id,
+            ) ?? null)
           : null,
       };
     });
-  const allTasksDispatchReady = tasks.every(
-    (task) => task.dispatch_readiness === "ready",
-  );
-  const allDeliveryUnitsDispatchReady = ledger.groups.every((item) =>
-    deliveryGateDiagnostics(ledger, item).length === 0 &&
-    (item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id),
+  const allTasksDispatchReady = tasks.every((task) => task.dispatch_readiness === "ready");
+  const allDeliveryUnitsDispatchReady = ledger.groups.every(
+    (item) =>
+      deliveryGateDiagnostics(ledger, item).length === 0 &&
+      (item.delivery_unit_kind === "bootstrap" || !!item.agent_thread_id),
   );
   const planSummary = ledger.plans.map((item) => ({
     id: item.id,
@@ -1105,11 +1323,14 @@ export function buildView(
       conversation_links_verified: ledger.config.conversation_links_verified,
       contract_version: ledger.contract_version,
       version: ledger.version,
-      version_status: ledger.version === null
-        ? { state: "historical_read_only", reason: "账本未声明 Skill 版本身份" }
-        : ledger.version.skill_id !== SKILL_ID || ledger.version.skill_version !== SKILL_VERSION || ledger.version.viewer_contract !== VIEWER_CONTRACT
-          ? { state: "mismatch", reason: "Skill、账本和 Viewer 版本不一致" }
-          : { state: "current", reason: null },
+      version_status:
+        ledger.version === null
+          ? { state: "historical_read_only", reason: "账本未声明 Skill 版本身份" }
+          : ledger.version.skill_id !== SKILL_ID ||
+              ledger.version.skill_version !== SKILL_VERSION ||
+              ledger.version.viewer_contract !== VIEWER_CONTRACT
+            ? { state: "mismatch", reason: "Skill、账本和 Viewer 版本不一致" }
+            : { state: "current", reason: null },
       execution_profile: ledger.config.execution_profile,
     },
     execution_phase: phase,
@@ -1120,12 +1341,15 @@ export function buildView(
       execution_plan_id: ledger.execution_plan_id,
       lifecycle: activePlan.lifecycle,
       phase,
-      approval_pending:
-        activePlan.id !== executionPlan.id ||
-        activePlan.lifecycle !== "approved",
+      approval_pending: activePlan.id !== executionPlan.id || activePlan.lifecycle !== "approved",
       scheduling_eligible: schedulingStatus === "eligible",
-      dispatch_readiness: allDeliveryUnitsDispatchReady && allTasksDispatchReady ? "ready" : "blocked",
-      delivery_agent_readiness: ledger.groups.some((item) => item.delivery_unit_kind === "regular" && !item.agent_thread_id) ? "unbound" : "bound",
+      dispatch_readiness:
+        allDeliveryUnitsDispatchReady && allTasksDispatchReady ? "ready" : "blocked",
+      delivery_agent_readiness: ledger.groups.some(
+        (item) => item.delivery_unit_kind === "regular" && !item.agent_thread_id,
+      )
+        ? "unbound"
+        : "bound",
       proposal: {
         status: completenessIssues.length === 0 ? "complete" : "blocked",
         issues: completenessIssues,
@@ -1154,31 +1378,73 @@ export function buildView(
     groups: atomProjection.groups.map((item) => ({
       ...item,
       pr_merged_availability: deliveryUnitPrMerged(item) ? "available" : "unavailable",
-      derived_status: deriveBusinessStatus(canonicalAtomicNodes, { kind: "delivery_unit", delivery_unit_id: item.id }, milestoneEvaluations),
+      derived_status: deriveBusinessStatus(
+        canonicalAtomicNodes,
+        { kind: "delivery_unit", delivery_unit_id: item.id },
+        milestoneEvaluations,
+      ),
       ...(() => {
         const gateDiagnostics = deliveryGateDiagnostics(ledger, item);
         return { gateDiagnostics };
       })(),
-      delivery_agent_readiness: item.delivery_unit_kind === "bootstrap" ? "not_applicable" : item.agent_thread_id ? "bound" : "unbound",
-      dispatch_readiness: item.delivery_unit_kind === "bootstrap"
-        ? deliveryGateDiagnostics(ledger, item).length === 0 ? "ready" : "blocked"
-        : !!item.agent_thread_id && deliveryGateDiagnostics(ledger, item).length === 0 ? "ready" : "blocked",
+      delivery_agent_readiness:
+        item.delivery_unit_kind === "bootstrap"
+          ? "not_applicable"
+          : item.agent_thread_id
+            ? "bound"
+            : "unbound",
+      dispatch_readiness:
+        item.delivery_unit_kind === "bootstrap"
+          ? deliveryGateDiagnostics(ledger, item).length === 0
+            ? "ready"
+            : "blocked"
+          : item.agent_thread_id && deliveryGateDiagnostics(ledger, item).length === 0
+            ? "ready"
+            : "blocked",
       dispatch_diagnostics: [
-        ...(item.delivery_unit_kind === "regular" && !item.agent_thread_id ? [{ code: "DELIVERY_AGENT_NOT_BOUND", message: "regular delivery unit 未绑定交付 Agent" }] : []),
+        ...(item.delivery_unit_kind === "regular" && !item.agent_thread_id
+          ? [
+              {
+                code: "DELIVERY_AGENT_NOT_BOUND",
+                message: "regular delivery unit 未绑定交付 Agent",
+              },
+            ]
+          : []),
         ...deliveryGateDiagnostics(ledger, item),
       ],
       merge_capability: mergeCapabilityProjection(ledger, item),
       closeout_reconciliation: closeoutReconciliationProjection(ledger, item.id),
       recovery: {
-        eligible: item.state === "blocked" && closeoutReconciliationProjection(ledger, item.id).status !== "unknown",
+        eligible:
+          item.state === "blocked" &&
+          closeoutReconciliationProjection(ledger, item.id).status !== "unknown",
         blockers: item.state !== "blocked" ? ["DeliveryUnit 当前不是 blocked"] : [],
       },
       ...profileProjection(ledger, "group", item),
       coordinator: coordinatorProjection(ledger, item),
-      runtime_readiness: runtimeProjection.byGroup.get(item.id) ?? { status: "unknown", blockers: [] },
-      latest_agent_output: outputs[`group:${item.id}`] ?? initialOutput(item.delivery_unit_kind === "bootstrap" ? ledger.control.owner_thread_id : item.agent_thread_id),
-      started_at: ledger.events.find(e => e.type === "group_execution_updated" && e.data.group_id === item.id && e.data.state === "running")?.occurred_at ?? null,
-      finished_at: ledger.events.find(e => e.type === "group_updated" && e.subject_id === item.id && e.data.state === "closed")?.occurred_at ?? null,
+      runtime_readiness: runtimeProjection.byGroup.get(item.id) ?? {
+        status: "unknown",
+        blockers: [],
+      },
+      latest_agent_output:
+        outputs[`group:${item.id}`] ??
+        initialOutput(
+          item.delivery_unit_kind === "bootstrap"
+            ? ledger.control.owner_thread_id
+            : item.agent_thread_id,
+        ),
+      started_at:
+        ledger.events.find(
+          (e) =>
+            e.type === "group_execution_updated" &&
+            e.data.group_id === item.id &&
+            e.data.state === "running",
+        )?.occurred_at ?? null,
+      finished_at:
+        ledger.events.find(
+          (e) =>
+            e.type === "group_updated" && e.subject_id === item.id && e.data.state === "closed",
+        )?.occurred_at ?? null,
     })),
     tasks: tasks.map((item) => ({
       ...item,

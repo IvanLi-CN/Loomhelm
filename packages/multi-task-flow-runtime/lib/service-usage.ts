@@ -1,15 +1,18 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { requireCondition } from "../lib/errors";
+import {
+  API_VERSION,
+  packageReleaseManifest,
+  releaseManifestSchema,
+} from "../lib/service-contract";
 import { servicePaths } from "../lib/service-paths";
 import { ServiceState } from "../lib/service-state";
-import { API_VERSION, packageReleaseManifest, releaseManifestSchema } from "../lib/service-contract";
-import { readRegular, LedgerStore, safeId } from "../lib/store";
-import { requireCondition } from "../lib/errors";
+import { LedgerStore, readRegular, safeId } from "../lib/store";
 
 function installedState(root: string): ServiceState | null {
   const paths = servicePaths();
-  if (root !== paths.data || !existsSync(join(paths.config, "service.json")))
-    return null;
+  if (root !== paths.data || !existsSync(join(paths.config, "service.json"))) return null;
   return new ServiceState(paths);
 }
 export function checkViewerCompatibility(root: string): void {
@@ -18,19 +21,18 @@ export function checkViewerCompatibility(root: string): void {
   const config = state.config();
   if (config.package_name && config.package_version) {
     const manifest = packageReleaseManifest(config);
-    requireCondition(manifest.api_versions.includes(API_VERSION), "INCOMPATIBLE_API", "Installed package does not support this CLI API");
+    requireCondition(
+      manifest.api_versions.includes(API_VERSION),
+      "INCOMPATIBLE_API",
+      "Installed package does not support this CLI API",
+    );
     return;
   }
   const manifest = releaseManifestSchema.parse(
-    JSON.parse(
-      readRegular(
-        join(state.paths.releases, config.current_build, "manifest.json"),
-      ),
-    ),
+    JSON.parse(readRegular(join(state.paths.releases, config.current_build, "manifest.json"))),
   );
   requireCondition(
-    manifest.build_id === config.current_build &&
-      manifest.api_versions.includes(API_VERSION),
+    manifest.build_id === config.current_build && manifest.api_versions.includes(API_VERSION),
     "INCOMPATIBLE_API",
     "Installed viewer requires explicit maintenance before this CLI can continue",
   );

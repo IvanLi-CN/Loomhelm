@@ -1,22 +1,14 @@
 // CI synthetic interactions plus a pure-frontend ui_demo evidence surface.
-import { chromium } from "playwright";
-import { mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { chromium } from "playwright";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
-import { buildView } from "../lib/view";
-import {
-  authFailedPage,
-  homePage,
-  homeScript,
-  runClientScript,
-} from "../lib/service-pages";
-import { startSharedViewer } from "../lib/service-http";
 import { ServiceAuth } from "../lib/service-auth";
-import {
-  serviceFixture,
-  fixtureRelease,
-  fixtureRun,
-} from "../tests/service-fixture";
+import { startSharedViewer } from "../lib/service-http";
+import { authFailedPage, homePage, homeScript, runClientScript } from "../lib/service-pages";
+import { buildView } from "../lib/view";
+import { fixtureRelease, fixtureRun, serviceFixture } from "../tests/service-fixture";
 
 const output = resolve(process.argv[2]!);
 mkdirSync(output, { recursive: true });
@@ -39,11 +31,8 @@ try {
     document.querySelector("#connection")?.textContent?.includes("实时"),
   );
   const response = await page.request.get(base + "/api/v1/runs");
-  if (!response.ok())
-    throw new Error("Browser login did not retain its session");
-  scenarios.push(
-    "single-use target ticket, URL cleanup and authenticated browser session",
-  );
+  if (!response.ok()) throw new Error("Browser login did not retain its session");
+  scenarios.push("single-use target ticket, URL cleanup and authenticated browser session");
   await live.close();
 
   const ledger = createDemoLedger(Date.parse("2026-11-04T09:00:00.000Z"));
@@ -62,8 +51,7 @@ try {
     await context.addInitScript(() => {
       class MockEvents {
         addEventListener(name: string, callback: EventListener) {
-          if (name === "open")
-            queueMicrotask(() => callback(new Event("open")));
+          if (name === "open") queueMicrotask(() => callback(new Event("open")));
         }
         close() {}
       }
@@ -88,10 +76,7 @@ try {
       } else if (url.pathname === "/runs/demo-run/") {
         body = sourceHtml;
         contentType = "text/html";
-      } else if (
-        url.pathname.endsWith("app.js") ||
-        url.pathname.endsWith("app.css")
-      ) {
+      } else if (url.pathname.endsWith("app.js") || url.pathname.endsWith("app.css")) {
         const name = url.pathname.endsWith("app.js") ? "app.js" : "app.css";
         body = readFileSync(join(dist, name), "utf8");
         contentType = name.endsWith("js") ? "text/javascript" : "text/css";
@@ -133,9 +118,7 @@ try {
     await demo.screenshot({ path: join(output, homeImage), fullPage: true });
     images.push(homeImage);
     await demo.getByRole("link", { name: "demo-run", exact: true }).click();
-    await demo
-      .getByText("自定义视图不兼容，已使用共享模板。", { exact: true })
-      .waitFor();
+    await demo.getByText("自定义视图不兼容，已使用共享模板。", { exact: true }).waitFor();
     await demo.waitForFunction(
       () =>
         document.querySelectorAll(".task-card").length > 0 ||
@@ -162,9 +145,7 @@ try {
     join(output, "evidence.json"),
     JSON.stringify(
       {
-        candidate_sha: Bun.spawnSync(["git", "rev-parse", "HEAD"])
-          .stdout.toString()
-          .trim(),
+        candidate_sha: Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim(),
         source: "ui_demo",
         backend: "mock-only for captures",
         images,

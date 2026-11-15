@@ -1,15 +1,17 @@
 import { canonicalJson } from "../lib/revisions-json";
+
 export { canonicalJson } from "../lib/revisions-json";
+
 import { z } from "zod";
 import {
   changeReason,
-  executionPhase,
-  planChangeSet,
-  planRevision,
   type ExecutionPhase,
+  executionPhase,
   type Ledger,
   type Plan,
   type PlanRevision,
+  planChangeSet,
+  planRevision,
   type Task,
 } from "../lib/schema";
 
@@ -27,12 +29,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function addModified(
-  changes: ChangeSet,
-  path: string,
-  oldValue: unknown,
-  newValue: unknown,
-): void {
+function addModified(changes: ChangeSet, path: string, oldValue: unknown, newValue: unknown): void {
   changes.modified.push({
     path,
     old_value: structuredClone(oldValue),
@@ -40,12 +37,7 @@ function addModified(
   });
 }
 
-function diffValue(
-  changes: ChangeSet,
-  path: string,
-  oldValue: unknown,
-  newValue: unknown,
-): void {
+function diffValue(changes: ChangeSet, path: string, oldValue: unknown, newValue: unknown): void {
   if (canonicalJson(oldValue) === canonicalJson(newValue)) return;
   if (
     Array.isArray(oldValue) &&
@@ -119,9 +111,7 @@ function taskContent(task: Task): Record<string, unknown> {
   };
 }
 
-function groupContent(
-  group: Ledger["groups"][number],
-): Record<string, unknown> {
+function groupContent(group: Ledger["groups"][number]): Record<string, unknown> {
   return {
     title: group.title,
     delivery_unit_kind: group.delivery_unit_kind,
@@ -165,9 +155,7 @@ export function diffPlan(
   return planChangeSet.parse(changes);
 }
 
-export function deriveExecutionPhase(
-  ledger: Pick<Ledger, "events">,
-): ExecutionPhase {
+export function deriveExecutionPhase(ledger: Pick<Ledger, "events">): ExecutionPhase {
   return ledger.events.some((event) => event.type === "task_started")
     ? "implementation"
     : "planning";
@@ -177,27 +165,16 @@ function taskIdsForNodeIds(plan: Plan, nodeIds: Iterable<string>): Set<string> {
   const ids = new Set(nodeIds);
   return new Set(
     plan.nodes
-      .filter(
-        (node) =>
-          ids.has(node.id) && node.kind === "task" && node.ref_id !== null,
-      )
+      .filter((node) => ids.has(node.id) && node.kind === "task" && node.ref_id !== null)
       .map((node) => node.ref_id!),
   );
 }
 
-function changedTaskIds(
-  changeSet: ChangeSet,
-  previous: Plan,
-  proposed: Plan,
-): Set<string> {
+function changedTaskIds(changeSet: ChangeSet, previous: Plan, proposed: Plan): Set<string> {
   const taskIds = new Set<string>();
   const allNodes = [...previous.nodes, ...proposed.nodes];
   const nodeById = new Map(allNodes.map((node) => [node.id, node]));
-  for (const entry of [
-    ...changeSet.added,
-    ...changeSet.removed,
-    ...changeSet.modified,
-  ]) {
+  for (const entry of [...changeSet.added, ...changeSet.removed, ...changeSet.modified]) {
     const taskMatch = entry.path.match(/^tasks\[([^\]]+)\]/);
     if (taskMatch) taskIds.add(taskMatch[1]!);
     const nodeMatch = entry.path.match(/^plan\.nodes\[([^\]]+)\]/);
@@ -212,18 +189,12 @@ function changedTaskIds(
       );
       if (atom)
         for (const node of allNodes)
-          if (
-            node.kind === "task" &&
-            node.ref_id &&
-            node.group_id === atom.group_id
-          )
+          if (node.kind === "task" && node.ref_id && node.group_id === atom.group_id)
             taskIds.add(node.ref_id);
     }
     const atomMatch = entry.path.match(/^plan\.atoms\[([^\]]+)\]/);
     if (atomMatch) {
-      const atom = [...previous.atoms, ...proposed.atoms].find(
-        (item) => item.id === atomMatch[1],
-      );
+      const atom = [...previous.atoms, ...proposed.atoms].find((item) => item.id === atomMatch[1]);
       if (atom) taskIds.add(atom.task_id);
     }
     const actionMatch = entry.path.match(/^plan\.actions\[([^\]]+)\]/);
@@ -235,19 +206,15 @@ function changedTaskIds(
     }
     const edgeMatch = entry.path.match(/^plan\.edges\[([^\]]+)\]/);
     if (edgeMatch) {
-      const edge = [...previous.edges, ...proposed.edges].find(
-        (item) => item.id === edgeMatch[1],
-      );
+      const edge = [...previous.edges, ...proposed.edges].find((item) => item.id === edgeMatch[1]);
       if (edge)
-        taskIdsForNodeIds(proposed, [
-          edge.from_node_id,
-          edge.to_node_id,
-        ]).forEach((id) => taskIds.add(id));
+        taskIdsForNodeIds(proposed, [edge.from_node_id, edge.to_node_id]).forEach((id) =>
+          taskIds.add(id),
+        );
       if (edge)
-        taskIdsForNodeIds(previous, [
-          edge.from_node_id,
-          edge.to_node_id,
-        ]).forEach((id) => taskIds.add(id));
+        taskIdsForNodeIds(previous, [edge.from_node_id, edge.to_node_id]).forEach((id) =>
+          taskIds.add(id),
+        );
     }
   }
   return taskIds;
@@ -265,26 +232,19 @@ function downstreamTaskIds(plan: Plan, roots: Set<string>): Set<string> {
   const visited = new Set(queue);
   while (queue.length) {
     const source = queue.shift()!;
-    for (const edge of plan.edges.filter(
-      (item) => item.from_node_id === source,
-    )) {
+    for (const edge of plan.edges.filter((item) => item.from_node_id === source)) {
       if (visited.has(edge.to_node_id)) continue;
       visited.add(edge.to_node_id);
       queue.push(edge.to_node_id);
     }
   }
   for (const node of plan.nodes)
-    if (node.kind === "task" && node.ref_id && visited.has(node.id))
-      roots.add(node.ref_id);
+    if (node.kind === "task" && node.ref_id && visited.has(node.id)) roots.add(node.ref_id);
   return roots;
 }
 
 function isLowImpact(changeSet: ChangeSet): boolean {
-  const entries = [
-    ...changeSet.added,
-    ...changeSet.removed,
-    ...changeSet.modified,
-  ];
+  const entries = [...changeSet.added, ...changeSet.removed, ...changeSet.modified];
   return (
     entries.length > 0 &&
     entries.every(
@@ -340,11 +300,7 @@ export function buildPlanRevision(
     affected_task_ids: [...changedTasks].sort(),
     affected_node_ids: [
       ...new Set(
-        [
-          ...changeSet.added,
-          ...changeSet.removed,
-          ...changeSet.modified,
-        ].flatMap((entry) => {
+        [...changeSet.added, ...changeSet.removed, ...changeSet.modified].flatMap((entry) => {
           const match = entry.path.match(/^plan\.nodes\[([^\]]+)\]/);
           return match ? [match[1]!] : [];
         }),
@@ -352,11 +308,7 @@ export function buildPlanRevision(
     ].sort(),
     affected_edge_ids: [
       ...new Set(
-        [
-          ...changeSet.added,
-          ...changeSet.removed,
-          ...changeSet.modified,
-        ].flatMap((entry) => {
+        [...changeSet.added, ...changeSet.removed, ...changeSet.modified].flatMap((entry) => {
           const match = entry.path.match(/^plan\.edges\[([^\]]+)\]/);
           return match ? [match[1]!] : [];
         }),
@@ -382,14 +334,10 @@ export function validateRevisionInput(revision: PlanRevision): void {
     revision.change_set.added.length +
     revision.change_set.removed.length +
     revision.change_set.modified.length;
-  if (changeCount === 0)
-    throw new Error("Plan revision requires a non-empty diff");
+  if (changeCount === 0) throw new Error("Plan revision requires a non-empty diff");
   if (reasonRequired(revision)) {
     if (!revision.reason) throw new Error("Plan revision requires a reason");
-    if (
-      evidenceRequired(revision) &&
-      revision.reason.evidence_refs.length === 0
-    )
+    if (evidenceRequired(revision) && revision.reason.evidence_refs.length === 0)
       throw new Error("High-impact plan revision requires evidence");
   }
 }

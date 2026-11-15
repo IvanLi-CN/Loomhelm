@@ -9,15 +9,11 @@ export class LoadedThreadSubscriptions {
   private generation = 0;
   constructor(private request: Request) {}
   retain(threads: Iterable<string>): void {
-    this.wanted = new Map(
-      [...threads].map((thread) => [thread, this.wanted.get(thread) ?? {}]),
-    );
+    this.wanted = new Map([...threads].map((thread) => [thread, this.wanted.get(thread) ?? {}]));
     for (const thread of this.joined)
       if (!this.wanted.has(thread)) {
         this.joined.delete(thread);
-        void this.request("thread/unsubscribe", { threadId: thread }).catch(
-          () => {},
-        );
+        void this.request("thread/unsubscribe", { threadId: thread }).catch(() => {});
       }
   }
   close(): void {
@@ -26,21 +22,17 @@ export class LoadedThreadSubscriptions {
     this.joined.clear();
   }
   ensure(thread: string): Promise<void> {
-    if (!this.wanted.has(thread) || this.joined.has(thread))
-      return Promise.resolve();
+    if (!this.wanted.has(thread) || this.joined.has(thread)) return Promise.resolve();
     const existing = this.pending.get(thread);
     if (existing) return existing;
-    const pending = this.join(thread).finally(() =>
-      this.pending.delete(thread),
-    );
+    const pending = this.join(thread).finally(() => this.pending.delete(thread));
     this.pending.set(thread, pending);
     return pending;
   }
   private async join(thread: string): Promise<void> {
     const generation = this.generation;
     const binding = this.wanted.get(thread);
-    const valid = () =>
-      generation === this.generation && this.wanted.get(thread) === binding;
+    const valid = () => generation === this.generation && this.wanted.get(thread) === binding;
     let cursor: string | undefined;
     const seen = new Set<string>();
     while (valid()) {
@@ -49,8 +41,7 @@ export class LoadedThreadSubscriptions {
         ...(cursor ? { cursor } : {}),
       });
       if (!valid()) return;
-      if (!Array.isArray(page.data))
-        throw new Error("Unsupported loaded thread page");
+      if (!Array.isArray(page.data)) throw new Error("Unsupported loaded thread page");
       if (page.data.includes(thread)) {
         // No overrides, history, path, user input, or turn/start. Rejoin the loaded session.
         await this.request("thread/resume", {

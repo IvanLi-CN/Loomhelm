@@ -22,6 +22,7 @@ Commands:
   database     Run the real PostgreSQL-backed database and job tests.
   web          Run client transport tests, frozen Web typecheck and production/Storybook builds.
   client       Install and verify the independent TypeScript client on Bun from TS sources.
+  style        Check multi-task-flow TypeScript formatting and lint rules.
   react        Run the pinned React Doctor changed-file check.
 EOF
 }
@@ -303,6 +304,13 @@ check_client() {
 	finish_check
 }
 
+check_style() {
+	run_command "multi-task-flow frozen dependencies" bun install --cwd packages/multi-task-flow-runtime --frozen-lockfile --ignore-scripts --backend=copy
+	run_command "multi-task-flow format" bun run --cwd packages/multi-task-flow-runtime format:check
+	run_command "multi-task-flow lint" bun run --cwd packages/multi-task-flow-runtime lint
+	finish_check
+}
+
 check_react() {
 	run_command "React Doctor" scripts/check-react-doctor
 	finish_check
@@ -319,6 +327,7 @@ run_named_group() {
 		database) run_group "database" check_database ;;
 		web) run_group "web" check_web ;;
 		client) run_group "TypeScript client" check_client ;;
+		style) run_group "multi-task-flow style" check_style ;;
 		react) run_group "React Doctor" check_react ;;
 		*)
 			echo "checks: unknown command: $1" >&2
@@ -339,7 +348,7 @@ if [ "$command" = "all" ]; then
 		usage >&2
 		exit 2
 	fi
-	for group in quality bootstrap generated source database web client react; do
+	for group in quality bootstrap generated source database web client style react; do
 		run_named_group "$group"
 	done
 else

@@ -1,9 +1,9 @@
-import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { join } from "node:path";
-import { requireCondition, ContractError } from "../lib/errors";
-import { writeAtomic } from "../lib/store";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { readRegularNoFollow } from "@loomhelm/runtime-core/modules/visual/secure_io";
+import { ContractError, requireCondition } from "../lib/errors";
 import type { ServiceState } from "../lib/service-state";
+import { writeAtomic } from "../lib/store";
 
 const escape = (value: string) =>
   value
@@ -13,12 +13,9 @@ const escape = (value: string) =>
     .replaceAll('"', "&quot;");
 export function launchdDomain(): string {
   const uid = process.getuid!();
-  return launchctl(["print", `gui/${uid}`], true)
-    ? `gui/${uid}`
-    : `user/${uid}`;
+  return launchctl(["print", `gui/${uid}`], true) ? `gui/${uid}` : `user/${uid}`;
 }
-export const launchdTarget = (state: ServiceState) =>
-  `${launchdDomain()}/${state.paths.label}`;
+export const launchdTarget = (state: ServiceState) => `${launchdDomain()}/${state.paths.label}`;
 export function launchctl(args: string[], allowFailure = false) {
   requireCondition(
     process.platform === "darwin",
@@ -53,7 +50,10 @@ export function writeLaunchdDefinition(state: ServiceState): string {
   return path;
 }
 export function startUserService(state: ServiceState): void {
-  const definition = readRegularNoFollow(join(state.paths.config, "viewer.plist"), state.paths.root).toString("utf8");
+  const definition = readRegularNoFollow(
+    join(state.paths.config, "viewer.plist"),
+    state.paths.root,
+  ).toString("utf8");
   requireCondition(
     definition.includes(`<key>Label</key><string>${escape(state.paths.label)}</string>`),
     "SERVICE_UPGRADE_REQUIRED",
@@ -61,16 +61,19 @@ export function startUserService(state: ServiceState): void {
   );
   const target = launchdTarget(state);
   if (!launchctl(["print", target], true))
-    launchctl([
-      "bootstrap",
-      launchdDomain(),
-      join(state.paths.config, "viewer.plist"),
-    ]);
+    launchctl(["bootstrap", launchdDomain(), join(state.paths.config, "viewer.plist")]);
   launchctl(["kickstart", target]);
 }
-export function unloadUserService(state: ServiceState, control = launchctl, domain = launchdDomain()): void {
+export function unloadUserService(
+  state: ServiceState,
+  control = launchctl,
+  domain = launchdDomain(),
+): void {
   // Explicit maintenance retires both identities within this exact profile.
-  const legacy = state.paths.label.replace("cc.ivanli.loomhelm.multi-task-flow.viewer", "cn.ivan.multi-task-flow.viewer");
+  const legacy = state.paths.label.replace(
+    "cc.ivanli.loomhelm.multi-task-flow.viewer",
+    "cn.ivan.multi-task-flow.viewer",
+  );
   for (const label of new Set([state.paths.label, legacy])) {
     const target = `${domain}/${label}`;
     if (control(["print", target], true)) control(["bootout", target]);

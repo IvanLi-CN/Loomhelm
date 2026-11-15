@@ -1,55 +1,55 @@
-import { migrateProfile } from "../lib/profile-migration";
-import {
-  effectiveProfile,
-  profileFreezeReason,
-  materializeRecommendation,
-  RECOMMENDATION_VERSION,
-} from "../lib/execution-profile";
-import { z } from "zod";
 import { createHash, randomUUID } from "node:crypto";
+import { z } from "zod";
 import { ContractError, requireCondition } from "../lib/errors";
 import {
+  effectiveProfile,
+  materializeRecommendation,
+  profileFreezeReason,
+  RECOMMENDATION_VERSION,
+} from "../lib/execution-profile";
+import { migrateProfile } from "../lib/profile-migration";
+import {
+  buildPlanRevision,
+  deriveExecutionPhase,
+  evidenceRequired,
+  reasonRequired,
+  revisionInput,
+} from "../lib/revisions";
+import {
+  baselineReceipt,
   changeReason,
   collectCutAssignmentEvidence,
   cutEvidence,
-  baselineReceipt,
+  defaultGroupAtoms,
+  deliveryTopologyForGroup,
+  executionProfile,
   externalRef,
   fact,
   group,
   id,
   isContributionKind,
+  type Ledger,
   ledgerSchema,
   milestone,
   notification,
   notificationOption,
   operation,
+  type Plan,
   plan,
   providerReceipt,
+  recommendedExecutionProfile,
+  type Task,
   task,
+  theoreticalScheduleIssues,
+  validateDeliveryTopologies,
   validateDevPlanHandoff,
   validateInitialRuntimeState,
-  validateNewTaskKinds,
   validateLedger,
-  validateSchedulablePlan,
-  theoreticalScheduleIssues,
+  validateNewTaskKinds,
   validatePlan,
-  deliveryTopologyForGroup,
-  validateDeliveryTopologies,
-  defaultGroupAtoms,
-  executionProfile,
-  recommendedExecutionProfile,
-  type Ledger,
-  type Plan,
-  type Task,
+  validateSchedulablePlan,
   validateTaskExecutionPolicies,
 } from "../lib/schema";
-import {
-  buildPlanRevision,
-  deriveExecutionPhase,
-  reasonRequired,
-  evidenceRequired,
-  revisionInput,
-} from "../lib/revisions";
 
 export const actorSchema = z
   .object({
@@ -80,11 +80,7 @@ function string(value: unknown): string {
 function now(): string {
   return new Date().toISOString();
 }
-function find<T>(
-  items: T[],
-  predicate: (item: T) => boolean,
-  label: string,
-): T {
+function find<T>(items: T[], predicate: (item: T) => boolean, label: string): T {
   const found = items.find(predicate);
   requireCondition(found, "NOT_FOUND", `${label} not found`);
   return found;
@@ -137,37 +133,43 @@ function onlyMain(actor: Request["actor"]): void {
   );
 }
 function activePlan(ledger: Ledger): Plan {
-  return find(
-    ledger.plans,
-    (item) => item.id === ledger.active_plan_id,
-    "Active plan",
-  );
+  return find(ledger.plans, (item) => item.id === ledger.active_plan_id, "Active plan");
 }
 function executionPlan(ledger: Ledger): Plan {
-  return find(
-    ledger.plans,
-    (item) => item.id === ledger.execution_plan_id,
-    "Execution plan",
-  );
+  return find(ledger.plans, (item) => item.id === ledger.execution_plan_id, "Execution plan");
 }
 function atomicNodeSatisfied(ledger: Ledger, node: any): boolean {
-  if (node.kind === "boundary") return node.boundary === "start" || ledger.events.some((event) => event.type === "run_completed");
+  if (node.kind === "boundary")
+    return (
+      node.boundary === "start" || ledger.events.some((event) => event.type === "run_completed")
+    );
   if (node.kind === "milestone") return node.state === "completed";
   const scope = node.scope;
-  const atoms = scope?.kind === "task"
-    ? ledger.tasks.find((task) => task.id === scope.task_id)?.atoms
-    : ledger.groups.find((group) => group.id === scope?.delivery_unit_id)?.atoms;
-  return atoms?.find((atom) => atom.id === node.id)?.status === "completed" || node.state === "completed";
+  const atoms =
+    scope?.kind === "task"
+      ? ledger.tasks.find((task) => task.id === scope.task_id)?.atoms
+      : ledger.groups.find((group) => group.id === scope?.delivery_unit_id)?.atoms;
+  return (
+    atoms?.find((atom) => atom.id === node.id)?.status === "completed" || node.state === "completed"
+  );
 }
 function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): boolean {
   const nodes = (plan.atomic_nodes ?? []) as any[];
   const edges = (plan.atomic_edges ?? []).filter((edge: any) => "from_node_id" in edge) as any[];
   if (!nodes.length || !edges.length) return true;
-  const targets = nodes.filter((node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId);
+  const targets = nodes.filter(
+    (node) => node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === taskId,
+  );
   if (!targets.length) return true;
   return targets.some((target) => {
     if (atomicNodeSatisfied(ledger, target)) return false;
-    return edges.filter((edge) => edge.to_node_id === target.id).every((edge) => atomicNodeSatisfied(ledger, nodes.find((node) => node.id === edge.from_node_id)));
+    const atom = ledger.tasks
+      .find((task) => task.id === taskId)
+      ?.atoms.find((candidate) => candidate.id === target.id);
+    if (atom ? atom.status !== "planned" : target.state !== "planned") return false;
+    return edges
+      .filter((edge) => edge.to_node_id === target.id)
+      .every((edge) => atomicNodeSatisfied(ledger, nodes.find((node) => node.id === edge.from_node_id)));
   });
 }
 function approved(ledger: Ledger): Plan {
@@ -197,12 +199,7 @@ function authorizedAction(ledger: Ledger, action: string): void {
       event.subject_id === current.id &&
       event.data.approval_id === current.approval_id,
   );
-  requireCondition(
-    approval,
-    "ACTION_NOT_APPROVED",
-    `Action ${action} is not approved`,
-    4,
-  );
+  requireCondition(approval, "ACTION_NOT_APPROVED", `Action ${action} is not approved`, 4);
 }
 function legacyLedger(ledger: Ledger): boolean {
   return ledger.source_schema_version === 1 && ledger.contract_version !== 2;
@@ -219,10 +216,7 @@ function taskPrRef(task: Ledger["tasks"][number]): ExternalRef | null {
   if (task.pr && "state" in task.pr) return "pr" in task.pr ? task.pr.pr : null;
   return task.pr;
 }
-function isSharedDeliveryTask(
-  ledger: Ledger,
-  task: Ledger["tasks"][number],
-): boolean {
+function isSharedDeliveryTask(ledger: Ledger, task: Ledger["tasks"][number]): boolean {
   return (
     isContributionKind(task.kind) &&
     deliveryTopologyForGroup(ledger.tasks, task.group_id) === "shared_delivery"
@@ -241,8 +235,7 @@ function requireContributionDispatchGate(
   if (owner.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     missing.push("workspace_ready");
   const parentPrRequired = requireParentPr || !parentPrDefinitivelyAbsent(ledger, owner);
-  if (parentPrRequired && !parentPrReady(ledger, owner, prAtom))
-    missing.push("parent_pr");
+  if (parentPrRequired && !parentPrReady(ledger, owner, prAtom)) missing.push("parent_pr");
   if (missing.length)
     throw new ContractError(
       "DELIVERY_GATE_PENDING",
@@ -255,51 +248,50 @@ function requireContributionDispatchGate(
         target_id: owner.id,
         missing,
         recovery: [
-          ...(missing.includes("workspace_ready") ? [
-            "lifecycle-record workspace_ready",
-            "group-atom-update workspace_ready completed",
-          ] : []),
-          ...(missing.includes("parent_pr") ? [
-            "publish-pr-claim + publish-pr-resolve for the parent PR",
-            "group-atom-update pr_created completed",
-            `retry ${retryAction}`,
-          ] : [`retry ${retryAction}`]),
+          ...(missing.includes("workspace_ready")
+            ? ["lifecycle-record workspace_ready", "group-atom-update workspace_ready completed"]
+            : []),
+          ...(missing.includes("parent_pr")
+            ? [
+                "publish-pr-claim + publish-pr-resolve for the parent PR",
+                "group-atom-update pr_created completed",
+                `retry ${retryAction}`,
+              ]
+            : [`retry ${retryAction}`]),
         ],
       },
     );
-  if (owner.delivery_unit_kind === "regular")
-    requireHandoffAcknowledged(ledger, owner);
+  if (owner.delivery_unit_kind === "regular") requireHandoffAcknowledged(ledger, owner);
 }
 function ensureSchedulable(ledger: Ledger, candidate: Plan): void {
   if (legacyLedger(ledger) || ledger.source_schema_version === 1) return;
   validateTaskExecutionPolicies(ledger.tasks);
   validateSchedulablePlan(candidate);
   const scheduleIssue = theoreticalScheduleIssues(candidate)[0];
-  requireCondition(!scheduleIssue, scheduleIssue?.code ?? "PLAN_NOT_SCHEDULABLE", scheduleIssue?.message ?? "理论排期不完整。", 3);
+  requireCondition(
+    !scheduleIssue,
+    scheduleIssue?.code ?? "PLAN_NOT_SCHEDULABLE",
+    scheduleIssue?.message ?? "理论排期不完整。",
+    3,
+  );
   if (ledger.schema_version !== 2) return;
   const contributionTasks = ledger.tasks.filter(
     (item) => item.disposition === "active" && isContributionKind(item.kind),
   );
-  if (ledger.contract_version >= 3)
-    validateDeliveryTopologies(contributionTasks, true);
+  if (ledger.contract_version >= 3) validateDeliveryTopologies(contributionTasks, true);
   const groupIds = new Set(contributionTasks.map((item) => item.group_id));
   const missing: string[] = [];
   for (const groupId of groupIds) {
     for (const kind of ["publish_branch", "publish_pr"] as const) {
       const planned = candidate.actions.some(
-        (action) =>
-          action.kind === kind &&
-          action.group_id === groupId &&
-          action.task_id === null,
+        (action) => action.kind === kind && action.group_id === groupId && action.task_id === null,
       );
       if (!planned) missing.push(`${kind}:group:${groupId}`);
     }
   }
   for (const task of contributionTasks) {
     const topology = deliveryTopologyForGroup(contributionTasks, task.group_id);
-    const hasTaskPublication = candidate.actions.some(
-      (action) => action.task_id === task.id,
-    );
+    const hasTaskPublication = candidate.actions.some((action) => action.task_id === task.id);
     if (topology === "shared_delivery") {
       requireCondition(
         !hasTaskPublication,
@@ -312,10 +304,7 @@ function ensureSchedulable(ledger: Ledger, candidate: Plan): void {
     if (!hasTaskPublication) continue;
     for (const kind of ["publish_branch", "publish_pr"] as const) {
       const planned = candidate.actions.some(
-        (action) =>
-          action.kind === kind &&
-          action.task_id === task.id &&
-          action.group_id === null,
+        (action) => action.kind === kind && action.task_id === task.id && action.group_id === null,
       );
       if (!planned) missing.push(`${kind}:task:${task.id}`);
     }
@@ -347,10 +336,7 @@ function ownsGroup(
         actor.thread_id === ledger.control.owner_thread_id
     : actor.role === "group" && owner.agent_thread_id === actor.thread_id;
 }
-function groupOwnerThread(
-  ledger: Ledger,
-  owner: Ledger["groups"][number],
-): string | null {
+function groupOwnerThread(ledger: Ledger, owner: Ledger["groups"][number]): string | null {
   return owner.delivery_unit_kind === "bootstrap"
     ? ledger.control.owner_thread_id
     : owner.agent_thread_id;
@@ -372,8 +358,7 @@ function requireOwner(
   else
     requireCondition(
       request.actor.role === "task" &&
-        (target as Ledger["tasks"][number]).thread_id ===
-          request.actor.thread_id,
+        (target as Ledger["tasks"][number]).thread_id === request.actor.thread_id,
       "FORBIDDEN",
       "Task publication belongs to its Task Agent",
       3,
@@ -499,20 +484,19 @@ export function parentPrReady(
     !!pr &&
     (canonicalState === null || canonicalState === "published") &&
     prReceipt(ledger, owner.id, pr, undefined, undefined, "open") &&
-    (ledger.contract_version < 3 || !receipt || owner.current_sha === null || receipt.target_branch === null || receipt.head_sha === null ||
-      (receipt.target_branch === ledger.repository.target_branch && receipt.head_sha === owner.current_sha))
+    (ledger.contract_version < 3 ||
+      !receipt ||
+      owner.current_sha === null ||
+      receipt.target_branch === null ||
+      receipt.head_sha === null ||
+      (receipt.target_branch === ledger.repository.target_branch &&
+        receipt.head_sha === owner.current_sha))
   );
 }
-function parentPrDefinitivelyAbsent(
-  ledger: Ledger,
-  owner: Ledger["groups"][number],
-): boolean {
+function parentPrDefinitivelyAbsent(ledger: Ledger, owner: Ledger["groups"][number]): boolean {
   const latest = latestPublication(ledger, owner.id, "pr_published");
   const publicationPending = ledger.operations.some(
-    (item) =>
-      item.kind === "publish_pr" &&
-      item.target_id === owner.id &&
-      activeOperation(item),
+    (item) => item.kind === "publish_pr" && item.target_id === owner.id && activeOperation(item),
   );
   return Boolean(
     !publicationPending &&
@@ -530,9 +514,7 @@ function requireDevelopmentTarget(
 ): void {
   if (targetType === "task")
     requireCondition(
-      isContributionKind(
-        find(ledger.tasks, (item) => item.id === targetId, "Task").kind,
-      ),
+      isContributionKind(find(ledger.tasks, (item) => item.id === targetId, "Task").kind),
       "TASK_MISMATCH",
       "Lifecycle publication applies only to contribution tasks",
       3,
@@ -586,12 +568,30 @@ function lineageEventMatches(
   if (!event || event.subject_id !== targetId) return false;
   const snapshot = event.data.group_snapshot ? object(event.data.group_snapshot) : {};
   if (targetType === "group")
-    return ["group_updated", "group_base_reconciled", "merge_resolved", "cut_applied"].includes(event.type) &&
-      [event.data.sha, event.data.current_sha, event.data.merge_sha, event.data.cut_sha,
-        snapshot.current_sha, snapshot.merge_sha, snapshot.cut_sha].includes(shaValue);
-  return ["task_rebased", "merge_resolved"].includes(event.type) &&
-    [event.data.sha, event.data.base_sha, event.data.merge_sha,
-      snapshot.current_sha, snapshot.merge_sha].includes(shaValue);
+    return (
+      ["group_updated", "group_base_reconciled", "merge_resolved", "cut_applied"].includes(
+        event.type,
+      ) &&
+      [
+        event.data.sha,
+        event.data.current_sha,
+        event.data.merge_sha,
+        event.data.cut_sha,
+        snapshot.current_sha,
+        snapshot.merge_sha,
+        snapshot.cut_sha,
+      ].includes(shaValue)
+    );
+  return (
+    ["task_rebased", "merge_resolved"].includes(event.type) &&
+    [
+      event.data.sha,
+      event.data.base_sha,
+      event.data.merge_sha,
+      snapshot.current_sha,
+      snapshot.merge_sha,
+    ].includes(shaValue)
+  );
 }
 function addEvent(
   ledger: Ledger,
@@ -637,23 +637,11 @@ function notificationDirective(
   const mode = option?.mode ?? (legacy ? "deliver" : "auto");
   const enabled = mode === "deliver" || (mode === "auto" && autoDefault);
   if (!enabled) return { enabled: false, recipient_thread_id: null };
-  if (
-    mode === "auto" &&
-    !ledger.control.owner_thread_id &&
-    option?.recipient === undefined
-  )
+  if (mode === "auto" && !ledger.control.owner_thread_id && option?.recipient === undefined)
     return { enabled: false, recipient_thread_id: null };
   const recipient = option?.recipient ?? "owner";
-  const threadId =
-    recipient === "owner"
-      ? ledger.control.owner_thread_id
-      : recipient.thread_id;
-  requireCondition(
-    !!threadId,
-    "RECIPIENT_UNBOUND",
-    "Notification recipient is not bound",
-    3,
-  );
+  const threadId = recipient === "owner" ? ledger.control.owner_thread_id : recipient.thread_id;
+  requireCondition(!!threadId, "RECIPIENT_UNBOUND", "Notification recipient is not bound", 3);
   requireCondition(
     boundConversation(ledger, threadId!),
     "RECIPIENT_UNBOUND",
@@ -664,7 +652,19 @@ function notificationDirective(
   return { enabled: true, recipient_thread_id: threadId! };
 }
 function requireNotificationRecipientActive(ledger: Ledger, threadId: string): void {
-  requireCondition(!ledger.resources.some(resource => resource.kind === "conversation" && resource.target === threadId && ["closed", "archive_unknown", "unarchive_unknown", "unarchive_failed"].includes(resource.status)), "CONVERSATION_ARCHIVED", "通知接收对话已归档或归档状态未知，请先手动取消归档或完成对账", 4);
+  requireCondition(
+    !ledger.resources.some(
+      (resource) =>
+        resource.kind === "conversation" &&
+        resource.target === threadId &&
+        ["closed", "archive_unknown", "unarchive_unknown", "unarchive_failed"].includes(
+          resource.status,
+        ),
+    ),
+    "CONVERSATION_ARCHIVED",
+    "通知接收对话已归档或归档状态未知，请先手动取消归档或完成对账",
+    4,
+  );
 }
 function addNotificationIntent(
   ledger: Ledger,
@@ -689,8 +689,13 @@ function addNotificationIntent(
   return created;
 }
 function requiresNativeDelivery(ledger: Ledger, notificationId: string): boolean {
-  return ledger.operations.some(op => op.request.handoff_notification_id === notificationId) ||
-    ledger.events.some(event => event.data.notification_id === notificationId && event.data.provider === "codex-app-tools");
+  return (
+    ledger.operations.some((op) => op.request.handoff_notification_id === notificationId) ||
+    ledger.events.some(
+      (event) =>
+        event.data.notification_id === notificationId && event.data.provider === "codex-app-tools",
+    )
+  );
 }
 function notificationDeliveryRequest(
   notice: Ledger["notifications"][number] | null,
@@ -739,25 +744,37 @@ function activeOperation(item: Ledger["operations"][number]): boolean {
 function creationObservations(op: Ledger["operations"][number], payload: Record<string, any>) {
   const observed: Record<string, any> = { ...object(op.request.creation_observations ?? {}) };
   const previous = object(op.request.creation_result ?? {});
-  for (const report of [{ thread_id: op.request.observed_thread_id }, previous,
-    object(previous.native_evidence ?? {}), payload, object(payload.native_evidence ?? {})]) {
+  for (const report of [
+    { thread_id: op.request.observed_thread_id },
+    previous,
+    object(previous.native_evidence ?? {}),
+    payload,
+    object(payload.native_evidence ?? {}),
+  ]) {
     for (const key of ["thread_id", "workspace_path", "initial_head"]) {
       const value = report[key];
       if (typeof value !== "string" || !value) continue;
-      requireCondition(!observed[key] || observed[key] === value, "CREATION_EVIDENCE_CONFLICT",
-        "Known creation identity and resources cannot change", 5);
+      requireCondition(
+        !observed[key] || observed[key] === value,
+        "CREATION_EVIDENCE_CONFLICT",
+        "Known creation identity and resources cannot change",
+        5,
+      );
       observed[key] = value;
     }
-    if (report.process_started === true || report.resources_created === true ||
-      report.turn_completed === true || report.exit_code != null ||
-      (Array.isArray(report.events) && report.events.length > 0)) observed.process_observed = true;
+    if (
+      report.process_started === true ||
+      report.resources_created === true ||
+      report.turn_completed === true ||
+      report.exit_code != null ||
+      (Array.isArray(report.events) && report.events.length > 0)
+    )
+      observed.process_observed = true;
   }
   return observed;
 }
 function publicationPendingForGroup(ledger: Ledger, groupId: string): boolean {
-  const taskIds = ledger.tasks
-    .filter((item) => item.group_id === groupId)
-    .map((item) => item.id);
+  const taskIds = ledger.tasks.filter((item) => item.group_id === groupId).map((item) => item.id);
   return ledger.operations.some(
     (item) =>
       [groupId, ...taskIds].includes(item.target_id) &&
@@ -834,8 +851,7 @@ function latestFact(
       .filter(({ item }) => item.subject_id === subjectId && item.kind === kind)
       .sort(
         (left, right) =>
-          left.item.observed_at.localeCompare(right.item.observed_at) ||
-          left.index - right.index,
+          left.item.observed_at.localeCompare(right.item.observed_at) || left.index - right.index,
       )
       .at(-1)?.item ?? null
   );
@@ -850,7 +866,9 @@ function factSatisfied(
   if (latest?.status !== "passed" || !latest.sha) return false;
   if (kind === "pr_merged" && ledger.groups.some((item) => item.id === subjectId)) {
     const group = ledger.groups.find((item) => item.id === subjectId)!;
-    return ledger.contract_version < 3 ? deliveryUnitPrMerged(group) : deliveryUnitPrMergedFromLedger(ledger, group);
+    return ledger.contract_version < 3
+      ? deliveryUnitPrMerged(group)
+      : deliveryUnitPrMergedFromLedger(ledger, group);
   }
   const task = ledger.tasks.find((item) => item.id === subjectId);
   if (!task) {
@@ -879,16 +897,12 @@ function factSatisfied(
         item.status === "succeeded" &&
         item.receipt_fact_id === latest.id,
     );
-    return receipt
-      ? receipt.expected_sha === sourceSha
-      : latest.sha === sourceSha;
+    return receipt ? receipt.expected_sha === sourceSha : latest.sha === sourceSha;
   }
   return latest.sha === sourceSha;
 }
 
-function factKind(
-  requires: PlanEdge["requires"],
-): Ledger["facts"][number]["kind"] | null {
+function factKind(requires: PlanEdge["requires"]): Ledger["facts"][number]["kind"] | null {
   if (requires === "merged") return "pr_merged";
   if (
     requires === "ci_passed" ||
@@ -925,15 +939,12 @@ function edgeSatisfied(
 ): boolean {
   const source = nodes.get(edge.from_node_id);
   if (!source) return false;
-  if (source.kind === "main_start")
-    return nodeSatisfied(ledger, source, nodes, edges, visiting);
+  if (source.kind === "main_start") return nodeSatisfied(ledger, source, nodes, edges, visiting);
   if (source.kind === "task" && source.ref_id) {
     const sourceTask = ledger.tasks.find((item) => item.id === source.ref_id);
     if (!sourceTask) return false;
-    if (edge.requires === "integrated")
-      return ["integrated", "closed"].includes(sourceTask.state);
-    if (edge.requires === "completed")
-      return ["completed", "closed"].includes(sourceTask.state);
+    if (edge.requires === "integrated") return ["integrated", "closed"].includes(sourceTask.state);
+    if (edge.requires === "completed") return ["completed", "closed"].includes(sourceTask.state);
     const kind = factKind(edge.requires);
     return kind ? factSatisfied(ledger, source.ref_id, kind) : false;
   }
@@ -963,12 +974,13 @@ export function ready(ledger: Ledger, taskId: string): boolean {
       ? active.revision
       : null;
   if (revision?.paused_task_ids.includes(taskId)) return false;
-  const target = currentPlan.nodes.find(
-    (item) => item.kind === "task" && item.ref_id === taskId,
-  );
+  const target = currentPlan.nodes.find((item) => item.kind === "task" && item.ref_id === taskId);
   if (!target) return false;
   const nodes = new Map(currentPlan.nodes.map((item) => [item.id, item]));
-  return nodeSatisfied(ledger, target, nodes, currentPlan.edges, new Set()) && atomicDependenciesReady(ledger, currentPlan, taskId);
+  return (
+    nodeSatisfied(ledger, target, nodes, currentPlan.edges, new Set()) &&
+    atomicDependenciesReady(ledger, currentPlan, taskId)
+  );
 }
 
 export function deliveryUnitPrMerged(group: Ledger["groups"][number]): boolean {
@@ -988,18 +1000,23 @@ function deliveryUnitPrMergedFromLedger(ledger: Ledger, group: Ledger["groups"][
   const canonicalState = group.pr && "state" in group.pr ? group.pr.state : null;
   return Boolean(
     ["merged", "closed"].includes(group.state) &&
-      group.merge_sha && group.lifecycle.pr_merged === "passed" &&
-      latest?.status === "passed" && latest.sha === group.merge_sha &&
+      group.merge_sha &&
+      group.lifecycle.pr_merged === "passed" &&
+      latest?.status === "passed" &&
+      latest.sha === group.merge_sha &&
       (canonicalState === null || canonicalState === "merged" || canonicalState === "closed") &&
-      ledger.operations.some((item) => item.kind === "merge" && item.target_id === group.id && item.status === "succeeded" && item.receipt_fact_id === latest.id) &&
+      ledger.operations.some(
+        (item) =>
+          item.kind === "merge" &&
+          item.target_id === group.id &&
+          item.status === "succeeded" &&
+          item.receipt_fact_id === latest.id,
+      ) &&
       (!canonicalPr || stable(canonicalPr) === stable(canonicalPr)),
   );
 }
 
-function requireHandoffAcknowledged(
-  ledger: Ledger,
-  group: Ledger["groups"][number],
-): void {
+function requireHandoffAcknowledged(ledger: Ledger, group: Ledger["groups"][number]): void {
   const dispatch = ledger.operations.find(
     (item) =>
       item.kind === "dispatch" &&
@@ -1037,10 +1054,7 @@ function requireHandoffAcknowledged(
  * merge. The task dispatch gate alone cannot enforce this because group
  * conversation creation happens before any task is selected.
  */
-export function requireGroupDispatchGate(
-  ledger: Ledger,
-  target: Ledger["groups"][number],
-): void {
+export function requireGroupDispatchGate(ledger: Ledger, target: Ledger["groups"][number]): void {
   if (legacyLedger(ledger)) return;
   const currentPlan = executionPlan(ledger);
   const nodes = new Map(currentPlan.nodes.map((item) => [item.id, item]));
@@ -1051,8 +1065,7 @@ export function requireGroupDispatchGate(
   for (const taskNode of taskNodes) {
     for (const edge of currentPlan.edges.filter((item) => item.to_node_id === taskNode.id)) {
       const source = nodes.get(edge.from_node_id);
-      if (source?.group_id && source.group_id !== target.id)
-        upstreamGroupIds.add(source.group_id);
+      if (source?.group_id && source.group_id !== target.id) upstreamGroupIds.add(source.group_id);
     }
   }
   const missingUpstream = [...upstreamGroupIds].filter((groupId) => {
@@ -1068,7 +1081,10 @@ export function requireGroupDispatchGate(
         target_type: "group",
         target_id: target.id,
         missing: missingUpstream.map((groupId) => `upstream_pr_merged:${groupId}`),
-        recovery: ["complete the upstream delivery-unit PR merge lifecycle", "retry dispatch-group-claim"],
+        recovery: [
+          "complete the upstream delivery-unit PR merge lifecycle",
+          "retry dispatch-group-claim",
+        ],
       },
     );
   const readyTask = taskNodes.some((node) => {
@@ -1104,11 +1120,7 @@ function ownerOfTask(ledger: Ledger, request: Request, taskId: string): void {
       3,
     );
   if (request.actor.role === "group") {
-    const owner = find(
-      ledger.groups,
-      (item) => item.id === target.group_id,
-      "Group",
-    );
+    const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
     requireCondition(
       owner.agent_thread_id === request.actor.thread_id,
       "FORBIDDEN",
@@ -1118,8 +1130,11 @@ function ownerOfTask(ledger: Ledger, request: Request, taskId: string): void {
   }
 }
 
-function taskExecutionState(task: { state: string; agent_resume_state?: "starting" | "running" }): string {
-  return task.state === "agent_idle" ? task.agent_resume_state ?? "running" : task.state;
+function taskExecutionState(task: {
+  state: string;
+  agent_resume_state?: "starting" | "running";
+}): string {
+  return task.state === "agent_idle" ? (task.agent_resume_state ?? "running") : task.state;
 }
 
 function taskRuntimeState(task: Task): Record<string, unknown> {
@@ -1163,9 +1178,7 @@ function hasTaskStarted(ledger: Ledger, taskId: string): boolean {
   );
 }
 
-function groupRuntimeState(
-  item: Ledger["groups"][number],
-): Record<string, unknown> {
+function groupRuntimeState(item: Ledger["groups"][number]): Record<string, unknown> {
   return {
     delivery_unit_kind: item.delivery_unit_kind,
     owner_kind: item.owner_kind,
@@ -1208,11 +1221,7 @@ function validateRevisionReason(revision: NonNullable<Plan["revision"]>): void {
     );
 }
 
-export function execute(
-  ledger: Ledger,
-  command: string,
-  request: Request,
-): unknown {
+export function execute(ledger: Ledger, command: string, request: Request): unknown {
   if (command !== "binding-resolve") authorize(ledger, request.actor);
   const payload = request.payload;
   const currentPlan = () => approved(ledger);
@@ -1295,16 +1304,10 @@ export function execute(
       validateNewTaskKinds(tasks.filter((item) => !ledger.tasks.some((old) => old.id === item.id)));
       ensureSchedulable(ledger, proposed);
       for (const item of groups)
-        if (
-          !ledger.groups.some((old) => old.id === item.id) &&
-          !item.execution_profile_source
-        )
+        if (!ledger.groups.some((old) => old.id === item.id) && !item.execution_profile_source)
           materializeRecommendation(ledger, item);
       for (const item of tasks)
-        if (
-          !ledger.tasks.some((old) => old.id === item.id) &&
-          !item.execution_profile_source
-        )
+        if (!ledger.tasks.some((old) => old.id === item.id) && !item.execution_profile_source)
           materializeRecommendation(ledger, item);
       const previous = executionPlan(ledger);
       requireCondition(
@@ -1369,8 +1372,7 @@ export function execute(
           3,
         );
         requireCondition(
-          stable(taskRuntimeState(existing)) ===
-            stable(taskRuntimeState(incoming)),
+          stable(taskRuntimeState(existing)) === stable(taskRuntimeState(incoming)),
           "TASK_CHANGED",
           `Plan revision cannot overwrite runtime state for task ${existing.id}`,
           3,
@@ -1386,8 +1388,7 @@ export function execute(
           )
         ) {
           requireCondition(
-            stable(existing.execution_profile) ===
-              stable(incoming.execution_profile),
+            stable(existing.execution_profile) === stable(incoming.execution_profile),
             "PROFILE_FROZEN",
             "Plan revisions cannot change a frozen or claimed execution profile",
             3,
@@ -1406,8 +1407,7 @@ export function execute(
         const incoming = groups.find((item) => item.id === existing.id);
         requireCondition(
           incoming !== undefined &&
-            stable(groupRuntimeState(existing)) ===
-              stable(groupRuntimeState(incoming)),
+            stable(groupRuntimeState(existing)) === stable(groupRuntimeState(incoming)),
           "GROUP_CHANGED",
           `Plan revision cannot overwrite runtime group ${existing.id}`,
           3,
@@ -1426,8 +1426,7 @@ export function execute(
           )
         ) {
           requireCondition(
-            stable(existing.execution_profile) ===
-              stable(incoming.execution_profile),
+            stable(existing.execution_profile) === stable(incoming.execution_profile),
             "PROFILE_FROZEN",
             "Plan revisions cannot change a frozen or claimed execution profile",
             3,
@@ -1448,14 +1447,12 @@ export function execute(
         );
       }
       const newGroups = groups.filter(
-        (incoming) =>
-          !ledger.groups.some((existing) => existing.id === incoming.id),
+        (incoming) => !ledger.groups.some((existing) => existing.id === incoming.id),
       );
       requireCondition(
         newGroups.every(
           (incoming) =>
-            incoming.delivery_unit_kind === "regular" &&
-            incoming.owner_kind === "group",
+            incoming.delivery_unit_kind === "regular" && incoming.owner_kind === "group",
         ),
         "INVALID_NEW_GROUP",
         "Bootstrap can only be created during run initialization",
@@ -1491,9 +1488,7 @@ export function execute(
       } else {
         ledger.execution_plan_id = proposed.id;
         ledger.control.approval_id =
-          revision.change_class === "implementation_low_impact"
-            ? proposed.approval_id
-            : null;
+          revision.change_class === "implementation_low_impact" ? proposed.approval_id : null;
       }
       addEvent(ledger, request, "plan_revision_proposed", proposed.id, {
         supersedes_plan_id: previous.id,
@@ -1531,11 +1526,7 @@ export function execute(
     }
     case "plan-approve": {
       onlyMain(request.actor);
-      const current = find(
-        ledger.plans,
-        (item) => item.id === string(payload.plan_id),
-        "Plan",
-      );
+      const current = find(ledger.plans, (item) => item.id === string(payload.plan_id), "Plan");
       requireCondition(
         current.id === ledger.active_plan_id &&
           current.lifecycle === "proposed" &&
@@ -1545,16 +1536,13 @@ export function execute(
       );
       ensureSchedulable(ledger, current);
       const previousExecution = current.supersedes_id
-        ? (ledger.plans.find((item) => item.id === current.supersedes_id) ??
-          null)
+        ? (ledger.plans.find((item) => item.id === current.supersedes_id) ?? null)
         : ledger.execution_plan_id === current.id
           ? null
           : executionPlan(ledger);
       current.approval_id = string(payload.approval_id);
       current.lifecycle = "approved";
-      const authorizedActionIds = z
-        .array(id)
-        .parse(payload.authorized_action_ids);
+      const authorizedActionIds = z.array(id).parse(payload.authorized_action_ids);
       requireCondition(
         authorizedActionIds.every((actionId) =>
           current.actions.some((action) => action.id === actionId),
@@ -1616,8 +1604,7 @@ export function execute(
       const approvalId = string(payload.approval_id);
       if (kind === "delivery_unit_merge" || kind === "delivery_unit_recovery")
         find(ledger.groups, (item) => item.id === targetId, "Delivery unit");
-      else
-        find(ledger.tasks, (item) => item.id === targetId, "Protected task");
+      else find(ledger.tasks, (item) => item.id === targetId, "Protected task");
       addEvent(ledger, request, "protected_action_approved", targetId, {
         kind,
         approval_id: approvalId,
@@ -1627,14 +1614,9 @@ export function execute(
     }
     case "plan-abandon": {
       onlyMain(request.actor);
-      const current = find(
-        ledger.plans,
-        (item) => item.id === string(payload.plan_id),
-        "Plan",
-      );
+      const current = find(ledger.plans, (item) => item.id === string(payload.plan_id), "Plan");
       requireCondition(
-        current.id === ledger.active_plan_id &&
-          current.lifecycle === "proposed",
+        current.id === ledger.active_plan_id && current.lifecycle === "proposed",
         "INVALID_PLAN",
         "Only the active proposed plan can be abandoned",
       );
@@ -1644,16 +1626,9 @@ export function execute(
         "Superseded plan",
       );
       for (const owner of ledger.groups) {
-        const definitions = restore.group_atoms.filter(
-          (atom) => atom.group_id === owner.id,
-        );
-        if (
-          definitions.length ||
-          current.group_atoms.some((atom) => atom.group_id === owner.id)
-        ) {
-          const statuses = new Map(
-            owner.atoms.map((atom) => [atom.id, atom.status]),
-          );
+        const definitions = restore.group_atoms.filter((atom) => atom.group_id === owner.id);
+        if (definitions.length || current.group_atoms.some((atom) => atom.group_id === owner.id)) {
+          const statuses = new Map(owner.atoms.map((atom) => [atom.id, atom.status]));
           owner.atoms = definitions.map(({ group_id, ...atom }) => ({
             ...atom,
             status: statuses.get(atom.id) ?? "planned",
@@ -1673,16 +1648,8 @@ export function execute(
       onlyMain(request.actor);
       const oldTaskId = parse(id, payload.old_task_id);
       const newTaskId = parse(id, payload.new_task_id);
-      const oldTask = find(
-        ledger.tasks,
-        (item) => item.id === oldTaskId,
-        "Old task",
-      );
-      const newTask = find(
-        ledger.tasks,
-        (item) => item.id === newTaskId,
-        "New task",
-      );
+      const oldTask = find(ledger.tasks, (item) => item.id === oldTaskId, "Old task");
+      const newTask = find(ledger.tasks, (item) => item.id === newTaskId, "New task");
       requireCondition(
         oldTask.id !== newTask.id &&
           oldTask.disposition === "active" &&
@@ -1698,9 +1665,7 @@ export function execute(
         3,
       );
       requireCondition(
-        newTask.state === "planned" &&
-          newTask.thread_id === null &&
-          newTask.started_at === null,
+        newTask.state === "planned" && newTask.thread_id === null && newTask.started_at === null,
         "INVALID_MIGRATION",
         "Replacement task must be planned and unbound",
         3,
@@ -1732,12 +1697,8 @@ export function execute(
         old_task_id: oldTask.id,
         new_task_id: newTask.id,
         reason,
-        inherited_outputs: z
-          .array(z.string().min(1))
-          .parse(payload.inherited_outputs ?? []),
-        uninherited_outputs: z
-          .array(z.string().min(1))
-          .parse(payload.uninherited_outputs ?? []),
+        inherited_outputs: z.array(z.string().min(1)).parse(payload.inherited_outputs ?? []),
+        uninherited_outputs: z.array(z.string().min(1)).parse(payload.uninherited_outputs ?? []),
         new_base_sha: newTask.base_sha,
         plan_id: ledger.active_plan_id,
         plan_revision: structuredClone(revisionPlan.revision),
@@ -1749,11 +1710,7 @@ export function execute(
       onlyMain(request.actor);
       authorizedAction(ledger, "dispatch");
       ensureSchedulable(ledger, approved(ledger));
-      const target = find(
-        ledger.tasks,
-        (item) => item.id === string(payload.task_id),
-        "Task",
-      );
+      const target = find(ledger.tasks, (item) => item.id === string(payload.task_id), "Task");
       requireCondition(
         target.disposition === "active",
         "TASK_NOT_ACTIVE",
@@ -1766,11 +1723,7 @@ export function execute(
         "Task already started or bound",
         4,
       );
-      const owner = find(
-        ledger.groups,
-        (item) => item.id === target.group_id,
-        "Group",
-      );
+      const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
       requireCondition(
         !isSharedDeliveryTask(ledger, target),
         "SHARED_DELIVERY_UNIT_DISPATCH",
@@ -1804,9 +1757,7 @@ export function execute(
       if (isContributionKind(target.kind)) {
         requireContributionDispatchGate(ledger, owner);
         requireCondition(
-          owner.parent_branch &&
-            target.base_sha &&
-            owner.current_sha === target.base_sha,
+          owner.parent_branch && target.base_sha && owner.current_sha === target.base_sha,
           "BASE_NOT_READY",
           "Contribution task requires the current delivery-unit base",
           4,
@@ -1814,12 +1765,7 @@ export function execute(
         requireCondition(
           legacyLedger(ledger) ||
             (owner.lifecycle.workspace_ready === "passed" &&
-              branchReceipt(
-                ledger,
-                owner.id,
-                owner.parent_branch,
-                owner.current_sha,
-              )),
+              branchReceipt(ledger, owner.id, owner.parent_branch, owner.current_sha)),
           "BRANCH_NOT_PUBLISHED",
           "Contribution dispatch requires a provider-published delivery-unit branch",
           4,
@@ -1845,9 +1791,7 @@ export function execute(
       requireCondition(
         !ledger.operations.some(
           (item) =>
-            item.kind === "dispatch" &&
-            item.target_id === target.id &&
-            activeOperation(item),
+            item.kind === "dispatch" && item.target_id === target.id && activeOperation(item),
         ),
         "OPERATION_PENDING",
         "Task already has a dispatch claim",
@@ -1858,9 +1802,7 @@ export function execute(
       ).length;
       const pending = ledger.operations.filter(
         (item) =>
-          item.kind === "dispatch" &&
-          item.request.target_type !== "group" &&
-          activeOperation(item),
+          item.kind === "dispatch" && item.request.target_type !== "group" && activeOperation(item),
       ).length;
       requireCondition(
         running + pending < ledger.config.max_running_tasks,
@@ -1879,11 +1821,7 @@ export function execute(
       onlyMain(request.actor);
       authorizedAction(ledger, "dispatch");
       ensureSchedulable(ledger, approved(ledger));
-      const target = find(
-        ledger.groups,
-        (item) => item.id === string(payload.group_id),
-        "Group",
-      );
+      const target = find(ledger.groups, (item) => item.id === string(payload.group_id), "Group");
       requireCondition(
         target.delivery_unit_kind !== "bootstrap" &&
           target.state === "planned" &&
@@ -1918,8 +1856,7 @@ export function execute(
       onlyMain(request.actor);
       const op = find(
         ledger.operations,
-        (item) =>
-          item.id === string(payload.operation_id) && item.kind === "dispatch",
+        (item) => item.id === string(payload.operation_id) && item.kind === "dispatch",
         "Dispatch",
       );
       requireCondition(
@@ -1928,9 +1865,7 @@ export function execute(
         "Dispatch is already resolved",
         3,
       );
-      const outcome = z
-        .enum(["succeeded", "failed", "unknown"])
-        .parse(payload.outcome);
+      const outcome = z.enum(["succeeded", "failed", "unknown"]).parse(payload.outcome);
       const target =
         op.request.target_type === "group"
           ? null
@@ -1943,11 +1878,20 @@ export function execute(
         requireGroupDispatchGate(ledger, targetGroup);
       const evidence = object(payload.native_evidence ?? {});
       const observed = creationObservations(op, payload);
-      if (outcome === "failed") requireCondition(Object.keys(observed).length === 0,
-        "UNKNOWN_REQUIRES_RECONCILIATION", "Known creation identity, resources or execution require reconciliation", 5);
-      if (outcome === "succeeded" && evidence.native_tool_name === "codex exec") requireCondition(
-        object(op.request.creation_parameters ?? {}).transport === "codex-exec",
-        "TRANSPORT_REQUIRED", "Codex exec success requires bound native transport for baseline readiness", 5);
+      if (outcome === "failed")
+        requireCondition(
+          Object.keys(observed).length === 0,
+          "UNKNOWN_REQUIRES_RECONCILIATION",
+          "Known creation identity, resources or execution require reconciliation",
+          5,
+        );
+      if (outcome === "succeeded" && evidence.native_tool_name === "codex exec")
+        requireCondition(
+          object(op.request.creation_parameters ?? {}).transport === "codex-exec",
+          "TRANSPORT_REQUIRED",
+          "Codex exec success requires bound native transport for baseline readiness",
+          5,
+        );
       if (op.request.execution_profile && outcome !== "unknown") {
         requireCondition(
           ["multi-task-flow-cli", "multi-task-flow-reconcile"].includes(String(evidence.source)) &&
@@ -1966,8 +1910,16 @@ export function execute(
           5,
         );
       }
-      if ((op.request.creation_parameters as any)?.transport === "codex-exec" && outcome !== "unknown")
-        requireCondition(evidence.native_tool_name === "codex exec", "EVIDENCE_REQUIRED", "CLI dispatch requires real exec evidence", 5);
+      if (
+        (op.request.creation_parameters as any)?.transport === "codex-exec" &&
+        outcome !== "unknown"
+      )
+        requireCondition(
+          evidence.native_tool_name === "codex exec",
+          "EVIDENCE_REQUIRED",
+          "CLI dispatch requires real exec evidence",
+          5,
+        );
       if (ledger.contract_version >= 3 && outcome !== "unknown")
         requireCondition(
           ["multi-task-flow-cli", "multi-task-flow-reconcile"].includes(String(evidence.source)) &&
@@ -1977,20 +1929,39 @@ export function execute(
           "Contract-3 dispatches must be created through the multi-task-flow codex exec path",
           5,
         );
-      if (evidence.native_tool_name === "codex exec" && outcome === "failed") requireCondition(!op.request.observed_thread_id &&
-        !payload.thread_id && !evidence.thread_id && !evidence.workspace_path && !evidence.initial_head && !evidence.turn_completed &&
-        evidence.process_started === false && evidence.resources_created === false,
-        "UNKNOWN_REQUIRES_RECONCILIATION", "Only proven pre-creation failure may release a CLI dispatch; observed identities require reconciliation", 5);
+      if (evidence.native_tool_name === "codex exec" && outcome === "failed")
+        requireCondition(
+          !op.request.observed_thread_id &&
+            !payload.thread_id &&
+            !evidence.thread_id &&
+            !evidence.workspace_path &&
+            !evidence.initial_head &&
+            !evidence.turn_completed &&
+            evidence.process_started === false &&
+            evidence.resources_created === false,
+          "UNKNOWN_REQUIRES_RECONCILIATION",
+          "Only proven pre-creation failure may release a CLI dispatch; observed identities require reconciliation",
+          5,
+        );
       if (evidence.native_tool_name === "codex exec" && outcome === "succeeded") {
         const reconciled = evidence.source === "multi-task-flow-reconcile";
-        requireCondition((reconciled || evidence.exit_code === 0) && evidence.turn_completed === true &&
-          typeof evidence.workspace_path === "string" && evidence.workspace_path.length > 0 &&
-          typeof evidence.initial_head === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(evidence.initial_head) &&
-          op.request.observed_thread_id === payload.thread_id && evidence.thread_id === payload.thread_id,
-          "EVIDENCE_REQUIRED", "CLI exit, initialization, observed identity and workspace evidence required", 5);
+        requireCondition(
+          (reconciled || evidence.exit_code === 0) &&
+            evidence.turn_completed === true &&
+            typeof evidence.workspace_path === "string" &&
+            evidence.workspace_path.length > 0 &&
+            typeof evidence.initial_head === "string" &&
+            /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(evidence.initial_head) &&
+            op.request.observed_thread_id === payload.thread_id &&
+            evidence.thread_id === payload.thread_id,
+          "EVIDENCE_REQUIRED",
+          "CLI exit, initialization, observed identity and workspace evidence required",
+          5,
+        );
       }
       op.request.creation_observations = observed;
-      if (outcome === "unknown" && observed.thread_id) op.request.observed_thread_id = observed.thread_id;
+      if (outcome === "unknown" && observed.thread_id)
+        op.request.observed_thread_id = observed.thread_id;
       op.request.creation_result = { ...payload, resolved_at: now() };
       addEvent(
         ledger,
@@ -2011,9 +1982,12 @@ export function execute(
         );
         requireCondition(
           ledger.contract_version >= 3
-            ? ["multi-task-flow-cli", "multi-task-flow-reconcile"].includes(String(object(payload.native_evidence).source)) &&
-              object(payload.native_evidence).native_tool_name === "codex exec"
-            : ["create_thread", "multi-task-flow-cli", "multi-task-flow-reconcile"].includes(String(object(payload.native_evidence).source)),
+            ? ["multi-task-flow-cli", "multi-task-flow-reconcile"].includes(
+                String(object(payload.native_evidence).source),
+              ) && object(payload.native_evidence).native_tool_name === "codex exec"
+            : ["create_thread", "multi-task-flow-cli", "multi-task-flow-reconcile"].includes(
+                String(object(payload.native_evidence).source),
+              ),
           "EVIDENCE_REQUIRED",
           "Native creation evidence required",
           5,
@@ -2027,13 +2001,12 @@ export function execute(
         const evidence = object(payload.native_evidence);
         requireCondition(
           typeof op.request.native_request_id === "string" &&
-            ["create_thread", "multi-task-flow-cli"].includes(
-              evidence.source,
-            ) &&
+            ["create_thread", "multi-task-flow-cli"].includes(evidence.source) &&
             evidence.operation_id === op.id &&
             evidence.native_request_id === op.request.native_request_id &&
             (evidence.native_tool_name === "create_thread" ||
-              evidence.native_tool_name === "thread/start" || evidence.native_tool_name === "codex exec") &&
+              evidence.native_tool_name === "thread/start" ||
+              evidence.native_tool_name === "codex exec") &&
             typeof evidence.error === "string" &&
             evidence.error.length > 0,
           "EVIDENCE_REQUIRED",
@@ -2043,30 +2016,38 @@ export function execute(
       }
       op.status = outcome;
       op.updated_at = now();
-      const threadId =
-        target?.thread_id ?? targetGroup?.agent_thread_id ?? null;
+      const threadId = target?.thread_id ?? targetGroup?.agent_thread_id ?? null;
       addEvent(ledger, request, "thread_bound", op.target_id, {
         operation_id: op.id,
         outcome,
         thread_id: threadId,
         group_snapshot: targetGroup ? structuredClone(targetGroup) : null,
       });
-      const handoffNotice = outcome === "succeeded" && (op.request.creation_parameters as any)?.transport === "codex-exec"
-        ? addNotificationIntent(ledger, { ...request, request_id: `${request.request_id}-creation` }, threadId!) : null;
+      const handoffNotice =
+        outcome === "succeeded" &&
+        (op.request.creation_parameters as any)?.transport === "codex-exec"
+          ? addNotificationIntent(
+              ledger,
+              { ...request, request_id: `${request.request_id}-creation` },
+              threadId!,
+            )
+          : null;
       if (handoffNotice) op.request.handoff_notification_id = handoffNotice.id;
-      return { operation_id: op.id, outcome, thread_id: threadId,
-        ...(handoffNotice ? { notification_request: notificationDeliveryRequest(handoffNotice) } : {}) };
+      return {
+        operation_id: op.id,
+        outcome,
+        thread_id: threadId,
+        ...(handoffNotice
+          ? { notification_request: notificationDeliveryRequest(handoffNotice) }
+          : {}),
+      };
     }
     case "execution-profile-migrate": {
       onlyMain(request.actor);
       migrateProfile(ledger, payload.execution_profile);
-      addEvent(
-        ledger,
-        request,
-        "execution_profile_migrated",
-        ledger.orchestration_id,
-        { execution_profile: ledger.config.execution_profile },
-      );
+      addEvent(ledger, request, "execution_profile_migrated", ledger.orchestration_id, {
+        execution_profile: ledger.config.execution_profile,
+      });
       return { execution_profile: ledger.config.execution_profile };
     }
     case "execution-profile-default-update": {
@@ -2080,19 +2061,14 @@ export function execute(
         ["task", ledger.tasks],
       ] as const) {
         for (const target of targets) {
-          if (
-            !target.execution_profile &&
-            profileFreezeReason(ledger, type, target.id)
-          )
+          if (!target.execution_profile && profileFreezeReason(ledger, type, target.id))
             target.execution_profile = effectiveProfile(ledger, target);
         }
       }
       ledger.config.execution_profile = profile;
       for (const op of ledger.operations.filter(
         (item) =>
-          item.kind === "dispatch" &&
-          activeOperation(item) &&
-          !item.request.native_request_id,
+          item.kind === "dispatch" && activeOperation(item) && !item.request.native_request_id,
       )) {
         const target =
           op.request.target_type === "group"
@@ -2115,13 +2091,10 @@ export function execute(
           },
         );
       }
-      addEvent(
-        ledger,
-        request,
-        "execution_profile_default_updated",
-        ledger.orchestration_id,
-        { previous_profile: previous, execution_profile: profile },
-      );
+      addEvent(ledger, request, "execution_profile_default_updated", ledger.orchestration_id, {
+        previous_profile: previous,
+        execution_profile: profile,
+      });
       return { execution_profile: profile };
     }
     case "execution-profile-update":
@@ -2153,8 +2126,7 @@ export function execute(
         (item) =>
           item.kind === "dispatch" &&
           item.target_id === targetId &&
-          (item.request.target_type === "group" ? "group" : "task") ===
-            targetType &&
+          (item.request.target_type === "group" ? "group" : "task") === targetType &&
           activeOperation(item),
       )) {
         operation.status = "failed";
@@ -2166,9 +2138,7 @@ export function execute(
           targetId,
           {
             operation_id: operation.id,
-            reason: recommendation
-              ? "recommendation_reapplied"
-              : "execution_profile_changed",
+            reason: recommendation ? "recommendation_reapplied" : "execution_profile_changed",
             previous_profile: previous,
             previous_effective_profile: effectiveProfile(ledger, target),
             execution_profile: profile,
@@ -2177,12 +2147,8 @@ export function execute(
         );
       }
       target.execution_profile = profile;
-      target.execution_profile_source = recommendation
-        ? "recommendation"
-        : "manual";
-      target.execution_profile_rule = recommendation
-        ? RECOMMENDATION_VERSION
-        : null;
+      target.execution_profile_source = recommendation ? "recommendation" : "manual";
+      target.execution_profile_rule = recommendation ? RECOMMENDATION_VERSION : null;
       addEvent(ledger, request, "execution_profile_updated", targetId, {
         target_type: targetType,
         target_id: targetId,
@@ -2199,14 +2165,29 @@ export function execute(
     }
     case "dispatch-progress": {
       onlyMain(request.actor);
-      const op = find(ledger.operations, item => item.id === string(payload.operation_id) && item.kind === "dispatch", "Dispatch");
-      requireCondition(activeOperation(op) && op.request.native_request_id === payload.native_request_id,
-        "NATIVE_REQUEST_CONFLICT", "Progress must match the active creation request", 3);
+      const op = find(
+        ledger.operations,
+        (item) => item.id === string(payload.operation_id) && item.kind === "dispatch",
+        "Dispatch",
+      );
+      requireCondition(
+        activeOperation(op) && op.request.native_request_id === payload.native_request_id,
+        "NATIVE_REQUEST_CONFLICT",
+        "Progress must match the active creation request",
+        3,
+      );
       const threadId = string(payload.thread_id);
-      requireCondition(!op.request.observed_thread_id || op.request.observed_thread_id === threadId,
-        "THREAD_CONFLICT", "Creation reported conflicting thread identities", 3);
+      requireCondition(
+        !op.request.observed_thread_id || op.request.observed_thread_id === threadId,
+        "THREAD_CONFLICT",
+        "Creation reported conflicting thread identities",
+        3,
+      );
       op.request.observed_thread_id = threadId;
-      addEvent(ledger, request, "dispatch_thread_observed", op.target_id, { operation_id: op.id, thread_id: threadId });
+      addEvent(ledger, request, "dispatch_thread_observed", op.target_id, {
+        operation_id: op.id,
+        thread_id: threadId,
+      });
       return { operation_id: op.id, thread_id: threadId };
     }
     case "dispatch-bind-request": {
@@ -2221,8 +2202,7 @@ export function execute(
       );
       const nativeId = string(payload.native_request_id);
       requireCondition(
-        !op.request.native_request_id ||
-          op.request.native_request_id === nativeId,
+        !op.request.native_request_id || op.request.native_request_id === nativeId,
         "NATIVE_REQUEST_CONFLICT",
         "Native request identity changed",
         3,
@@ -2254,7 +2234,11 @@ export function execute(
         else if (isContributionKind((dispatchTarget as Ledger["tasks"][number]).kind))
           requireContributionDispatchGate(
             ledger,
-            find(ledger.groups, (item) => item.id === (dispatchTarget as Ledger["tasks"][number]).group_id, "Group"),
+            find(
+              ledger.groups,
+              (item) => item.id === (dispatchTarget as Ledger["tasks"][number]).group_id,
+              "Group",
+            ),
           );
         requireCondition(
           object(payload.creation_parameters ?? {}).transport === "codex-exec",
@@ -2264,8 +2248,7 @@ export function execute(
         );
       }
       requireCondition(
-        stable(op.request.execution_profile) ===
-          stable(effectiveProfile(ledger, dispatchTarget)),
+        stable(op.request.execution_profile) === stable(effectiveProfile(ledger, dispatchTarget)),
         "PROFILE_CONFLICT",
         "Claim execution profile changed; claim again",
         3,
@@ -2283,12 +2266,18 @@ export function execute(
             .strict(),
           payload.creation_parameters,
         );
-        requireCondition(!op.request.native_request_id || stable(op.request.creation_parameters) === stable(parameters),
-          "NATIVE_REQUEST_CONFLICT", "Creation parameters are frozen after native request binding", 3);
+        requireCondition(
+          !op.request.native_request_id ||
+            stable(op.request.creation_parameters) === stable(parameters),
+          "NATIVE_REQUEST_CONFLICT",
+          "Creation parameters are frozen after native request binding",
+          3,
+        );
         op.request.creation_parameters = parameters;
       }
       op.request.native_request_id = nativeId;
-      if ((op.request.creation_parameters as any)?.transport === "codex-exec") op.status = "unknown";
+      if ((op.request.creation_parameters as any)?.transport === "codex-exec")
+        op.status = "unknown";
       addEvent(ledger, request, "dispatch_request_bound", op.target_id, {
         operation_id: op.id,
         native_request_id: nativeId,
@@ -2311,12 +2300,7 @@ export function execute(
       requireOwner(ledger, request, targetType, targetId);
       const mode = z.enum(["initial", "refresh"]).parse(payload.mode);
       const dispatchOperationId = parse(id, payload.dispatch_operation_id);
-      const dispatch = developmentDispatch(
-        ledger,
-        targetType,
-        targetId,
-        dispatchOperationId,
-      );
+      const dispatch = developmentDispatch(ledger, targetType, targetId, dispatchOperationId);
       const baseline = parse(baselineReceipt, payload.baseline);
       requireCondition(
         baseline.sha === baseline.head,
@@ -2325,9 +2309,10 @@ export function execute(
         4,
       );
       const currentBaseline = dispatch.request.development_baseline;
-      const expectedPrevious = payload.expected_previous_baseline === null
-        ? null
-        : parse(baselineReceipt, payload.expected_previous_baseline);
+      const expectedPrevious =
+        payload.expected_previous_baseline === null
+          ? null
+          : parse(baselineReceipt, payload.expected_previous_baseline);
       if (mode === "initial") {
         requireCondition(
           currentBaseline === undefined && expectedPrevious === null,
@@ -2345,20 +2330,25 @@ export function execute(
           5,
         );
       }
-      const owner = targetType === "group"
-        ? target
-        : find(ledger.groups, (item) => item.id === target.group_id, "Group");
+      const owner =
+        targetType === "group"
+          ? target
+          : find(ledger.groups, (item) => item.id === target.group_id, "Group");
       const postMerge =
-        targetType === "task" &&
-        ["release", "deployment", "verification"].includes(target.kind);
-      const expectedLineage = targetType === "group"
-        ? target.current_sha
-        : postMerge
-          ? owner.merge_sha
-          : owner.current_sha;
-      const expectedLineageSha = payload.expected_lineage_sha === null
-        ? null
-        : parse(z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), payload.expected_lineage_sha);
+        targetType === "task" && ["release", "deployment", "verification"].includes(target.kind);
+      const expectedLineage =
+        targetType === "group"
+          ? target.current_sha
+          : postMerge
+            ? owner.merge_sha
+            : owner.current_sha;
+      const expectedLineageSha =
+        payload.expected_lineage_sha === null
+          ? null
+          : parse(
+              z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+              payload.expected_lineage_sha,
+            );
       requireCondition(
         expectedLineageSha === expectedLineage,
         "BASE_CHANGED",
@@ -2391,7 +2381,8 @@ export function execute(
         lineageEventMatches(ledger, lineageEventId, "group", owner.id, baseline.sha);
       requireCondition(
         (mode === "initial" && lineageEventId === "initial") ||
-          targetLineageEvent || groupLineageEvent,
+          targetLineageEvent ||
+          groupLineageEvent,
         "LINEAGE_MISMATCH",
         "Synchronization must reference the fact that established the target lineage",
         5,
@@ -2399,7 +2390,8 @@ export function execute(
       requireCondition(
         !ledger.operations.some(
           (item) =>
-            (item.target_id === targetId || (targetType === "task" && item.target_id === owner.id)) &&
+            (item.target_id === targetId ||
+              (targetType === "task" && item.target_id === owner.id)) &&
             activeOperation(item) &&
             ["merge", "cut"].includes(item.kind),
         ),
@@ -2413,13 +2405,23 @@ export function execute(
         find(ledger.resources, (resource) => resource.id === resourceId, "Workspace resource"),
       );
       requireCondition(
-        resources.some((resource) => resource.kind === "worktree" && resource.target === targetId && resource.status === "active"),
+        resources.some(
+          (resource) =>
+            resource.kind === "worktree" &&
+            resource.target === targetId &&
+            resource.status === "active",
+        ),
         "WORKSPACE_NOT_READY",
         "Baseline synchronization requires an active target worktree",
         4,
       );
       requireCondition(
-        resources.some((resource) => resource.kind === "branch" && resource.target === branch && resource.status === "active"),
+        resources.some(
+          (resource) =>
+            resource.kind === "branch" &&
+            resource.target === branch &&
+            resource.status === "active",
+        ),
         "WORKSPACE_NOT_READY",
         "Baseline synchronization requires an active target branch resource",
         4,
@@ -2440,7 +2442,8 @@ export function execute(
         5,
       );
       const evidenceRef = string(payload.evidence_ref);
-      const previousBaseline = currentBaseline === undefined ? null : parse(baselineReceipt, currentBaseline);
+      const previousBaseline =
+        currentBaseline === undefined ? null : parse(baselineReceipt, currentBaseline);
       if (targetType === "group" && expectedLineage === null) target.current_sha = baseline.sha;
       dispatch.request.development_baseline = baseline;
       const factId = `${request.request_id}-fact`;
@@ -2503,11 +2506,7 @@ export function execute(
       const branch = string(payload.branch);
       const resourceIds = z.array(id).min(1).parse(payload.resource_ids);
       const resources = resourceIds.map((resourceId) =>
-        find(
-          ledger.resources,
-          (resource) => resource.id === resourceId,
-          "Workspace resource",
-        ),
+        find(ledger.resources, (resource) => resource.id === resourceId, "Workspace resource"),
       );
       requireCondition(
         resources.some(
@@ -2545,30 +2544,64 @@ export function execute(
           "Workspace branch differs from the task branch",
           3,
         );
-      const cliDispatch = ledger.operations.find(op => op.kind === "dispatch" && op.target_id === targetId && (op.request.target_type ?? "task") === targetType &&
-        (op.request.creation_parameters as any)?.transport === "codex-exec" && op.status === "succeeded");
+      const cliDispatch = ledger.operations.find(
+        (op) =>
+          op.kind === "dispatch" &&
+          op.target_id === targetId &&
+          (op.request.target_type ?? "task") === targetType &&
+          (op.request.creation_parameters as any)?.transport === "codex-exec" &&
+          op.status === "succeeded",
+      );
       if (cliDispatch) {
         const baseline = parse(baselineReceipt, payload.baseline);
-        requireCondition(baseline.sha === baseline.head, "BASELINE_MISMATCH", "Align HEAD to the verified baseline before development", 4);
-        requireCondition(!cliDispatch.request.development_baseline || stable(cliDispatch.request.development_baseline) === stable(baseline),
-          "BASELINE_CONFLICT", "Creation baseline is immutable; use the explicit synchronization workflow", 4);
+        requireCondition(
+          baseline.sha === baseline.head,
+          "BASELINE_MISMATCH",
+          "Align HEAD to the verified baseline before development",
+          4,
+        );
+        requireCondition(
+          !cliDispatch.request.development_baseline ||
+            stable(cliDispatch.request.development_baseline) === stable(baseline),
+          "BASELINE_CONFLICT",
+          "Creation baseline is immutable; use the explicit synchronization workflow",
+          4,
+        );
         if (ledger.contract_version === 3)
-          requireCondition(!!cliDispatch.request.development_baseline,
-            "BASELINE_REQUIRED", "Record the development baseline before lifecycle readiness", 4);
+          requireCondition(
+            !!cliDispatch.request.development_baseline,
+            "BASELINE_REQUIRED",
+            "Record the development baseline before lifecycle readiness",
+            4,
+          );
         if (targetType === "group") {
-          requireCondition(!!baseline.fetched_at && Date.parse(baseline.fetched_at) >= Date.parse(cliDispatch.created_at),
-            "BASELINE_REQUIRED", "Group baseline requires a fresh remote fetch receipt after dispatch", 4);
+          requireCondition(
+            !!baseline.fetched_at &&
+              Date.parse(baseline.fetched_at) >= Date.parse(cliDispatch.created_at),
+            "BASELINE_REQUIRED",
+            "Group baseline requires a fresh remote fetch receipt after dispatch",
+            4,
+          );
           if (ledger.contract_version === 3)
-            requireCondition(target.current_sha === baseline.sha,
-              "BASELINE_NOT_VERIFIED", "Workspace baseline no longer matches the current group lineage", 4);
-          if (!cliDispatch.request.development_baseline && ledger.contract_version !== 3) target.current_sha = baseline.sha;
+            requireCondition(
+              target.current_sha === baseline.sha,
+              "BASELINE_NOT_VERIFIED",
+              "Workspace baseline no longer matches the current group lineage",
+              4,
+            );
+          if (!cliDispatch.request.development_baseline && ledger.contract_version !== 3)
+            target.current_sha = baseline.sha;
         } else {
-          const group = find(ledger.groups, g => g.id === target.group_id, "Group");
+          const group = find(ledger.groups, (g) => g.id === target.group_id, "Group");
           const postMerge = ["release", "deployment", "verification"].includes(target.kind);
           requireCondition(
-            postMerge ? group.state === "merged" && group.merge_sha === baseline.sha : group.current_sha === baseline.sha,
+            postMerge
+              ? group.state === "merged" && group.merge_sha === baseline.sha
+              : group.current_sha === baseline.sha,
             "BASELINE_MISMATCH",
-            postMerge ? "Post-merge task baseline must match the merged parent SHA" : "Task baseline must match its group parent SHA",
+            postMerge
+              ? "Post-merge task baseline must match the merged parent SHA"
+              : "Task baseline must match its group parent SHA",
             4,
           );
           target.base_sha = baseline.sha;
@@ -2667,26 +2700,17 @@ export function execute(
       requireCondition(
         !ledger.operations.some(
           (item) =>
-            item.kind === "publish_branch" &&
-            item.target_id === targetId &&
-            activeOperation(item),
+            item.kind === "publish_branch" && item.target_id === targetId && activeOperation(item),
         ),
         "OPERATION_PENDING",
         "Branch publication is already pending",
         4,
       );
-      const op = addOperation(
-        ledger,
-        request,
-        "publish_branch",
-        targetId,
-        expectedSha,
-      );
+      const op = addOperation(ledger, request, "publish_branch", targetId, expectedSha);
       op.request.target_type = targetType;
       op.request.branch = branch;
       op.request.expected_head_sha = expectedSha;
-      op.request.expected_base_sha =
-        targetType === "group" ? target.current_sha : target.base_sha;
+      op.request.expected_base_sha = targetType === "group" ? target.current_sha : target.base_sha;
       op.request.action_id = payload.action_id;
       addEvent(ledger, request, "publish_branch_claimed", targetId, {
         operation_id: op.id,
@@ -2699,9 +2723,7 @@ export function execute(
     case "publish-branch-resolve": {
       const op = find(
         ledger.operations,
-        (item) =>
-          item.id === string(payload.operation_id) &&
-          item.kind === "publish_branch",
+        (item) => item.id === string(payload.operation_id) && item.kind === "publish_branch",
         "Branch publication",
       );
       requireCondition(
@@ -2710,23 +2732,19 @@ export function execute(
         "Branch publication claim is not active or belongs to another actor",
         3,
       );
-      const outcome = z
-        .enum(["succeeded", "failed", "unknown"])
-        .parse(payload.outcome);
+      const outcome = z.enum(["succeeded", "failed", "unknown"]).parse(payload.outcome);
       if (outcome === "succeeded") {
         const receipt = providerReceipt.parse(
           payload.provider_receipt ?? payload.provider_observation,
         );
         requireCondition(
           receipt.provider === ledger.repository.provider &&
-            receipt.repository ===
-              `${ledger.repository.owner}/${ledger.repository.name}` &&
+            receipt.repository === `${ledger.repository.owner}/${ledger.repository.name}` &&
             receipt.resource_type === "branch" &&
             receipt.resource_id === op.request.branch &&
             receipt.branch === op.request.branch &&
             receipt.target_branch === null &&
-            (receipt.base_sha === null ||
-              receipt.base_sha === op.request.expected_base_sha) &&
+            (receipt.base_sha === null || receipt.base_sha === op.request.expected_base_sha) &&
             receipt.head_sha === op.expected_sha &&
             receipt.state === "exists",
           "EVIDENCE_MISMATCH",
@@ -2746,9 +2764,7 @@ export function execute(
         });
         ledger.facts.push(observed);
         op.receipt_fact_id = observed.id;
-        const targetType = z
-          .enum(["group", "task"])
-          .parse(op.request.target_type);
+        const targetType = z.enum(["group", "task"]).parse(op.request.target_type);
         const target = lifecycleTarget(ledger, targetType, op.target_id) as any;
         requireCondition(
           (targetType === "group" ? target.current_sha : target.base_sha) ===
@@ -2767,8 +2783,7 @@ export function execute(
         );
         requireCondition(
           receipt.provider === ledger.repository.provider &&
-            receipt.repository ===
-              `${ledger.repository.owner}/${ledger.repository.name}` &&
+            receipt.repository === `${ledger.repository.owner}/${ledger.repository.name}` &&
             receipt.resource_type === "branch" &&
             receipt.resource_id === op.request.branch &&
             receipt.branch === op.request.branch &&
@@ -2846,9 +2861,7 @@ export function execute(
         4,
       );
       requireCondition(
-        targetType === "group"
-          ? target.current_sha === headSha
-          : target.base_sha === baseSha,
+        targetType === "group" ? target.current_sha === headSha : target.base_sha === baseSha,
         "BASE_CHANGED",
         "PR publication does not match the current branch lineage",
         5,
@@ -2866,9 +2879,7 @@ export function execute(
       requireCondition(
         !ledger.operations.some(
           (item) =>
-            item.kind === "publish_pr" &&
-            item.target_id === targetId &&
-            activeOperation(item),
+            item.kind === "publish_pr" && item.target_id === targetId && activeOperation(item),
         ),
         "OPERATION_PENDING",
         "PR publication is already pending",
@@ -2896,9 +2907,7 @@ export function execute(
     case "publish-pr-resolve": {
       const op = find(
         ledger.operations,
-        (item) =>
-          item.id === string(payload.operation_id) &&
-          item.kind === "publish_pr",
+        (item) => item.id === string(payload.operation_id) && item.kind === "publish_pr",
         "PR publication",
       );
       requireCondition(
@@ -2907,9 +2916,7 @@ export function execute(
         "PR publication claim is not active or belongs to another actor",
         3,
       );
-      const outcome = z
-        .enum(["succeeded", "failed", "unknown"])
-        .parse(payload.outcome);
+      const outcome = z.enum(["succeeded", "failed", "unknown"]).parse(payload.outcome);
       if (outcome === "succeeded") {
         const receipt = providerReceipt.parse(
           payload.provider_receipt ?? payload.provider_observation,
@@ -2917,8 +2924,7 @@ export function execute(
         const requestedPr = parse(externalRef, op.request.pr);
         requireCondition(
           receipt.provider === ledger.repository.provider &&
-            receipt.repository ===
-              `${ledger.repository.owner}/${ledger.repository.name}` &&
+            receipt.repository === `${ledger.repository.owner}/${ledger.repository.name}` &&
             receipt.resource_type === "pr" &&
             receipt.resource_id === requestedPr.id &&
             receipt.pr &&
@@ -2945,42 +2951,42 @@ export function execute(
         });
         ledger.facts.push(observed);
         op.receipt_fact_id = observed.id;
-        const targetType = z
-          .enum(["group", "task"])
-          .parse(op.request.target_type);
+        const targetType = z.enum(["group", "task"]).parse(op.request.target_type);
         const target = lifecycleTarget(ledger, targetType, op.target_id) as any;
         requireCondition(
           (targetType === "group" ? target.current_sha : target.base_sha) ===
-            (targetType === "group"
-              ? op.request.expected_head_sha
-              : op.request.expected_base_sha),
+            (targetType === "group" ? op.request.expected_head_sha : op.request.expected_base_sha),
           "BASE_CHANGED",
           "PR lineage changed while publication was pending",
           5,
         );
         if (targetType === "group") {
           if (ledger.contract_version !== 3) target.parent_pr = receipt.pr;
-          else target.pr = {
+          else
+            target.pr = {
               state: "published",
               pr: receipt.pr,
               parent_branch: op.request.branch,
             };
         } else {
           requireCondition(
-            typeof target.branch === "string" && target.branch.length > 0 &&
-              typeof op.request.target_branch === "string" && op.request.target_branch.length > 0,
+            typeof target.branch === "string" &&
+              target.branch.length > 0 &&
+              typeof op.request.target_branch === "string" &&
+              op.request.target_branch.length > 0,
             "TASK_PR_BINDING_INCOMPLETE",
             "Task PR publication requires task branch and base branch facts",
             4,
           );
-          target.pr = ledger.contract_version !== 3
-            ? receipt.pr
-            : {
-                state: "open",
-                pr: receipt.pr,
-                branch: target.branch,
-                base_branch: op.request.target_branch,
-              };
+          target.pr =
+            ledger.contract_version !== 3
+              ? receipt.pr
+              : {
+                  state: "open",
+                  pr: receipt.pr,
+                  branch: target.branch,
+                  base_branch: op.request.target_branch,
+                };
         }
         target.lifecycle.pr_created = "passed";
       } else {
@@ -2990,8 +2996,7 @@ export function execute(
         const requestedPr = parse(externalRef, op.request.pr);
         requireCondition(
           receipt.provider === ledger.repository.provider &&
-            receipt.repository ===
-              `${ledger.repository.owner}/${ledger.repository.name}` &&
+            receipt.repository === `${ledger.repository.owner}/${ledger.repository.name}` &&
             receipt.resource_type === "pr" &&
             receipt.resource_id === requestedPr.id &&
             receipt.branch === op.request.branch &&
@@ -3016,12 +3021,9 @@ export function execute(
         });
         ledger.facts.push(observed);
         op.receipt_fact_id = observed.id;
-        const targetType = z
-          .enum(["group", "task"])
-          .parse(op.request.target_type);
+        const targetType = z.enum(["group", "task"]).parse(op.request.target_type);
         const target = lifecycleTarget(ledger, targetType, op.target_id) as any;
-        target.lifecycle.pr_created =
-          outcome === "unknown" ? "unknown" : "blocked";
+        target.lifecycle.pr_created = outcome === "unknown" ? "unknown" : "blocked";
       }
       requireCondition(
         outcome !== "failed" || payload.verified_no_effect === true,
@@ -3040,15 +3042,30 @@ export function execute(
     }
     case "task-runtime-observe": {
       onlyMain(request.actor);
-      const target = find(ledger.tasks, item => item.id === parse(id, payload.task_id), "Task");
+      const target = find(ledger.tasks, (item) => item.id === parse(id, payload.task_id), "Task");
       const observedThread = isSharedDeliveryTask(ledger, target)
         ? ledger.groups.find((item) => item.id === target.group_id)?.agent_thread_id
         : target.thread_id;
-      requireCondition(observedThread === payload.thread_id, "RESOURCE_MISMATCH", "Runtime observation thread does not match task", 4);
+      requireCondition(
+        observedThread === payload.thread_id,
+        "RESOURCE_MISMATCH",
+        "Runtime observation thread does not match task",
+        4,
+      );
       const runtime = z.enum(["active", "idle", "unknown"]).parse(payload.runtime);
       const observedAt = z.iso.datetime().parse(payload.observed_at);
-      if (runtime === "idle") requireCondition(typeof payload.turn_id === "string" && payload.turn_id.length > 0, "EVIDENCE_REQUIRED", "Idle observation requires a confirmed terminal turn identity", 4);
-      if (target.disposition !== "active" || !["starting", "running", "agent_idle"].includes(target.state)) return { state: target.state };
+      if (runtime === "idle")
+        requireCondition(
+          typeof payload.turn_id === "string" && payload.turn_id.length > 0,
+          "EVIDENCE_REQUIRED",
+          "Idle observation requires a confirmed terminal turn identity",
+          4,
+        );
+      if (
+        target.disposition !== "active" ||
+        !["starting", "running", "agent_idle"].includes(target.state)
+      )
+        return { state: target.state };
       const previous = target.state;
       if (runtime === "idle" && target.state !== "agent_idle") {
         target.agent_resume_state = target.state as "starting" | "running";
@@ -3057,14 +3074,24 @@ export function execute(
         target.state = target.agent_resume_state ?? "running";
         delete target.agent_resume_state;
       }
-      if (previous !== target.state) addEvent(ledger, request, "task_runtime_observed", target.id, { task_id: target.id, thread_id: observedThread, turn_id: payload.turn_id ?? null, observed_at: observedAt, runtime, state: target.state, previous_state: previous });
+      if (previous !== target.state)
+        addEvent(ledger, request, "task_runtime_observed", target.id, {
+          task_id: target.id,
+          thread_id: observedThread,
+          turn_id: payload.turn_id ?? null,
+          observed_at: observedAt,
+          runtime,
+          state: target.state,
+          previous_state: previous,
+        });
       return { state: target.state };
     }
     case "task-update": {
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
-      const mainOwned = target.execution_owner === "main" &&
+      const mainOwned =
+        target.execution_owner === "main" &&
         target.conversation_policy === "main_owned" &&
         request.actor.role === "main" &&
         request.actor.thread_id === ledger.control.owner_thread_id;
@@ -3095,11 +3122,29 @@ export function execute(
         `Cannot move ${target.state} to ${state}`,
         3,
       );
-      if (state === "running" && ledger.operations.some(op => op.kind === "dispatch" && op.request.target_type !== "group" && op.target_id === taskId &&
-        (op.request.creation_parameters as any)?.transport === "codex-exec")) {
-        const op = ledger.operations.find(op => op.kind === "dispatch" && op.request.target_type !== "group" && op.target_id === taskId && op.status === "succeeded");
-        requireCondition(target.lifecycle.workspace_ready === "passed" && !!op?.request.development_baseline,
-          "BASELINE_REQUIRED", "Record verified workspace baseline before running", 4);
+      if (
+        state === "running" &&
+        ledger.operations.some(
+          (op) =>
+            op.kind === "dispatch" &&
+            op.request.target_type !== "group" &&
+            op.target_id === taskId &&
+            (op.request.creation_parameters as any)?.transport === "codex-exec",
+        )
+      ) {
+        const op = ledger.operations.find(
+          (op) =>
+            op.kind === "dispatch" &&
+            op.request.target_type !== "group" &&
+            op.target_id === taskId &&
+            op.status === "succeeded",
+        );
+        requireCondition(
+          target.lifecycle.workspace_ready === "passed" && !!op?.request.development_baseline,
+          "BASELINE_REQUIRED",
+          "Record verified workspace baseline before running",
+          4,
+        );
         if (ledger.contract_version === 3 && op?.request.development_baseline) {
           const group = find(ledger.groups, (item) => item.id === target.group_id, "Group");
           const postMerge = ["release", "deployment", "verification"].includes(target.kind);
@@ -3117,21 +3162,14 @@ export function execute(
       if (state === "running" && isContributionKind(target.kind)) {
         const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
         const bootstrapMainOwnedStart =
-          mainOwned &&
-          owner.delivery_unit_kind === "bootstrap" &&
-          owner.owner_kind === "main";
+          mainOwned && owner.delivery_unit_kind === "bootstrap" && owner.owner_kind === "main";
         requireCondition(
           owner.state === "active",
           "GROUP_NOT_READY",
           "Task group is not active",
           4,
         );
-        requireContributionDispatchGate(
-          ledger,
-          owner,
-          !bootstrapMainOwnedStart,
-          "task-update",
-        );
+        requireContributionDispatchGate(ledger, owner, !bootstrapMainOwnedStart, "task-update");
       }
       if (state === "running" && previousState !== "starting" && !occupiedSlot) {
         requireCondition(
@@ -3141,9 +3179,8 @@ export function execute(
           4,
         );
         const used =
-          ledger.tasks.filter((item) =>
-            ["starting", "running", "agent_idle"].includes(item.state),
-          ).length +
+          ledger.tasks.filter((item) => ["starting", "running", "agent_idle"].includes(item.state))
+            .length +
           ledger.operations.filter(
             (item) =>
               item.kind === "dispatch" &&
@@ -3192,7 +3229,8 @@ export function execute(
             legacyLedger(ledger) ||
               target.lifecycle.pr_merged === "passed" ||
               (isSharedDeliveryTask(ledger, target) &&
-                ledger.groups.find((item) => item.id === target.group_id)?.lifecycle.pr_merged === "passed"),
+                ledger.groups.find((item) => item.id === target.group_id)?.lifecycle.pr_merged ===
+                  "passed"),
             "PR_NOT_MERGED",
             "Contribution task PR must merge before closeout",
             4,
@@ -3200,23 +3238,20 @@ export function execute(
       }
       target.state = state;
       delete target.agent_resume_state;
-      target.blocker =
-        state === "blocked" || state === "waiting"
-          ? string(payload.detail)
-          : null;
+      target.blocker = state === "blocked" || state === "waiting" ? string(payload.detail) : null;
       if (state === "closed" && target.lifecycle && !legacyLedger(ledger))
         target.lifecycle.closed = "passed";
       if (state === "running" && (previousState === "starting" || previousState === "planned"))
-        target.started_at = z.iso
-          .datetime({ offset: false })
-          .parse(payload.occurred_at);
+        target.started_at = z.iso.datetime({ offset: false }).parse(payload.occurred_at);
       if (state === "completed")
         target.finished_at = payload.occurred_at
           ? z.iso.datetime({ offset: false }).parse(payload.occurred_at)
           : null;
       if ((state === "completed" || state === "closed") && target.thread_id) {
         const resourceId = `conversation-${createHash("sha256").update(target.thread_id).digest("hex").slice(0, 32)}`;
-        const resource = ledger.resources.find((item) => item.kind === "conversation" && item.target === target.thread_id);
+        const resource = ledger.resources.find(
+          (item) => item.kind === "conversation" && item.target === target.thread_id,
+        );
         if (!resource) {
           ledger.resources.push({
             id: resourceId,
@@ -3253,9 +3288,7 @@ export function execute(
           state,
           reason: target.blocker,
         },
-        payload.occurred_at
-          ? z.iso.datetime({ offset: false }).parse(payload.occurred_at)
-          : null,
+        payload.occurred_at ? z.iso.datetime({ offset: false }).parse(payload.occurred_at) : null,
       );
       const directive = notificationDirective(
         ledger,
@@ -3279,19 +3312,58 @@ export function execute(
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
       const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
-      requireCondition(isContributionKind(target.kind), "TASK_MISMATCH", "Only contribution tasks can be equivalently integrated", 3);
-      requireCondition(!isSharedDeliveryTask(ledger, target), "SHARED_DELIVERY_UNIT_PR", "Shared delivery tasks do not have a child PR to integrate", 3);
-      requireCondition(["blocked", "agent_idle", "running"].includes(target.state), "INVALID_TRANSITION", "Task is not awaiting integration", 3);
-      requireCondition(target.atoms.every((atom) => atom.status === "completed"), "ATOMS_PENDING", "Complete the task atoms before integration", 4);
+      requireCondition(
+        isContributionKind(target.kind),
+        "TASK_MISMATCH",
+        "Only contribution tasks can be equivalently integrated",
+        3,
+      );
+      requireCondition(
+        !isSharedDeliveryTask(ledger, target),
+        "SHARED_DELIVERY_UNIT_PR",
+        "Shared delivery tasks do not have a child PR to integrate",
+        3,
+      );
+      requireCondition(
+        ["blocked", "agent_idle", "running"].includes(target.state),
+        "INVALID_TRANSITION",
+        "Task is not awaiting integration",
+        3,
+      );
+      requireCondition(
+        target.atoms.every((atom) => atom.status === "completed"),
+        "ATOMS_PENDING",
+        "Complete the task atoms before integration",
+        4,
+      );
       const taskPr = parse(externalRef, payload.task_pr);
       const parentPr = parse(externalRef, payload.parent_pr);
       checkPR(ledger, taskPr);
       checkPR(ledger, parentPr);
-      requireCondition(target.pr && stable(taskPrRef(target)) === stable(taskPr), "PR_MISMATCH", "Equivalent integration task PR does not match the registered PR", 3);
-      requireCondition(deliveryUnitPr(owner) && stable(deliveryUnitPr(owner)) === stable(parentPr), "PR_MISMATCH", "Equivalent integration parent PR does not match the delivery unit", 3);
-      const taskHeadSha = z.string().regex(/^[a-f0-9]{40}$/).parse(payload.task_head_sha);
-      const parentMergeSha = z.string().regex(/^[a-f0-9]{40}$/).parse(payload.parent_merge_sha);
-      const commits = z.array(z.string().regex(/^[a-f0-9]{40}$/)).min(1).parse(payload.integration_commits);
+      requireCondition(
+        target.pr && stable(taskPrRef(target)) === stable(taskPr),
+        "PR_MISMATCH",
+        "Equivalent integration task PR does not match the registered PR",
+        3,
+      );
+      requireCondition(
+        deliveryUnitPr(owner) && stable(deliveryUnitPr(owner)) === stable(parentPr),
+        "PR_MISMATCH",
+        "Equivalent integration parent PR does not match the delivery unit",
+        3,
+      );
+      const taskHeadSha = z
+        .string()
+        .regex(/^[a-f0-9]{40}$/)
+        .parse(payload.task_head_sha);
+      const parentMergeSha = z
+        .string()
+        .regex(/^[a-f0-9]{40}$/)
+        .parse(payload.parent_merge_sha);
+      const commits = z
+        .array(z.string().regex(/^[a-f0-9]{40}$/))
+        .min(1)
+        .parse(payload.integration_commits);
       const evidenceRef = z.string().min(1).parse(payload.evidence_ref);
       target.state = "integrated";
       target.finished_at = now();
@@ -3312,7 +3384,8 @@ export function execute(
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
-      const mainOwned = target.execution_owner === "main" &&
+      const mainOwned =
+        target.execution_owner === "main" &&
         target.conversation_policy === "main_owned" &&
         request.actor.role === "main" &&
         request.actor.thread_id === ledger.control.owner_thread_id;
@@ -3322,23 +3395,18 @@ export function execute(
         ledger.groups.find((item) => item.id === target.group_id)?.agent_thread_id ===
           request.actor.thread_id;
       requireCondition(
-        (request.actor.role === "task" || mainOwned || sharedOwned) && taskExecutionState(target) === "running",
+        (request.actor.role === "task" || mainOwned || sharedOwned) &&
+          taskExecutionState(target) === "running",
         "FORBIDDEN",
         "The running task owner updates its atoms",
         3,
       );
-      const index = target.atoms.findIndex(
-        (item) => item.id === parse(id, payload.atom_id),
-      );
+      const index = target.atoms.findIndex((item) => item.id === parse(id, payload.atom_id));
       requireCondition(index >= 0, "NOT_FOUND", "Atom not found");
       const atom = target.atoms[index]!;
-      const state = z
-        .enum(["running", "blocked", "completed"])
-        .parse(payload.state);
+      const state = z.enum(["running", "blocked", "completed"]).parse(payload.state);
       requireCondition(
-        target.atoms
-          .slice(0, index)
-          .every((item) => item.status === "completed"),
+        target.atoms.slice(0, index).every((item) => item.status === "completed"),
         "ATOMS_PENDING",
         "Earlier atoms must complete first",
         4,
@@ -3369,8 +3437,7 @@ export function execute(
       requireCondition(
         (request.actor.role === "main" &&
           request.actor.thread_id === ledger.control.owner_thread_id) ||
-          (request.actor.role === "group" &&
-            owner.agent_thread_id === request.actor.thread_id),
+          (request.actor.role === "group" && owner.agent_thread_id === request.actor.thread_id),
         "FORBIDDEN",
         "Only the Delivery coordinator or main conversation can update delivery-unit atoms",
         3,
@@ -3383,16 +3450,8 @@ export function execute(
       );
       if (ledger.active_plan_id !== ledger.execution_plan_id)
         requireCondition(
-          stable(
-            activePlan(ledger).group_atoms.filter(
-              (atom) => atom.group_id === groupId,
-            ),
-          ) ===
-            stable(
-              executionPlan(ledger).group_atoms.filter(
-                (atom) => atom.group_id === groupId,
-              ),
-            ),
+          stable(activePlan(ledger).group_atoms.filter((atom) => atom.group_id === groupId)) ===
+            stable(executionPlan(ledger).group_atoms.filter((atom) => atom.group_id === groupId)),
           "PLAN_REVISION_PENDING",
           "Delivery-unit atom changes await plan approval",
           4,
@@ -3403,13 +3462,9 @@ export function execute(
         "Delivery-unit atom",
       );
       const index = owner.atoms.indexOf(atom);
-      const state = z
-        .enum(["running", "blocked", "completed"])
-        .parse(payload.state);
+      const state = z.enum(["running", "blocked", "completed"]).parse(payload.state);
       requireCondition(
-        owner.atoms
-          .slice(0, index)
-          .every((item) => item.status === "completed"),
+        owner.atoms.slice(0, index).every((item) => item.status === "completed"),
         "ATOMS_PENDING",
         "Earlier delivery-unit atoms must complete first",
         4,
@@ -3433,8 +3488,7 @@ export function execute(
       );
       if (state === "completed" && atom.lifecycle_stage)
         requireCondition(
-          legacyLedger(ledger) ||
-            owner.lifecycle[atom.lifecycle_stage] === "passed",
+          legacyLedger(ledger) || owner.lifecycle[atom.lifecycle_stage] === "passed",
           "LIFECYCLE_BLOCKED",
           `Delivery-unit lifecycle stage ${atom.lifecycle_stage} is not passed`,
           4,
@@ -3451,9 +3505,7 @@ export function execute(
           state,
           reason: state === "blocked" ? string(payload.detail) : null,
         },
-        payload.occurred_at
-          ? z.iso.datetime({ offset: false }).parse(payload.occurred_at)
-          : null,
+        payload.occurred_at ? z.iso.datetime({ offset: false }).parse(payload.occurred_at) : null,
       );
       return { group_id: groupId, atom_id: atom.id, state };
     }
@@ -3463,8 +3515,7 @@ export function execute(
       requireCondition(
         (request.actor.role === "main" &&
           request.actor.thread_id === ledger.control.owner_thread_id) ||
-          (request.actor.role === "group" &&
-            owner.agent_thread_id === request.actor.thread_id),
+          (request.actor.role === "group" && owner.agent_thread_id === request.actor.thread_id),
         "FORBIDDEN",
         "Only the Delivery coordinator or main conversation can update execution state",
         3,
@@ -3485,7 +3536,8 @@ export function execute(
         4,
       );
       requireCondition(
-        state === "unknown" || owner.state === "active" ||
+        state === "unknown" ||
+          owner.state === "active" ||
           (owner.state === "merged" && state === "idle"),
         "GROUP_NOT_ACTIVE",
         "Only active delivery units can record runtime execution, except merged closeout idle",
@@ -3497,18 +3549,35 @@ export function execute(
         "Regular delivery unit requires a bound Delivery coordinator before runtime execution",
         4,
       );
-      const cliDispatches = ledger.operations.filter(op => op.kind === "dispatch" && op.target_id === groupId &&
-        op.request.target_type === "group" && (op.request.creation_parameters as any)?.transport === "codex-exec");
-      const cliDispatch = cliDispatches.find(op => op.status === "succeeded");
-      if (state === "running" && cliDispatches.length) requireCondition(
-        owner.lifecycle.workspace_ready === "passed" && !!cliDispatch?.request.development_baseline,
-        "BASELINE_REQUIRED", "Record verified group workspace baseline before running", 4);
-      if (state === "running" && ledger.contract_version >= 3 && owner.delivery_unit_kind === "regular")
-      {
+      const cliDispatches = ledger.operations.filter(
+        (op) =>
+          op.kind === "dispatch" &&
+          op.target_id === groupId &&
+          op.request.target_type === "group" &&
+          (op.request.creation_parameters as any)?.transport === "codex-exec",
+      );
+      const cliDispatch = cliDispatches.find((op) => op.status === "succeeded");
+      if (state === "running" && cliDispatches.length)
+        requireCondition(
+          owner.lifecycle.workspace_ready === "passed" &&
+            !!cliDispatch?.request.development_baseline,
+          "BASELINE_REQUIRED",
+          "Record verified group workspace baseline before running",
+          4,
+        );
+      if (
+        state === "running" &&
+        ledger.contract_version >= 3 &&
+        owner.delivery_unit_kind === "regular"
+      ) {
         requireGroupDispatchGate(ledger, owner);
         requireHandoffAcknowledged(ledger, owner);
       }
-      if (state === "running" && cliDispatch?.request.development_baseline && ledger.contract_version === 3)
+      if (
+        state === "running" &&
+        cliDispatch?.request.development_baseline &&
+        ledger.contract_version === 3
+      )
         requireCondition(
           cliDispatch.request.development_baseline.sha === owner.current_sha,
           "BASELINE_NOT_VERIFIED",
@@ -3523,9 +3592,7 @@ export function execute(
         blocked: ["blocked", "idle", "running"],
       };
       requireCondition(
-        executionTransitions[owner.coordination_execution.state]?.includes(
-          state,
-        ),
+        executionTransitions[owner.coordination_execution.state]?.includes(state),
         "INVALID_TRANSITION",
         "Invalid delivery-unit coordination execution transition",
         3,
@@ -3534,11 +3601,7 @@ export function execute(
       requireCondition(
         waitingFor.every((taskId) => {
           const task = ledger.tasks.find((item) => item.id === taskId);
-          return (
-            task !== undefined &&
-            task.group_id === groupId &&
-            isContributionKind(task.kind)
-          );
+          return task !== undefined && task.group_id === groupId && isContributionKind(task.kind);
         }),
         "INVALID_WAIT_TARGET",
         "Waiting task references must be contribution tasks in the same delivery unit",
@@ -3554,8 +3617,7 @@ export function execute(
         3,
       );
       requireCondition(
-        state !== "blocked" ||
-          (typeof payload.reason === "string" && payload.reason.length > 0),
+        state !== "blocked" || (typeof payload.reason === "string" && payload.reason.length > 0),
         "BLOCK_REASON_REQUIRED",
         "Blocked execution requires a reason",
         3,
@@ -3580,9 +3642,7 @@ export function execute(
       owner.coordination_execution = {
         state,
         reason:
-          payload.reason === null || payload.reason === undefined
-            ? null
-            : string(payload.reason),
+          payload.reason === null || payload.reason === undefined ? null : string(payload.reason),
         waiting_for_task_ids: waitingFor,
       };
       addEvent(
@@ -3596,9 +3656,7 @@ export function execute(
           reason: owner.coordination_execution.reason,
           waiting_for_task_ids: waitingFor,
         },
-        payload.occurred_at
-          ? z.iso.datetime({ offset: false }).parse(payload.occurred_at)
-          : null,
+        payload.occurred_at ? z.iso.datetime({ offset: false }).parse(payload.occurred_at) : null,
       );
       return {
         group_id: groupId,
@@ -3608,15 +3666,10 @@ export function execute(
     case "group-update": {
       const incoming = parse(group, payload.group);
       if (incoming.parent_pr) checkPR(ledger, incoming.parent_pr);
-      const current = find(
-        ledger.groups,
-        (item) => item.id === incoming.id,
-        "Group",
-      );
+      const current = find(ledger.groups, (item) => item.id === incoming.id, "Group");
       if (incoming.parent_pr)
         requireCondition(
-          legacyLedger(ledger) ||
-            prReceipt(ledger, incoming.id, incoming.parent_pr),
+          legacyLedger(ledger) || prReceipt(ledger, incoming.id, incoming.parent_pr),
           "PR_NOT_PUBLISHED",
           "Parent PR must be bound to a successful provider publication receipt",
           4,
@@ -3632,8 +3685,7 @@ export function execute(
       else {
         onlyMain(request.actor);
         requireCondition(
-          current.delivery_unit_kind === "bootstrap" &&
-            current.owner_kind === "main",
+          current.delivery_unit_kind === "bootstrap" && current.owner_kind === "main",
           "FORBIDDEN",
           "Main conversation may update only the bootstrap delivery unit",
           3,
@@ -3668,18 +3720,15 @@ export function execute(
       requireCondition(
         (current.state === "planned" &&
           ["planned", "active", "blocked"].includes(incoming.state)) ||
-          (current.state === "active" &&
-            ["active", "blocked"].includes(incoming.state)) ||
-          (current.state === "blocked" &&
-            ["blocked"].includes(incoming.state)),
+          (current.state === "active" && ["active", "blocked"].includes(incoming.state)) ||
+          (current.state === "blocked" && ["blocked"].includes(incoming.state)),
         "INVALID_TRANSITION",
         "Group merge and closeout require verified operations",
         3,
       );
       requireCondition(
         stable(current.atoms) === stable(incoming.atoms) &&
-          stable(current.coordination_execution) ===
-            stable(incoming.coordination_execution),
+          stable(current.coordination_execution) === stable(incoming.coordination_execution),
         "GROUP_EXECUTION_SEPARATE",
         "Use delivery-unit atom or execution commands for execution state",
         3,
@@ -3754,8 +3803,7 @@ export function execute(
         .strict()
         .parse(payload.provider_observation);
       requireCondition(
-        owner.parent_branch === null ||
-          owner.parent_branch === observation.branch,
+        owner.parent_branch === null || owner.parent_branch === observation.branch,
         "TARGET_MISMATCH",
         "Group parent branch cannot be silently changed",
         3,
@@ -3767,8 +3815,7 @@ export function execute(
         5,
       );
       const cut = ledger.events.find(
-        (event) =>
-          event.type === "cut_applied" && event.data.new_group_id === groupId,
+        (event) => event.type === "cut_applied" && event.data.new_group_id === groupId,
       );
       if (cut) {
         const previous = find(
@@ -3835,10 +3882,7 @@ export function execute(
         "Group has an unresolved merge or cut",
         4,
       );
-      const observation = parse(
-        groupBaseReconciliation,
-        payload.provider_observation,
-      );
+      const observation = parse(groupBaseReconciliation, payload.provider_observation);
       requireCondition(
         observation.source === ledger.repository.provider,
         "EVIDENCE_MISMATCH",
@@ -3915,8 +3959,10 @@ export function execute(
       else {
         const owner = find(ledger.groups, (item) => item.id === target.group_id, "DeliveryUnit");
         requireCondition(
-          typeof target.branch === "string" && target.branch.length > 0 &&
-            typeof owner.parent_branch === "string" && owner.parent_branch.length > 0,
+          typeof target.branch === "string" &&
+            target.branch.length > 0 &&
+            typeof owner.parent_branch === "string" &&
+            owner.parent_branch.length > 0,
           "TASK_PR_BINDING_INCOMPLETE",
           "Task PR binding requires task branch and DeliveryUnit parent branch facts",
           4,
@@ -3928,19 +3974,14 @@ export function execute(
           base_branch: owner.parent_branch,
         };
       }
-      if (target.lifecycle && !legacyLedger(ledger))
-        target.lifecycle.pr_created = "passed";
+      if (target.lifecycle && !legacyLedger(ledger)) target.lifecycle.pr_created = "passed";
       return { task_id: taskId, pr };
     }
     case "task-base": {
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
-      const owner = find(
-        ledger.groups,
-        (item) => item.id === target.group_id,
-        "Group",
-      );
+      const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
       const baseSha = z
         .string()
         .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)
@@ -3954,9 +3995,7 @@ export function execute(
       requireCondition(
         !ledger.operations.some(
           (item) =>
-            item.kind === "merge" &&
-            activeOperation(item) &&
-            item.request.task_id === taskId,
+            item.kind === "merge" && activeOperation(item) && item.request.task_id === taskId,
         ),
         "MERGE_PENDING",
         "Cannot change base while merge is pending",
@@ -3982,7 +4021,12 @@ export function execute(
     }
     case "task-quality-record": {
       const taskId = parse(id, payload.task_id);
-      requireCondition(request.actor.role === "task", "FORBIDDEN", "Only the task Agent may record task quality", 3);
+      requireCondition(
+        request.actor.role === "task",
+        "FORBIDDEN",
+        "Only the task Agent may record task quality",
+        3,
+      );
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
       requireCondition(
@@ -3993,14 +4037,9 @@ export function execute(
         "Task PR must be provider-published and running",
         4,
       );
-      const owner = find(
-        ledger.groups,
-        (item) => item.id === target.group_id,
-        "Group",
-      );
+      const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
       requireCondition(
-        payload.base_sha === owner.current_sha &&
-          target.base_sha === owner.current_sha,
+        payload.base_sha === owner.current_sha && target.base_sha === owner.current_sha,
         "BASE_CHANGED",
         "Quality proof must bind the task and current parent base",
         3,
@@ -4012,12 +4051,12 @@ export function execute(
           review.status === "passed" &&
           review.sha &&
           review.evidence_ref &&
-        review.source === request.actor.thread_id &&
-        review.quality?.task_id === taskId &&
-        review.quality.thread_id === request.actor.thread_id &&
-        stable(review.quality.pr) === stable(taskPrRef(target)) &&
-        review.quality.base_sha === owner.current_sha &&
-        review.quality.head_sha === review.sha,
+          review.source === request.actor.thread_id &&
+          review.quality?.task_id === taskId &&
+          review.quality.thread_id === request.actor.thread_id &&
+          stable(review.quality.pr) === stable(taskPrRef(target)) &&
+          review.quality.base_sha === owner.current_sha &&
+          review.quality.head_sha === review.sha,
         "EVIDENCE_REQUIRED",
         "Task quality evidence must identify the exact task, PR, head, base, acceptance and checks",
         5,
@@ -4032,17 +4071,9 @@ export function execute(
     case "follow-pr-update": {
       const followId = parse(id, payload.follow_pr_id);
       const originTaskId = parse(id, payload.origin_task_id);
-      const target = find(
-        ledger.tasks,
-        (item) => item.id === originTaskId,
-        "Origin task",
-      );
+      const target = find(ledger.tasks, (item) => item.id === originTaskId, "Origin task");
       const groupId = parse(id, payload.origin_group_id);
-      const owner = find(
-        ledger.groups,
-        (item) => item.id === groupId,
-        "Origin group",
-      );
+      const owner = find(ledger.groups, (item) => item.id === groupId, "Origin group");
       requireCondition(
         target.group_id === groupId ||
           target.assignment_history.some((item) => item.group_id === groupId) ||
@@ -4083,10 +4114,7 @@ export function execute(
       );
       requireCondition(
         !ledger.operations.some(
-          (item) =>
-            item.kind === "merge" &&
-            item.target_id === groupId &&
-            activeOperation(item),
+          (item) => item.kind === "merge" && item.target_id === groupId && activeOperation(item),
         ),
         "MERGE_PENDING",
         "Cannot register a follow PR while group merge is pending",
@@ -4110,9 +4138,7 @@ export function execute(
       });
       checkPR(ledger, follow.pr);
       requireCondition(
-        follow.affected_task_ids.every((taskId) =>
-          ledger.tasks.some((item) => item.id === taskId),
-        ),
+        follow.affected_task_ids.every((taskId) => ledger.tasks.some((item) => item.id === taskId)),
         "UNKNOWN_TASK",
         "Follow PR references an unknown task",
       );
@@ -4256,34 +4282,33 @@ export function execute(
             5,
           );
         }
-        if (mode === "parent") requireCondition(
-          legacyLedger(ledger) ||
-            (owner.lifecycle.pr_created === "passed" &&
-              prReceipt(ledger, groupId, pr, expectedSha, headSha)),
-          "PR_NOT_READY",
-          "Parent PR must be provider-published before merge",
-          4,
-        );
+        if (mode === "parent")
+          requireCondition(
+            legacyLedger(ledger) ||
+              (owner.lifecycle.pr_created === "passed" &&
+                prReceipt(ledger, groupId, pr, expectedSha, headSha)),
+            "PR_NOT_READY",
+            "Parent PR must be provider-published before merge",
+            4,
+          );
         requireCondition(
           ledger.tasks
-            .filter(
+            .filter((item) => item.group_id === groupId && isContributionKind(item.kind))
+            .every(
               (item) =>
-                item.group_id === groupId && isContributionKind(item.kind),
-            )
-            .every((item) =>
-              ["integrated", "closed"].includes(item.state) ||
-              (item.execution_owner === "main" &&
-                item.conversation_policy === "main_owned" &&
-                item.state === "running" &&
-                item.atoms.every((atom) => atom.status === "completed"))),
+                ["integrated", "closed"].includes(item.state) ||
+                (item.execution_owner === "main" &&
+                  item.conversation_policy === "main_owned" &&
+                  item.state === "running" &&
+                  item.atoms.every((atom) => atom.status === "completed")),
+            ),
           "TASKS_PENDING",
           "Contribution tasks are not integrated",
           4,
         );
         requireCondition(
           !ledger.follow_prs.some(
-            (item) =>
-              item.origin_group_id === groupId && item.state !== "merged",
+            (item) => item.origin_group_id === groupId && item.state !== "merged",
           ),
           "FOLLOW_PR_PENDING",
           "Known follow PRs must merge first",
@@ -4293,9 +4318,7 @@ export function execute(
       } else {
         const follow = find(
           ledger.follow_prs,
-          (item) =>
-            item.id === string(payload.follow_pr_id) &&
-            item.origin_group_id === groupId,
+          (item) => item.id === string(payload.follow_pr_id) && item.origin_group_id === groupId,
           "Follow PR",
         );
         requireCondition(
@@ -4318,8 +4341,7 @@ export function execute(
           requireCondition(
             ledger.tasks.some(
               (item) =>
-                item.id === follow.origin_task_id &&
-                item.thread_id === request.actor.thread_id,
+                item.id === follow.origin_task_id && item.thread_id === request.actor.thread_id,
             ),
             "FORBIDDEN",
             "Follow PR belongs to another task",
@@ -4342,10 +4364,7 @@ export function execute(
       );
       requireCondition(
         !ledger.operations.some(
-          (item) =>
-            item.kind === "cut" &&
-            item.target_id === groupId &&
-            activeOperation(item),
+          (item) => item.kind === "cut" && item.target_id === groupId && activeOperation(item),
         ),
         "CUT_PENDING",
         "The parent branch is being cut",
@@ -4359,10 +4378,7 @@ export function execute(
       );
       requireCondition(
         !ledger.operations.some(
-          (item) =>
-            item.kind === "merge" &&
-            item.target_id === groupId &&
-            activeOperation(item),
+          (item) => item.kind === "merge" && item.target_id === groupId && activeOperation(item),
         ),
         "MERGE_PENDING",
         "A merge into this group is already pending",
@@ -4392,8 +4408,7 @@ export function execute(
     case "merge-resolve": {
       const op = find(
         ledger.operations,
-        (item) =>
-          item.id === string(payload.operation_id) && item.kind === "merge",
+        (item) => item.id === string(payload.operation_id) && item.kind === "merge",
         "Merge",
       );
       requireCondition(
@@ -4402,9 +4417,7 @@ export function execute(
         "Merge claim is not active or belongs to another actor",
         3,
       );
-      const outcome = z
-        .enum(["succeeded", "failed", "unknown"])
-        .parse(payload.outcome);
+      const outcome = z.enum(["succeeded", "failed", "unknown"]).parse(payload.outcome);
       if (outcome === "succeeded") {
         const evidence = parse(fact, payload.provider_evidence);
         requireCondition(
@@ -4435,11 +4448,7 @@ export function execute(
           "Provider observation does not match the merge claim",
           5,
         );
-        const owner = find(
-          ledger.groups,
-          (item) => item.id === op.target_id,
-          "Group",
-        );
+        const owner = find(ledger.groups, (item) => item.id === op.target_id, "Group");
         if (op.request.target_branch === owner.parent_branch)
           requireCondition(
             owner.current_sha === op.expected_sha,
@@ -4448,7 +4457,7 @@ export function execute(
             3,
           );
         const subject =
-          (op.request.mode === "parent" || op.request.mode === "parent-followup")
+          op.request.mode === "parent" || op.request.mode === "parent-followup"
             ? owner.id
             : op.request.mode === "follow"
               ? op.request.follow_pr_id
@@ -4462,8 +4471,7 @@ export function execute(
         if (op.request.mode === "parent" || op.request.mode === "parent-followup") {
           requireCondition(
             !ledger.follow_prs.some(
-              (item) =>
-                item.origin_group_id === owner.id && item.state !== "merged",
+              (item) => item.origin_group_id === owner.id && item.state !== "merged",
             ),
             "FOLLOW_PR_PENDING",
             "Known follow PRs must merge first",
@@ -4473,7 +4481,8 @@ export function execute(
           if (op.request.mode === "parent-followup") owner.current_sha = evidence.sha;
           if (op.request.mode === "parent") {
             if (ledger.contract_version !== 3) owner.parent_pr = op.request.pr;
-            else owner.pr = {
+            else
+              owner.pr = {
                 state: "merged",
                 pr: op.request.pr,
                 parent_branch: owner.parent_branch,
@@ -4481,8 +4490,7 @@ export function execute(
               };
           }
           owner.merge_sha = evidence.sha;
-          if (owner.lifecycle && !legacyLedger(ledger))
-            owner.lifecycle.pr_merged = "passed";
+          if (owner.lifecycle && !legacyLedger(ledger)) owner.lifecycle.pr_merged = "passed";
           for (const task of ledger.tasks.filter(
             (item) =>
               item.group_id === owner.id &&
@@ -4494,38 +4502,33 @@ export function execute(
             task.finished_at = evidence.observed_at;
           }
         } else if (op.request.mode === "follow") {
-          const follow = find(
-            ledger.follow_prs,
-            (item) => item.id === subject,
-            "Follow PR",
-          );
+          const follow = find(ledger.follow_prs, (item) => item.id === subject, "Follow PR");
           follow.state = "merged";
           follow.merge_fact_id = evidence.id;
-          if (op.request.target_branch === owner.parent_branch)
-            owner.current_sha = evidence.sha;
+          if (op.request.target_branch === owner.parent_branch) owner.current_sha = evidence.sha;
         } else {
-          const target = find(
-            ledger.tasks,
-            (item) => item.id === subject,
-            "Task",
-          );
+          const target = find(ledger.tasks, (item) => item.id === subject, "Task");
           owner.current_sha = evidence.sha;
           target.state = "integrated";
           if (!legacyLedger(ledger)) {
-            const owner = find(ledger.groups, (item) => item.id === target.group_id, "DeliveryUnit");
-            target.pr = ledger.contract_version !== 3
-              ? op.request.pr
-              : {
-                  state: "merged",
-                  pr: op.request.pr,
-                  branch: target.branch,
-                  merge_sha: evidence.sha,
-                };
+            const owner = find(
+              ledger.groups,
+              (item) => item.id === target.group_id,
+              "DeliveryUnit",
+            );
+            target.pr =
+              ledger.contract_version !== 3
+                ? op.request.pr
+                : {
+                    state: "merged",
+                    pr: op.request.pr,
+                    branch: target.branch,
+                    merge_sha: evidence.sha,
+                  };
             if (owner.pr?.state === "published") owner.pr = { ...owner.pr };
           }
           target.finished_at = evidence.observed_at;
-          if (target.lifecycle && !legacyLedger(ledger))
-            target.lifecycle.pr_merged = "passed";
+          if (target.lifecycle && !legacyLedger(ledger)) target.lifecycle.pr_merged = "passed";
         }
         ledger.facts.push(evidence);
         op.receipt_fact_id = evidence.id;
@@ -4549,8 +4552,7 @@ export function execute(
       op.status = outcome;
       op.updated_at = now();
       const observedAt = op.receipt_fact_id
-        ? (ledger.facts.find((item) => item.id === op.receipt_fact_id)
-            ?.observed_at ?? null)
+        ? (ledger.facts.find((item) => item.id === op.receipt_fact_id)?.observed_at ?? null)
         : null;
       addEvent(
         ledger,
@@ -4562,18 +4564,11 @@ export function execute(
           task_id: op.request.task_id ?? null,
           outcome,
           fact_id: op.receipt_fact_id,
-          group_snapshot: structuredClone(
-            ledger.groups.find((item) => item.id === op.target_id)!,
-          ),
+          group_snapshot: structuredClone(ledger.groups.find((item) => item.id === op.target_id)!),
         },
         observedAt,
       );
-      const directive = notificationDirective(
-        ledger,
-        request,
-        payload,
-        outcome === "succeeded",
-      );
+      const directive = notificationDirective(ledger, request, payload, outcome === "succeeded");
       const notice = directive.enabled
         ? addNotificationIntent(ledger, request, directive.recipient_thread_id!)
         : null;
@@ -4589,11 +4584,7 @@ export function execute(
       onlyMain(request.actor);
       authorizedAction(ledger, "cut");
       const current = currentPlan();
-      const owner = find(
-        ledger.groups,
-        (item) => item.id === string(payload.group_id),
-        "Group",
-      );
+      const owner = find(ledger.groups, (item) => item.id === string(payload.group_id), "Group");
       requireCondition(
         owner.state === "active" && owner.current_sha,
         "GROUP_NOT_READY",
@@ -4622,9 +4613,7 @@ export function execute(
       requireCondition(
         !ledger.operations.some(
           (item) =>
-            item.kind === "cut" &&
-            item.request.rule_id === rule.id &&
-            item.status === "succeeded",
+            item.kind === "cut" && item.request.rule_id === rule.id && item.status === "succeeded",
         ),
         "CUT_ALREADY_APPLIED",
         "Cut rule was already applied",
@@ -4638,9 +4627,7 @@ export function execute(
             item.status !== "cancelled" &&
             !ledger.operations.some(
               (op) =>
-                op.kind === "cut" &&
-                op.request.rule_id === item.id &&
-                op.status === "succeeded",
+                op.kind === "cut" && op.request.rule_id === item.id && op.status === "succeeded",
             ),
         ),
         "CUT_ORDER",
@@ -4662,27 +4649,15 @@ export function execute(
       );
       requireCondition(
         !ledger.operations.some(
-          (item) =>
-            item.kind === "cut" &&
-            item.target_id === owner.id &&
-            activeOperation(item),
+          (item) => item.kind === "cut" && item.target_id === owner.id && activeOperation(item),
         ),
         "CUT_PENDING",
         "Cut already pending",
         4,
       );
-      const op = addOperation(
-        ledger,
-        request,
-        "cut",
-        owner.id,
-        owner.current_sha,
-      );
+      const op = addOperation(ledger, request, "cut", owner.id, owner.current_sha);
       const drained = !ledger.operations.some(
-        (item) =>
-          item.kind === "merge" &&
-          item.target_id === owner.id &&
-          activeOperation(item),
+        (item) => item.kind === "merge" && item.target_id === owner.id && activeOperation(item),
       );
       addEvent(ledger, request, "cut_claimed", owner.id, {
         operation_id: op.id,
@@ -4699,27 +4674,19 @@ export function execute(
       const op = find(
         ledger.operations,
         (item) =>
-          item.id === string(payload.operation_id) &&
-          item.kind === "cut" &&
-          activeOperation(item),
+          item.id === string(payload.operation_id) && item.kind === "cut" && activeOperation(item),
         "Cut",
       );
       requireCondition(
         !ledger.operations.some(
           (item) =>
-            item.kind === "merge" &&
-            item.target_id === op.target_id &&
-            activeOperation(item),
+            item.kind === "merge" && item.target_id === op.target_id && activeOperation(item),
         ),
         "MERGE_PENDING",
         "Resolve pending merges before cutting",
         4,
       );
-      const owner = find(
-        ledger.groups,
-        (item) => item.id === op.target_id,
-        "Group",
-      );
+      const owner = find(ledger.groups, (item) => item.id === op.target_id, "Group");
       requireCondition(
         !publicationPendingForGroup(ledger, owner.id),
         "PUBLICATION_PENDING",
@@ -4775,11 +4742,7 @@ export function execute(
         "Next group must not have pre-existing runtime identities",
         3,
       );
-      const rule = find(
-        current.cut_rules,
-        (item) => item.id === op.request.rule_id,
-        "Cut rule",
-      );
+      const rule = find(current.cut_rules, (item) => item.id === op.request.rule_id, "Cut rule");
       const integrated = ledger.tasks.filter(
         (item) =>
           item.group_id === owner.id &&
@@ -4788,16 +4751,13 @@ export function execute(
       );
       const included = z.array(id).parse(payload.included_task_ids);
       requireCondition(
-        stable([...included].sort()) ===
-          stable(integrated.map((item) => item.id).sort()),
+        stable([...included].sort()) === stable(integrated.map((item) => item.id).sort()),
         "CUT_SCOPE_MISMATCH",
         "Included tasks differ from current integrated tasks",
         3,
       );
       const taskSnapshots = ledger.tasks
-        .filter(
-          (item) => item.group_id === owner.id && isContributionKind(item.kind),
-        )
+        .filter((item) => item.group_id === owner.id && isContributionKind(item.kind))
         .map((item) => structuredClone(item));
       const reassigned = ledger.tasks.filter(
         (item) =>
@@ -4850,30 +4810,19 @@ export function execute(
     case "fact-record": {
       const observed = parse(fact, payload.fact);
       requireCondition(
-        ![
-          "pr_merged",
-          "task_quality",
-          "branch_published",
-          "pr_published",
-        ].includes(observed.kind),
+        !["pr_merged", "task_quality", "branch_published", "pr_published"].includes(observed.kind),
         "INVALID_FACT",
         "Quality, merge and publication facts require their dedicated operation",
         3,
       );
       requireCondition(
-        observed.evidence_ref &&
-          observed.source &&
-          observed.status !== "unknown",
+        observed.evidence_ref && observed.source && observed.status !== "unknown",
         "EVIDENCE_REQUIRED",
         "Observed fact requires a source and evidence",
         5,
       );
-      const owner = ledger.groups.find(
-        (item) => item.id === observed.subject_id,
-      );
-      const target = ledger.tasks.find(
-        (item) => item.id === observed.subject_id,
-      );
+      const owner = ledger.groups.find((item) => item.id === observed.subject_id);
+      const target = ledger.tasks.find((item) => item.id === observed.subject_id);
       requireCondition(owner || target, "NOT_FOUND", "Fact subject not found");
       if (target) ownerOfTask(ledger, request, target.id);
       if (owner && request.actor.role === "group")
@@ -4897,8 +4846,7 @@ export function execute(
           5,
         );
       if (observed.kind === "published" || observed.kind === "deployed") {
-        const operationKind =
-          observed.kind === "published" ? "release" : "deploy";
+        const operationKind = observed.kind === "published" ? "release" : "deploy";
         requireCondition(
           ledger.operations.some(
             (item) =>
@@ -4923,49 +4871,31 @@ export function execute(
       authorizedAction(ledger, action);
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
-      protectedActionApproved(
-        ledger,
-        action,
-        taskId,
-        string(payload.owner_approval_id),
-      );
+      protectedActionApproved(ledger, action, taskId, string(payload.owner_approval_id));
       const current = currentPlan();
       const actionId = parse(id, payload.action_id);
       const planned = find(
         current.actions,
-        (item) =>
-          item.id === actionId &&
-          item.kind === action &&
-          item.task_id === taskId,
+        (item) => item.id === actionId && item.kind === action && item.task_id === taskId,
         "Planned action",
       );
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
       requireCondition(
         taskExecutionState(target) === "running" &&
-          (action === "release"
-            ? target.kind === "release"
-            : target.kind === "deployment"),
+          (action === "release" ? target.kind === "release" : target.kind === "deployment"),
         "TASK_MISMATCH",
         "Active task does not match the action",
         3,
       );
-      const owner = find(
-        ledger.groups,
-        (item) => item.id === target.group_id,
-        "Group",
-      );
+      const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
       requireCondition(
-        owner.state === "merged" &&
-          owner.merge_sha &&
-          payload.expected_sha === owner.merge_sha,
+        owner.state === "merged" && owner.merge_sha && payload.expected_sha === owner.merge_sha,
         "BASE_CHANGED",
         "Action must bind the group's merged SHA",
         5,
       );
       requireCondition(
-        !ledger.operations.some(
-          (item) => item.target_id === taskId && activeOperation(item),
-        ),
+        !ledger.operations.some((item) => item.target_id === taskId && activeOperation(item)),
         "OPERATION_PENDING",
         "Task already has an unresolved action",
         4,
@@ -4987,8 +4917,7 @@ export function execute(
       const op = find(
         ledger.operations,
         (item) =>
-          item.id === string(payload.operation_id) &&
-          ["release", "deploy"].includes(item.kind),
+          item.id === string(payload.operation_id) && ["release", "deploy"].includes(item.kind),
         "Action",
       );
       requireCondition(
@@ -4997,14 +4926,11 @@ export function execute(
         "Action claim is not active or belongs to another actor",
         3,
       );
-      const outcome = z
-        .enum(["succeeded", "failed", "unknown"])
-        .parse(payload.outcome);
+      const outcome = z.enum(["succeeded", "failed", "unknown"]).parse(payload.outcome);
       if (outcome === "succeeded") {
         const evidence = parse(fact, payload.provider_evidence);
         requireCondition(
-          evidence.kind ===
-            (op.kind === "release" ? "published" : "deployed") &&
+          evidence.kind === (op.kind === "release" ? "published" : "deployed") &&
             evidence.status === "passed" &&
             evidence.subject_id === op.target_id &&
             evidence.sha &&
@@ -5023,8 +4949,7 @@ export function execute(
             .strict()
             .parse(payload.lineage_evidence);
           requireCondition(
-            lineage.source_sha === op.expected_sha &&
-              lineage.publication_sha === evidence.sha,
+            lineage.source_sha === op.expected_sha && lineage.publication_sha === evidence.sha,
             "LINEAGE_MISMATCH",
             "Publication lineage does not match the source and actual SHA",
             5,
@@ -5111,8 +5036,9 @@ export function execute(
         "Notification event",
       );
       requireCondition(
-        original.actor_id === request.actor.thread_id || (request.actor.role === "main" &&
-          object(payload.provider_receipt).provider === "codex-app-tools"),
+        original.actor_id === request.actor.thread_id ||
+          (request.actor.role === "main" &&
+            object(payload.provider_receipt).provider === "codex-app-tools"),
         "FORBIDDEN",
         "Only the event sender or native main coordinator can record notification delivery",
         3,
@@ -5129,20 +5055,23 @@ export function execute(
         "Unknown delivery must be reconciled before another delivery attempt",
         5,
       );
-      const outcome = z
-        .enum(["sent", "failed", "unknown"])
-        .parse(payload.outcome);
-      requireCondition((!requiresNativeDelivery(ledger, notice.id) || object(payload.provider_receipt).provider === "codex-app-tools") &&
-        (object(payload.provider_receipt).provider !== "codex-app-tools" || outcome === "unknown"),
-        "NATIVE_RECEIPT_REQUIRED", "Native delivery must claim an unknown attempt before reconciling the platform receipt", 5);
+      const outcome = z.enum(["sent", "failed", "unknown"]).parse(payload.outcome);
+      requireCondition(
+        (!requiresNativeDelivery(ledger, notice.id) ||
+          object(payload.provider_receipt).provider === "codex-app-tools") &&
+          (object(payload.provider_receipt).provider !== "codex-app-tools" ||
+            outcome === "unknown"),
+        "NATIVE_RECEIPT_REQUIRED",
+        "Native delivery must claim an unknown attempt before reconciling the platform receipt",
+        5,
+      );
       requireNotificationRecipientActive(ledger, notice.recipient_thread_id);
       const attemptId = parse(id, payload.delivery_attempt_id);
       requireCondition(
         !ledger.events.some(
           (event) =>
-            ["notification_delivery_resolved", "notification_sent"].includes(
-              event.type,
-            ) && event.data.delivery_attempt_id === attemptId,
+            ["notification_delivery_resolved", "notification_sent"].includes(event.type) &&
+            event.data.delivery_attempt_id === attemptId,
         ),
         "ATTEMPT_EXISTS",
         "Delivery attempt identity already exists",
@@ -5160,13 +5089,20 @@ export function execute(
           evidence_ref: z.string().min(1),
           message_id: z.string().min(1).nullable().optional(),
           recipient_thread_id: z.string().min(1).optional(),
-          prompt_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+          prompt_digest: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .optional(),
         })
         .strict()
         .parse(payload.provider_receipt);
       if (receipt.provider === "codex-app-tools") {
-        requireCondition(receipt.recipient_thread_id === notice.recipient_thread_id && !!receipt.prompt_digest,
-          "NATIVE_RECEIPT_REQUIRED", "Native delivery must bind the claimed recipient and prompt", 5);
+        requireCondition(
+          receipt.recipient_thread_id === notice.recipient_thread_id && !!receipt.prompt_digest,
+          "NATIVE_RECEIPT_REQUIRED",
+          "Native delivery must bind the claimed recipient and prompt",
+          5,
+        );
       }
       notice.status = outcome;
       notice.delivery_status = outcome;
@@ -5181,22 +5117,16 @@ export function execute(
             : string(payload.error)
           : null;
       notice.updated_at = now();
-      addEvent(
-        ledger,
-        request,
-        "notification_delivery_resolved",
-        notice.event_id,
-        {
-          notification_id: notice.id,
-          delivery_attempt_id: attemptId,
-          outcome,
-          provider: receipt.provider,
-          evidence_ref: receipt.evidence_ref,
-          message_id: receipt.message_id ?? null,
-          recipient_thread_id: receipt.recipient_thread_id ?? null,
-          prompt_digest: receipt.prompt_digest ?? null,
-        },
-      );
+      addEvent(ledger, request, "notification_delivery_resolved", notice.event_id, {
+        notification_id: notice.id,
+        delivery_attempt_id: attemptId,
+        outcome,
+        provider: receipt.provider,
+        evidence_ref: receipt.evidence_ref,
+        message_id: receipt.message_id ?? null,
+        recipient_thread_id: receipt.recipient_thread_id ?? null,
+        prompt_digest: receipt.prompt_digest ?? null,
+      });
       return {
         notification_id: notice.id,
         delivery_attempt_id: attemptId,
@@ -5217,8 +5147,7 @@ export function execute(
         "Notification event",
       );
       requireCondition(
-        request.actor.role === "main" ||
-          original.actor_id === request.actor.thread_id,
+        request.actor.role === "main" || original.actor_id === request.actor.thread_id,
         "FORBIDDEN",
         "Only the sender or main conversation can reconcile delivery",
         3,
@@ -5235,19 +5164,28 @@ export function execute(
         "Only an unknown delivery can be reconciled",
         4,
       );
-      const nativeClaim = ledger.events.find(event => event.type === "notification_delivery_resolved" &&
-        event.data.delivery_attempt_id === notice.last_attempt_id && event.data.provider === "codex-app-tools" && event.data.outcome === "unknown");
+      const nativeClaim = ledger.events.find(
+        (event) =>
+          event.type === "notification_delivery_resolved" &&
+          event.data.delivery_attempt_id === notice.last_attempt_id &&
+          event.data.provider === "codex-app-tools" &&
+          event.data.outcome === "unknown",
+      );
       const nativeAttempt = !!nativeClaim;
-      if (nativeAttempt || payload.delivery_attempt_id !== undefined) requireCondition(payload.delivery_attempt_id === notice.last_attempt_id,
-        "ATTEMPT_MISMATCH", "Receipt must match the active delivery attempt", 3);
+      if (nativeAttempt || payload.delivery_attempt_id !== undefined)
+        requireCondition(
+          payload.delivery_attempt_id === notice.last_attempt_id,
+          "ATTEMPT_MISMATCH",
+          "Receipt must match the active delivery attempt",
+          3,
+        );
       const reconciliationId = parse(id, payload.reconciliation_id);
       requireCondition(
         !ledger.events.some(
           (event) =>
-            [
-              "notification_delivery_resolved",
-              "notification_delivery_reconciled",
-            ].includes(event.type) &&
+            ["notification_delivery_resolved", "notification_delivery_reconciled"].includes(
+              event.type,
+            ) &&
             (event.data.delivery_attempt_id === reconciliationId ||
               event.data.reconciliation_id === reconciliationId),
         ),
@@ -5255,25 +5193,35 @@ export function execute(
         "Reconciliation identity already exists",
         3,
       );
-      const outcome = z
-        .enum(["sent", "failed", "unknown"])
-        .parse(payload.outcome);
+      const outcome = z.enum(["sent", "failed", "unknown"]).parse(payload.outcome);
       const receipt = z
         .object({
           provider: z.string().min(1),
           evidence_ref: z.string().min(1),
           message_id: z.string().min(1).nullable().optional(),
           recipient_thread_id: z.string().min(1).optional(),
-          prompt_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+          prompt_digest: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .optional(),
         })
         .strict()
         .parse(payload.provider_receipt);
-      if (nativeAttempt || receipt.provider === "codex-app-tools") requireCondition(nativeAttempt && receipt.provider === "codex-app-tools",
-        "NATIVE_RECEIPT_REQUIRED", "Native attempt requires a matching platform provider", 5);
-      if (nativeClaim?.data.prompt_digest) requireCondition(
-        receipt.recipient_thread_id === nativeClaim.data.recipient_thread_id &&
-        receipt.prompt_digest === nativeClaim.data.prompt_digest,
-        "NATIVE_RECEIPT_REQUIRED", "Platform receipt does not match the claimed recipient and prompt", 5);
+      if (nativeAttempt || receipt.provider === "codex-app-tools")
+        requireCondition(
+          nativeAttempt && receipt.provider === "codex-app-tools",
+          "NATIVE_RECEIPT_REQUIRED",
+          "Native attempt requires a matching platform provider",
+          5,
+        );
+      if (nativeClaim?.data.prompt_digest)
+        requireCondition(
+          receipt.recipient_thread_id === nativeClaim.data.recipient_thread_id &&
+            receipt.prompt_digest === nativeClaim.data.prompt_digest,
+          "NATIVE_RECEIPT_REQUIRED",
+          "Platform receipt does not match the claimed recipient and prompt",
+          5,
+        );
       notice.status = outcome;
       notice.delivery_status = outcome;
       notice.ack_status = "unacknowledged";
@@ -5285,22 +5233,16 @@ export function execute(
             : string(payload.error)
           : null;
       notice.updated_at = now();
-      addEvent(
-        ledger,
-        request,
-        "notification_delivery_reconciled",
-        notice.event_id,
-        {
-          notification_id: notice.id,
-          reconciliation_id: reconciliationId,
-          outcome,
-          provider: receipt.provider,
-          evidence_ref: receipt.evidence_ref,
-          message_id: receipt.message_id ?? null,
-          recipient_thread_id: receipt.recipient_thread_id ?? null,
-          prompt_digest: receipt.prompt_digest ?? null,
-        },
-      );
+      addEvent(ledger, request, "notification_delivery_reconciled", notice.event_id, {
+        notification_id: notice.id,
+        reconciliation_id: reconciliationId,
+        outcome,
+        provider: receipt.provider,
+        evidence_ref: receipt.evidence_ref,
+        message_id: receipt.message_id ?? null,
+        recipient_thread_id: receipt.recipient_thread_id ?? null,
+        prompt_digest: receipt.prompt_digest ?? null,
+      });
       return {
         notification_id: notice.id,
         reconciliation_id: reconciliationId,
@@ -5310,15 +5252,23 @@ export function execute(
       };
     }
     case "notification-sent": {
-      requireCondition(object(payload.provider_receipt).provider !== "codex-app-tools",
-        "NATIVE_RECEIPT_REQUIRED", "Native delivery requires a claimed attempt and reconciled platform receipt", 5);
+      requireCondition(
+        object(payload.provider_receipt).provider !== "codex-app-tools",
+        "NATIVE_RECEIPT_REQUIRED",
+        "Native delivery requires a claimed attempt and reconciled platform receipt",
+        5,
+      );
       const notice = find(
         ledger.notifications,
         (item) => item.id === string(payload.notification_id),
         "Notification",
       );
-      requireCondition(!requiresNativeDelivery(ledger, notice.id), "NATIVE_RECEIPT_REQUIRED",
-        "Native delivery requires a claimed attempt and reconciled platform receipt", 5);
+      requireCondition(
+        !requiresNativeDelivery(ledger, notice.id),
+        "NATIVE_RECEIPT_REQUIRED",
+        "Native delivery requires a claimed attempt and reconciled platform receipt",
+        5,
+      );
       const original = find(
         ledger.events,
         (item) => item.id === notice.event_id,
@@ -5398,23 +5348,24 @@ export function execute(
     }
     case "resource-update": {
       onlyMain(request.actor);
-      const incoming = ledgerSchema.shape.resources.element.parse(
-        payload.resource,
-      );
+      const incoming = ledgerSchema.shape.resources.element.parse(payload.resource);
       const existing = ledger.resources.find((item) => item.id === incoming.id);
       if (existing) {
         requireCondition(
-          existing.kind === incoming.kind &&
-            existing.target === incoming.target,
+          existing.kind === incoming.kind && existing.target === incoming.target,
           "RESOURCE_MISMATCH",
           "Resource identity cannot change",
           3,
         );
         requireCondition(
-          existing.status !== "closed" && existing.status !== "not_applicable" ||
-            existing.kind === "conversation" && existing.status === "closed" &&
-            incoming.status === "unarchive_unknown" && incoming.archive_policy === "manual" &&
-            !!incoming.operation_id && incoming.operation_id !== existing.operation_id && !!incoming.evidence_ref,
+          (existing.status !== "closed" && existing.status !== "not_applicable") ||
+            (existing.kind === "conversation" &&
+              existing.status === "closed" &&
+              incoming.status === "unarchive_unknown" &&
+              incoming.archive_policy === "manual" &&
+              !!incoming.operation_id &&
+              incoming.operation_id !== existing.operation_id &&
+              !!incoming.evidence_ref),
           "RESOURCE_TERMINAL",
           "Resource is already terminal",
           3,
@@ -5440,8 +5391,7 @@ export function execute(
     case "run-complete": {
       onlyMain(request.actor);
       requireCondition(
-        ledger.groups.length > 0 &&
-          ledger.groups.every((item) => item.state === "closed"),
+        ledger.groups.length > 0 && ledger.groups.every((item) => item.state === "closed"),
         "GROUPS_PENDING",
         "All groups must be closed",
         4,
@@ -5541,8 +5491,7 @@ export function execute(
         4,
       );
       owner.state = "closed";
-      if (owner.lifecycle && !legacyLedger(ledger))
-        owner.lifecycle.closed = "passed";
+      if (owner.lifecycle && !legacyLedger(ledger)) owner.lifecycle.closed = "passed";
       if (closeout?.lifecycle_stage === "closed") closeout.status = "completed";
       addEvent(ledger, request, "group_updated", groupId, {
         group_id: groupId,
@@ -5564,60 +5513,150 @@ export function execute(
     case "group-closeout-reconcile": {
       const groupId = parse(id, payload.group_id);
       const owner = find(ledger.groups, (item) => item.id === groupId, "Group");
-      requireCondition(ownsGroup(ledger, request.actor, owner), "FORBIDDEN", "Only the bound Delivery coordinator can reconcile closeout", 3);
+      requireCondition(
+        ownsGroup(ledger, request.actor, owner),
+        "FORBIDDEN",
+        "Only the bound Delivery coordinator can reconcile closeout",
+        3,
+      );
       const planId = parse(id, payload.plan_id);
-      requireCondition(planId === ledger.execution_plan_id, "PLAN_MISMATCH", "Closeout reconciliation must target the execution plan", 4);
+      requireCondition(
+        planId === ledger.execution_plan_id,
+        "PLAN_MISMATCH",
+        "Closeout reconciliation must target the execution plan",
+        4,
+      );
       const outcome = z.enum(["valid", "invalid", "unknown"]).parse(payload.outcome);
-      const observation = z.object({
-        pr: externalRef,
-        provider_state: z.enum(["merged", "closed", "open", "unknown"]),
-        merge_sha: z.string().nullable(),
-        source: z.string().min(1),
-        observed_at: z.iso.datetime({ offset: false }),
-        evidence_ref: z.string().min(1),
-      }).strict().parse(payload.provider_observation);
+      const observation = z
+        .object({
+          pr: externalRef,
+          provider_state: z.enum(["merged", "closed", "open", "unknown"]),
+          merge_sha: z.string().nullable(),
+          source: z.string().min(1),
+          observed_at: z.iso.datetime({ offset: false }),
+          evidence_ref: z.string().min(1),
+        })
+        .strict()
+        .parse(payload.provider_observation);
       const canonicalPr = deliveryUnitPr(owner);
-      requireCondition(!canonicalPr || stable(canonicalPr) === stable(observation.pr), "TARGET_MISMATCH", "Closeout observation PR does not match the DeliveryUnit PR", 5);
-      requireCondition(observation.source === ledger.repository.provider, "EVIDENCE_MISMATCH", "Closeout evidence source does not match the bound repository", 5);
+      requireCondition(
+        !canonicalPr || stable(canonicalPr) === stable(observation.pr),
+        "TARGET_MISMATCH",
+        "Closeout observation PR does not match the DeliveryUnit PR",
+        5,
+      );
+      requireCondition(
+        observation.source === ledger.repository.provider,
+        "EVIDENCE_MISMATCH",
+        "Closeout evidence source does not match the bound repository",
+        5,
+      );
       const closeoutEventId = parse(id, payload.closeout_event_id);
-      requireCondition(ledger.events.some((event) => event.id === closeoutEventId && event.subject_id === groupId && event.data.state === "closed"), "EVIDENCE_REQUIRED", "Original closeout event is not present", 5);
+      requireCondition(
+        ledger.events.some(
+          (event) =>
+            event.id === closeoutEventId &&
+            event.subject_id === groupId &&
+            event.data.state === "closed",
+        ),
+        "EVIDENCE_REQUIRED",
+        "Original closeout event is not present",
+        5,
+      );
       const previousState = owner.state;
-      if (outcome === "invalid") { owner.state = "blocked"; owner.lifecycle.closed = "blocked"; }
-      addEvent(ledger, request, "group_updated", groupId, { operation: "closeout-reconcile", group_id: groupId, plan_id: planId, closeout_event_id: closeoutEventId, reconciliation_id: parse(id, payload.reconciliation_id), outcome, reason: string(payload.reason), evidence_refs: z.array(z.string().min(1)).parse(payload.evidence_refs), provider_observation: observation, previous_state: previousState, state: owner.state, group_snapshot: structuredClone(owner) });
-      return { group_id: groupId, state: owner.state, outcome, reconciliation_id: payload.reconciliation_id };
+      if (outcome === "invalid") {
+        owner.state = "blocked";
+        owner.lifecycle.closed = "blocked";
+      }
+      addEvent(ledger, request, "group_updated", groupId, {
+        operation: "closeout-reconcile",
+        group_id: groupId,
+        plan_id: planId,
+        closeout_event_id: closeoutEventId,
+        reconciliation_id: parse(id, payload.reconciliation_id),
+        outcome,
+        reason: string(payload.reason),
+        evidence_refs: z.array(z.string().min(1)).parse(payload.evidence_refs),
+        provider_observation: observation,
+        previous_state: previousState,
+        state: owner.state,
+        group_snapshot: structuredClone(owner),
+      });
+      return {
+        group_id: groupId,
+        state: owner.state,
+        outcome,
+        reconciliation_id: payload.reconciliation_id,
+      };
     }
     case "group-reopen": {
       const groupId = parse(id, payload.group_id);
       const owner = find(ledger.groups, (item) => item.id === groupId, "Group");
-      requireCondition(ownsGroup(ledger, request.actor, owner), "FORBIDDEN", "Only the bound Delivery coordinator can reopen a DeliveryUnit", 3);
-      requireCondition(owner.state === "blocked", "INVALID_TRANSITION", "Only a blocked DeliveryUnit can be reopened", 3);
+      requireCondition(
+        ownsGroup(ledger, request.actor, owner),
+        "FORBIDDEN",
+        "Only the bound Delivery coordinator can reopen a DeliveryUnit",
+        3,
+      );
+      requireCondition(
+        owner.state === "blocked",
+        "INVALID_TRANSITION",
+        "Only a blocked DeliveryUnit can be reopened",
+        3,
+      );
       const planId = parse(id, payload.plan_id);
-      requireCondition(planId === ledger.execution_plan_id && approved(ledger).lifecycle === "approved", "PLAN_NOT_APPROVED", "Recovery requires the approved execution plan", 4);
-      protectedActionApproved(ledger, "delivery_unit_recovery", groupId, string(payload.recovery_id));
-      requireCondition(!ledger.operations.some((item) => item.target_id === groupId && activeOperation(item)), "OPERATION_PENDING", "DeliveryUnit has unresolved operations", 4);
-      const latest = ledger.events.filter((event) => event.subject_id === groupId && event.data.operation === "closeout-reconcile").at(-1);
-      requireCondition(latest?.data.outcome !== "unknown", "RECONCILIATION_REQUIRED", "Closeout reconciliation is still unknown", 5);
+      requireCondition(
+        planId === ledger.execution_plan_id && approved(ledger).lifecycle === "approved",
+        "PLAN_NOT_APPROVED",
+        "Recovery requires the approved execution plan",
+        4,
+      );
+      protectedActionApproved(
+        ledger,
+        "delivery_unit_recovery",
+        groupId,
+        string(payload.recovery_id),
+      );
+      requireCondition(
+        !ledger.operations.some((item) => item.target_id === groupId && activeOperation(item)),
+        "OPERATION_PENDING",
+        "DeliveryUnit has unresolved operations",
+        4,
+      );
+      const latest = ledger.events
+        .filter(
+          (event) => event.subject_id === groupId && event.data.operation === "closeout-reconcile",
+        )
+        .at(-1);
+      requireCondition(
+        latest?.data.outcome !== "unknown",
+        "RECONCILIATION_REQUIRED",
+        "Closeout reconciliation is still unknown",
+        5,
+      );
       owner.state = "active";
       owner.lifecycle.closed = "unknown";
-      addEvent(ledger, request, "group_updated", groupId, { operation: "protected-recovery", group_id: groupId, plan_id: planId, recovery_id: parse(id, payload.recovery_id), reason: string(payload.reason), evidence_refs: z.array(z.string().min(1)).parse(payload.evidence_refs), previous_state: "blocked", state: "active", group_snapshot: structuredClone(owner) });
+      addEvent(ledger, request, "group_updated", groupId, {
+        operation: "protected-recovery",
+        group_id: groupId,
+        plan_id: planId,
+        recovery_id: parse(id, payload.recovery_id),
+        reason: string(payload.reason),
+        evidence_refs: z.array(z.string().min(1)).parse(payload.evidence_refs),
+        previous_state: "blocked",
+        state: "active",
+        group_snapshot: structuredClone(owner),
+      });
       return { group_id: groupId, state: owner.state, recovery_id: payload.recovery_id };
     }
     default:
-      throw new ContractError(
-        "UNKNOWN_COMMAND",
-        `Unsupported command: ${command}`,
-      );
+      throw new ContractError("UNKNOWN_COMMAND", `Unsupported command: ${command}`);
   }
 }
 
-export function apply(
-  ledger: Ledger,
-  command: string,
-  request: Request,
-): unknown {
+export function apply(ledger: Ledger, command: string, request: Request): unknown {
   const normalized = validateLedger(ledger);
-  if ((ledger as any).schema_version === 1)
-    Object.assign(ledger, structuredClone(normalized));
+  if ((ledger as any).schema_version === 1) Object.assign(ledger, structuredClone(normalized));
   requireCondition(
     request.run_id === ledger.orchestration_id,
     "RUN_MISMATCH",
@@ -5631,9 +5670,7 @@ export function apply(
     command,
     payload: request.payload,
   });
-  const prior = ledger.requests.find(
-    (item) => item.request_id === request.request_id,
-  );
+  const prior = ledger.requests.find((item) => item.request_id === request.request_id);
   if (prior) {
     requireCondition(
       prior.command === command && prior.canonical_input === canonical,
@@ -5655,31 +5692,75 @@ export function apply(
     3,
   );
   requireCondition(
-    !!normalized.config.execution_profile ||
-      command === "execution-profile-migrate",
+    !!normalized.config.execution_profile || command === "execution-profile-migrate",
     "PROFILE_MIGRATION_REQUIRED",
     "Run is read-only until explicit execution-profile-migrate",
     4,
   );
   const candidate = structuredClone(normalized);
-  const readinessCommands = new Set(["atom-update", "task-update", "merge-resolve", "group-base-reconcile", "lifecycle-record", "milestone-record", "fact-record", "task-equivalent-integrate"]);
+  const readinessCommands = new Set([
+    "atom-update",
+    "task-update",
+    "merge-resolve",
+    "group-base-reconcile",
+    "lifecycle-record",
+    "milestone-record",
+    "fact-record",
+    "task-equivalent-integrate",
+  ]);
   const readinessBefore = readinessCommands.has(command)
-    ? new Map(candidate.tasks.filter(task => task.disposition === "active").map(task => [task.id, ready(candidate, task.id)]))
+    ? new Map(
+        candidate.tasks
+          .filter((task) => task.disposition === "active")
+          .map((task) => [task.id, ready(candidate, task.id)]),
+      )
     : new Map<string, boolean>();
   const result = execute(candidate, command, request);
-  const newlyReady = readinessCommands.has(command) ? candidate.tasks
-    .filter(task => task.disposition === "active" && task.thread_id === null && !candidate.operations.some(op => op.kind === "dispatch" && op.target_id === task.id) && !readinessBefore.get(task.id) && ready(candidate, task.id))
-    .map(task => task.id) : [];
+  const newlyReady = readinessCommands.has(command)
+    ? candidate.tasks
+        .filter(
+          (task) =>
+            task.disposition === "active" &&
+            task.thread_id === null &&
+            !candidate.operations.some(
+              (op) => op.kind === "dispatch" && op.target_id === task.id,
+            ) &&
+            !readinessBefore.get(task.id) &&
+            ready(candidate, task.id),
+        )
+        .map((task) => task.id)
+    : [];
   if (newlyReady.length > 0) {
     const eventId = `${request.request_id}-ready`;
-    addEvent(candidate, { ...request, request_id: eventId }, "task_ready", candidate.orchestration_id, {
-      task_ids: newlyReady,
-      trigger_command: command,
-      trigger_request_id: request.request_id,
-    });
-    const notice = notificationDirective(candidate, request, { notification: { mode: "auto", recipient: "owner" } }, true);
-    if (notice.enabled && typeof result === "object" && result !== null && !Array.isArray(result) && !("notification_request" in result)) {
-      const notification = addNotificationIntent(candidate, { ...request, request_id: eventId }, notice.recipient_thread_id!);
+    addEvent(
+      candidate,
+      { ...request, request_id: eventId },
+      "task_ready",
+      candidate.orchestration_id,
+      {
+        task_ids: newlyReady,
+        trigger_command: command,
+        trigger_request_id: request.request_id,
+      },
+    );
+    const notice = notificationDirective(
+      candidate,
+      request,
+      { notification: { mode: "auto", recipient: "owner" } },
+      true,
+    );
+    if (
+      notice.enabled &&
+      typeof result === "object" &&
+      result !== null &&
+      !Array.isArray(result) &&
+      !("notification_request" in result)
+    ) {
+      const notification = addNotificationIntent(
+        candidate,
+        { ...request, request_id: eventId },
+        notice.recipient_thread_id!,
+      );
       Object.assign(result, {
         readiness_notification_id: notification.id,
         readiness_notification_request: notificationDeliveryRequest(notification),

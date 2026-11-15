@@ -138,6 +138,8 @@ jobs:
           bun-version: 1.4.4
       - name: Check Go source
         run: scripts/checks source
+      - name: Check multi-task-flow TypeScript style
+        run: scripts/checks style
       - name: Save bounded Go caches
         uses: ./.github/actions/go-cache
         with:

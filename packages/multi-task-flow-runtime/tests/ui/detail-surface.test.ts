@@ -2,7 +2,14 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { getByText } from "@testing-library/dom";
 import { applyDetailSurface, type DetailSurfaceElements } from "../../web/detail-surface";
 import { firstVisibleElement, focusAfterRerender } from "../../web/focus";
-import { canShowHoverPreview, detailsPanelFits, isDetailInteraction, resolveDetailSurface, selectedObjectFocusSelector, supportsHoverInput } from "../../web/interaction-policy";
+import {
+  canShowHoverPreview,
+  detailsPanelFits,
+  isDetailInteraction,
+  resolveDetailSurface,
+  selectedObjectFocusSelector,
+  supportsHoverInput,
+} from "../../web/interaction-policy";
 
 let elements: DetailSurfaceElements;
 
@@ -19,7 +26,10 @@ beforeEach(() => {
   `;
   elements = {
     workspace: document.querySelector(".workspace")!,
-    background: [document.querySelector("#app-header")!, document.querySelector("#background-content")!],
+    background: [
+      document.querySelector("#app-header")!,
+      document.querySelector("#background-content")!,
+    ],
     details: document.querySelector("#details")!,
     detailsBackdrop: document.querySelector("#details-backdrop")!,
     hoverPreview: document.querySelector("#hover-preview")!,
@@ -29,18 +39,35 @@ beforeEach(() => {
 
 describe("dashboard detail surface DOM", () => {
   test("does not reserve a detail column before an object is selected", () => {
-    const surface = resolveDetailSurface({ selected: false, detailOpen: false, hoverCapable: true, detailPanelViewport: true });
+    const surface = resolveDetailSurface({
+      selected: false,
+      detailOpen: false,
+      hoverCapable: true,
+      detailPanelViewport: true,
+    });
     applyDetailSurface(elements, surface, true);
 
     expect(surface).toBe("none");
     expect(elements.details.hidden).toBe(true);
     expect(elements.details.closest<HTMLElement>(".details-slot")?.hidden).toBe(true);
     expect(elements.workspace.classList.contains("has-details")).toBe(false);
-    expect(canShowHoverPreview({ selected: false, detailOpen: false, hoverCapable: true, detailPanelViewport: true })).toBe(true);
+    expect(
+      canShowHoverPreview({
+        selected: false,
+        detailOpen: false,
+        hoverCapable: true,
+        detailPanelViewport: true,
+      }),
+    ).toBe(true);
   });
 
   test("opens the wide inspector only for an explicitly selected object", () => {
-    const surface = resolveDetailSurface({ selected: true, detailOpen: true, hoverCapable: true, detailPanelViewport: true });
+    const surface = resolveDetailSurface({
+      selected: true,
+      detailOpen: true,
+      hoverCapable: true,
+      detailPanelViewport: true,
+    });
     applyDetailSurface(elements, surface, true);
 
     expect(surface).toBe("desktop-inspector");
@@ -50,7 +77,12 @@ describe("dashboard detail surface DOM", () => {
   });
 
   test("uses an overlay inspector when the panel would shrink the canvas", () => {
-    const surface = resolveDetailSurface({ selected: true, detailOpen: true, hoverCapable: true, drawerViewport: false });
+    const surface = resolveDetailSurface({
+      selected: true,
+      detailOpen: true,
+      hoverCapable: true,
+      drawerViewport: false,
+    });
     applyDetailSurface(elements, surface, false);
 
     expect(surface).toBe("overlay-inspector");
@@ -61,9 +93,21 @@ describe("dashboard detail surface DOM", () => {
   });
 
   test("keeps the selected desktop inspector surface without an overlay", () => {
-    expect(resolveDetailSurface({ selected: false, detailOpen: false, hoverCapable: true, detailPanelViewport: true })).toBe("none");
+    expect(
+      resolveDetailSurface({
+        selected: false,
+        detailOpen: false,
+        hoverCapable: true,
+        detailPanelViewport: true,
+      }),
+    ).toBe("none");
 
-    const surface = resolveDetailSurface({ selected: true, detailOpen: true, hoverCapable: true, detailPanelViewport: true });
+    const surface = resolveDetailSurface({
+      selected: true,
+      detailOpen: true,
+      hoverCapable: true,
+      detailPanelViewport: true,
+    });
     applyDetailSurface(elements, surface, true);
 
     expect(surface).toBe("desktop-inspector");
@@ -73,9 +117,30 @@ describe("dashboard detail surface DOM", () => {
   });
 
   test("does not allow a hover preview beside an open desktop inspector", () => {
-    expect(canShowHoverPreview({ selected: true, detailOpen: true, hoverCapable: true, detailPanelViewport: true })).toBe(false);
-    expect(canShowHoverPreview({ selected: false, detailOpen: false, hoverCapable: true, detailPanelViewport: true })).toBe(true);
-    expect(canShowHoverPreview({ selected: true, detailOpen: true, hoverCapable: true, detailPanelViewport: false })).toBe(false);
+    expect(
+      canShowHoverPreview({
+        selected: true,
+        detailOpen: true,
+        hoverCapable: true,
+        detailPanelViewport: true,
+      }),
+    ).toBe(false);
+    expect(
+      canShowHoverPreview({
+        selected: false,
+        detailOpen: false,
+        hoverCapable: true,
+        detailPanelViewport: true,
+      }),
+    ).toBe(true);
+    expect(
+      canShowHoverPreview({
+        selected: true,
+        detailOpen: true,
+        hoverCapable: true,
+        detailPanelViewport: false,
+      }),
+    ).toBe(false);
   });
 
   test("uses the canvas width for the detail panel threshold", () => {
@@ -84,14 +149,27 @@ describe("dashboard detail surface DOM", () => {
   });
 
   test("keeps a touch-selected object in the narrow drawer surface", () => {
-    expect(resolveDetailSurface({ selected: true, detailOpen: true, hoverCapable: false, drawerViewport: true })).toBe("drawer");
+    expect(
+      resolveDetailSurface({
+        selected: true,
+        detailOpen: true,
+        hoverCapable: false,
+        drawerViewport: true,
+      }),
+    ).toBe("drawer");
   });
 
   test("uses the active pointer type on a hybrid touch device", () => {
     expect(supportsHoverInput({ anyHover: true, anyFinePointer: true })).toBe(true);
-    expect(supportsHoverInput({ anyHover: true, anyFinePointer: true, pointerType: "mouse" })).toBe(true);
-    expect(supportsHoverInput({ anyHover: true, anyFinePointer: true, pointerType: "touch" })).toBe(false);
-    expect(supportsHoverInput({ anyHover: true, anyFinePointer: true, pointerType: "pen" })).toBe(false);
+    expect(supportsHoverInput({ anyHover: true, anyFinePointer: true, pointerType: "mouse" })).toBe(
+      true,
+    );
+    expect(supportsHoverInput({ anyHover: true, anyFinePointer: true, pointerType: "touch" })).toBe(
+      false,
+    );
+    expect(supportsHoverInput({ anyHover: true, anyFinePointer: true, pointerType: "pen" })).toBe(
+      false,
+    );
     expect(supportsHoverInput({ anyHover: false, anyFinePointer: true })).toBe(false);
     expect(supportsHoverInput({ anyHover: true, anyFinePointer: false })).toBe(false);
   });
@@ -111,8 +189,23 @@ describe("dashboard detail surface DOM", () => {
   });
 
   test("keeps keyboard-selected details in one surface", () => {
-    expect(resolveDetailSurface({ selected: true, detailOpen: true, hoverCapable: true, keyboardSelection: true, drawerViewport: true })).toBe("drawer");
-    expect(canShowHoverPreview({ selected: true, detailOpen: true, hoverCapable: true, keyboardSelection: true })).toBe(false);
+    expect(
+      resolveDetailSurface({
+        selected: true,
+        detailOpen: true,
+        hoverCapable: true,
+        keyboardSelection: true,
+        drawerViewport: true,
+      }),
+    ).toBe("drawer");
+    expect(
+      canShowHoverPreview({
+        selected: true,
+        detailOpen: true,
+        hoverCapable: true,
+        keyboardSelection: true,
+      }),
+    ).toBe(false);
   });
 
   test("keeps accessible graph selection inside the detail interaction boundary", () => {
@@ -176,18 +269,32 @@ describe("dashboard detail surface DOM", () => {
   });
 
   test("restores focus to the selected object's action button after a list rerender", () => {
-    document.body.insertAdjacentHTML("beforeend", `
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `
       <article data-task-id="deploy"><button class="task-card-select">部署并验证</button></article>
       <article data-group-id="core"><button class="task-card-select">第一组</button></article>
-    `);
+    `,
+    );
 
-    const taskButton = document.querySelector<HTMLElement>(selectedObjectFocusSelector({ kind: "task", id: "deploy" })!);
-    const groupButton = document.querySelector<HTMLElement>(selectedObjectFocusSelector({ kind: "group", id: "core" })!);
+    const taskButton = document.querySelector<HTMLElement>(
+      selectedObjectFocusSelector({ kind: "task", id: "deploy" })!,
+    );
+    const groupButton = document.querySelector<HTMLElement>(
+      selectedObjectFocusSelector({ kind: "group", id: "core" })!,
+    );
 
     expect(taskButton?.textContent).toBe("部署并验证");
     expect(groupButton?.textContent).toBe("第一组");
-    document.body.insertAdjacentHTML("beforeend", `<article data-group-id="board"><button class="task-column-select">看板组</button></article>`);
-    expect(document.querySelector<HTMLElement>(selectedObjectFocusSelector({ kind: "group", id: "board" })!)?.textContent).toBe("看板组");
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `<article data-group-id="board"><button class="task-column-select">看板组</button></article>`,
+    );
+    expect(
+      document.querySelector<HTMLElement>(
+        selectedObjectFocusSelector({ kind: "group", id: "board" })!,
+      )?.textContent,
+    ).toBe("看板组");
     expect(selectedObjectFocusSelector(null)).toBeNull();
   });
 

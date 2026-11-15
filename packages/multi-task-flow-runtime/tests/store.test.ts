@@ -20,30 +20,33 @@ function temporaryRoot(): string {
   return path;
 }
 afterEach(() => {
-  for (const path of created.splice(0))
-    rmSync(path, { recursive: true, force: true });
+  for (const path of created.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
 describe("ledger store", () => {
   test("persists the previous complete snapshot", () => {
     const store = new LedgerStore(temporaryRoot(), "test-run");
-      store.create({ schema_version: 2, contract_version: 2, revision: 0 });
+    store.create({ schema_version: 2, contract_version: 2, revision: 0 });
     store.update((ledger) => {
       ledger.revision = 1;
     });
     expect(store.read().revision).toBe(1);
     expect(
-      JSON.parse(
-        readFileSync(join(store.runPath, "ledger.previous.json"), "utf8"),
-      ).revision,
+      JSON.parse(readFileSync(join(store.runPath, "ledger.previous.json"), "utf8")).revision,
     ).toBe(0);
   });
 
   test("requires explicit migration before writing an unversioned ledger", () => {
     const store = new LedgerStore(temporaryRoot(), "legacy-run");
     store.create({ revision: 0 });
-    expect(() => store.update((ledger) => { ledger.revision = 1; })).toThrow("read-only");
-    expect(JSON.parse(readFileSync(join(store.runPath, "ledger.json"), "utf8"))).toEqual({ revision: 0 });
+    expect(() =>
+      store.update((ledger) => {
+        ledger.revision = 1;
+      }),
+    ).toThrow("read-only");
+    expect(JSON.parse(readFileSync(join(store.runPath, "ledger.json"), "utf8"))).toEqual({
+      revision: 0,
+    });
   });
 
   test("rejects incomplete declared task policies before writing", () => {
@@ -55,7 +58,11 @@ describe("ledger store", () => {
       tasks: [{ execution_owner: "main", conversation_policy: null, delivery_policy: null }],
     });
     const before = readFileSync(store.ledgerPath, "utf8");
-    expect(() => store.update((ledger) => { ledger.revision = 1; })).toThrow();
+    expect(() =>
+      store.update((ledger) => {
+        ledger.revision = 1;
+      }),
+    ).toThrow();
     expect(readFileSync(store.ledgerPath, "utf8")).toBe(before);
     expect(existsSync(join(store.runPath, "ledger.previous.json"))).toBe(false);
   });
@@ -66,10 +73,16 @@ describe("ledger store", () => {
       schema_version: 2,
       contract_version: 2,
       revision: 0,
-      tasks: [{ execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "evidence" }],
+      tasks: [
+        { execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "evidence" },
+      ],
     });
     const before = readFileSync(store.ledgerPath, "utf8");
-    expect(() => store.update((ledger) => { delete ledger.tasks[0].delivery_policy; })).toThrow();
+    expect(() =>
+      store.update((ledger) => {
+        delete ledger.tasks[0].delivery_policy;
+      }),
+    ).toThrow();
     expect(readFileSync(store.ledgerPath, "utf8")).toBe(before);
     expect(existsSync(join(store.runPath, "ledger.previous.json"))).toBe(false);
   });
@@ -80,10 +93,16 @@ describe("ledger store", () => {
       schema_version: 2,
       contract_version: 2,
       revision: 0,
-      tasks: [{ execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "evidence" }],
+      tasks: [
+        { execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "evidence" },
+      ],
     });
     const before = readFileSync(store.ledgerPath, "utf8");
-    expect(() => store.update((ledger) => { ledger.tasks[0].execution_owner = "not-an-owner"; })).toThrow();
+    expect(() =>
+      store.update((ledger) => {
+        ledger.tasks[0].execution_owner = "not-an-owner";
+      }),
+    ).toThrow();
     expect(readFileSync(store.ledgerPath, "utf8")).toBe(before);
     expect(existsSync(join(store.runPath, "ledger.previous.json"))).toBe(false);
   });
@@ -94,10 +113,16 @@ describe("ledger store", () => {
       schema_version: 2,
       contract_version: 2,
       revision: 0,
-      tasks: [{ execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "evidence" }],
+      tasks: [
+        { execution_owner: "main", conversation_policy: "main_owned", delivery_policy: "evidence" },
+      ],
     });
     const before = readFileSync(store.ledgerPath, "utf8");
-    expect(() => store.update((ledger) => { ledger.tasks[0].delivery_policy = undefined; })).toThrow();
+    expect(() =>
+      store.update((ledger) => {
+        ledger.tasks[0].delivery_policy = undefined;
+      }),
+    ).toThrow();
     expect(readFileSync(store.ledgerPath, "utf8")).toBe(before);
     expect(existsSync(join(store.runPath, "ledger.previous.json"))).toBe(false);
   });
@@ -143,12 +168,8 @@ describe("ledger store", () => {
 
     expect(() => store.create(circular)).toThrow();
     expect(() => store.read()).toThrow("Run does not exist");
-    expect(existsSync(join(root, "runs", "test-run", "ledger.json"))).toBe(
-      false,
-    );
-    expect([
-      ...new Bun.Glob(".run-test-run-*").scanSync(join(root, "runs")),
-    ]).toEqual([]);
+    expect(existsSync(join(root, "runs", "test-run", "ledger.json"))).toBe(false);
+    expect([...new Bun.Glob(".run-test-run-*").scanSync(join(root, "runs"))]).toEqual([]);
   });
 
   test("cleans up an atomic candidate when the commit hook fails", () => {
@@ -159,19 +180,17 @@ describe("ledger store", () => {
       if (stage === "candidate_synced") throw new Error("simulated interruption");
     });
 
-    expect(() => interrupted.update((ledger) => { ledger.revision = 1; })).toThrow(
-      "simulated interruption",
-    );
-    expect([...new Bun.Glob(".ledger-*.tmp").scanSync(store.runPath)]).toEqual(
-      [],
-    );
+    expect(() =>
+      interrupted.update((ledger) => {
+        ledger.revision = 1;
+      }),
+    ).toThrow("simulated interruption");
+    expect([...new Bun.Glob(".ledger-*.tmp").scanSync(store.runPath)]).toEqual([]);
     expect(store.read().revision).toBe(0);
   });
 
   test("refuses unsafe run identifiers", () => {
-    expect(() => new LedgerStore(temporaryRoot(), "../other")).toThrow(
-      "Invalid identifier",
-    );
+    expect(() => new LedgerStore(temporaryRoot(), "../other")).toThrow("Invalid identifier");
   });
 
   test("serializes competing process updates", async () => {
@@ -179,10 +198,9 @@ describe("ledger store", () => {
     const store = new LedgerStore(root, "test-run");
     store.create({ schema_version: 2, contract_version: 2, revision: 0 });
     const processes = Array.from({ length: 4 }, () =>
-      Bun.spawn(
-        [process.execPath, join(import.meta.dir, "increment-worker.ts"), root],
-        { stderr: "pipe" },
-      ),
+      Bun.spawn([process.execPath, join(import.meta.dir, "increment-worker.ts"), root], {
+        stderr: "pipe",
+      }),
     );
     const codes = await Promise.all(processes.map((process) => process.exited));
     expect(codes).toEqual([0, 0, 0, 0]);
@@ -197,22 +215,15 @@ describe("ledger store", () => {
     test(`recovers the committed ledger when the writer dies at ${stage}`, async () => {
       const root = temporaryRoot();
       const store = new LedgerStore(root, "test-run");
-    store.create({ schema_version: 2, contract_version: 2, revision: 0 });
+      store.create({ schema_version: 2, contract_version: 2, revision: 0 });
       const process = Bun.spawn(
-        [
-          Bun.which("bun")!,
-          join(import.meta.dir, "crash-worker.ts"),
-          root,
-          stage,
-        ],
+        [Bun.which("bun")!, join(import.meta.dir, "crash-worker.ts"), root, stage],
         { stderr: "pipe" },
       );
       expect(await process.exited).not.toBe(0);
       expect(store.read().revision).toBe(expected);
       expect(
-        JSON.parse(
-          readFileSync(join(store.runPath, "ledger.previous.json"), "utf8"),
-        ).revision,
+        JSON.parse(readFileSync(join(store.runPath, "ledger.previous.json"), "utf8")).revision,
       ).toBe(0);
     });
   }

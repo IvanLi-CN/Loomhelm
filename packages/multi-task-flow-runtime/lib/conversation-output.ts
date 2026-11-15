@@ -1,13 +1,10 @@
-import { messageSentAt } from "../lib/conversation-history";
-import { latestConversationOutput } from "../lib/conversation-history";
+import { latestConversationOutput, messageSentAt } from "../lib/conversation-history";
+
 export { messageOutput } from "../lib/conversation-history";
+
 import { randomUUID } from "node:crypto";
-import { observeCodex, type JsonRecord } from "../lib/codex-agent-api";
-import {
-  initialOutput,
-  type AgentOutput,
-  type OutputSnapshot,
-} from "../web/agent-output";
+import { type JsonRecord, observeCodex } from "../lib/codex-agent-api";
+import { type AgentOutput, initialOutput, type OutputSnapshot } from "../web/agent-output";
 
 type Binding = { id: string; thread_id: string | null };
 type NativeConnection = Awaited<ReturnType<typeof observeCodex>>;
@@ -18,9 +15,7 @@ export type ConnectObserver = (
   close: () => void,
 ) => Promise<Connection>;
 const object = (v: unknown): JsonRecord | null =>
-  typeof v === "object" && v !== null && !Array.isArray(v)
-    ? (v as JsonRecord)
-    : null;
+  typeof v === "object" && v !== null && !Array.isArray(v) ? (v as JsonRecord) : null;
 const key = (turn: unknown, item: unknown) => JSON.stringify([turn, item]);
 const terminalTurnStatuses = new Set(["completed", "interrupted", "failed"]);
 const activeTurnStatuses = new Set(["inProgress", "started", "running"]);
@@ -69,19 +64,36 @@ export class ConversationOutputs {
       output_epoch: this.epoch,
       output_revision: this.revision,
       outputs: Object.fromEntries(
-        [...this.bindings].flatMap(([id, thread]) => { const output = thread ? ({ ...(this.threads.get(thread)?.output ?? initialOutput(thread)), thread_title: this.titles.get(thread) ?? null }) : initialOutput(null); return id.startsWith("task:") ? [[id, output], [id.slice(5), output]] : [[id, output]]; }),
+        [...this.bindings].flatMap(([id, thread]) => {
+          const output = thread
+            ? {
+                ...(this.threads.get(thread)?.output ?? initialOutput(thread)),
+                thread_title: this.titles.get(thread) ?? null,
+              }
+            : initialOutput(null);
+          return id.startsWith("task:")
+            ? [
+                [id, output],
+                [id.slice(5), output],
+              ]
+            : [[id, output]];
+        }),
       ),
     };
   }
   bind(tasks: Binding[]): void {
     const next = new Map(tasks.map((t) => [t.id, t.thread_id]));
-    const changed =
-      JSON.stringify([...next]) !== JSON.stringify([...this.bindings]);
+    const changed = JSON.stringify([...next]) !== JSON.stringify([...this.bindings]);
     this.bindings = next;
     const wanted = new Set([...next.values()].filter((t): t is string => !!t));
     this.connection?.subscriptions?.retain(wanted);
     for (const thread of this.threads.keys())
-      if (!wanted.has(thread)) { this.threads.delete(thread); this.titles.delete(thread); this.titleReads.delete(thread); this.titleReadAt.delete(thread); }
+      if (!wanted.has(thread)) {
+        this.threads.delete(thread);
+        this.titles.delete(thread);
+        this.titleReads.delete(thread);
+        this.titleReadAt.delete(thread);
+      }
     for (const thread of wanted)
       if (!this.threads.has(thread)) {
         this.threads.set(thread, {
@@ -97,8 +109,7 @@ export class ConversationOutputs {
           failures: 0,
           retryAt: 0,
         });
-        if (this.connection)
-          void this.load(thread, this.connection, this.generation);
+        if (this.connection) void this.load(thread, this.connection, this.generation);
       }
     if (changed) this.changed(true);
     if (!wanted.size && this.active) this.stop();
@@ -152,14 +163,18 @@ export class ConversationOutputs {
       this.connection = null;
       clearTimeout(this.pollTimer);
       for (const state of this.threads.values())
-        this.set(state, { ...state.output, state: "unavailable", stale: true, agent_state: "unknown" });
+        this.set(state, {
+          ...state.output,
+          state: "unavailable",
+          stale: true,
+          agent_state: "unknown",
+        });
       this.timer = setTimeout(() => void this.open(), this.backoff);
       this.backoff = Math.min(this.backoff * 2, 30000);
     };
     try {
       const connection = await this.connect((e) => {
-        if (generation === this.generation && this.active && !lostAlready)
-          this.notify(e);
+        if (generation === this.generation && this.active && !lostAlready) this.notify(e);
       }, lost);
       if (!this.active || generation !== this.generation || lostAlready) {
         connection.close();
@@ -174,37 +189,18 @@ export class ConversationOutputs {
       if (this.opening === generation) this.opening = null;
     }
   }
-  private async catchUp(
-    connection: Connection,
-    generation: number,
-  ): Promise<void> {
+  private async catchUp(connection: Connection, generation: number): Promise<void> {
     for (const thread of this.threads.keys()) {
-      if (
-        !this.active ||
-        generation !== this.generation ||
-        this.connection !== connection
-      )
-        return;
+      if (!this.active || generation !== this.generation || this.connection !== connection) return;
       await this.load(thread, connection, generation);
     }
-    if (
-      this.active &&
-      generation === this.generation &&
-      this.connection === connection
-    ) {
+    if (this.active && generation === this.generation && this.connection === connection) {
       this.backoff = 1000;
       // Historical catch-up is not evidence of native streaming support.
-      this.pollTimer = setTimeout(
-        () => void this.catchUp(connection, generation),
-        this.pollMs,
-      );
+      this.pollTimer = setTimeout(() => void this.catchUp(connection, generation), this.pollMs);
     }
   }
-  private async load(
-    thread: string,
-    connection: Connection,
-    generation: number,
-  ): Promise<void> {
+  private async load(thread: string, connection: Connection, generation: number): Promise<void> {
     const state = this.threads.get(thread);
     if (!state || state.reading || state.retryAt > Date.now()) return;
     state.reading = true;
@@ -217,13 +213,21 @@ export class ConversationOutputs {
       state.version === version;
     try {
       // Runtime metadata and title reads must not hold up public message history.
-      const metadataRead = connection.request("thread/read", { threadId: thread, includeTurns: false });
-      void metadataRead.then(metadata => {
-        if (!valid()) return;
-        const title = object(metadata.thread)?.name;
-        const next = typeof title === "string" && title.trim() ? title : null;
-        if (this.titles.get(thread) !== next) { this.titles.set(thread, next); this.changed(true); }
-      }).catch(() => {});
+      const metadataRead = connection.request("thread/read", {
+        threadId: thread,
+        includeTurns: false,
+      });
+      void metadataRead
+        .then((metadata) => {
+          if (!valid()) return;
+          const title = object(metadata.thread)?.name;
+          const next = typeof title === "string" && title.trim() ? title : null;
+          if (this.titles.get(thread) !== next) {
+            this.titles.set(thread, next);
+            this.changed(true);
+          }
+        })
+        .catch(() => {});
       void (async () => {
         let runtime: "active" | "idle" | "unknown" = "unknown";
         let runtimeTurnId: string | null = null;
@@ -231,23 +235,41 @@ export class ConversationOutputs {
         try {
           const metadata = await metadataRead;
           const status = object(object(metadata.thread)?.status)?.type;
-          if (status === "active") { observedNativeStatus = "active"; runtime = "active"; }
-          else if (status === "idle") observedNativeStatus = "idle";
+          if (status === "active") {
+            observedNativeStatus = "active";
+            runtime = "active";
+          } else if (status === "idle") observedNativeStatus = "idle";
           // Codex reports completed threads that are not loaded in the current
           // app session as `notLoaded`. Confirm the latest turn before treating
           // that runtime as idle; an active or missing turn remains unknown.
           if (status === "idle" || status === "notLoaded") {
-            const page = await connection.request("thread/turns/list", { threadId: thread, sortDirection: "desc", limit: 1, itemsView: "full" });
+            const page = await connection.request("thread/turns/list", {
+              threadId: thread,
+              sortDirection: "desc",
+              limit: 1,
+              itemsView: "full",
+            });
             const latest = Array.isArray(page.data) ? object(page.data[0]) : null;
-            if (typeof latest?.id === "string" && latest.id.trim() && activeTurnStatuses.has(String(latest.status))) {
+            if (
+              typeof latest?.id === "string" &&
+              latest.id.trim() &&
+              activeTurnStatuses.has(String(latest.status))
+            ) {
               runtime = "active";
               runtimeTurnId = latest.id;
-            } else if (state.nativeStatus !== "active" && typeof latest?.id === "string" && latest.id.trim() && terminalTurnStatuses.has(String(latest.status))) {
+            } else if (
+              state.nativeStatus !== "active" &&
+              typeof latest?.id === "string" &&
+              latest.id.trim() &&
+              terminalTurnStatuses.has(String(latest.status))
+            ) {
               runtime = "idle";
               runtimeTurnId = latest.id;
             }
           }
-        } catch { /* Runtime observation is independent of readable output history. */ }
+        } catch {
+          /* Runtime observation is independent of readable output history. */
+        }
         if (!valid()) return;
         if (state.nativeStatus === "active" && runtime !== "active") {
           runtime = "active";
@@ -265,11 +287,7 @@ export class ConversationOutputs {
       // Never replace a locally streaming item with an older persisted item.
       if (state.streamGeneration === generation) {
         if (selected?.message_id !== state.output.message_id) return;
-        if (
-          state.output.text &&
-          selected.text &&
-          selected.text.length < state.output.text.length
-        )
+        if (state.output.text && selected.text && selected.text.length < state.output.text.length)
           return;
       }
       if (selected) {
@@ -287,21 +305,25 @@ export class ConversationOutputs {
       }
       state.failures = 0;
       state.retryAt = 0;
-      this.set(
-        state,
-        { ...(selected ?? {
+      this.set(state, {
+        ...(selected ?? {
           ...initialOutput(thread),
           state: "empty",
           stale: false,
           observed_at: new Date().toISOString(),
-        }), agent_state: state.output.agent_state, runtime_turn_id: state.output.runtime_turn_id },
-      );
+        }),
+        agent_state: state.output.agent_state,
+        runtime_turn_id: state.output.runtime_turn_id,
+      });
     } catch {
       if (valid()) {
-        state.retryAt =
-          Date.now() +
-          Math.min(1000 * 2 ** Math.min(state.failures++, 5), 30000);
-        this.set(state, { ...state.output, state: "unavailable", stale: true, agent_state: "unknown" });
+        state.retryAt = Date.now() + Math.min(1000 * 2 ** Math.min(state.failures++, 5), 30000);
+        this.set(state, {
+          ...state.output,
+          state: "unavailable",
+          stale: true,
+          agent_state: "unknown",
+        });
       }
     } finally {
       state.reading = false;
@@ -319,20 +341,35 @@ export class ConversationOutputs {
       state.version++;
       state.nativeStatus = status === "active" ? "active" : status === "idle" ? "idle" : "unknown";
       state.activeTurnId = null;
-      this.set(state, { ...state.output, agent_state: status === "active" ? "active" : "unknown", runtime_turn_id: null, observed_at: new Date().toISOString() });
-      if ((status === "idle" || status === "notLoaded") && this.connection) void this.load(thread, this.connection, this.generation);
+      this.set(state, {
+        ...state.output,
+        agent_state: status === "active" ? "active" : "unknown",
+        runtime_turn_id: null,
+        observed_at: new Date().toISOString(),
+      });
+      if ((status === "idle" || status === "notLoaded") && this.connection)
+        void this.load(thread, this.connection, this.generation);
       return;
     }
     if (method === "turn/started") {
       state.version++;
       state.nativeStatus = "active";
-      state.activeTurnId = typeof object(params.turn)?.id === "string" ? object(params.turn)!.id as string : null;
-      this.set(state, { ...state.output, agent_state: "active", turn_id: typeof object(params.turn)?.id === "string" ? object(params.turn)!.id as string : state.output.turn_id });
+      state.activeTurnId =
+        typeof object(params.turn)?.id === "string" ? (object(params.turn)!.id as string) : null;
+      this.set(state, {
+        ...state.output,
+        agent_state: "active",
+        turn_id:
+          typeof object(params.turn)?.id === "string"
+            ? (object(params.turn)!.id as string)
+            : state.output.turn_id,
+      });
       return;
     }
     if (
       ["turn/completed", "turn/failed", "turn/interrupted"].includes(String(method)) &&
-      typeof state.activeTurnId === "string" && object(params.turn)?.id === state.activeTurnId
+      typeof state.activeTurnId === "string" &&
+      object(params.turn)?.id === state.activeTurnId
     ) {
       state.version++;
       const turnStatus = object(params.turn)?.status;
@@ -340,7 +377,11 @@ export class ConversationOutputs {
         ...state.output,
         runtime_turn_id: object(params.turn)!.id as string,
         message_status: typeof turnStatus === "string" ? turnStatus : "completed",
-        agent_state: turnStatus === undefined || ["completed", "failed", "interrupted"].includes(String(turnStatus)) ? "idle" : "unknown",
+        agent_state:
+          turnStatus === undefined ||
+          ["completed", "failed", "interrupted"].includes(String(turnStatus))
+            ? "idle"
+            : "unknown",
         observed_at: new Date().toISOString(),
         stale: false,
       });

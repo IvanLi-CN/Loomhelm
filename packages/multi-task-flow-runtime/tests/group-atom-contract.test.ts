@@ -1,22 +1,17 @@
-import { apply } from "../lib/engine";
 import { expect, test } from "bun:test";
 import {
   createDemoLedger,
   createPlanningDemoLedger,
 } from "../examples/orchestration-viewer/ledger";
+import { contractJsonSchema, localSemanticProjection } from "../lib/contract";
+import { apply } from "../lib/engine";
 import { defaultGroupAtoms, group, validateLedger } from "../lib/schema";
 import { buildView } from "../lib/view";
-import {
-  contractJsonSchema,
-  localSemanticProjection,
-} from "../lib/contract";
 
 test("rejects runtime group atoms outside the configured stable identity", () => {
   const ledger = createDemoLedger();
   ledger.groups[0]!.atoms[0]!.id = "forged";
-  expect(() => validateLedger(ledger)).toThrow(
-    "Delivery-unit atoms must match",
-  );
+  expect(() => validateLedger(ledger)).toThrow("Delivery-unit atoms must match");
 });
 
 test("semantic projection preserves the actual ledger contract", () => {
@@ -37,19 +32,11 @@ test("an unconfigured historical plan does not borrow runtime atoms", () => {
   historical.atomic_edges = [];
   ledger.plans.push(historical);
   const view = buildView(ledger, historical.id) as any;
-  expect(view.groups.every((group: any) => group.atoms.length === 0)).toBe(
-    true,
-  );
+  expect(view.groups.every((group: any) => group.atoms.length === 0)).toBe(true);
   expect(view.tasks.every((task: any) => task.atoms.length === 0)).toBe(true);
 });
 
-for (const contamination of [
-  "clean",
-  "binding",
-  "atom",
-  "coordination",
-  "lifecycle",
-] as const) {
+for (const contamination of ["clean", "binding", "atom", "coordination", "lifecycle"] as const) {
   test(`plan revisions require clean new group runtime: ${contamination}`, () => {
     const ledger = createPlanningDemoLedger();
     const proposed = structuredClone(ledger.plans[0]!);
@@ -84,10 +71,8 @@ for (const contamination of [
     );
     if (contamination === "binding") incoming.agent_thread_id = "forged-thread";
     if (contamination === "atom") incoming.atoms[0]!.status = "completed";
-    if (contamination === "coordination")
-      incoming.coordination_execution.state = "running";
-    if (contamination === "lifecycle")
-      incoming.lifecycle.workspace_ready = "passed";
+    if (contamination === "coordination") incoming.coordination_execution.state = "running";
+    if (contamination === "lifecycle") incoming.lifecycle.workspace_ready = "passed";
     const before = JSON.stringify(ledger);
     const propose = () =>
       apply(ledger, "plan-propose", {
@@ -109,9 +94,7 @@ for (const contamination of [
           .atoms.every((atom) => atom.status === "planned"),
       ).toBe(true);
     } else {
-      expect(propose).toThrow(
-        "Initial groups and tasks must be unbound and planned",
-      );
+      expect(propose).toThrow("Initial groups and tasks must be unbound and planned");
       expect(JSON.stringify(ledger)).toBe(before);
     }
   });

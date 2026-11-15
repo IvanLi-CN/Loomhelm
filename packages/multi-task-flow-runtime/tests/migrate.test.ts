@@ -33,19 +33,9 @@ function root(): string {
   return value;
 }
 
-async function runOrchestrate(
-  dataRoot: string,
-  command: string,
-  input: unknown,
-) {
+async function runOrchestrate(dataRoot: string, command: string, input: unknown) {
   const child = Bun.spawn(
-    [
-      process.execPath,
-      join(import.meta.dir, "../scripts/orchestrate.ts"),
-      command,
-      "--input",
-      "-",
-    ],
+    [process.execPath, join(import.meta.dir, "../scripts/orchestrate.ts"), command, "--input", "-"],
     {
       env: { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: dataRoot },
       stdin: "pipe",
@@ -115,11 +105,7 @@ async function createLegacyRun(dataRoot: string, runId = "legacy-run") {
   return { input, ledgerPath, legacy };
 }
 
-function migrateInput(
-  runId: string,
-  expectedRevision: number,
-  requestId = "migration-1",
-) {
+function migrateInput(runId: string, expectedRevision: number, requestId = "migration-1") {
   return {
     run_id: runId,
     actor: { role: "main", thread_id: "example-main-thread" },
@@ -130,8 +116,7 @@ function migrateInput(
 }
 
 afterEach(() => {
-  for (const value of roots.splice(0))
-    rmSync(value, { recursive: true, force: true });
+  for (const value of roots.splice(0)) rmSync(value, { recursive: true, force: true });
 });
 
 describe("orchestrate migrate", () => {
@@ -149,18 +134,16 @@ describe("orchestrate migrate", () => {
     }
     writeFileSync(ledgerPath, JSON.stringify(historical, null, 2) + "\n");
     const before = readFileSync(ledgerPath, "utf8");
-    const result = await runOrchestrate(
-      dataRoot,
-      "migrate",
-      migrateInput("legacy-run", 7),
-    );
+    const result = await runOrchestrate(dataRoot, "migrate", migrateInput("legacy-run", 7));
 
     expect(result).toMatchObject({
       exitCode: 4,
       output: { ok: false, code: "HISTORICAL_LEDGER_READ_ONLY" },
     });
     expect(readFileSync(ledgerPath, "utf8")).toBe(before);
-    expect(existsSync(join(dataRoot, "runs", "legacy-run", "ledger.migration-v1-migration-1.json"))).toBe(false);
+    expect(
+      existsSync(join(dataRoot, "runs", "legacy-run", "ledger.migration-v1-migration-1.json")),
+    ).toBe(false);
   });
 
   test("ordinary migrate keeps complete but semantically invalid historical policies read-only", async () => {
@@ -179,11 +162,7 @@ describe("orchestrate migrate", () => {
     historical.tasks[0].conversation_policy = "task_agent";
     writeFileSync(ledgerPath, JSON.stringify(historical, null, 2) + "\n");
     const before = readFileSync(ledgerPath, "utf8");
-    const result = await runOrchestrate(
-      dataRoot,
-      "migrate",
-      migrateInput("legacy-run", 7),
-    );
+    const result = await runOrchestrate(dataRoot, "migrate", migrateInput("legacy-run", 7));
 
     expect(result).toMatchObject({
       exitCode: 4,
@@ -195,11 +174,7 @@ describe("orchestrate migrate", () => {
   test("migrates a valid v1 ledger with an incremented revision and complete backup", async () => {
     const dataRoot = root();
     const { ledgerPath, legacy } = await createLegacyRun(dataRoot);
-    const result = await runOrchestrate(
-      dataRoot,
-      "migrate",
-      migrateInput("legacy-run", 7),
-    );
+    const result = await runOrchestrate(dataRoot, "migrate", migrateInput("legacy-run", 7));
 
     expect(result).toMatchObject({
       exitCode: 0,
@@ -235,15 +210,8 @@ describe("orchestrate migrate", () => {
       command: "migrate",
       committed_revision: 8,
     });
-    const backupPath = join(
-      dataRoot,
-      "runs",
-      "legacy-run",
-      result.output.result.backup,
-    );
-    expect(readFileSync(backupPath, "utf8")).toBe(
-      JSON.stringify(legacy, null, 2) + "\n",
-    );
+    const backupPath = join(dataRoot, "runs", "legacy-run", result.output.result.backup);
+    expect(readFileSync(backupPath, "utf8")).toBe(JSON.stringify(legacy, null, 2) + "\n");
   });
 
   test("recovers a legacy backup without a request identity sidecar", async () => {
@@ -252,11 +220,7 @@ describe("orchestrate migrate", () => {
     const runPath = join(dataRoot, "runs", "legacy-run");
     const backupPath = join(runPath, "ledger.migration-v1-migration-1.json");
     writeFileSync(backupPath, JSON.stringify(legacy, null, 2) + "\n");
-    const result = await runOrchestrate(
-      dataRoot,
-      "migrate",
-      migrateInput("legacy-run", 7),
-    );
+    const result = await runOrchestrate(dataRoot, "migrate", migrateInput("legacy-run", 7));
 
     expect(result).toMatchObject({ exitCode: 0, output: { code: "APPLIED" } });
     expect(existsSync(`${backupPath}.request.json`)).toBe(true);
@@ -268,12 +232,7 @@ describe("orchestrate migrate", () => {
       const { legacy } = await createLegacyRun(dataRoot, `legacy-${artifact}`);
       const request = migrateInput(`legacy-${artifact}`, 7, `migration-${artifact}`);
       const applied = await runOrchestrate(dataRoot, "migrate", request);
-      const backupPath = join(
-        dataRoot,
-        "runs",
-        `legacy-${artifact}`,
-        applied.output.result.backup,
-      );
+      const backupPath = join(dataRoot, "runs", `legacy-${artifact}`, applied.output.result.backup);
       if (artifact === "backup") writeFileSync(backupPath, "corrupted");
       else writeFileSync(`${backupPath}.request.json`, "{}");
       const replay = await runOrchestrate(dataRoot, "migrate", request);
@@ -355,11 +314,7 @@ describe("orchestrate migrate", () => {
       },
     ];
     writeFileSync(ledgerPath, JSON.stringify(legacy, null, 2) + "\n");
-    const result = await runOrchestrate(
-      dataRoot,
-      "migrate",
-      migrateInput("legacy-run", 7),
-    );
+    const result = await runOrchestrate(dataRoot, "migrate", migrateInput("legacy-run", 7));
     expect(result).toMatchObject({
       exitCode: 3,
       output: { ok: false, code: "ID_CONFLICT" },
@@ -370,25 +325,14 @@ describe("orchestrate migrate", () => {
   test("rejects a stale expected revision without creating a backup", async () => {
     const dataRoot = root();
     const { ledgerPath, legacy } = await createLegacyRun(dataRoot);
-    const result = await runOrchestrate(
-      dataRoot,
-      "migrate",
-      migrateInput("legacy-run", 6),
-    );
+    const result = await runOrchestrate(dataRoot, "migrate", migrateInput("legacy-run", 6));
     expect(result).toMatchObject({
       exitCode: 3,
       output: { ok: false, code: "REVISION_CONFLICT" },
     });
     expect(JSON.parse(readFileSync(ledgerPath, "utf8"))).toEqual(legacy);
     expect(
-      existsSync(
-        join(
-          dataRoot,
-          "runs",
-          "legacy-run",
-          "ledger.migration-v1-migration-1.json",
-        ),
-      ),
+      existsSync(join(dataRoot, "runs", "legacy-run", "ledger.migration-v1-migration-1.json")),
     ).toBe(false);
   });
 
@@ -416,11 +360,7 @@ describe("orchestrate migrate", () => {
     });
 
     writeFileSync(ledgerPath, "not-json\n");
-    const corrupted = await runOrchestrate(
-      dataRoot,
-      "migrate",
-      migrateInput("legacy-run", 7),
-    );
+    const corrupted = await runOrchestrate(dataRoot, "migrate", migrateInput("legacy-run", 7));
     expect(corrupted).toMatchObject({
       exitCode: 5,
       output: { ok: false, code: "LEDGER_UNREADABLE" },
@@ -432,11 +372,7 @@ describe("orchestrate migrate", () => {
     unlinkSync(ledgerPath);
     Bun.spawnSync(["ln", "-s", outside, ledgerPath]);
     expect(lstatSync(ledgerPath).isSymbolicLink()).toBe(true);
-    const unsafe = await runOrchestrate(
-      dataRoot,
-      "migrate",
-      migrateInput("legacy-run", 7),
-    );
+    const unsafe = await runOrchestrate(dataRoot, "migrate", migrateInput("legacy-run", 7));
     expect(unsafe.output.ok).toBe(false);
   });
 
@@ -444,8 +380,7 @@ describe("orchestrate migrate", () => {
     const dataRoot = root();
     const { ledgerPath, legacy } = await createLegacyRun(dataRoot);
     const store = new LedgerStore(dataRoot, "legacy-run", (stage) => {
-      if (stage === "migration_backup_committed")
-        throw new Error("simulated interruption");
+      if (stage === "migration_backup_committed") throw new Error("simulated interruption");
     });
     expect(() =>
       store.migrate({
@@ -458,19 +393,10 @@ describe("orchestrate migrate", () => {
     ).toThrow("simulated interruption");
     expect(JSON.parse(readFileSync(ledgerPath, "utf8"))).toEqual(legacy);
     expect(
-      existsSync(
-        join(
-          dataRoot,
-          "runs",
-          "legacy-run",
-          "ledger.migration-v1-migration-1.json",
-        ),
-      ),
+      existsSync(join(dataRoot, "runs", "legacy-run", "ledger.migration-v1-migration-1.json")),
     ).toBe(true);
     expect([
-      ...new Bun.Glob(".ledger.json.*.tmp").scanSync(
-        join(dataRoot, "runs", "legacy-run"),
-      ),
+      ...new Bun.Glob(".ledger.json.*.tmp").scanSync(join(dataRoot, "runs", "legacy-run")),
     ]).toEqual([]);
   });
 });

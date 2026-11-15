@@ -1,45 +1,43 @@
-import { observeTaskRuntime } from "../lib/task-runtime";
-import { PRDetailsCache } from "../lib/pr-details";
-import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
-import {
-  ConversationOutputs,
-  type ConnectObserver,
-} from "../lib/conversation-output";
-import { handleProfileRequest, profileErrorResponse } from "../lib/profile-http";
 import { randomBytes } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  realpathSync,
-  watch,
-  type FSWatcher,
-} from "node:fs";
+import { existsSync, type FSWatcher, lstatSync, realpathSync, watch } from "node:fs";
 import { join, resolve } from "node:path";
-import { ContractError, requireCondition } from "../lib/errors";
-import { LedgerStore, safeId } from "../lib/store";
-import { parseLedger, validateLedger } from "../lib/schema";
-import { buildView } from "../lib/view";
-import { sweepConversationArchives, retryConversationArchive, retryConversationUnarchive } from "../lib/conversation-archive";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { z } from "zod";
+import {
+  retryConversationArchive,
+  retryConversationUnarchive,
+  sweepConversationArchives,
+} from "../lib/conversation-archive";
+import { type ConnectObserver, ConversationOutputs } from "../lib/conversation-output";
+import { ContractError, requireCondition } from "../lib/errors";
+import { PRDetailsCache } from "../lib/pr-details";
 import { GlobalPreferencesStore, parseThemePayload } from "../lib/preferences";
+import { handleProfileRequest, profileErrorResponse } from "../lib/profile-http";
+import { parseLedger, validateLedger } from "../lib/schema";
 import {
   readBodyWithinLimit,
   readRegisteredDocument,
   readSafeFile,
   safeCompare,
 } from "../lib/server-files";
-export { dashboardHeaders, type DashboardOptions } from "../lib/server-contract";
+import { LedgerStore, safeId } from "../lib/store";
+import { observeTaskRuntime } from "../lib/task-runtime";
+import { buildView } from "../lib/view";
+
+export { type DashboardOptions, dashboardHeaders } from "../lib/server-contract";
+
 import {
-  dashboardHeaders,
   contentTypes,
-  maxPreferenceBodyBytes,
   type DashboardOptions,
+  dashboardHeaders,
+  maxPreferenceBodyBytes,
 } from "../lib/server-contract";
 
 export function createRunDashboard(options: DashboardOptions) {
   const headers = dashboardHeaders;
   const store = new LedgerStore(options.root, safeId(options.runId));
-  const readLedger = (): ReturnType<typeof validateLedger> => options.readOnly ? parseLedger(JSON.parse(store.readRaw())) : validateLedger(store.read());
+  const readLedger = (): ReturnType<typeof validateLedger> =>
+    options.readOnly ? parseLedger(JSON.parse(store.readRaw())) : validateLedger(store.read());
   readLedger();
   const preferences = new GlobalPreferencesStore(options.root);
   const token = options.token ?? randomBytes(24).toString("base64url");
@@ -69,9 +67,7 @@ export function createRunDashboard(options: DashboardOptions) {
   let watchHealthy = true;
   let lastRevision = readLedger().revision;
   const publish = (event: string, data: unknown) => {
-    const bytes = encoder.encode(
-      `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
-    );
+    const bytes = encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     for (const controller of subscribers) {
       try {
         controller.enqueue(bytes);
@@ -81,17 +77,25 @@ export function createRunDashboard(options: DashboardOptions) {
     }
   };
   const prDetails = new PRDetailsCache();
-  const bindOutputs = (ledger: ReturnType<typeof validateLedger>) => outputs.bind([...ledger.tasks.map(t => ({ id: `task:${t.id}`, thread_id: t.thread_id ?? null })), ...ledger.groups.map(g => ({ id: `group:${g.id}`, thread_id: g.delivery_unit_kind === "bootstrap" ? ledger.control.owner_thread_id : g.agent_thread_id }))]);
-  const outputs = new ConversationOutputs(
-    (snapshot) => {
-      if (!options.readOnly) {
-        try { observeTaskRuntime(store, snapshot); }
-        catch { publish("stale", { reason: "runtime_state_write_failed" }); }
+  const bindOutputs = (ledger: ReturnType<typeof validateLedger>) =>
+    outputs.bind([
+      ...ledger.tasks.map((t) => ({ id: `task:${t.id}`, thread_id: t.thread_id ?? null })),
+      ...ledger.groups.map((g) => ({
+        id: `group:${g.id}`,
+        thread_id:
+          g.delivery_unit_kind === "bootstrap" ? ledger.control.owner_thread_id : g.agent_thread_id,
+      })),
+    ]);
+  const outputs = new ConversationOutputs((snapshot) => {
+    if (!options.readOnly) {
+      try {
+        observeTaskRuntime(store, snapshot);
+      } catch {
+        publish("stale", { reason: "runtime_state_write_failed" });
       }
-      publish("agent-output", snapshot);
-    },
-    options.connectObserver,
-  );
+    }
+    publish("agent-output", snapshot);
+  }, options.connectObserver);
   let archiveRunning = false;
   let lastArchiveSweep = 0;
   const archivePendingConversations = async (): Promise<void> => {
@@ -100,8 +104,11 @@ export function createRunDashboard(options: DashboardOptions) {
     lastArchiveSweep = Date.now();
     try {
       await sweepConversationArchives(store, options.archiveProvider);
-    } catch { /* Durable intent and resource diagnostics survive observer restarts. */ }
-    finally { archiveRunning = false; }
+    } catch {
+      /* Durable intent and resource diagnostics survive observer restarts. */
+    } finally {
+      archiveRunning = false;
+    }
   };
   bindOutputs(readLedger());
   let watcher: FSWatcher | null = null;
@@ -188,51 +195,47 @@ export function createRunDashboard(options: DashboardOptions) {
             headers,
           });
         const declaredLength = Number(request.headers.get("content-length"));
-        if (
-          Number.isFinite(declaredLength) &&
-          declaredLength > maxPreferenceBodyBytes
-        )
-          return Response.json(
-            { error: "preferences_body_too_large" },
-            { status: 413, headers },
-          );
+        if (Number.isFinite(declaredLength) && declaredLength > maxPreferenceBodyBytes)
+          return Response.json({ error: "preferences_body_too_large" }, { status: 413, headers });
         let payload: unknown;
         try {
-          const body = await readBodyWithinLimit(
-            request,
-            maxPreferenceBodyBytes,
-          );
+          const body = await readBodyWithinLimit(request, maxPreferenceBodyBytes);
           if (body === null)
-            return Response.json(
-              { error: "preferences_body_too_large" },
-              { status: 413, headers },
-            );
+            return Response.json({ error: "preferences_body_too_large" }, { status: 413, headers });
           payload = JSON.parse(body);
         } catch {
-          return Response.json(
-            { error: "invalid_preferences" },
-            { status: 400, headers },
-          );
+          return Response.json({ error: "invalid_preferences" }, { status: 400, headers });
         }
         const saved = preferences.write(parseThemePayload(payload));
         return Response.json(saved, { headers: responseHeaders });
       }
       if (path === "/api/execution-profile") {
-        return await handleProfileRequest(
-          request,
-          options,
-          store,
-          responseHeaders,
-          (revision) => publish("revision", { revision, watching }),
+        return await handleProfileRequest(request, options, store, responseHeaders, (revision) =>
+          publish("revision", { revision, watching }),
         );
       }
       if (path === "/api/conversation-archive") {
-        if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers });
-        requireCondition(!options.readOnly, "READ_ONLY_SOURCE", "External source viewers are read-only", 3);
+        if (request.method !== "POST")
+          return new Response("Method not allowed", { status: 405, headers });
+        requireCondition(
+          !options.readOnly,
+          "READ_ONLY_SOURCE",
+          "External source viewers are read-only",
+          3,
+        );
         const raw = await readBodyWithinLimit(request, 8192);
-        if (raw === null) return Response.json({ error: "request_body_too_large" }, { status: 413, headers });
-        const parsed = z.object({ task_id: z.string().min(1), action: z.enum(["archive", "unarchive"]).default("archive") }).strict().parse(JSON.parse(raw));
-        const result = await (parsed.action === "unarchive" ? retryConversationUnarchive : retryConversationArchive)(store, parsed.task_id, options.archiveProvider);
+        if (raw === null)
+          return Response.json({ error: "request_body_too_large" }, { status: 413, headers });
+        const parsed = z
+          .object({
+            task_id: z.string().min(1),
+            action: z.enum(["archive", "unarchive"]).default("archive"),
+          })
+          .strict()
+          .parse(JSON.parse(raw));
+        const result = await (parsed.action === "unarchive"
+          ? retryConversationUnarchive
+          : retryConversationArchive)(store, parsed.task_id, options.archiveProvider);
         publish("revision", { revision: readLedger().revision, watching });
         return Response.json(result, { headers });
       }
@@ -249,17 +252,51 @@ export function createRunDashboard(options: DashboardOptions) {
           },
         );
       if (path === "/api/resource-details") {
-        if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers });
-        const kind = url.searchParams.get("kind"), id = url.searchParams.get("id");
-        if ((kind !== "task" && kind !== "group") || !id || [...url.searchParams.keys()].some(k => !["kind", "id", "refresh"].includes(k))) return new Response("Invalid request", { status: 400, headers });
+        if (request.method !== "GET")
+          return new Response("Method not allowed", { status: 405, headers });
+        const kind = url.searchParams.get("kind"),
+          id = url.searchParams.get("id");
+        if (
+          (kind !== "task" && kind !== "group") ||
+          !id ||
+          [...url.searchParams.keys()].some((k) => !["kind", "id", "refresh"].includes(k))
+        )
+          return new Response("Invalid request", { status: 400, headers });
         const ledger = readLedger();
-        const object = kind === "task" ? ledger.tasks.find(t => t.id === id) : ledger.groups.find(g => g.id === id);
+        const object =
+          kind === "task"
+            ? ledger.tasks.find((t) => t.id === id)
+            : ledger.groups.find((g) => g.id === id);
         if (!object) return new Response("Not found", { status: 404, headers });
-        const pr = kind === "task" ? (object as typeof ledger.tasks[number]).pr : (object as typeof ledger.groups[number]).parent_pr;
-        if (!pr?.url) return Response.json({ data: null, observed_at: null, stale: false, loading: false, error: null }, { headers: responseHeaders });
-        if (ledger.repository.provider !== "github") return Response.json({ error: "此 PR 查询仅支持 GitHub" }, { status: 400, headers: responseHeaders });
-        try { return Response.json(await prDetails.read(ledger.repository, pr.url, url.searchParams.get("refresh") === "1"), { headers: responseHeaders }); }
-        catch { return Response.json({ error: "PR 与当前仓库不匹配" }, { status: 400, headers: responseHeaders }); }
+        const pr =
+          kind === "task"
+            ? (object as (typeof ledger.tasks)[number]).pr
+            : (object as (typeof ledger.groups)[number]).parent_pr;
+        if (!pr?.url)
+          return Response.json(
+            { data: null, observed_at: null, stale: false, loading: false, error: null },
+            { headers: responseHeaders },
+          );
+        if (ledger.repository.provider !== "github")
+          return Response.json(
+            { error: "此 PR 查询仅支持 GitHub" },
+            { status: 400, headers: responseHeaders },
+          );
+        try {
+          return Response.json(
+            await prDetails.read(
+              ledger.repository,
+              pr.url,
+              url.searchParams.get("refresh") === "1",
+            ),
+            { headers: responseHeaders },
+          );
+        } catch {
+          return Response.json(
+            { error: "PR 与当前仓库不匹配" },
+            { status: 400, headers: responseHeaders },
+          );
+        }
       }
       if (path === "/api/view") {
         const selected = url.searchParams.get("plan") ?? undefined;
@@ -278,9 +315,10 @@ export function createRunDashboard(options: DashboardOptions) {
             output_epoch: snapshot.output_epoch,
             output_revision: snapshot.output_revision,
             view: {
-              ...buildView(ledger, selected, snapshot.outputs, { readOnly: options.readOnly === true }),
-              profile_read_only:
-                options.readOnly === true || !ledger.config.execution_profile,
+              ...buildView(ledger, selected, snapshot.outputs, {
+                readOnly: options.readOnly === true,
+              }),
+              profile_read_only: options.readOnly === true || !ledger.config.execution_profile,
             },
           },
           { headers: responseHeaders },
@@ -320,10 +358,7 @@ export function createRunDashboard(options: DashboardOptions) {
         });
       }
       if (path.startsWith("/api/document/")) {
-        const document = readRegisteredDocument(
-          store,
-          path.slice("/api/document/".length),
-        );
+        const document = readRegisteredDocument(store, path.slice("/api/document/".length));
         return document === null
           ? new Response("Not found", { status: 404, headers })
           : new Response(document, {
@@ -339,18 +374,12 @@ export function createRunDashboard(options: DashboardOptions) {
           : path.startsWith("/assets/")
             ? path.slice(8)
             : "";
-      if (!(asset in contentTypes))
-        return new Response("Not found", { status: 404, headers });
+      if (!(asset in contentTypes)) return new Response("Not found", { status: 404, headers });
       const file = join(assetRoot, asset);
-      if (
-        !existsSync(file) ||
-        lstatSync(file).isSymbolicLink() ||
-        realpathSync(file) !== file
-      )
+      if (!existsSync(file) || lstatSync(file).isSymbolicLink() || realpathSync(file) !== file)
         return new Response("Not found", { status: 404, headers });
       const contentType = contentTypes[asset];
-      if (!contentType)
-        return new Response("Not found", { status: 404, headers });
+      if (!contentType) return new Response("Not found", { status: 404, headers });
       const content = readSafeFile(file);
       if (!content) return new Response("Not found", { status: 404, headers });
       const bytes = new Uint8Array(content.byteLength);
@@ -363,11 +392,9 @@ export function createRunDashboard(options: DashboardOptions) {
         return profileErrorResponse(error, headers);
       }
       const status =
-        error instanceof ContractError &&
-        ["PLAN_NOT_FOUND", "INVALID_ID"].includes(error.code)
+        error instanceof ContractError && ["PLAN_NOT_FOUND", "INVALID_ID"].includes(error.code)
           ? 404
-          : error instanceof ContractError &&
-              error.code === "INVALID_PREFERENCES"
+          : error instanceof ContractError && error.code === "INVALID_PREFERENCES"
             ? 400
             : 503;
       return Response.json(
@@ -413,10 +440,7 @@ export async function startDashboard(options: DashboardOptions) {
       fetch(request, currentServer) {
         const host = `127.0.0.1:${currentServer.port}`;
         const origin = request.headers.get("origin");
-        if (
-          request.headers.get("host") !== host ||
-          (origin && origin !== `http://${host}`)
-        )
+        if (request.headers.get("host") !== host || (origin && origin !== `http://${host}`))
           return new Response("Forbidden", {
             status: 403,
             headers: dashboardHeaders,
@@ -428,11 +452,7 @@ export async function startDashboard(options: DashboardOptions) {
             status: 404,
             headers: dashboardHeaders,
           });
-        return run.handle(
-          request,
-          currentServer,
-          "/" + parts.slice(3).join("/"),
-        );
+        return run.handle(request, currentServer, "/" + parts.slice(3).join("/"));
       },
     });
   } catch (error) {

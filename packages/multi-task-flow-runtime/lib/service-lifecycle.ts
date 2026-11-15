@@ -1,31 +1,45 @@
-import type { ConnectObserver } from "../lib/conversation-output";
-import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { tryLockFile } from "@loomhelm/runtime-core/modules/core/security_file";
 import { withExclusiveLockAsync } from "@loomhelm/runtime-core/modules/flow/storage";
 import {
   PortRegistry,
-  RegistryError,
   processAlive,
+  RegistryError,
 } from "@loomhelm/runtime-core/modules/workspace/port_registry";
-import { ServiceState } from "../lib/service-state";
+import type { ConnectObserver } from "../lib/conversation-output";
+import { ContractError, requireCondition } from "../lib/errors";
 import { ServiceAuth } from "../lib/service-auth";
-import { startSharedViewer, agentLease } from "../lib/service-http";
-import { packageReleaseManifest, requireApi, type ReleaseManifest } from "../lib/service-contract";
+import { packageReleaseManifest, type ReleaseManifest, requireApi } from "../lib/service-contract";
+import { agentLease, startSharedViewer } from "../lib/service-http";
 import { startUserService } from "../lib/service-launchd";
-import { verifyRelease, requireSourceRelease } from "../lib/service-release";
-import { requireCondition, ContractError } from "../lib/errors";
 import { serviceLog } from "../lib/service-log";
+import { requireSourceRelease, verifyRelease } from "../lib/service-release";
+import type { ServiceState } from "../lib/service-state";
 
 export const SERVICE_STARTUP_TIMEOUT_MS = 60_000;
 function verifyPackageIdentity(config: ReturnType<ServiceState["config"]>): void {
   const root = process.env.LOOMHELM_TOOLKIT_ROOT;
   requireCondition(root, "PACKAGE_IDENTITY_UNAVAILABLE", "Package toolkit identity is unavailable");
-  let artifact: { packageName?: string; packageVersion?: string; compatibilityLine?: string; skillVersion?: string; sourceSha?: string; buildId?: string; identity?: { contracts?: { serviceVersion?: string } } };
-  try { artifact = JSON.parse(readFileSync(join(root, "artifact-manifest.json"), "utf8")); }
-  catch { throw new ContractError("PACKAGE_IDENTITY_UNAVAILABLE", "Package artifact identity cannot be read"); }
+  let artifact: {
+    packageName?: string;
+    packageVersion?: string;
+    compatibilityLine?: string;
+    skillVersion?: string;
+    sourceSha?: string;
+    buildId?: string;
+    identity?: { contracts?: { serviceVersion?: string } };
+  };
+  try {
+    artifact = JSON.parse(readFileSync(join(root, "artifact-manifest.json"), "utf8"));
+  } catch {
+    throw new ContractError(
+      "PACKAGE_IDENTITY_UNAVAILABLE",
+      "Package artifact identity cannot be read",
+    );
+  }
   requireCondition(
     artifact.packageName === config.package_name &&
       artifact.packageVersion === config.package_version &&
@@ -39,12 +53,23 @@ function verifyPackageIdentity(config: ReturnType<ServiceState["config"]>): void
     "Package artifact identity does not match service configuration",
   );
 }
-export async function waitForServiceHealth<T>(check: () => Promise<T>, timeoutMs = SERVICE_STARTUP_TIMEOUT_MS): Promise<T> {
-  requireCondition(Number.isFinite(timeoutMs) && timeoutMs > 0, "INVALID_TIMEOUT", "Startup timeout must be finite and positive");
+export async function waitForServiceHealth<T>(
+  check: () => Promise<T>,
+  timeoutMs = SERVICE_STARTUP_TIMEOUT_MS,
+): Promise<T> {
+  requireCondition(
+    Number.isFinite(timeoutMs) && timeoutMs > 0,
+    "INVALID_TIMEOUT",
+    "Startup timeout must be finite and positive",
+  );
   const deadline = performance.now() + timeoutMs;
   let failure: unknown;
   do {
-    try { return await check(); } catch (error) { failure = error; }
+    try {
+      return await check();
+    } catch (error) {
+      failure = error;
+    }
     const remaining = deadline - performance.now();
     if (remaining <= 0) break;
     await Runtime.sleep(Math.min(100, remaining));
@@ -54,15 +79,12 @@ export async function waitForServiceHealth<T>(check: () => Promise<T>, timeoutMs
 
 export async function serviceStatus(state: ServiceState) {
   const config = state.config();
-  const response = await fetch(
-    `http://127.0.0.1:${config.port}/api/v1/status`,
-    {
-      headers: {
-        authorization: "Bearer " + new ServiceAuth(state).credential(),
-      },
-      signal: AbortSignal.timeout(1500),
+  const response = await fetch(`http://127.0.0.1:${config.port}/api/v1/status`, {
+    headers: {
+      authorization: "Bearer " + new ServiceAuth(state).credential(),
     },
-  );
+    signal: AbortSignal.timeout(1500),
+  });
   requireCondition(
     response.ok,
     "SERVICE_UNAVAILABLE",
@@ -94,7 +116,11 @@ export async function serviceStatus(state: ServiceState) {
   );
   const configIdentity = [config.package_name, config.package_version].filter(Boolean).join("@");
   const actualIdentity = [result.package_name, result.package_version].filter(Boolean).join("@");
-  requireCondition(!configIdentity || configIdentity === actualIdentity, "SERVICE_IDENTITY_MISMATCH", "Running daemon package identity mismatch");
+  requireCondition(
+    !configIdentity || configIdentity === actualIdentity,
+    "SERVICE_IDENTITY_MISMATCH",
+    "Running daemon package identity mismatch",
+  );
   return result;
 }
 export async function ensureService(
@@ -114,67 +140,54 @@ export async function ensureService(
     const candidate = discoverCandidate(state);
     if (candidate) await switchRelease(state, join(state.paths.candidates, candidate.build_id));
   }
-  return withExclusiveLockAsync(
-    join(state.paths.state, "startup.lock"),
-    async () => {
-      const config = state.config();
-      const manifest = config.package_name && config.package_version
+  return withExclusiveLockAsync(join(state.paths.state, "startup.lock"), async () => {
+    const config = state.config();
+    const manifest =
+      config.package_name && config.package_version
         ? packageReleaseManifest(config)
         : verifyRelease(join(state.paths.releases, config.current_build));
-      if (!config.package_name) requireSourceRelease(manifest);
-      requireCondition(
-        manifest.api_versions.includes(input.api_version),
-        "INCOMPATIBLE_API",
-        "Installed build requires explicit maintenance",
-      );
-      for (let attempt = 0; ; attempt++) {
-        requireCondition(
-          attempt < 100,
-          "SERVICE_STOPPING",
-          "Viewer did not finish stopping",
-        );
-        state.transaction((runtime) => {
-          if (runtime.pid !== null && !processAlive(runtime.pid)) {
-            runtime.phase = "stopped";
-            runtime.pid = null;
-          }
-        });
-        try {
-          state.renew(
-            agentLease({ ...input, api_version: 1 }),
-            config.agent_ttl_ms,
-          );
-          break;
-        } catch (error) {
-          if (
-            !(error instanceof ContractError) ||
-            error.code !== "SERVICE_STOPPING"
-          )
-            throw error;
-          await Runtime.sleep(100);
+    if (!config.package_name) requireSourceRelease(manifest);
+    requireCondition(
+      manifest.api_versions.includes(input.api_version),
+      "INCOMPATIBLE_API",
+      "Installed build requires explicit maintenance",
+    );
+    for (let attempt = 0; ; attempt++) {
+      requireCondition(attempt < 100, "SERVICE_STOPPING", "Viewer did not finish stopping");
+      state.transaction((runtime) => {
+        if (runtime.pid !== null && !processAlive(runtime.pid)) {
+          runtime.phase = "stopped";
+          runtime.pid = null;
         }
+      });
+      try {
+        state.renew(agentLease({ ...input, api_version: 1 }), config.agent_ttl_ms);
+        break;
+      } catch (error) {
+        if (!(error instanceof ContractError) || error.code !== "SERVICE_STOPPING") throw error;
+        await Runtime.sleep(100);
       }
-      try {
-        const current = await serviceStatus(state);
-        return {
-          ...current,
-          url: `http://127.0.0.1:${config.port}/runs/${encodeURIComponent(input.run_id)}/`,
-        };
-      } catch {}
-      start();
-      try {
-        const current = await waitForServiceHealth(() => serviceStatus(state));
-        return {
-          ...current,
-          url: `http://127.0.0.1:${config.port}/runs/${encodeURIComponent(input.run_id)}/`,
-        };
-      } catch {}
-      throw new ContractError(
-        "SERVICE_START_FAILED",
-        "Viewer did not become healthy; use service doctor",
-      );
-    },
-  );
+    }
+    try {
+      const current = await serviceStatus(state);
+      return {
+        ...current,
+        url: `http://127.0.0.1:${config.port}/runs/${encodeURIComponent(input.run_id)}/`,
+      };
+    } catch {}
+    start();
+    try {
+      const current = await waitForServiceHealth(() => serviceStatus(state));
+      return {
+        ...current,
+        url: `http://127.0.0.1:${config.port}/runs/${encodeURIComponent(input.run_id)}/`,
+      };
+    } catch {}
+    throw new ContractError(
+      "SERVICE_START_FAILED",
+      "Viewer did not become healthy; use service doctor",
+    );
+  });
 }
 
 export async function runDaemon(
@@ -185,7 +198,10 @@ export async function runDaemon(
     assetsDir: string;
     revision: () => string;
     connectObserver?: ConnectObserver;
-    demoHooks?: Pick<import("../lib/server-contract").DashboardOptions, "connectObserver" | "archiveProvider" | "getProfileCapabilities">;
+    demoHooks?: Pick<
+      import("../lib/server-contract").DashboardOptions,
+      "connectObserver" | "archiveProvider" | "getProfileCapabilities"
+    >;
   },
 ) {
   requireCondition(
@@ -197,17 +213,16 @@ export async function runDaemon(
   const config = state.config();
   const packageBacked = Boolean(config.package_name && config.package_version);
   if (packageBacked) verifyPackageIdentity(config);
-  const manifest = source?.manifest ??
-    (packageBacked ? packageReleaseManifest(config) : verifyRelease(join(state.paths.releases, config.current_build)));
+  const manifest =
+    source?.manifest ??
+    (packageBacked
+      ? packageReleaseManifest(config)
+      : verifyRelease(join(state.paths.releases, config.current_build)));
   // Isolated live-source previews use metadata, not an installed release package.
   // Installed services must still reject legacy executable bundles.
   if (!source && !packageBacked) requireSourceRelease(manifest);
   const lifetime = tryLockFile(join(state.paths.state, "instance.lock"));
-  requireCondition(
-    lifetime,
-    "SERVICE_ALREADY_RUNNING",
-    "Another viewer instance is running",
-  );
+  requireCondition(lifetime, "SERVICE_ALREADY_RUNNING", "Another viewer instance is running");
   const generation = randomUUID();
   const registry = new PortRegistry(config.registry_dir);
   let viewer: Awaited<ReturnType<typeof startSharedViewer>> | undefined;
@@ -217,8 +232,11 @@ export async function runDaemon(
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   // Diagnostics must not turn a recovered heartbeat into another outage.
   const log = (event: Parameters<typeof serviceLog>[1], details: Record<string, unknown> = {}) => {
-    try { serviceLog(state.paths, event, generation, manifest.build_id, details); }
-    catch { console.error("VIEWER_DIAGNOSTIC_WRITE_FAILED"); }
+    try {
+      serviceLog(state.paths, event, generation, manifest.build_id, details);
+    } catch {
+      console.error("VIEWER_DIAGNOSTIC_WRITE_FAILED");
+    }
   };
   type ShutdownReason =
     | "requested"
@@ -233,7 +251,11 @@ export async function runDaemon(
     if (stopping) return stopping;
     const stopStartedAt = new Date().toISOString();
     stopping = (async () => {
-      log("stopping", {stop_reason: reason, stop_started_at: stopStartedAt, ...(errorCode ? {error_code: errorCode} : {})});
+      log("stopping", {
+        stop_reason: reason,
+        stop_started_at: stopStartedAt,
+        ...(errorCode ? { error_code: errorCode } : {}),
+      });
       clearInterval(timer);
       clearInterval(heartbeat);
       try {
@@ -271,16 +293,20 @@ export async function runDaemon(
     })();
     return stopping;
   };
-  const terminate = () => { void shutdown("SIGTERM"); };
-  const interrupt = () => { void shutdown("SIGINT"); };
+  const terminate = () => {
+    void shutdown("SIGTERM");
+  };
+  const interrupt = () => {
+    void shutdown("SIGINT");
+  };
   // Only this typed registry failure is known to be transient. Unknown errors
   // and ownership changes still fence the viewer immediately. No error message
   // enters logs: messages may contain private paths or command inputs.
   let heartbeatFailures = 0;
   const errorCode = (error: unknown) =>
-    error instanceof RegistryError &&
-    error.code === "REGISTRY_LOCK_TIMEOUT"
-      ? "REGISTRY_LOCK_TIMEOUT" : "INTERNAL_ERROR";
+    error instanceof RegistryError && error.code === "REGISTRY_LOCK_TIMEOUT"
+      ? "REGISTRY_LOCK_TIMEOUT"
+      : "INTERNAL_ERROR";
   try {
     state.transaction((runtime) => {
       runtime.generation = generation;
@@ -314,7 +340,12 @@ export async function runDaemon(
           config.port,
           source?.revision,
           source?.name,
-          source ? { ...source.demoHooks, connectObserver: source.demoHooks?.connectObserver ?? source.connectObserver } : undefined,
+          source
+            ? {
+                ...source.demoHooks,
+                connectObserver: source.demoHooks?.connectObserver ?? source.connectObserver,
+              }
+            : undefined,
         );
         return viewer;
       },
@@ -359,7 +390,11 @@ export async function runDaemon(
           heartbeatFailures++;
           if (code !== "REGISTRY_LOCK_TIMEOUT" || heartbeatFailures >= 3)
             return shutdown("registry_heartbeat_error", code);
-          log("maintenance_failed", { operation: "registry_heartbeat", error_code: code, consecutive_failures: heartbeatFailures });
+          log("maintenance_failed", {
+            operation: "registry_heartbeat",
+            error_code: code,
+            consecutive_failures: heartbeatFailures,
+          });
         })
         .finally(() => {
           heartbeating = false;

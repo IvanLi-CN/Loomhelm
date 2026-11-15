@@ -1,16 +1,23 @@
-import { existsSync, readdirSync, lstatSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { z } from "zod";
 import { readRegularNoFollow } from "@loomhelm/runtime-core/modules/visual/secure_io";
-import { ServiceState } from "../lib/service-state";
-import { verifyRelease, digest } from "../lib/service-release";
-import { ledgerContract, packageReleaseManifest, type ReleaseManifest } from "../lib/service-contract";
-import { validateLedger } from "../lib/schema";
+import { z } from "zod";
 import { ContractError, requireCondition } from "../lib/errors";
+import { validateLedger } from "../lib/schema";
+import {
+  ledgerContract,
+  packageReleaseManifest,
+  type ReleaseManifest,
+} from "../lib/service-contract";
+import { digest, verifyRelease } from "../lib/service-release";
+import type { ServiceState } from "../lib/service-state";
 import { stable } from "../lib/store-migration";
 
-const readerCache = new Map<string, { ok: true; contract: string; revision: number } | { ok: false; code: string }>();
+const readerCache = new Map<
+  string,
+  { ok: true; contract: string; revision: number } | { ok: false; code: string }
+>();
 
 function releaseReader(
   releaseRoot: string,
@@ -20,36 +27,52 @@ function releaseReader(
   const cached = readerCache.get(cacheKey);
   if (cached) return cached;
   try {
-    const result = spawnSync(
-      join(releaseRoot, "viewer"), ["reader-check", "--input", "-"],
-      {
-        input: JSON.stringify({ ledger }), encoding: "utf8", timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
-        env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" },
-      },
-    );
+    const result = spawnSync(join(releaseRoot, "viewer"), ["reader-check", "--input", "-"], {
+      input: JSON.stringify({ ledger }),
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" },
+    });
     if (result.status !== 0) {
       const failure = { ok: false as const, code: "LEDGER_UNREADABLE" };
       readerCache.set(cacheKey, failure);
       return failure;
     }
-    const parsed = z.object({
-      ok: z.literal(true),
-      code: z.literal("OK"),
-      result: z.object({ contract: z.string().min(1), revision: z.number().int().nonnegative() }).strict(),
-    }).strict().parse(JSON.parse(result.stdout.toString()));
+    const parsed = z
+      .object({
+        ok: z.literal(true),
+        code: z.literal("OK"),
+        result: z
+          .object({ contract: z.string().min(1), revision: z.number().int().nonnegative() })
+          .strict(),
+      })
+      .strict()
+      .parse(JSON.parse(result.stdout.toString()));
     const expectedContracts = new Set<string>([ledgerContract(ledger)]);
     try {
       const normalized = structuredClone(ledger);
       validateLedger(normalized);
       expectedContracts.add(ledgerContract(normalized));
     } catch {}
-    const expectedRevision = z.number().int().nonnegative().parse((ledger as { revision?: unknown }).revision);
-    if (!expectedContracts.has(parsed.result.contract) || parsed.result.revision !== expectedRevision) {
+    const expectedRevision = z
+      .number()
+      .int()
+      .nonnegative()
+      .parse((ledger as { revision?: unknown }).revision);
+    if (
+      !expectedContracts.has(parsed.result.contract) ||
+      parsed.result.revision !== expectedRevision
+    ) {
       const failure = { ok: false as const, code: "LEDGER_UNREADABLE" };
       readerCache.set(cacheKey, failure);
       return failure;
     }
-    const success = { ok: true as const, contract: parsed.result.contract, revision: parsed.result.revision };
+    const success = {
+      ok: true as const,
+      contract: parsed.result.contract,
+      revision: parsed.result.revision,
+    };
     readerCache.set(cacheKey, success);
     return success;
   } catch {
@@ -58,7 +81,11 @@ function releaseReader(
     return failure;
   }
 }
-function releaseRootFor(state: ServiceState, manifest: ReleaseManifest, preferred?: string): string | null {
+function releaseRootFor(
+  state: ServiceState,
+  manifest: ReleaseManifest,
+  preferred?: string,
+): string | null {
   for (const root of [
     preferred,
     join(state.paths.releases, manifest.build_id),
@@ -75,15 +102,31 @@ function releaseRootFor(state: ServiceState, manifest: ReleaseManifest, preferre
 function releaseReadOnlyView(root: string, ledger: unknown): boolean {
   try {
     const result = spawnSync(join(root, "viewer"), ["read-only-view", "--input", "-"], {
-      input: JSON.stringify({ ledger }), encoding: "utf8", timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
+      input: JSON.stringify({ ledger }),
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 4 * 1024 * 1024,
       env: { ...process.env, BUN_OPTIONS: "", NODE_OPTIONS: "" },
     });
     if (result.status !== 0) return false;
-    const parsed = z.object({ ok: z.literal(true), code: z.literal("OK"), result: z.object({ view: z.record(z.string(), z.unknown()) }).strict() }).strict().parse(JSON.parse(result.stdout.toString()));
+    const parsed = z
+      .object({
+        ok: z.literal(true),
+        code: z.literal("OK"),
+        result: z.object({ view: z.record(z.string(), z.unknown()) }).strict(),
+      })
+      .strict()
+      .parse(JSON.parse(result.stdout.toString()));
     const view = parsed.result.view as { orchestration?: { id?: unknown; revision?: unknown } };
-    if (view.orchestration?.id !== (ledger as { orchestration_id?: unknown }).orchestration_id || view.orchestration?.revision !== (ledger as { revision?: unknown }).revision) return false;
+    if (
+      view.orchestration?.id !== (ledger as { orchestration_id?: unknown }).orchestration_id ||
+      view.orchestration?.revision !== (ledger as { revision?: unknown }).revision
+    )
+      return false;
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
 export const downgradeApproval = z
@@ -101,7 +144,9 @@ export function compatibilityReport(
 ) {
   const config = existsSync(join(state.paths.config, "service.json")) ? state.config() : null;
   const current = config
-    ? (config.package_name && config.package_version ? packageReleaseManifest(config) : verifyRelease(join(state.paths.releases, config.current_build)))
+    ? config.package_name && config.package_version
+      ? packageReleaseManifest(config)
+      : verifyRelease(join(state.paths.releases, config.current_build))
     : null;
   const errors: { run_id: string; capability: string; code: string }[] = [];
   const runs: {
@@ -123,20 +168,36 @@ export function compatibilityReport(
   if (!config?.package_name && existsSync(state.paths.releases)) {
     const prior = readdirSync(state.paths.releases, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => { try { return verifyRelease(join(state.paths.releases, entry.name)); } catch { return null; } })
-      .filter((manifest): manifest is ReleaseManifest => Boolean(manifest) && manifest.schema_version === 2 && manifest.build_id !== target.build_id)
+      .map((entry) => {
+        try {
+          return verifyRelease(join(state.paths.releases, entry.name));
+        } catch {
+          return null;
+        }
+      })
+      .filter(
+        (manifest): manifest is ReleaseManifest =>
+          Boolean(manifest) &&
+          manifest.schema_version === 2 &&
+          manifest.build_id !== target.build_id,
+      )
       .sort((left, right) => right.service_version.localeCompare(left.service_version))
       .slice(0, 4);
     for (const release of prior) {
       for (const contract of release.writable) {
-        if (contract !== "schema-2/contract-3" && !target.readable.includes(contract)) releaseWindowErrors.push({ run_id: `release:${release.service_version}`, capability: "release_window", code: "INCOMPATIBLE_RELEASE_WINDOW" });
+        if (contract !== "schema-2/contract-3" && !target.readable.includes(contract))
+          releaseWindowErrors.push({
+            run_id: `release:${release.service_version}`,
+            capability: "release_window",
+            code: "INCOMPATIBLE_RELEASE_WINDOW",
+          });
       }
     }
   }
   errors.push(...releaseWindowErrors);
   if (existsSync(root))
-    for (const entry of readdirSync(root, { withFileTypes: true }).sort(
-      (a, b) => a.name.localeCompare(b.name),
+    for (const entry of readdirSync(root, { withFileTypes: true }).sort((a, b) =>
+      a.name.localeCompare(b.name),
     )) {
       if (entry.name.startsWith(".")) continue;
       const row = {
@@ -155,11 +216,7 @@ export function compatibilityReport(
       };
       runs.push(row);
       try {
-        requireCondition(
-          entry.isDirectory(),
-          "UNSAFE_PATH",
-          "Run must be a directory",
-        );
+        requireCondition(entry.isDirectory(), "UNSAFE_PATH", "Run must be a directory");
         const bytes = readRegularNoFollow(
           join(root, entry.name, "ledger.json"),
           state.paths.root,
@@ -180,25 +237,35 @@ export function compatibilityReport(
         validateLedger(raw);
         const currentRoot = current ? releaseRootFor(state, current) : null;
         const packageBacked = Boolean(config?.package_name && config.package_version);
-        const currentReader = packageBacked && current && current.readable.includes(row.contract)
-          ? { ok: true as const, contract: row.contract, revision: raw.revision }
-          : current && currentRoot
-            ? releaseReader(currentRoot, raw)
-            : { ok: false as const, code: "NO_CURRENT_RELEASE" };
-        row.current_readable = currentReader.ok && current?.readable.includes(row.contract) === true;
-        row.current_writable =
-          current?.writable.includes(row.contract) ?? false;
+        const currentReader =
+          packageBacked && current && current.readable.includes(row.contract)
+            ? { ok: true as const, contract: row.contract, revision: raw.revision }
+            : current && currentRoot
+              ? releaseReader(currentRoot, raw)
+              : { ok: false as const, code: "NO_CURRENT_RELEASE" };
+        row.current_readable =
+          currentReader.ok && current?.readable.includes(row.contract) === true;
+        row.current_writable = current?.writable.includes(row.contract) ?? false;
         const targetReleaseRoot = releaseRootFor(state, target, targetRoot);
-        const targetReader = target.readable.includes(row.contract) && packageBacked
-          ? { ok: true as const, contract: row.contract, revision: raw.revision }
-          : target.readable.includes(row.contract) && targetReleaseRoot
-            ? releaseReader(targetReleaseRoot, raw)
-          : { ok: false as const, code: "INCOMPATIBLE_LEDGER" };
+        const targetReader =
+          target.readable.includes(row.contract) && packageBacked
+            ? { ok: true as const, contract: row.contract, revision: raw.revision }
+            : target.readable.includes(row.contract) && targetReleaseRoot
+              ? releaseReader(targetReleaseRoot, raw)
+              : { ok: false as const, code: "INCOMPATIBLE_LEDGER" };
         row.target_readable = targetReader.ok;
         row.target_writable = target.writable.includes(row.contract);
-        row.fallback_build_id = !targetReader.ok && currentReader.ok && currentRoot && releaseReadOnlyView(currentRoot, raw) ? current?.build_id ?? null : null;
+        row.fallback_build_id =
+          !targetReader.ok &&
+          currentReader.ok &&
+          currentRoot &&
+          releaseReadOnlyView(currentRoot, raw)
+            ? (current?.build_id ?? null)
+            : null;
         row.fallback_readable = Boolean(row.fallback_build_id);
-        row.migration_guides = (target.migration_guides ?? []).filter((guide) => guide.required_for.includes(row.contract!)).map((guide) => guide.id);
+        row.migration_guides = (target.migration_guides ?? [])
+          .filter((guide) => guide.required_for.includes(row.contract!))
+          .map((guide) => guide.id);
         if (!row.target_readable && !row.fallback_readable)
           errors.push({
             run_id: entry.name,
@@ -224,8 +291,7 @@ export function compatibilityReport(
         errors.push({
           run_id: entry.name,
           capability: "read",
-          code:
-            error instanceof ContractError ? error.code : "LEDGER_UNREADABLE",
+          code: error instanceof ContractError ? error.code : "LEDGER_UNREADABLE",
         });
       }
     }
@@ -260,12 +326,7 @@ export function requireReport(
         report,
       );
   } else
-    requireCondition(
-      !approval,
-      "UNEXPECTED_APPROVAL",
-      "No write downgrade requires approval",
-      3,
-    );
+    requireCondition(!approval, "UNEXPECTED_APPROVAL", "No write downgrade requires approval", 3);
 }
 export function selectedRelease(
   state: ServiceState,

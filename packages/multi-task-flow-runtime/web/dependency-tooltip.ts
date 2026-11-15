@@ -1,5 +1,5 @@
-import { attachTooltip } from "./tooltip";
 import { renderStatusRow } from "./status-row";
+import { attachTooltip } from "./tooltip";
 
 export type DependencyTooltipItem = {
   name: string;
@@ -8,7 +8,10 @@ export type DependencyTooltipItem = {
   completedAt?: string | null | undefined;
 };
 
-export function renderDependencyTooltip(items: DependencyTooltipItem[], label: string): HTMLElement {
+export function renderDependencyTooltip(
+  items: DependencyTooltipItem[],
+  label: string,
+): HTMLElement {
   const wrapper = document.createElement("span");
   wrapper.className = "dependency-tooltip-wrap";
   const trigger = document.createElement("button");
@@ -19,7 +22,11 @@ export function renderDependencyTooltip(items: DependencyTooltipItem[], label: s
   return wrapper;
 }
 
-export function attachDependencyTooltip(trigger: HTMLElement, items: DependencyTooltipItem[], label: string): HTMLElement {
+export function attachDependencyTooltip(
+  trigger: HTMLElement,
+  items: DependencyTooltipItem[],
+  label: string,
+): HTMLElement {
   const content = document.createElement("div");
   if (!items.length) {
     content.className = "dependency-tooltip-empty";
@@ -28,7 +35,13 @@ export function attachDependencyTooltip(trigger: HTMLElement, items: DependencyT
     const list = document.createElement("ul");
     for (const item of items) {
       const row = document.createElement("li");
-      row.append(renderStatusRow({ name: item.name, status: item.status ?? "unknown", completedAt: item.completedAt }));
+      row.append(
+        renderStatusRow({
+          name: item.name,
+          status: item.status ?? "unknown",
+          completedAt: item.completedAt,
+        }),
+      );
       if (item.state) {
         const description = document.createElement("span");
         description.className = "dependency-tooltip-state";
