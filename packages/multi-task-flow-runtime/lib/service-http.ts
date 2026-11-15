@@ -318,7 +318,7 @@ export async function startSharedViewer(
         ? [process.execPath, new URL("../scripts/viewer-worker-process.ts", import.meta.url).pathname]
         : [process.execPath, "x", "--bun", "--package", `@loomhelm/multi-task-flow@${selected.package_version}`, "multi-task-flow", "worker-process"];
       const child = Bun.spawn(childCommand, {
-        env: { ...process.env, MTF_WORKER_SOCKET: socketPath, MTF_WORKER_KEY: workerKey, MTF_WORKER_GENERATION: generation, MTF_WORKER_DATA_ROOT: state.paths.data, MTF_WORKER_PORT: String(gatewayPort) },
+        env: { ...process.env, MTF_WORKER_SOCKET: socketPath, MTF_WORKER_KEY: workerKey, MTF_WORKER_GENERATION: generation, MTF_WORKER_DATA_ROOT: state.paths.data, MTF_WORKER_PORT: String(gatewayPort), MTF_WORKER_ASSETS: assetsDir },
         stdout: "ignore", stderr: "ignore",
       });
       const deadline = Date.now() + 1_500;
