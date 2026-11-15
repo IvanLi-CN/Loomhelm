@@ -26,6 +26,18 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 
 原子图、任务图和交付单元图 MUST 使用同一份 canonical 原子数据，聚合投影 MUST 保留回溯到原子节点、条件、证据和阻塞原因的路径；历史格式只能按兼容合同读取或经可恢复的显式迁移处理。
 
+### REQ-VIEWER-ATOMIC-001
+
+原子依赖图 MUST 展示 canonical `AtomicNode` 与 `AtomicEdge` 中所有已持久化的节点和边，即使图存在环、孤儿节点、缺失依赖或顺序冲突；viewer MUST 通过节点、边和详情警告标记异常区域，不得通过过滤异常事实制造一个看似合法的子图。
+
+### REQ-VIEWER-ATOMIC-002
+
+交付单元和任务详情中的原子任务列表 MUST 从同一份原子依赖图推导顺序；无环图使用以稳定节点 ID 作为并列 tie-breaker 的稳定拓扑排序，有环图使用强连通分量的稳定回退顺序，并 MUST 显示无法形成合法线性顺序的诊断。系统 MUST NOT 持久化独立的 `display_order` 作为第二个顺序事实。
+
+### REQ-VIEWER-ATOMIC-003
+
+原子任务状态 MUST 仅由状态图标表达；用户聚焦的节点使用聚焦样式；viewer MUST NOT 因节点是第一项或第一个 `planned` 节点而自动添加“当前待推进项”样式。
+
 ### REQ-SCHEDULE-001
 
 计划在批准前 MUST 通过完整理论排期校验；任一可执行节点缺少可计算的正确定时、存在悬空依赖、循环依赖、未批准计划或其他导致开始/结束偏移不可确定的情况时，批准和 scheduled 状态转换 MUST 被拒绝。
@@ -57,6 +69,12 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 - covers: `REQ-ATOMIC-004`
 - Method: viewer projection、原子依赖图、聚合依赖回溯、历史兼容和迁移测试。
 - Pass condition: 三种图使用同一 canonical 数据，页面可定位具体原子和证据，历史数据不会被无语义推断地覆盖或清理。
+
+### VER-VIEWER-ATOMIC-001
+
+- covers: `REQ-VIEWER-ATOMIC-001`, `REQ-VIEWER-ATOMIC-002`, `REQ-VIEWER-ATOMIC-003`
+- Method: viewer projection、原子图和详情内容测试，覆盖合法 DAG、并列节点、环、孤儿节点、缺失依赖、开始/结束节点、里程碑、选中节点和状态图标。
+- Pass condition: 所有 canonical 节点与边始终可见；合法 DAG 的详情顺序与依赖一致；非法图显示完整事实和异常原因；不产生第二顺序字段；列表不再自动高亮第一个 planned 节点。
 
 ### VER-SCHEDULE-001
 

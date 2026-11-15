@@ -758,6 +758,11 @@ export type Ledger = z.infer<typeof ledgerSchema>;
 export type Plan = z.infer<typeof plan>;
 export type Task = z.infer<typeof task>;
 
+/** Parse the durable shape for read-only compatibility views without applying write-time graph rules. */
+export function parseLedger(value: unknown): Ledger {
+  return ledgerSchema.parse(normalizeLegacyLedger(value));
+}
+
 export const TASK_EXECUTION_POLICY_FIELDS = [
   "execution_owner",
   "conversation_policy",
@@ -2246,7 +2251,7 @@ function validateDeliveryUnits(ledger: Ledger): void {
 }
 
 export function validateLedger(value: unknown): Ledger {
-  const parsed = ledgerSchema.parse(normalizeLegacyLedger(value));
+  const parsed = parseLedger(value);
   validateDeliveryUnits(parsed);
   if (parsed.atomic_nodes.length || parsed.atomic_edges.some((edge) => "from_node_id" in edge)) {
     requireCondition(

@@ -13,6 +13,7 @@ import {
   planCompletenessIssues,
   taskExecutionPolicyIssues,
   theoreticalScheduleIssues,
+  parseLedger,
   validateLedger,
   type Ledger,
   type Plan,
@@ -821,8 +822,9 @@ export function buildView(
   input: unknown,
   planId?: string,
   outputs: Record<string, AgentOutput> = {},
+  options: { readOnly?: boolean } = {},
 ): Record<string, unknown> {
-  const ledger = validateLedger(input);
+  const ledger = options.readOnly ? parseLedger(input) : validateLedger(input);
   const plan = ledger.plans.find(
     (item) => item.id === (planId ?? ledger.active_plan_id),
   );
