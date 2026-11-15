@@ -74,7 +74,7 @@ function record(value: unknown): JsonRecord | null {
 
 function notificationRequestOf(value: unknown): JsonRecord | null {
   const result = record(record(value)?.result);
-  const request = record(result?.notification_request);
+  const request = record(result?.notification_request) ?? record(result?.readiness_notification_request);
   if (
     typeof request?.notification_id !== "string" ||
     typeof request?.event_id !== "string" ||
@@ -114,10 +114,12 @@ function notificationPrompt(
     "outcome",
     "operation_id",
     "evidence",
+    "task_ids",
+    "trigger_command",
   ]) {
-    const value = payload?.[key];
-    if (typeof value === "string" && value.length > 0)
-      lines.push(`${key}: ${value}`);
+    const value = payload?.[key] ?? record(event?.data)?.[key];
+    if (typeof value === "string" && value.length > 0) lines.push(`${key}: ${value}`);
+    else if (Array.isArray(value) && value.length > 0) lines.push(`${key}: ${value.join(", ")}`);
   }
   const reason = record(event?.data)?.reason;
   if (typeof reason === "string" && reason.length > 0)
@@ -558,9 +560,11 @@ try {
             "tasks",
             "operations",
             "notifications",
+            "task-context",
             "full",
           ])
           .optional(),
+        task_id: id.optional(),
       })
       .strict()
       .parse(input);
@@ -581,6 +585,18 @@ try {
         3,
       );
     const section = parsed.section ?? "full";
+    if (section === "task-context" && !parsed.task_id)
+      throw new ContractError("INVALID_INPUT", "task-context requires task_id", 2);
+    const contextTask = parsed.task_id ? ledger.tasks.find(item => item.id === parsed.task_id) : null;
+    if (section === "task-context" && (!contextTask || contextTask.thread_id !== parsed.actor.thread_id))
+      throw new ContractError("ACTOR_MISMATCH", "Task context is limited to the bound task conversation", 3);
+    const contextPlan = ledger.plans.find(item => item.id === ledger.execution_plan_id);
+    const contextNode = contextPlan?.nodes.find(item => item.kind === "task" && item.ref_id === parsed.task_id);
+    const contextEdges = contextPlan?.edges.filter(edge => edge.from_node_id === contextNode?.id || edge.to_node_id === contextNode?.id) ?? [];
+    const contextAtomicNodes = (contextPlan?.atomic_nodes ?? ledger.atomic_nodes).filter(node =>
+      node.kind === "work" && node.scope?.kind === "task" && node.scope.task_id === parsed.task_id ||
+      node.kind === "milestone" && node.scope?.kind === "task" && node.scope.task_id === parsed.task_id,
+    );
     const sections = {
       summary: {
         orchestration_id: ledger.orchestration_id,
@@ -591,6 +607,16 @@ try {
       tasks: ledger.tasks,
       operations: ledger.operations,
       notifications: ledger.notifications,
+      "task-context": {
+        task: contextTask,
+        delivery_unit: contextTask ? ledger.groups.find(item => item.id === contextTask.group_id) : null,
+        plan_node: contextNode ?? null,
+        dependency_edges: contextEdges,
+        atomic_nodes: contextAtomicNodes,
+        atomic_edges: (contextPlan?.atomic_edges ?? ledger.atomic_edges).filter(edge => contextAtomicNodes.some(node => node.id === edge.from_node_id || node.id === edge.to_node_id)),
+        resources: contextTask ? ledger.resources.filter(resource => resource.target === contextTask.id || resource.target === contextTask.thread_id || resource.target === contextTask.branch) : [],
+        ready: parsed.task_id ? ready(ledger, parsed.task_id) : false,
+      },
       full: ledger,
     };
     console.log(

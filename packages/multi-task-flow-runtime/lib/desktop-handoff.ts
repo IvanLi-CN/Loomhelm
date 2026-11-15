@@ -14,7 +14,7 @@ export function desktopHandoff(ledger: Ledger, operationId: string, prompt: stri
     thread_id: receipt.thread_id,
     next_action: "send_message_to_thread",
     formal_prompt: [
-      `run_id: ${ledger.orchestration_id}; ${groupTarget ? "group" : "task"}_id: ${target.id}`,
+      `$multi-task-flow\nrun_id: ${ledger.orchestration_id}; ${groupTarget ? "group" : "task"}_id: ${target.id}${groupTarget ? "" : `; delivery_unit_id: ${(target as Ledger["tasks"][number]).group_id}`}`,
       `Repository: ${repository.host}/${repository.owner}/${repository.name}; mainline: ${repository.target_branch}`,
       `Workspace: ${evidence.workspace_path}; owner thread: ${receipt.thread_id}; initial HEAD (not development baseline): ${evidence.initial_head}`,
       groupTarget
@@ -24,6 +24,7 @@ export function desktopHandoff(ledger: Ledger, operationId: string, prompt: stri
           : `开发基线必须是组 ${owner.id} 父分支 ${(owner as Ledger["groups"][number]).parent_branch} 的已核验 SHA ${(owner as Ledger["groups"][number]).current_sha}；先向账本核对最新值，不能自行改用主干。`,
       "先核验当前 CODEX_THREAD_ID、Codex 工作区归属元数据和干净状态。只在本次新建且归属自己的干净工作区对齐基线并建立工作分支；有改动、身份不明或基线获取失败必须报告阻塞，不能覆盖或清理。",
       "向主对话提供资源证据，由主对话通过现有 resource-update 注册资源，再由你调用 lifecycle-record workspace_ready，baseline 必须包含 sha、head、clean:true、source，组还须有 fetched_at；初始 HEAD 保留在创建证据。门禁通过后才可进入 running。",
+      groupTarget ? "读取本组完整编排并按原子顺序推进到 closeout；只在阻塞、完成或产生可派发任务时通知主 Agent。" : `使用 exact-version CLI 的 show/view task-context 读取任务 ${target.id}、所属交付单元、前后继、原子、验收和阻塞事实；按账本顺序自主推进到 closeout。PR merge 可以解锁后继任务，但不代表当前任务完成。`,
       groupTarget ? "遵守本组范围和验收合同。" : `Owned surfaces: ${JSON.stringify((target as Ledger["tasks"][number]).owned_surfaces)}`,
       "你不是独自工作，保留其他 Agent 的改动。以下为正式任务及验收要求：",
       prompt,

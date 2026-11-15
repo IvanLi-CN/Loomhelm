@@ -5658,7 +5658,31 @@ export function apply(
     4,
   );
   const candidate = structuredClone(normalized);
+  const readinessCommands = new Set(["atom-update", "task-update", "merge-resolve", "group-base-reconcile", "lifecycle-record", "milestone-record", "fact-record", "task-equivalent-integrate"]);
+  const readinessBefore = readinessCommands.has(command)
+    ? new Map(candidate.tasks.filter(task => task.disposition === "active").map(task => [task.id, ready(candidate, task.id)]))
+    : new Map<string, boolean>();
   const result = execute(candidate, command, request);
+  const newlyReady = readinessCommands.has(command) ? candidate.tasks
+    .filter(task => task.disposition === "active" && task.thread_id === null && !candidate.operations.some(op => op.kind === "dispatch" && op.target_id === task.id) && !readinessBefore.get(task.id) && ready(candidate, task.id))
+    .map(task => task.id) : [];
+  if (newlyReady.length > 0) {
+    const eventId = `${request.request_id}-ready`;
+    addEvent(candidate, { ...request, request_id: eventId }, "task_ready", candidate.orchestration_id, {
+      task_ids: newlyReady,
+      trigger_command: command,
+      trigger_request_id: request.request_id,
+    });
+    const notice = notificationDirective(candidate, request, { notification: { mode: "auto", recipient: "owner" } }, true);
+    if (notice.enabled && typeof result === "object" && result !== null && !Array.isArray(result) && !("notification_request" in result)) {
+      const notification = addNotificationIntent(candidate, { ...request, request_id: eventId }, notice.recipient_thread_id!);
+      Object.assign(result, {
+        readiness_notification_id: notification.id,
+        readiness_notification_request: notificationDeliveryRequest(notification),
+        ready_task_ids: newlyReady,
+      });
+    }
+  }
   candidate.revision += 1;
   candidate.updated_at = now();
   candidate.requests.push({
