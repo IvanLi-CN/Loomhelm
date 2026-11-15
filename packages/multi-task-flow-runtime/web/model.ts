@@ -154,6 +154,9 @@ export type Group = {
   dispatch_readiness?: "ready" | "blocked" | "unknown";
   pr_merged_availability?: "available" | "unavailable";
   dispatch_diagnostics?: { code: string; message: string }[];
+  merge_capability?: { status: "satisfied" | "blocked" | "unknown"; merge_sha: string | null; evidence_refs: string[]; reason: string | null };
+  closeout_reconciliation?: { status: "valid" | "invalid" | "unknown" | "unreconciled"; reconciliation_id: string | null; reason: unknown; evidence_refs: string[] };
+  recovery?: { eligible: boolean; blockers: string[] };
 };
 
 export type Node = {
