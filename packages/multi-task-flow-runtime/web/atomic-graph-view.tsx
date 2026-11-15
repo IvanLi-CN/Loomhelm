@@ -12,20 +12,20 @@ import { dependencyLabel } from "./labels";
 type AtomicCardData = { title: string; kind: string; state: string; scope: string; color: string; direction: Direction; nodeId: string; nodeKind: "task" | "group" | "milestone" | "boundary"; boundary: "start" | "end" | null; taskId: string | null; groupId: string | null; evidence: string[]; blocker: string | null; acceptanceCount: number; diagnostics: string[]; displayMode: "compact" | "full"; interaction: "current" | "related" | "dim" | "none"; atomRole: "branch" | "implementation" | "pr-create" | "pr-merge" | "closeout" | "verification" | "other" };
 
 function kindGlyph(kind: AtomicCardData["nodeKind"], boundary: AtomicCardData["boundary"], role: AtomicCardData["atomRole"]): React.ReactNode {
-  const path = kind === "group"
-    ? "M12 3 20 7 12 11 4 7 12 3Z M4 12 12 16 20 12 M4 17 12 21 20 17"
-    : kind === "milestone"
-      ? "M12 3 21 12 12 21 3 12 12 3Z M12 8.5v7 M8.5 12h7"
-      : kind === "boundary"
-        ? (boundary === "start" ? "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M10 8l6 4-6 4Z" : "M5 5h14v14H5Z M9 9l6 6 M15 9l-6 6")
-        : role === "branch"
-          ? "M7 20V7m0 0 5-4m-5 4 5 4M7 13h7m0 0 3-3m-3 3 3 3"
-          : role === "pr-create"
-            ? "M5 4h10l4 4v12H5z M15 4v5h5 M8 14h8 M8 17h5"
-            : role === "pr-merge"
-              ? "M7 5v14m0-7h10m0 0-3-3m3 3-3 3 M17 5v4"
-              : role === "closeout"
-                ? "M5 12l4 4L19 6 M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z"
+  const path = role === "branch"
+    ? "M7 20V7m0 0 5-4m-5 4 5 4M7 13h7m0 0 3-3m-3 3 3 3"
+    : role === "pr-create"
+      ? "M5 4h10l4 4v12H5z M15 4v5h5 M8 14h8 M8 17h5"
+      : role === "pr-merge"
+        ? "M7 5v14m0-7h10m0 0-3-3m3 3-3 3 M17 5v4"
+        : role === "closeout"
+          ? "M5 12l4 4L19 6 M12 3a9 9 0 1 0 0 18 9 9 0 0 0-18Z"
+          : kind === "group"
+            ? "M12 3 20 7 12 11 4 7 12 3Z M4 12 12 16 20 12 M4 17 12 21 20 17"
+            : kind === "milestone"
+              ? "M12 3 21 12 12 21 3 12 12 3Z M12 8.5v7 M8.5 12h7"
+              : kind === "boundary"
+                ? (boundary === "start" ? "M12 3a9 9 0 1 0 0 18 9 9 0 0 0-18Z M10 8l6 4-6 4Z" : "M5 5h14v14H5Z M9 9l6 6 M15 9l-6 6")
                 : role === "verification"
                   ? "M12 3l2.2 5.2L20 10l-5.8 1.8L12 17l-2.2-5.2L4 10l5.8-1.8L12 3Z M12 17v4"
                   : "M7 3.5h7l3 3V20.5H7a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 7 3.5Z M14 3.5v4h4 M8.5 12h6 M8.5 15.5h6";
