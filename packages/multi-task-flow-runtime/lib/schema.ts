@@ -1,19 +1,19 @@
-import { normalizeRetiredPlanAlias } from "../lib/legacy-plan-alias";
 import { createHash } from "node:crypto";
 import { posix as posixPath } from "node:path";
 import { z } from "zod";
-import { topologicalOrder, validateGrouping } from "../lib/graph";
-import { requireCondition } from "../lib/errors";
 import {
   atomicNode,
   atomicEdge as canonicalAtomicEdge,
-  taskPrBinding,
   deliveryUnitExternalFacts,
-  validateAtomicGraph,
+  taskPrBinding,
   validateAtomicBoundaries,
+  validateAtomicGraph,
   validateDeliveryUnitLifecycleEdges,
   validateTaskLifecycleEdges,
 } from "../lib/atomic-orchestration";
+import { requireCondition } from "../lib/errors";
+import { topologicalOrder, validateGrouping } from "../lib/graph";
+import { normalizeRetiredPlanAlias } from "../lib/legacy-plan-alias";
 
 export const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
 const text = z.string().trim().min(1);

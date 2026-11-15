@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "format": "biome check --write .",
-    "format:check": "biome format .",
+    "format:check": "biome check --assist-enabled=true --enforce-assist=true --diagnostic-level=error .",
     "lint": "biome lint .",
     "check:style": "bun run format:check && bun run lint",
     "test": "bun test --path-ignore-patterns 'tests/ui/**'",

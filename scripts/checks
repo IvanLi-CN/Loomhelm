@@ -348,7 +348,7 @@ if [ "$command" = "all" ]; then
 		usage >&2
 		exit 2
 	fi
-	for group in quality bootstrap generated source database web client react; do
+	for group in quality bootstrap generated source database web client style react; do
 		run_named_group "$group"
 	done
 else
