@@ -110,7 +110,7 @@ function writeToolkitPackageMetadata(): void {
     dependencies: declaredDependencies,
     packageManager: packageMetadata.packageManager,
   };
-  writeGenerated('package.json', Buffer.from(JSON.stringify(metadata, null, 2) + '\n'));
+  writeFileSync(resolve(target, 'package.json'), JSON.stringify(metadata, null, 2) + '\n');
 }
 for (const file of packagedResources([...manifest.files, ...(manifest.additions ?? [])].filter(file => !packageOmissionPaths.has(file.path)))) copy(file.path, file.installedSha256, false, file.sourcePath ?? file.path);
 copyPackageManifest();
