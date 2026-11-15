@@ -42,7 +42,7 @@
     },
     {
       "path": "skills/bin/agent_profile_runtime.ts",
-      "installedSha256": "4deee4685256501401f4fe3baa884dc6bfd74e0fc9391a049337805eef4f9b1e"
+      "installedSha256": "ffe9e2deb15c8f374e1da4c7f4826ebe0727044f97f576e33bfcfd5e2bc5a0a8"
     },
     {
       "path": "skills/bin/agent_vm_migration_check.ts",
@@ -82,7 +82,7 @@
     },
     {
       "path": "skills/bin/compatibility_visual.ts",
-      "installedSha256": "4a2f24afaa694f82f45b4385bd4f6fe3ef44fcda58fa872c4c0146040ff89cbd"
+      "installedSha256": "f341e3ba52561faecf8673975e83a763ddd534cd9dd1130add3af801110722f3"
     },
     {
       "path": "skills/bin/compatibility_workspace.ts",
@@ -498,7 +498,7 @@
     },
     {
       "path": "skills/bin/modules/flow/profile-state.ts",
-      "installedSha256": "e835ea927a8857d381e0ceff64904721ca1e2f0187b7597cc47f948e03b25177"
+      "installedSha256": "2b7096d3df364ac14e5d79fb789f6e7d0dc844da22713f259823e3b32708e8a7"
     },
     {
       "path": "skills/bin/modules/flow/profile-transcript.ts",
@@ -954,7 +954,7 @@
     },
     {
       "path": "skills/bin/multi_task_platform_gate.ts",
-      "installedSha256": "99cc843ec1f07047002215684ca473a94aa3ee0e36eaaf6b90d233c8692d66c2"
+      "installedSha256": "34ad390b26ece96534feb818b81692c69dce958fe4d99ad41243a92b9a4f7184"
     },
     {
       "path": "skills/bin/native-tests/core/native.test.ts",
@@ -986,7 +986,7 @@
     },
     {
       "path": "skills/bin/plan_contract_check.ts",
-      "installedSha256": "fc2b20a569f98d4f216efe58f022ad3ca19af80f5677f56f42dc92c1de18fa4c"
+      "installedSha256": "97c072e04260b2ee3cbee1a865aae837853a03cd6e8e8d00d37c96d2b45d94c7"
     },
     {
       "path": "skills/bin/plan_review_view.ts",

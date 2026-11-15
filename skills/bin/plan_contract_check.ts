@@ -1,4 +1,4 @@
-import { Runtime } from "./modules/core/runtime";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
