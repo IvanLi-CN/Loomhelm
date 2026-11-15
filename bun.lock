@@ -50,6 +50,10 @@
       "name": "@loomhelm/protocol",
       "version": "0.0.0",
     },
+    "packages/runtime-core": {
+      "name": "@loomhelm/runtime-core",
+      "version": "0.1.0",
+    },
     "web": {
       "name": "@loomhelm/web",
       "version": "0.2.10",
@@ -451,6 +455,8 @@
     "@loomhelm/content": ["@loomhelm/content@workspace:packages/content"],
 
     "@loomhelm/protocol": ["@loomhelm/protocol@workspace:packages/protocol"],
+
+    "@loomhelm/runtime-core": ["@loomhelm/runtime-core@workspace:packages/runtime-core"],
 
     "@loomhelm/web": ["@loomhelm/web@workspace:web"],
 

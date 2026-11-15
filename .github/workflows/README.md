@@ -1,6 +1,6 @@
 # Skill Runtime Release Workflows
 
-本文是 `.github/workflows/skill-release-gate.yml` 与 `.github/workflows/skill-release-publish.yml` 的操作说明；发布合同的权威来源仍是 [`docs/specs/skill-runtime-release/SPEC.md`](../../docs/specs/skill-runtime-release/SPEC.md)、[`docs/adr/0029-skill-runtime-release-and-service-boundary.md`](../../docs/adr/0029-skill-runtime-release-and-service-boundary.md) 与 [`docs/adr/0030-skill-runtime-registry-reconciliation-and-consumer-dependencies.md`](../../docs/adr/0030-skill-runtime-registry-reconciliation-and-consumer-dependencies.md)。
+本文是 `.github/workflows/runtime-core-release.yml`、`.github/workflows/skill-release-gate.yml` 与 `.github/workflows/skill-release-publish.yml` 的操作说明；发布合同的权威来源仍是 [`docs/specs/skill-runtime-release/SPEC.md`](../../docs/specs/skill-runtime-release/SPEC.md)、[`docs/adr/0029-skill-runtime-release-and-service-boundary.md`](../../docs/adr/0029-skill-runtime-release-and-service-boundary.md) 与 [`docs/adr/0030-skill-runtime-registry-reconciliation-and-consumer-dependencies.md`](../../docs/adr/0030-skill-runtime-registry-reconciliation-and-consumer-dependencies.md)。
 
 ## Release boundary
 
@@ -25,6 +25,7 @@ Skill release boundary 包含 `.github/workflows/`、`clients/typescript/`、`sk
 | - | - | - |
 | `skill-release-gate.yml` | PR opened/synchronize/reopened/ready-for-review/labeled/unlabeled；merge queue checks | checkout exact PR or merge-group head，运行 `release.py gate`，校验 label、base/head projection、版本和 compatibility line |
 | `skill-release-publish.yml` | owner-approved `workflow_dispatch` | 校验已合并 main PR、构建并验证一个 candidate tarball、记录 skip/release receipt，或按 identity-first state machine 对账/发布并单调提升 dist-tags |
+| `runtime-core-release.yml` | owner-approved `workflow_dispatch` | 校验精确源码 SHA 与 `@loomhelm/runtime-core` 版本、冻结唯一 tarball、通过 npm Trusted Publishing 发布并回读精确版本，再创建 `runtime-core-vX.Y.Z` immutable tag |
 
 PR gate 使用 PR 的 exact base SHA 和 head SHA；merge queue 会重新解析唯一的 main PR 并以 queue base/head 再跑一次 gate。不要以工作区当前分支、PR title、历史 workflow 结果或本地 package version 代替 provider 传入的 SHA 和 label 证据。
 
@@ -38,7 +39,7 @@ PR gate 使用 PR 的 exact base SHA 和 head SHA；merge queue 会重新解析�
 2. `release.py gate` 重新检查唯一 release label、package projection、Skill frontmatter、`lib/contract.ts` 与 `lib/service-contract.ts` 的 contract fields；首次发布还必须先由 workflow 确认 exact npm version 缺失。
 3. `release:skill` 和 `release:skill-initial-publication` 路径先用 `verify-tag --allow-missing` 检查 `multi-task-flow-v<version>`，再以同一个 merge SHA 和 Bun `1.4.4` 构建一个可上传 candidate tarball，记录 `schemaVersion=3`、`path-byte-v2` canonical digest、raw integrity 和 release identity；`verify-tag --allow-missing` 只读，immutable tag 的创建/复用后置到 registry exact identity 对账成功之后。
 4. 候选包的 production dependencies 是根 package 声明的 `playwright`、`sharp`、`zod`，由消费者 `bun install` 解析；tarball 不得包含 `toolkit/**/node_modules`，runtime 缺依赖时 fail closed，不联网安装或回退到 checkout/global Skill。
-5. publish 先读取 exact registry state；只有 exact metadata 返回 404 且 package version index 也明确不包含该版本时，才允许当前 owner-approved run 进行一次 `npm publish`。version index 已包含该版本但 exact metadata 仍滞后时只能 read-only reconcile；exact 查询的其他错误 fail closed。未知 npm publish 错误立即输出捕获的 stdout/stderr 并停止，不能被误判为 registry processing。processing、已知 409 或 timeout 进入 bounded reconcile，不重建 tarball；所有状态写入 release receipt；现有 `0.2.7` 永远只做 read-only reconcile，即使 exact 不可见也不得 publish，exact-visible 对账后也跳过 tag 和 dist-tag 写入。
+5. publish 先读取 exact registry state；只有明确的 exact 404 才允许当前 owner-approved run 进行一次 `npm publish`，exact 查询的其他错误 fail closed；processing、已知 409、timeout 或未知结果都进入 bounded reconcile，不重复上传、不重建 tarball，且所有状态写入 release receipt；现有 `0.2.7` 永远只做 read-only reconcile，即使 exact 不可见也不得 publish，exact-visible 对账后也跳过 tag 和 dist-tag 写入。
 6. exact-visible 后下载 registry tarball，比较 package identity、merge SHA、build ID、tag、raw npm integrity 和 canonical digest；schema v2 legacy artifact 只以 raw integrity 和 legacy identity 对账，不能重传 `0.2.7`。
 7. exact identity 对账成功才标记 `published`；随后以 `compat-vN`、`latest`、显式 `stable` 的顺序逐个执行 monotonic policy 并逐个 read-back，全部成功才标记 `completed`。发布 job 通过 npm Trusted Publishing 使用 GitHub OIDC，不读取长期 npm 写入 token。
 8. `release:skill-initial-publication` 只有在 exact npm version 缺失时才允许进入一次 package publish；immutable tag 必须等 exact identity 对账成功后创建/复用，再按顺序 promotion；现有 `0.2.7` schema v2 exact-visible 只记录 legacy identity/raw integrity 对账 receipt，不创建/复用 tag，也不移动任何 dist-tag；`release:skip` 路径不生成发布包，只上传包含 PR、merge SHA、当前 package version、compatibility line 和 skip reason 的 skip receipt。
@@ -67,7 +68,7 @@ Immutable tag 冲突时运行 `verify-tag` 对账现有 tag 的目标 SHA；目�
 
 `npm publish` 返回未知结果时不得立即重试；先查询 exact package、registry metadata 和 tarball digest，只有明确不存在且候选身份仍未被占用时才允许由 owner-approved workflow 重试。dist-tag policy 返回 regression 或 registry 元数据无法解析时停止，不手工把 tag 指向旧版本。
 
-首次发布在 npm 已接受写入但 processing 延迟导致 exact package 不可见时，发布 job 会使用 `0, 5, 15, 30, 60, 120, 240, 480` 秒的分阶段退避，在约 15 分钟内持续读取同一 exact package；随后自动对同一冻结 candidate 做一次 guarded republish，并再次进行 bounded reconcile。只有两轮都无法对账时才退出为 `processing-timeout`，owner-approved retry 才需要携带 `resume_run_id`，且只下载同一 candidate 和 receipt context。若 receipt 明确为 `processing-timeout` 且 `resumeRetryUsed` 已为 true，后续 resume 只能 read-only reconcile，不得再次写入。exact package、registry raw integrity、legacy/current identity 和 provenance 对账完成前，不能跳过 immutable tag 或 registry identity 校验。known 409、timeout、identity mismatch、dist-tag read-back 失败都必须停止并保留 receipt；不得使用新构建替换候选。
+首次发布在 npm 已接受写入但 processing 延迟导致 workflow 退出时，发布 job 会使用 `0, 5, 15, 30, 60, 120, 240, 480` 秒的分阶段退避，在约 15 分钟内持续读取同一 exact package；owner-approved retry 必须携带 `resume_run_id`，只下载同一 candidate 和 receipt context。若 receipt 明确为 `processing-timeout` 且 npm 仍返回 404，只允许对同一 candidate 做一次受控 republish，随后进入 exact package、registry raw integrity、legacy/current identity 和 provenance 对账，不能跳过 immutable tag 或 registry identity 校验。known 409、timeout、identity mismatch、dist-tag read-back 失败都必须停止并保留 receipt；不得使用新构建替换候选。
 
 受控 republish 会在 receipt 写入 `resumeRetryUsed`，后续 resume 只能继续对账，不能再次写入 npm。
 

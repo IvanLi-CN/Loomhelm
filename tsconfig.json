@@ -30,5 +30,5 @@
     "web/vite.config.ts",
     "packages"
   ],
-  "exclude": ["packages/multi-task-flow-runtime"]
+  "exclude": ["packages/multi-task-flow-runtime", "packages/runtime-core"]
 }
