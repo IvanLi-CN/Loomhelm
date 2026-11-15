@@ -44,9 +44,6 @@ function dependencyLabels(projection: GraphProjection, nodeId: string, direction
       const neighbor = projection.nodes.find((node) => node.id === neighborId)?.fullLabel ?? neighborId;
       return `${neighbor}（${edge.paths.map(pathLabel).join("；")}）`;
     });
-  values.push(...projection.boundaryDependencies
-    .filter((item) => item.direction === direction && item.nodeId === nodeId)
-    .map((item) => `${direction === "incoming" ? "计划入口" : "计划出口"}（${item.paths.map(pathLabel).join("；")}）`));
   return values;
 }
 
