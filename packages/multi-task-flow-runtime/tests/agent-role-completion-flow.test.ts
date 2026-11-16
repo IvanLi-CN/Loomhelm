@@ -857,15 +857,18 @@ test("topology projection matches Agent ownership contracts", () => {
   expect(deliveryTopologyForGroup(shared, "shared")).toBe("shared_delivery");
   expect(() => validateDeliveryTopologies(shared as unknown as Task[], true)).not.toThrow();
 
-  const integrated = ["task-a", "task-b"].map((id) => ({
-    id,
-    group_id: "integrated",
-    kind: "contribution",
-    disposition: "active",
-    execution_owner: "task_agent",
-    conversation_policy: "task_agent",
-    delivery_policy: "child_pr",
-  } as const));
+  const integrated = ["task-a", "task-b"].map(
+    (id) =>
+      ({
+        id,
+        group_id: "integrated",
+        kind: "contribution",
+        disposition: "active",
+        execution_owner: "task_agent",
+        conversation_policy: "task_agent",
+        delivery_policy: "child_pr",
+      }) as const,
+  );
   expect(deliveryTopologyForGroup(integrated, "integrated")).toBe("multi_task_integration");
   expect(() => validateDeliveryTopologies(integrated as unknown as Task[], true)).not.toThrow();
   expect(() =>
