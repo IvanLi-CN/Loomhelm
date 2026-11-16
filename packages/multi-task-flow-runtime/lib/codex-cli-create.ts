@@ -31,14 +31,12 @@ function normalizedItemType(value: unknown): string {
 
 function isIgnorableInitializationDiagnostic(value: unknown): boolean {
   const item = record(value);
-  const message = typeof item?.message === "string" ? item.message : "";
+  const message = typeof item?.message === "string" ? item.message.trim() : "";
   return (
     normalizedItemType(item?.type) === "error" &&
-    ((message.includes("[features].multi_agent") && message.includes("deprecated")) ||
-      message.includes("unrecognized configuration setting") ||
-      message.includes("is ignored") ||
-      message.includes("loading hooks") ||
-      message.includes("prefer a single representation"))
+    (/^`?\[features\]\.multi_agent`? is deprecated\./.test(message) ||
+      /^Codex is ignoring \d+ unrecognized configuration settings?\.$/.test(message) ||
+      message === "loading hooks from two config layers; prefer a single representation")
   );
 }
 
@@ -323,6 +321,21 @@ type ReconciliationRead = {
   turn: Record<string, unknown>;
 };
 
+function unsupportedRpcResponse(response: Record<string, unknown>): boolean {
+  const error = record(response.error);
+  const message = typeof error?.message === "string" ? error.message : JSON.stringify(error ?? "");
+  return /method not found|unknown (?:method|variant)|unsupported method/i.test(message);
+}
+
+function fullTurn(value: unknown, turnId: string): Record<string, unknown> | null {
+  const turn = record(value);
+  if (!turn || turn.id !== turnId || !Array.isArray(turn.items)) return null;
+  const items = turn.items.filter((item): item is Record<string, unknown> => record(item) !== null);
+  return items.length === turn.items.length && items.length > 0
+    ? { ...turn, items, itemsView: "full" }
+    : null;
+}
+
 export async function readThreadEvidence(
   socket: Socket,
   buffer: { value: Buffer },
@@ -347,20 +360,60 @@ export async function readThreadEvidence(
   const turn = Array.isArray(turnData) ? record(turnData[0]) : null;
   if (turns.error || !turn || typeof turn.id !== "string")
     throw new Error("Initialization turn evidence unavailable");
-  const items = await request(socket, buffer, requestId + 2, "thread/items/list", {
-    threadId,
-    sortDirection: "asc",
-    limit: 50,
-  });
-  const itemData = record(items.result)?.data;
-  const turnItems = Array.isArray(itemData)
-    ? itemData
-        .filter((row) => record(row)?.turnId === turn.id)
-        .map((row) => record(record(row)?.item))
-        .filter((item): item is Record<string, unknown> => item !== null)
-    : [];
-  if (items.error || !turnItems.length) throw new Error("Initialization items unavailable");
-  return { thread, turn: { ...turn, items: turnItems, itemsView: "full" } };
+  let cursor: unknown;
+  const cursors = new Set<unknown>();
+  const turnItems: Record<string, unknown>[] = [];
+  try {
+    while (true) {
+      const items = await request(
+        socket,
+        buffer,
+        requestId + 2 + cursors.size,
+        "thread/items/list",
+        {
+          threadId,
+          sortDirection: "asc",
+          limit: 50,
+          ...(cursor ? { cursor } : {}),
+        },
+      );
+      if (items.error) {
+        if (unsupportedRpcResponse(items)) throw new Error("thread/items/list unsupported");
+        throw new Error("thread/items/list rejected");
+      }
+      const itemData = record(items.result)?.data;
+      if (!Array.isArray(itemData)) throw new Error("thread/items/list malformed");
+      for (const row of itemData) {
+        const value = record(row);
+        if (!value || value.turnId !== turn.id) continue;
+        const item = record(value.item) ?? (typeof value.type === "string" ? { ...value } : null);
+        if (item) {
+          delete item.turnId;
+          turnItems.push(item);
+        }
+      }
+      const next = record(items.result)?.nextCursor;
+      if (!next) break;
+      if (cursors.has(next)) throw new Error("Repeated thread item cursor");
+      cursors.add(next);
+      cursor = next;
+    }
+    if (turnItems.length) return { thread, turn: { ...turn, items: turnItems, itemsView: "full" } };
+    throw new Error("thread/items/list returned no matching items");
+  } catch (error) {
+    if (!(error instanceof Error && /unsupported|malformed|no matching items/.test(error.message)))
+      throw error;
+    const full = await request(socket, buffer, requestId + 100, "thread/turns/list", {
+      threadId,
+      sortDirection: "asc",
+      limit: 1,
+      itemsView: "full",
+    });
+    const fullData = record(full.result)?.data;
+    const hydrated = Array.isArray(fullData) ? fullTurn(fullData[0], turn.id) : null;
+    if (!hydrated) throw new Error("Initialization items unavailable");
+    return { thread, turn: hydrated };
+  }
 }
 
 export async function readReconciliationEvidence(threadId: string): Promise<ReconciliationRead> {

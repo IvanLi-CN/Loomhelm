@@ -7122,7 +7122,7 @@
     {
       "path": "skills/multi-task-flow/lib/engine.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/engine.ts",
-      "installedSha256": "c7962b70fc08a762b2d841bc715094254a6ad8f9230ee97a6449a936eefd56b3"
+      "installedSha256": "ce9c5ab7d0ba0ca9c615836931fd6484160de37a599d3d078c7cd955733b43b2"
     },
     {
       "path": "skills/multi-task-flow/lib/errors.ts",
@@ -7361,7 +7361,7 @@
     {
       "path": "skills/multi-task-flow/scripts/orchestrate.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/orchestrate.ts",
-      "installedSha256": "f20e7cad5ac55250de5c133f1d35072e45958890c01fdcfc634003ccc65da5b9"
+      "installedSha256": "2bdd9ce4dfa40032bad05540a617a409318a7219529d31ba10d845be521bb436"
     },
     {
       "path": "skills/multi-task-flow/scripts/service.ts",

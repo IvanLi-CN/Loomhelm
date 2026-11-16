@@ -127,6 +127,13 @@ test("initialization ignores the known multi-agent deprecation diagnostic", () =
       ]),
     ),
   ).not.toThrow();
+  expect(() =>
+    verifyInitializationTurn(
+      handshakeTurn("completed", "Task Agent", [
+        { type: "error", message: "a command is ignored because it is unavailable" },
+      ]),
+    ),
+  ).toThrow("recorded work");
 });
 
 test("bind requires both process exit and initialization completion, preserving identity on every ambiguous result", async () => {
@@ -276,6 +283,71 @@ test("reconciliation hydrates handshake items separately from the turn summary",
   );
   expect(() => verifyInitializationTurn(evidence.turn, "Task Agent")).not.toThrow();
   expect(calls).toEqual(["thread/read", "thread/turns/list", "thread/items/list"]);
+});
+
+test("reconciliation accepts flat paginated item rows", async () => {
+  let itemPage = 0;
+  const request = async (_socket: any, _buffer: any, _id: number, method: string) => {
+    if (method === "thread/read") return { result: { thread: await thread() } };
+    if (method === "thread/turns/list")
+      return { result: { data: [{ id: "turn-a", status: "completed" }] } };
+    itemPage++;
+    return {
+      result: {
+        data:
+          itemPage === 1
+            ? [
+                {
+                  turnId: "turn-a",
+                  type: "userMessage",
+                  content: [{ type: "text", text: initializationPrompt("Task Agent") }],
+                },
+              ]
+            : [{ turnId: "turn-a", type: "agentMessage", text: "待命。" }],
+        nextCursor: itemPage === 1 ? "page-2" : null,
+      },
+    };
+  };
+  const evidence = await readThreadEvidence(
+    {} as any,
+    { value: Buffer.alloc(0) },
+    "thread-a",
+    2,
+    request,
+  );
+  expect(evidence.turn.items).toHaveLength(2);
+  expect(() => verifyInitializationTurn(evidence.turn, "Task Agent")).not.toThrow();
+});
+
+test("reconciliation falls back to full turns when item listing is unavailable", async () => {
+  const calls: string[] = [];
+  const request = async (_socket: any, _buffer: any, _id: number, method: string, params: any) => {
+    calls.push(method);
+    if (method === "thread/read") return { result: { thread: await thread() } };
+    if (method === "thread/turns/list" && params.itemsView === "summary")
+      return { result: { data: [{ id: "turn-a", status: "completed" }] } };
+    if (method === "thread/items/list") return { error: { message: "method not found" } };
+    return {
+      result: {
+        data: [handshakeTurn("completed", "Task Agent")],
+        nextCursor: null,
+      },
+    };
+  };
+  const evidence = await readThreadEvidence(
+    {} as any,
+    { value: Buffer.alloc(0) },
+    "thread-a",
+    2,
+    request,
+  );
+  expect(() => verifyInitializationTurn(evidence.turn, "Task Agent")).not.toThrow();
+  expect(calls).toEqual([
+    "thread/read",
+    "thread/turns/list",
+    "thread/items/list",
+    "thread/turns/list",
+  ]);
 });
 
 test("reconciliation keeps the app-server socket open until evidence is read", async () => {
