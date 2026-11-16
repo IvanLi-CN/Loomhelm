@@ -220,38 +220,38 @@ export function createGraphController(context: GraphContext, calculateLayout = l
       <>
         {graphDirectionTools
           ? createPortal(
-          <div className="layout-switch graph-direction-switch" role="group" aria-label="排列方向">
-            <button
-              type="button"
-              className="icon-button layout-option graph-direction-option"
-              aria-label="从上到下"
-              aria-pressed={direction === "DOWN"}
-              data-tooltip="从上到下"
-              onClick={() => {
-                direction = "DOWN";
-                signature = "";
-                viewportInitialized = false;
-                render(latest, latestGroupIds);
-              }}
-            >
-              <i data-lucide="arrow-down" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className="icon-button layout-option graph-direction-option"
-              aria-label="从左到右"
-              aria-pressed={direction === "RIGHT"}
-              data-tooltip="从左到右"
-              onClick={() => {
-                direction = "RIGHT";
-                signature = "";
-                viewportInitialized = false;
-                render(latest, latestGroupIds);
-              }}
-            >
-              <i data-lucide="arrow-right" aria-hidden="true" />
-            </button>
-          </div>,
+              <fieldset className="layout-switch graph-direction-switch" aria-label="排列方向">
+                <button
+                  type="button"
+                  className="icon-button layout-option graph-direction-option"
+                  aria-label="从上到下"
+                  aria-pressed={direction === "DOWN"}
+                  data-tooltip="从上到下"
+                  onClick={() => {
+                    direction = "DOWN";
+                    signature = "";
+                    viewportInitialized = false;
+                    render(latest, latestGroupIds);
+                  }}
+                >
+                  <i data-lucide="arrow-down" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="icon-button layout-option graph-direction-option"
+                  aria-label="从左到右"
+                  aria-pressed={direction === "RIGHT"}
+                  data-tooltip="从左到右"
+                  onClick={() => {
+                    direction = "RIGHT";
+                    signature = "";
+                    viewportInitialized = false;
+                    render(latest, latestGroupIds);
+                  }}
+                >
+                  <i data-lucide="arrow-right" aria-hidden="true" />
+                </button>
+              </fieldset>,
               graphDirectionTools,
             )
           : null}

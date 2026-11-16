@@ -220,6 +220,7 @@ h1 { margin: 3px 0 0; color: var(--text); font-size: 26px; line-height: 1.14; fo
 #graph-direction-tools { display: flex; gap: 2px; }
 .workspace[data-view-tab="atomic"] #graph-direction-tools { display: none; }
 .atomic-view-tools { display: flex; align-items: center; gap: 6px; margin-left: auto; color: var(--muted); font-size: 11px; }
+.layout-switch { margin: 0; padding: 0; border: 0; min-inline-size: 0; }
 .workspace[data-view-tab="atomic"] .graph-tools { margin-left: 0; }
 .atomic-view-tools label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .atomic-layout-switch { flex:none; }

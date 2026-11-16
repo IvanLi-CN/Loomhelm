@@ -326,11 +326,7 @@ export function createTimelineController(context: TimelineContext) {
       const planRow = data.planned_intervals.find((item) => item.node_id === node?.id);
       const actualRows = data.actual_intervals.filter((item) => item.task_id === task.id);
       if (mode === "planned") {
-        if (
-          planRow?.start_offset_minutes != null &&
-          planRow.end_offset_minutes != null &&
-          node
-        ) {
+        if (planRow?.start_offset_minutes != null && planRow.end_offset_minutes != null && node) {
           plannedEndOffsetMinutes = Math.max(plannedEndOffsetMinutes, planRow.end_offset_minutes);
           entries.push({
             id: `plan-${task.id}`,

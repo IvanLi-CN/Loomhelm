@@ -570,76 +570,76 @@ export function createAtomicGraphController(context: GraphContext) {
         ) : null}
         {atomicViewTools
           ? createPortal(
-          <>
-            <div className="layout-switch atomic-layout-switch" role="group" aria-label="节点显示">
-              <button
-                type="button"
-                className="icon-button layout-option"
-                aria-label="简略显示"
-                aria-pressed={displayMode === "compact"}
-                data-tooltip="简略显示"
-                onClick={() => {
-                  displayMode = "compact";
-                  localStorage.setItem(
-                    `loomhelm:atomic-display-mode:${location.pathname}`,
-                    displayMode,
-                  );
-                  signature = "";
-                  render(latestNodes, latestEdges);
-                }}
-              >
-                <i data-lucide="layout-grid" aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                className="icon-button layout-option"
-                aria-label="完整显示"
-                aria-pressed={displayMode === "full"}
-                data-tooltip="完整显示"
-                onClick={() => {
-                  displayMode = "full";
-                  localStorage.setItem(
-                    `loomhelm:atomic-display-mode:${location.pathname}`,
-                    displayMode,
-                  );
-                  signature = "";
-                  render(latestNodes, latestEdges);
-                }}
-              >
-                <i data-lucide="list" aria-hidden="true" />
-              </button>
-            </div>
-            <div className="layout-switch atomic-layout-switch" role="group" aria-label="排列方向">
-              <button
-                type="button"
-                className="icon-button layout-option"
-                aria-label="从左到右"
-                aria-pressed={direction === "RIGHT"}
-                data-tooltip="从左到右"
-                onClick={() => {
-                  direction = "RIGHT";
-                  signature = "";
-                  render(latestNodes, latestEdges);
-                }}
-              >
-                <i data-lucide="arrow-right" aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                className="icon-button layout-option"
-                aria-label="从上到下"
-                aria-pressed={direction === "DOWN"}
-                data-tooltip="从上到下"
-                onClick={() => {
-                  direction = "DOWN";
-                  signature = "";
-                  render(latestNodes, latestEdges);
-                }}
-              >
-                <i data-lucide="arrow-down" aria-hidden="true" />
-              </button>
-            </div>
-          </>,
+              <>
+                <fieldset className="layout-switch atomic-layout-switch" aria-label="节点显示">
+                  <button
+                    type="button"
+                    className="icon-button layout-option"
+                    aria-label="简略显示"
+                    aria-pressed={displayMode === "compact"}
+                    data-tooltip="简略显示"
+                    onClick={() => {
+                      displayMode = "compact";
+                      localStorage.setItem(
+                        `loomhelm:atomic-display-mode:${location.pathname}`,
+                        displayMode,
+                      );
+                      signature = "";
+                      render(latestNodes, latestEdges);
+                    }}
+                  >
+                    <i data-lucide="layout-grid" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button layout-option"
+                    aria-label="完整显示"
+                    aria-pressed={displayMode === "full"}
+                    data-tooltip="完整显示"
+                    onClick={() => {
+                      displayMode = "full";
+                      localStorage.setItem(
+                        `loomhelm:atomic-display-mode:${location.pathname}`,
+                        displayMode,
+                      );
+                      signature = "";
+                      render(latestNodes, latestEdges);
+                    }}
+                  >
+                    <i data-lucide="list" aria-hidden="true" />
+                  </button>
+                </fieldset>
+                <fieldset className="layout-switch atomic-layout-switch" aria-label="排列方向">
+                  <button
+                    type="button"
+                    className="icon-button layout-option"
+                    aria-label="从左到右"
+                    aria-pressed={direction === "RIGHT"}
+                    data-tooltip="从左到右"
+                    onClick={() => {
+                      direction = "RIGHT";
+                      signature = "";
+                      render(latestNodes, latestEdges);
+                    }}
+                  >
+                    <i data-lucide="arrow-right" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button layout-option"
+                    aria-label="从上到下"
+                    aria-pressed={direction === "DOWN"}
+                    data-tooltip="从上到下"
+                    onClick={() => {
+                      direction = "DOWN";
+                      signature = "";
+                      render(latestNodes, latestEdges);
+                    }}
+                  >
+                    <i data-lucide="arrow-down" aria-hidden="true" />
+                  </button>
+                </fieldset>
+              </>,
               atomicViewTools,
             )
           : null}
