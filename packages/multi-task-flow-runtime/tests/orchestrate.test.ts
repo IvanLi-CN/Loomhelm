@@ -748,3 +748,32 @@ describe("orchestrate development-baseline-sync", () => {
     expect(before).not.toBe(expected);
   });
 });
+
+describe("orchestrate show actor binding", () => {
+  test("allows the bound owner thread and rejects a different main thread", async () => {
+    const root = temporaryRoot();
+    const input = structuredClone(initialInput);
+    input.run_id = "show-actor-binding-run";
+    expect((await runInit(root, input)).exitCode).toBe(0);
+    const ledgerPath = join(root, "runs", input.run_id, "ledger.json");
+    const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+    ledger.control = { owner_thread_id: "owner-thread", ownership: "bound", approval_id: null };
+    writeFileSync(ledgerPath, JSON.stringify(validateLedger(ledger)));
+
+    const allowed = await runCommand(root, "show", {
+      run_id: input.run_id,
+      actor: { role: "main", thread_id: "owner-thread" },
+      section: "summary",
+    });
+    expect(allowed.exitCode).toBe(0);
+    expect(allowed.output).toMatchObject({ ok: true, code: "OK", revision: 0 });
+
+    const denied = await runCommand(root, "show", {
+      run_id: input.run_id,
+      actor: { role: "main", thread_id: "other-thread" },
+      section: "summary",
+    });
+    expect(denied.exitCode).toBe(3);
+    expect(denied.output).toMatchObject({ ok: false, code: "ACTOR_MISMATCH" });
+  });
+});
