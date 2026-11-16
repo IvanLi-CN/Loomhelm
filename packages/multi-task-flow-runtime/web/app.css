@@ -553,8 +553,10 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
   .workspace-view > .timeline-view > .axis-timezone, .workspace-view > .timeline-view > .unknown { flex: none; }
   .workspace-tasks { display: flex; flex-direction: column; overflow: hidden; }
   .workspace-tasks .task-list-section { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; }
-  .workspace-tasks .task-list { min-height: 0; flex: 1 1 auto; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-  .workspace-tasks .task-layout-board, .workspace-tasks .task-layout-grid { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+  .workspace-tasks .task-list { min-height: 0; flex: 1 1 auto; }
+  .workspace-tasks .task-list { overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+  .workspace-tasks .task-layout-board { min-height: 0; }
+  .workspace-tasks .task-layout-board, .workspace-tasks .task-layout-grid { overflow: auto; overscroll-behavior: contain; }
   .details-slot { grid-row: 2 !important; padding-top: 0; min-height: 0; }
   .workspace[data-view-tab="tasks"] .details-slot { grid-row: 3 !important; }
   .details-resize { display: block; height: 12px; cursor: ns-resize; border-top: 1px solid var(--border); background: linear-gradient(var(--control), var(--control)) center / 42px 3px no-repeat; touch-action: none; overflow-anchor: none; }
