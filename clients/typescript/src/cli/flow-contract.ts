@@ -120,6 +120,11 @@ const mergeObservation = {
 		state: { const: "merged" },
 	},
 } as const;
+const utcDateTime = {
+	type: "string",
+	format: "date-time",
+	pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+} as const;
 const closeoutObservation = {
 	type: "object",
 	additionalProperties: false,
@@ -129,7 +134,7 @@ const closeoutObservation = {
 		provider_state: { enum: ["merged", "closed", "open", "unknown"] },
 		merge_sha: { oneOf: [shaValue, { type: "null" }] },
 		source: textValue,
-		observed_at: { type: "string", format: "date-time" },
+		observed_at: utcDateTime,
 		evidence_ref: textValue,
 	},
 } as const;
