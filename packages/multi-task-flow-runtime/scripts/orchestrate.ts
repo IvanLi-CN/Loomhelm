@@ -167,7 +167,7 @@ function recordCreationReconciliationUnknown(
     apply(raw, "dispatch-resolve", {
       ...parsed,
       request_id: `${parsed.request_id}-reconcile-unknown`,
-      expected_revision: ledger.revision,
+      expected_revision: parsed.expected_revision,
       payload: {
         operation_id: operation.id,
         outcome: "unknown",
@@ -182,7 +182,6 @@ function recordCreationReconciliationUnknown(
           ...(threadId ? { thread_id: threadId } : {}),
           reconciliation_attempted: true,
           evidence_ref: `codex-thread-reconcile:${threadId ?? operation.request.native_request_id}`,
-          created_at: new Date().toISOString(),
           error: String(error).slice(0, 500),
         },
       },
@@ -393,6 +392,22 @@ try {
         "ACTOR_MISMATCH",
         "Creation reconciliation must be run by the bound main thread",
       );
+    const replayRequest = ledger.requests.find(
+      (item) =>
+        item.request_id === parsed.request_id ||
+        item.request_id === `${parsed.request_id}-reconcile-unknown`,
+    );
+    if (replayRequest && replayRequest.command === "dispatch-resolve") {
+      console.log(
+        JSON.stringify({
+          ok: true,
+          code: "REPLAYED",
+          revision: replayRequest.committed_revision,
+          result: replayRequest.result,
+        }),
+      );
+      process.exit(0);
+    }
     const operation = ledger.operations.find(
       (item) => item.id === payload.operation_id && item.kind === "dispatch",
     );

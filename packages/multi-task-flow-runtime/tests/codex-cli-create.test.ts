@@ -32,6 +32,7 @@ const handshakeTurn = (
   role: "Delivery Agent" | "Task Agent" = "Delivery Agent",
   extraItems: Record<string, unknown>[] = [],
 ) => ({
+  id: "turn-a",
   status,
   items: [
     {
@@ -89,6 +90,7 @@ test("actual profile and Codex ownership are required; initial HEAD is separate 
   expect(success.outcome).toBe("succeeded");
   expect(success.initial_head).toBe("a".repeat(40));
   expect(success).not.toHaveProperty("development_baseline");
+  expect(success.initialization_turn_id).toBe("turn-a");
   expect(
     (
       await createCliThread(input, {
@@ -121,6 +123,30 @@ test("actual profile and Codex ownership are required; initial HEAD is separate 
       })
     ).outcome,
   ).toBe("unknown");
+});
+
+test("malformed handshake evidence remains unreconcilable", () => {
+  expect(() =>
+    verifyInitializationTurn({
+      ...handshakeTurn("completed", "Task Agent"),
+      items: [...handshakeTurn("completed", "Task Agent").items, "commandExecution"],
+    }),
+  ).toThrow("malformed");
+  expect(() =>
+    verifyInitializationTurn({
+      ...handshakeTurn("completed", "Task Agent"),
+      items: [
+        {
+          type: "userMessage",
+          content: [
+            { type: "text", text: initializationPrompt("Task Agent") },
+            { type: "futureContent" },
+          ],
+        },
+        handshakeTurn("completed", "Task Agent").items[1],
+      ],
+    }),
+  ).toThrow("content is malformed");
 });
 
 test("reconciliation requires the matching completed handshake before checking the worktree", async () => {

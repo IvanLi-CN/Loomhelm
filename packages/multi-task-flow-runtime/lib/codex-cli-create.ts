@@ -25,17 +25,22 @@ function normalizedItemType(value: unknown): string {
 
 function isWorkItem(value: unknown): boolean {
   const item = record(value);
-  return item !== null && !handshakeItemTypes.has(normalizedItemType(item.type));
+  return item === null || !handshakeItemTypes.has(normalizedItemType(item.type));
 }
 
 function itemText(item: Record<string, unknown>): string {
-  if (typeof item.text === "string") return item.text;
+  if (typeof item.text === "string") {
+    if ("content" in item) throw new Error("Initialization item content is malformed");
+    return item.text;
+  }
   if (typeof item.content === "string") return item.content;
   if (!Array.isArray(item.content)) return "";
   return item.content
     .map((part: unknown) => {
       const value = record(part);
-      return typeof value?.text === "string" ? value.text : "";
+      if (!value || normalizedItemType(value.type) !== "text" || typeof value.text !== "string")
+        throw new Error("Initialization item content is malformed");
+      return value.text;
     })
     .join("");
 }
@@ -44,9 +49,12 @@ function itemText(item: Record<string, unknown>): string {
 export function verifyInitializationTurn(turn: unknown, role: AgentRole = "Task Agent"): void {
   const value = record(turn);
   if (value?.status !== "completed") throw new Error("Initialization turn is not completed");
-  const items = Array.isArray(value.items)
-    ? value.items.map(record).filter((item): item is Record<string, unknown> => item !== null)
-    : [];
+  if (!Array.isArray(value.items)) throw new Error("Initialization items are unavailable");
+  const items = value.items.map((item) => {
+    const parsed = record(item);
+    if (!parsed) throw new Error("Initialization item is malformed");
+    return parsed;
+  });
   const userMessages = items.filter((item) => normalizedItemType(item.type) === "user_message");
   const userMessage = userMessages[0];
   if (
@@ -110,8 +118,13 @@ export async function runInitialization(input: CliCreationInput): Promise<CliRun
       }
       if (type === "turn.completed") result.turn_completed = true;
       if (type === "turn.failed" || type === "error") throw new Error("Initialization turn failed");
-      const item = record(event.item) ?? record(record(event.params)?.item);
-      if (isWorkItem(item)) throw new Error("Initialization attempted work instead of a handshake");
+      const params = record(event.params);
+      const hasEventItem = Object.hasOwn(event, "item");
+      const hasParamsItem = params !== null && Object.hasOwn(params, "item");
+      if (hasEventItem && hasParamsItem) throw new Error("Ambiguous CLI item evidence");
+      const item = hasEventItem ? event.item : hasParamsItem ? params?.item : undefined;
+      if ((hasEventItem || hasParamsItem) && isWorkItem(item))
+        throw new Error("Initialization attempted work instead of a handshake");
     } catch (error) {
       abort(error instanceof SyntaxError ? "Invalid CLI JSONL" : String(error));
     }
@@ -286,7 +299,8 @@ async function readThreadEvidence(
   });
   const turnData = record(turns.result)?.data;
   const turn = Array.isArray(turnData) ? record(turnData[0]) : null;
-  if (turns.error || !turn) throw new Error("Initialization turn evidence unavailable");
+  if (turns.error || !turn || typeof turn.id !== "string")
+    throw new Error("Initialization turn evidence unavailable");
   return { thread, turn };
 }
 
@@ -335,6 +349,7 @@ export async function reconcileCliThread(
     model: input.model,
     thinking: input.thinking,
     evidence_ref: `codex-thread-reconcile:${input.thread_id}`,
+    initialization_turn_id: turn.id,
     created_at: new Date().toISOString(),
   };
 }
@@ -354,7 +369,7 @@ export async function createCliThread(
   let workspace_path: string | undefined;
   try {
     if (input.repository) verifyRepositoryIdentity(input.cwd ?? process.cwd(), input.repository);
-    execution = await dependencies.run(input);
+    execution = await dependencies.run({ ...input, native_request_id });
     if (
       execution.error ||
       execution.exit_code !== 0 ||
@@ -386,6 +401,7 @@ export async function createCliThread(
       exit_code: execution.exit_code,
       turn_completed: execution.turn_completed,
       events: execution.events,
+      initialization_turn_id: typeof evidence.turn.id === "string" ? evidence.turn.id : undefined,
     };
   } catch (error) {
     // A failed CLI can allocate a worktree before it emits thread.started.
