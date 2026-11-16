@@ -4060,7 +4060,10 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
         .string()
         .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)
         .parse(payload.merge_sha);
-      const taskPr = target.pr && "pr" in target.pr ? target.pr.pr : target.pr;
+      const taskPr =
+        target.pr && "state" in target.pr && target.pr.state === "unbound"
+          ? null
+          : taskPrRef(target);
       requireCondition(
         target.base_sha === baseSha,
         "BASE_CHANGED",
