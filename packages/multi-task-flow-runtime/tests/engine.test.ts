@@ -5180,7 +5180,7 @@ test("contract-3 baseline sync refreshes an advanced lineage without changing na
   expect(JSON.stringify(ledger)).toBe(before);
 });
 
-test("external merge reconciliation records exact child lifecycle facts without regressing lineage", () => {
+test("external merge reconciliation accepts an unbound task PR binding without regressing lineage", () => {
   const ledger = fixture();
   ledger.contract_version = 3;
   ledger.source_schema_version = null;
@@ -5198,6 +5198,7 @@ test("external merge reconciliation records exact child lifecycle facts without 
   task.state = "waiting";
   task.branch = "branch-a";
   task.base_sha = base;
+  task.pr = { state: "unbound" };
   task.execution_owner = "task_agent";
   task.conversation_policy = "task_agent";
   task.delivery_policy = "child_pr";
@@ -5274,6 +5275,98 @@ test("external merge reconciliation records exact child lifecycle facts without 
       }),
     ),
   ).toMatchObject({ code: "REPLAYED" });
+});
+
+test("external merge reconciliation preserves mismatch protection for a registered child PR", () => {
+  const ledger = fixture();
+  ledger.contract_version = 3;
+  ledger.source_schema_version = null;
+  const group = ledger.groups[0]!;
+  const task = ledger.tasks[0]!;
+  const registeredPr = {
+    provider: "github",
+    repository: "example/repo",
+    id: "registered",
+    url: "https://github.com/example/repo/pull/2",
+  };
+  const observedPr = {
+    provider: "github",
+    repository: "example/repo",
+    id: "observed",
+    url: "https://github.com/example/repo/pull/1",
+  };
+  group.parent_branch = "parent";
+  group.pr = {
+    state: "published",
+    pr: registeredPr,
+    parent_branch: "parent",
+  };
+  task.thread_id = "task-a";
+  task.state = "waiting";
+  task.branch = "branch-a";
+  task.base_sha = base;
+  task.pr = {
+    state: "open",
+    pr: registeredPr,
+    branch: "branch-a",
+    base_branch: "parent",
+  };
+  task.execution_owner = "task_agent";
+  task.conversation_policy = "task_agent";
+  task.delivery_policy = "child_pr";
+  const quality = {
+    id: "quality-a",
+    kind: "task_quality" as const,
+    subject_id: task.id,
+    status: "passed" as const,
+    source: task.thread_id,
+    observed_at: at,
+    sha: head,
+    evidence_ref: "workspace:/tmp/task-a",
+    quality: taskQuality(task.id, task.thread_id, observedPr, base, head),
+  };
+  const observation = {
+    provider: "github",
+    repository: "example/repo",
+    resource_type: "pr" as const,
+    resource_id: "observed",
+    branch: "branch-a",
+    target_branch: "parent",
+    base_sha: base,
+    head_sha: head,
+    pr: observedPr,
+    state: "merged" as const,
+    evidence_ref: "https://github.com/example/repo/pull/1",
+  };
+  apply(
+    ledger,
+    "protected-approve",
+    request(ledger, "approve-recovery", {
+      kind: "delivery_unit_recovery",
+      target_id: group.id,
+      approval_id: "recovery-a",
+    }),
+  );
+  expect(() =>
+    apply(
+      ledger,
+      "task-external-merge-reconcile",
+      request(ledger, "reconcile-a", {
+        task_id: task.id,
+        pr: observedPr,
+        provider_observation: observation,
+        quality_evidence: quality,
+        merge_sha: merge,
+        recovery_approval_id: "recovery-a",
+      }),
+    ),
+  ).toThrow("Historical merge PR does not match the registered task PR");
+  expect(task.pr).toEqual({
+    state: "open",
+    pr: registeredPr,
+    branch: "branch-a",
+    base_branch: "parent",
+  });
 });
 
 test("external merge reconciliation rejects incomplete quality evidence without mutation", () => {
