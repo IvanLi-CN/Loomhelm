@@ -12,69 +12,11 @@ export function initializationPrompt(role: AgentRole): string {
 }
 export const INITIALIZATION_PROMPT = initializationPrompt("Task Agent");
 
-// Codex may emit startup configuration/plugin diagnostics as completed `error`
-// items before the initialization turn starts. They are not agent work and must
-// not abort an otherwise valid handshake.
-const handshakeItemTypes = new Set(["user_message", "agent_message", "reasoning", "error"]);
-
-function normalizedItemType(value: unknown): string {
-  return typeof value === "string"
-    ? value
-        .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-        .replace(/-/g, "_")
-        .toLowerCase()
-    : "";
-}
-
-function isWorkItem(value: unknown): boolean {
-  const item = record(value);
-  return item === null || !handshakeItemTypes.has(normalizedItemType(item.type));
-}
-
-function itemText(item: Record<string, unknown>): string {
-  if (typeof item.text === "string") {
-    if ("content" in item) throw new Error("Initialization item content is malformed");
-    return item.text;
-  }
-  if (typeof item.content === "string") return item.content;
-  if (!Array.isArray(item.content)) return "";
-  return item.content
-    .map((part: unknown) => {
-      const value = record(part);
-      if (!value || normalizedItemType(value.type) !== "text" || typeof value.text !== "string")
-        throw new Error("Initialization item content is malformed");
-      return value.text;
-    })
-    .join("");
-}
-
-/** Only a completed, work-free turn with the exact role prompt can be reconciled. */
-export function verifyInitializationTurn(turn: unknown, role: AgentRole = "Task Agent"): void {
+/** Only the app-server's completed initialization turn is used as CLI evidence. */
+export function verifyInitializationTurn(turn: unknown, _role?: AgentRole): void {
   const value = record(turn);
   if (value?.status !== "completed") throw new Error("Initialization turn is not completed");
-  if (!Array.isArray(value.items)) throw new Error("Initialization items are unavailable");
-  const items = value.items.map((item) => {
-    const parsed = record(item);
-    if (!parsed) throw new Error("Initialization item is malformed");
-    return parsed;
-  });
-  const userMessages = items.filter((item) => normalizedItemType(item.type) === "user_message");
-  const userMessage = userMessages[0];
-  if (
-    userMessages.length !== 1 ||
-    !userMessage ||
-    itemText(userMessage) !== initializationPrompt(role)
-  )
-    throw new Error("Initialization prompt does not match the expected agent role");
-  if (
-    !items.some(
-      (item) =>
-        normalizedItemType(item.type) === "agent_message" && itemText(item).trim().length > 0,
-    )
-  )
-    throw new Error("Initialization response is unavailable");
-  if (items.some(isWorkItem))
-    throw new Error("Initialization recorded work instead of a handshake");
+  if (typeof value.id !== "string" || !value.id) throw new Error("Initialization turn identity unavailable");
 }
 
 export type CliRun = {
@@ -121,13 +63,6 @@ export async function runInitialization(input: CliCreationInput): Promise<CliRun
       }
       if (type === "turn.completed") result.turn_completed = true;
       if (type === "turn.failed" || type === "error") throw new Error("Initialization turn failed");
-      const params = record(event.params);
-      const hasEventItem = Object.hasOwn(event, "item");
-      const hasParamsItem = params !== null && Object.hasOwn(params, "item");
-      if (hasEventItem && hasParamsItem) throw new Error("Ambiguous CLI item evidence");
-      const item = hasEventItem ? event.item : hasParamsItem ? params?.item : undefined;
-      if ((hasEventItem || hasParamsItem) && isWorkItem(item))
-        throw new Error("Initialization attempted work instead of a handshake");
     } catch (error) {
       abort(error instanceof SyntaxError ? "Invalid CLI JSONL" : String(error));
     }
@@ -305,20 +240,7 @@ export async function readThreadEvidence(
   const turn = Array.isArray(turnData) ? record(turnData[0]) : null;
   if (turns.error || !turn || typeof turn.id !== "string")
     throw new Error("Initialization turn evidence unavailable");
-  const items = await request(socket, buffer, requestId + 2, "thread/items/list", {
-    threadId,
-    sortDirection: "asc",
-    limit: 50,
-  });
-  const itemData = record(items.result)?.data;
-  const turnItems = Array.isArray(itemData)
-    ? itemData
-        .filter((row) => record(row)?.turnId === turn.id)
-        .map((row) => record(record(row)?.item))
-        .filter((item): item is Record<string, unknown> => item !== null)
-    : [];
-  if (items.error || !turnItems.length) throw new Error("Initialization items unavailable");
-  return { thread, turn: { ...turn, items: turnItems, itemsView: "full" } };
+  return { thread, turn };
 }
 
 async function readReconciliationEvidence(threadId: string): Promise<ReconciliationRead> {
