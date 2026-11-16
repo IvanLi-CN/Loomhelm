@@ -7631,7 +7631,7 @@
     {
       "path": "skills/multi-task-flow/web/app.css",
       "sourcePath": "packages/multi-task-flow-runtime/web/app.css",
-      "installedSha256": "6e88e9713ecfa98ec4ff4ddb78cec4b56bb1428811120dc37ddb3e86f756be58"
+      "installedSha256": "ad9426478370fb807812e36dd0aa28b525361e227faf2149131e87e16fdbc7a8"
     },
     {
       "path": "skills/multi-task-flow/web/app.ts",

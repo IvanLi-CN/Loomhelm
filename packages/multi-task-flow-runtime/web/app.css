@@ -533,6 +533,10 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
   .workspace .task-layout-grid, .workspace .group-cards {
     grid-template-columns: repeat(auto-fill, var(--stable-task-card-width)); gap: 20px;
   }
+  .workspace[data-view-tab="tasks"] .task-layout-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    overflow-x: hidden;
+  }
   .details { --details-padding-inline: 16px; --details-padding-bottom: 20px; }
   .mobile-close { display: grid; }
   .task-layout-board { display: grid; grid-auto-flow: column; grid-auto-columns: var(--stable-task-card-width); grid-template-columns: none; gap: 20px; padding-inline: 0; justify-content: start; align-items: stretch; overflow-x: auto; overflow-y: hidden; }
@@ -555,6 +559,11 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
   .workspace-tasks { display: flex; flex-direction: column; overflow: hidden; }
   .workspace-tasks .task-list-section { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; }
   .workspace-tasks .task-list { min-height: 0; flex: 1 1 auto; }
+  .workspace-tasks #group-section { flex: none; }
+  .workspace-tasks #group-list { flex: none; align-content: start; align-items: start; }
+  .workspace-tasks #group-list .group-card { align-self: start; }
+  .workspace-tasks #task-list.task-layout-grid { align-content: start; grid-auto-rows: max-content; }
+  .workspace-tasks #task-list.task-layout-grid .task-card { align-self: start; }
   .workspace-tasks .task-list { overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
   .workspace-tasks .task-layout-board { min-height: 0; }
   .workspace-tasks .task-layout-board, .workspace-tasks .task-layout-grid { overflow: auto; overscroll-behavior: contain; }
