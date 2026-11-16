@@ -8,7 +8,13 @@ import { connectSocket, record, rpc, socketPath } from "../lib/codex-rpc";
 
 export type AgentRole = "Delivery Agent" | "Task Agent";
 export function initializationPrompt(role: AgentRole): string {
-  return `$multi-task-flow\n\n你是本次运行中的 ${role}，由主 Agent 委派到独立工作区。主 Agent 稍后会发送正式派发消息；收到后按本 Skill 读取任务上下文并推进自己的任务。正式派发前不要开始正式任务，也不要调用工具、读取或修改文件、执行命令。`;
+  return `$multi-task-flow\n\n你是本次运行中的 ${role}，由主 Agent 委派到独立工作区。当前只是初始化握手：正式派发前只回复 READY，不要开始正式任务，也不要读取或修改文件、调用工具或执行命令。主 Agent 稍后会发送正式派发消息；收到后再按本 Skill 读取任务上下文并推进自己的任务。`;
+}
+function legacyInitializationPrompt(role: AgentRole): string {
+  return initializationPrompt(role).replace("，也不要调用工具、读取或修改文件、执行命令。", "。");
+}
+function historicalInitializationPrompt(role: AgentRole): string {
+  return `$multi-task-flow\n\n你是本次运行中的 ${role}，由主 Agent 委派到独立工作区。主 Agent 稍后会发送正式派发消息；收到后按本 Skill 读取任务上下文并推进自己的任务。正式派发前不要开始正式任务。`;
 }
 export const INITIALIZATION_PROMPT = initializationPrompt("Task Agent");
 
@@ -23,9 +29,24 @@ function normalizedItemType(value: unknown): string {
     : "";
 }
 
+function isIgnorableInitializationDiagnostic(value: unknown): boolean {
+  const item = record(value);
+  const message = typeof item?.message === "string" ? item.message.trim() : "";
+  return (
+    normalizedItemType(item?.type) === "error" &&
+    (/^`?\[features\]\.multi_agent`? is deprecated\./.test(message) ||
+      /^Codex is ignoring \d+ unrecognized configuration settings?\.$/.test(message) ||
+      message === "loading hooks from two config layers; prefer a single representation")
+  );
+}
+
 function isWorkItem(value: unknown): boolean {
   const item = record(value);
-  return item === null || !handshakeItemTypes.has(normalizedItemType(item.type));
+  return (
+    item === null ||
+    (!handshakeItemTypes.has(normalizedItemType(item.type)) &&
+      !isIgnorableInitializationDiagnostic(item))
+  );
 }
 
 function itemText(item: Record<string, unknown>): string {
@@ -45,10 +66,8 @@ function itemText(item: Record<string, unknown>): string {
     .join("");
 }
 
-/** Only a completed, work-free turn with the exact role prompt can be reconciled. */
-export function verifyInitializationTurn(turn: unknown, role: AgentRole = "Task Agent"): void {
+function verifyInitializationItems(turn: unknown, role: AgentRole): void {
   const value = record(turn);
-  if (value?.status !== "completed") throw new Error("Initialization turn is not completed");
   if (!Array.isArray(value.items)) throw new Error("Initialization items are unavailable");
   const items = value.items.map((item) => {
     const parsed = record(item);
@@ -60,7 +79,11 @@ export function verifyInitializationTurn(turn: unknown, role: AgentRole = "Task 
   if (
     userMessages.length !== 1 ||
     !userMessage ||
-    itemText(userMessage) !== initializationPrompt(role)
+    ![
+      initializationPrompt(role),
+      legacyInitializationPrompt(role),
+      historicalInitializationPrompt(role),
+    ].includes(itemText(userMessage))
   )
     throw new Error("Initialization prompt does not match the expected agent role");
   if (
@@ -72,6 +95,24 @@ export function verifyInitializationTurn(turn: unknown, role: AgentRole = "Task 
     throw new Error("Initialization response is unavailable");
   if (items.some(isWorkItem))
     throw new Error("Initialization recorded work instead of a handshake");
+}
+
+/** Only a completed, work-free turn with the exact role prompt can be reconciled. */
+export function verifyInitializationTurn(turn: unknown, role: AgentRole = "Task Agent"): void {
+  const value = record(turn);
+  if (value?.status !== "completed") throw new Error("Initialization turn is not completed");
+  verifyInitializationItems(turn, role);
+}
+
+/** An interrupted initialization may only be recovered if it remained work-free. */
+export function verifyInterruptedInitializationTurn(
+  turn: unknown,
+  role: AgentRole = "Task Agent",
+): void {
+  const value = record(turn);
+  if (value?.status !== "interrupted" && value?.status !== "failed")
+    throw new Error("Initialization turn is not interrupted");
+  verifyInitializationItems(turn, role);
 }
 
 export type CliRun = {
@@ -124,7 +165,9 @@ export async function runInitialization(input: CliCreationInput): Promise<CliRun
       if (hasEventItem && hasParamsItem) throw new Error("Ambiguous CLI item evidence");
       const item = hasEventItem ? event.item : hasParamsItem ? params?.item : undefined;
       if ((hasEventItem || hasParamsItem) && isWorkItem(item))
-        throw new Error("Initialization attempted work instead of a handshake");
+        throw new Error(
+          `Initialization attempted work instead of a handshake: ${JSON.stringify(item).slice(0, 500)}`,
+        );
     } catch (error) {
       abort(error instanceof SyntaxError ? "Invalid CLI JSONL" : String(error));
     }
@@ -200,7 +243,7 @@ async function readAndNameThread(threadId: string, title: string): Promise<Recon
       const response = await rpc(socket, buffer, id, method, params);
       if (response.error) throw new Error(`${method} rejected`);
     }
-    return readThreadEvidence(socket, buffer, threadId, 3);
+    return await readThreadEvidence(socket, buffer, threadId, 3);
   } finally {
     socket.destroy();
   }
@@ -278,6 +321,21 @@ type ReconciliationRead = {
   turn: Record<string, unknown>;
 };
 
+function unsupportedRpcResponse(response: Record<string, unknown>): boolean {
+  const error = record(response.error);
+  const message = typeof error?.message === "string" ? error.message : JSON.stringify(error ?? "");
+  return /method not found|unknown (?:method|variant)|unsupported method/i.test(message);
+}
+
+function fullTurn(value: unknown, turnId: string): Record<string, unknown> | null {
+  const turn = record(value);
+  if (!turn || turn.id !== turnId || !Array.isArray(turn.items)) return null;
+  const items = turn.items.filter((item): item is Record<string, unknown> => record(item) !== null);
+  return items.length === turn.items.length && items.length > 0
+    ? { ...turn, items, itemsView: "full" }
+    : null;
+}
+
 export async function readThreadEvidence(
   socket: Socket,
   buffer: { value: Buffer },
@@ -302,23 +360,63 @@ export async function readThreadEvidence(
   const turn = Array.isArray(turnData) ? record(turnData[0]) : null;
   if (turns.error || !turn || typeof turn.id !== "string")
     throw new Error("Initialization turn evidence unavailable");
-  const items = await request(socket, buffer, requestId + 2, "thread/items/list", {
-    threadId,
-    sortDirection: "asc",
-    limit: 50,
-  });
-  const itemData = record(items.result)?.data;
-  const turnItems = Array.isArray(itemData)
-    ? itemData
-        .filter((row) => record(row)?.turnId === turn.id)
-        .map((row) => record(record(row)?.item))
-        .filter((item): item is Record<string, unknown> => item !== null)
-    : [];
-  if (items.error || !turnItems.length) throw new Error("Initialization items unavailable");
-  return { thread, turn: { ...turn, items: turnItems, itemsView: "full" } };
+  let cursor: unknown;
+  const cursors = new Set<unknown>();
+  const turnItems: Record<string, unknown>[] = [];
+  try {
+    while (true) {
+      const items = await request(
+        socket,
+        buffer,
+        requestId + 2 + cursors.size,
+        "thread/items/list",
+        {
+          threadId,
+          sortDirection: "asc",
+          limit: 50,
+          ...(cursor ? { cursor } : {}),
+        },
+      );
+      if (items.error) {
+        if (unsupportedRpcResponse(items)) throw new Error("thread/items/list unsupported");
+        throw new Error("thread/items/list rejected");
+      }
+      const itemData = record(items.result)?.data;
+      if (!Array.isArray(itemData)) throw new Error("thread/items/list malformed");
+      for (const row of itemData) {
+        const value = record(row);
+        if (!value || value.turnId !== turn.id) continue;
+        const item = record(value.item) ?? (typeof value.type === "string" ? { ...value } : null);
+        if (item) {
+          delete item.turnId;
+          turnItems.push(item);
+        }
+      }
+      const next = record(items.result)?.nextCursor;
+      if (!next) break;
+      if (cursors.has(next)) throw new Error("Repeated thread item cursor");
+      cursors.add(next);
+      cursor = next;
+    }
+    if (turnItems.length) return { thread, turn: { ...turn, items: turnItems, itemsView: "full" } };
+    throw new Error("thread/items/list returned no matching items");
+  } catch (error) {
+    if (!(error instanceof Error && /unsupported|malformed|no matching items/.test(error.message)))
+      throw error;
+    const full = await request(socket, buffer, requestId + 100, "thread/turns/list", {
+      threadId,
+      sortDirection: "asc",
+      limit: 1,
+      itemsView: "full",
+    });
+    const fullData = record(full.result)?.data;
+    const hydrated = Array.isArray(fullData) ? fullTurn(fullData[0], turn.id) : null;
+    if (!hydrated) throw new Error("Initialization items unavailable");
+    return { thread, turn: hydrated };
+  }
 }
 
-async function readReconciliationEvidence(threadId: string): Promise<ReconciliationRead> {
+export async function readReconciliationEvidence(threadId: string): Promise<ReconciliationRead> {
   const path = socketPath();
   if (!path) throw new Error("App-server read control is unavailable");
   const { socket, buffer: initial } = await connectSocket(path);
@@ -329,7 +427,31 @@ async function readReconciliationEvidence(threadId: string): Promise<Reconciliat
       capabilities: { experimentalApi: true },
     });
     if (initialized.error) throw new Error("Codex app-server initialization rejected");
-    return readThreadEvidence(socket, buffer, threadId);
+    return await readThreadEvidence(socket, buffer, threadId);
+  } finally {
+    socket.destroy();
+  }
+}
+
+export async function readThreadRecord(threadId: string): Promise<Record<string, unknown>> {
+  const path = socketPath();
+  if (!path) throw new Error("App-server read control is unavailable");
+  const { socket, buffer: initial } = await connectSocket(path);
+  const buffer = { value: initial };
+  try {
+    const initialized = await rpc(socket, buffer, 1, "initialize", {
+      clientInfo: { name: "multi-task-flow", version: "2" },
+      capabilities: { experimentalApi: true },
+    });
+    if (initialized.error) throw new Error("Codex app-server initialization rejected");
+    const response = await rpc(socket, buffer, 2, "thread/read", {
+      threadId,
+      includeTurns: false,
+    });
+    if (response.error) throw new Error("thread/read rejected");
+    const thread = record(record(response.result)?.thread);
+    if (!thread || thread.id !== threadId) throw new Error("Thread identity mismatch");
+    return thread;
   } finally {
     socket.destroy();
   }

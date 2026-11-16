@@ -606,19 +606,23 @@ try {
       native_request_id: nativeRequestId,
       repository: ledger.repository,
       onThreadStarted: (threadId) => {
-        const current = validateLedger(store.read());
-        store.update((raw) =>
-          apply(raw, "dispatch-progress", {
-            ...parsed,
-            request_id: `${parsed.request_id}-thread`,
-            expected_revision: current.revision,
-            payload: {
-              operation_id: payload.operation_id,
-              native_request_id: nativeRequestId,
-              thread_id: threadId,
-            },
-          }),
-        );
+        try {
+          const current = validateLedger(store.read());
+          store.update((raw) =>
+            apply(raw, "dispatch-progress", {
+              ...parsed,
+              request_id: `${parsed.request_id}-thread`,
+              expected_revision: current.revision,
+              payload: {
+                operation_id: payload.operation_id,
+                native_request_id: nativeRequestId,
+                thread_id: threadId,
+              },
+            }),
+          );
+        } catch (error) {
+          if (!(error instanceof ContractError && error.code === "REVISION_CONFLICT")) throw error;
+        }
       },
       ...profile,
     });
