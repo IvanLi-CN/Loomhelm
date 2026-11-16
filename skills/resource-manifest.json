@@ -6962,7 +6962,7 @@
     },
     {
       "path": "skills/multi-task-flow/SKILL.md",
-      "installedSha256": "eb2b45d8e06d42d63331b22b208e74bd052e0750a464f3424baf83f99bb4dd0f"
+      "installedSha256": "dfa434cd50f8f3066e0c111ab5b2ad73726835bd552a13a5a36699e1d45aa9a1"
     },
     {
       "path": "skills/multi-task-flow/bun.lock",
@@ -7328,6 +7328,11 @@
       "path": "skills/multi-task-flow/package.json",
       "sourcePath": "packages/multi-task-flow-runtime/package.json",
       "installedSha256": "adb60703b756724320bbdad5da3a4c78df689e0f8b0b6def0fd56fe18816ee57"
+    },
+    {
+      "path": "skills/multi-task-flow/references/cli-contract.md",
+      "sourcePath": "docs/specs/multi-task-flow-unified-atomic-orchestration/CLI-CONTRACT.md",
+      "installedSha256": "40d99f942967226299400af96b5d101015b96659ba3cb06b931fcd86f1e8996d"
     },
     {
       "path": "skills/multi-task-flow/references/shared-viewer.md",
@@ -8267,7 +8272,12 @@
     {
       "path": "skills/multi-task-flow/scripts/package-client-skills.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/package-client-skills.ts",
-      "installedSha256": "932d34c7d72a52c5e58635fd7bc037cbf4e8776303e8eed60c87f13e2cdf92ac"
+      "installedSha256": "cf4095a673810185434ca28b637a40f7d7488b63b519051af5ce904d4cecba3f"
+    },
+    {
+      "path": "skills/multi-task-flow/lib/flow-domain-schemas.json",
+      "sourcePath": "packages/multi-task-flow-runtime/lib/flow-domain-schemas.json",
+      "installedSha256": "993606c7cb323bb2513cdd187a5ee43060a3bc4dfab97041c2834f2ab819a4a5"
     },
     {
       "path": "skills/multi-task-flow/lib/package-source.ts",

@@ -1,40 +1,99 @@
-import { loadConfig } from '../config.ts';
-import type { ClientConfig } from '../config.ts';
-import type { ProcessOptions } from '../runtime/process.ts';
-import { SkillsRuntime } from '../toolkit.ts';
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import type { ClientConfig } from "../config.ts";
+import { loadConfig } from "../config.ts";
+import type { ProcessOptions } from "../runtime/process.ts";
+import { SkillsRuntime } from "../toolkit.ts";
+import {
+	enrichFlowContract,
+	FLOW_CONTRACT,
+	flowHelp,
+} from "./flow-contract.ts";
 
-export function flowProcessOptions(config: Pick<ClientConfig, 'processTimeoutMs' | 'maxOutputBytes'>, input: Uint8Array, socket?: string): ProcessOptions {
-  return {
-    input,
-    cwd: process.cwd(),
-    timeoutMs: config.processTimeoutMs,
-    maxOutputBytes: config.maxOutputBytes,
-    env: { ...process.env, ...(socket ? { LOOMHELM_CODEX_APP_SERVER_SOCKET: socket } : {}) },
-  };
+export function flowProcessOptions(
+	config: Pick<ClientConfig, "processTimeoutMs" | "maxOutputBytes">,
+	input: Uint8Array,
+	socket?: string,
+): ProcessOptions {
+	return {
+		input,
+		cwd: process.cwd(),
+		timeoutMs: config.processTimeoutMs,
+		maxOutputBytes: config.maxOutputBytes,
+		env: {
+			...process.env,
+			...(socket ? { LOOMHELM_CODEX_APP_SERVER_SOCKET: socket } : {}),
+		},
+	};
 }
 
-export async function runFlowCommand(args: string[], configPath?: string): Promise<void> {
-  if (args[0] === 'help' || !args.length) {
-    console.log('flow COMMAND --input - [--socket PATH]; original Multi-task Flow JSON contract, schema_version=2 / contract_version=2'); return;
-  }
-  let socket: string | undefined;
-  const index = args.indexOf('--socket');
-  if (index >= 0) {
-    socket = args[index + 1];
-    if (!socket) throw new Error('Missing socket path');
-    args = [...args.slice(0, index), ...args.slice(index + 2)];
-  }
-  if (args.length !== 3 || args[1] !== '--input' || args[2] !== '-') throw new Error('FLOW_LEGACY_ARGUMENTS_UNSUPPORTED: use COMMAND --input - with the original JSON contract; existing state is unchanged');
-  const config = await loadConfig(configPath);
-  if (process.stdin.isTTY) throw new Error('Flow requires a JSON request on stdin');
-  const chunks: Buffer[] = []; let size = 0;
-  for await (const chunk of process.stdin) {
-    const data = Buffer.from(chunk); size += data.length;
-    if (size > 16 * 1024 * 1024) throw new Error('Flow input too large');
-    chunks.push(data);
-  }
-  const selected = socket ?? config.codexAppServerSocket;
-  const result = await new SkillsRuntime().run('skills/multi-task-flow/scripts/orchestrate.ts', args, flowProcessOptions(config, Buffer.concat(chunks), selected));
-  process.stdout.write(result.stdout); process.stderr.write(result.stderr);
-  process.exitCode = result.code ?? 1;
+export async function runFlowCommand(
+	args: string[],
+	configPath?: string,
+): Promise<void> {
+	if (
+		!args.length ||
+		args[0] === "help" ||
+		args[1] === "--help" ||
+		args[0] === "--help"
+	) {
+		console.log(
+			flowHelp(
+				args[0] === "help" || args[0] === "--help" ? undefined : args[0],
+			),
+		);
+		return;
+	}
+	if (args[0] === "schema") {
+		if (args.length !== 3 || args[1] !== "--format" || args[2] !== "json")
+			throw new Error("Usage: flow schema --format json");
+		let contract: Record<string, unknown> = FLOW_CONTRACT;
+		try {
+			const domain = JSON.parse(
+				await readFile(
+					resolve(
+						new SkillsRuntime().root,
+						"skills/multi-task-flow/lib/flow-domain-schemas.json",
+					),
+					"utf8",
+				),
+			) as Record<string, unknown>;
+			contract = enrichFlowContract(domain);
+		} catch {
+			// Source checkouts can inspect the command registry before their packaged resources exist.
+		}
+		console.log(JSON.stringify(contract));
+		return;
+	}
+	let socket: string | undefined;
+	const index = args.indexOf("--socket");
+	if (index >= 0) {
+		socket = args[index + 1];
+		if (!socket) throw new Error("Missing socket path");
+		args = [...args.slice(0, index), ...args.slice(index + 2)];
+	}
+	if (args.length !== 3 || args[1] !== "--input" || args[2] !== "-")
+		throw new Error(
+			"FLOW_LEGACY_ARGUMENTS_UNSUPPORTED: use COMMAND --input - with the original JSON contract; existing state is unchanged",
+		);
+	const config = await loadConfig(configPath);
+	if (process.stdin.isTTY)
+		throw new Error("Flow requires a JSON request on stdin");
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const chunk of process.stdin) {
+		const data = Buffer.from(chunk);
+		size += data.length;
+		if (size > 16 * 1024 * 1024) throw new Error("Flow input too large");
+		chunks.push(data);
+	}
+	const selected = socket ?? config.codexAppServerSocket;
+	const result = await new SkillsRuntime().run(
+		"skills/multi-task-flow/scripts/orchestrate.ts",
+		args,
+		flowProcessOptions(config, Buffer.concat(chunks), selected),
+	);
+	process.stdout.write(result.stdout);
+	process.stderr.write(result.stderr);
+	process.exitCode = result.code ?? 1;
 }
