@@ -553,6 +553,7 @@ const eventType = z.enum([
   "task_blocked",
   "task_rebased",
   "task_integrated",
+  "external_merge_reconciled",
   "task_completed",
   "task_closed",
   "merge_claimed",
@@ -1927,7 +1928,12 @@ export function collectCutAssignmentEvidence(ledger: Ledger, active: Plan): CutA
       const snapshotField =
         laterEvent.type === "cut_applied"
           ? "old_group_snapshot"
-          : ["thread_bound", "group_updated", "merge_resolved"].includes(laterEvent.type)
+          : [
+                "thread_bound",
+                "group_updated",
+                "merge_resolved",
+                "external_merge_reconciled",
+              ].includes(laterEvent.type)
             ? "group_snapshot"
             : null;
       if (snapshotField === null) continue;
