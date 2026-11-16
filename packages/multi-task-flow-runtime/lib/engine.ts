@@ -667,9 +667,10 @@ function addEvent(
   subject: string,
   data: Record<string, unknown>,
   occurredAt: string | null = now(),
+  eventId = request.request_id,
 ): void {
   ledger.events.push({
-    id: request.request_id,
+    id: eventId,
     type,
     subject_id: subject,
     actor_id: request.actor.thread_id,
@@ -1202,6 +1203,66 @@ function taskExecutionState(task: {
   agent_resume_state?: "starting" | "running";
 }): string {
   return task.state === "agent_idle" ? (task.agent_resume_state ?? "running") : task.state;
+}
+
+function taskMergePrerequisitesComplete(ledger: Ledger, task: Task): boolean {
+  if (ledger.contract_version !== 3) return task.atoms.every((atom) => atom.status === "completed");
+  const mergeIndex = task.atoms.findIndex((atom) => atom.lifecycle_stage === "pr_merged");
+  if (mergeIndex < 0) return task.atoms.every((atom) => atom.status === "completed");
+  return (
+    task.atoms[mergeIndex]?.status !== "blocked" &&
+    task.atoms.slice(0, mergeIndex).every((atom) => atom.status === "completed")
+  );
+}
+
+function taskCanUpdateAtoms(ledger: Ledger, task: Task): boolean {
+  return (
+    taskExecutionState(task) === "running" ||
+    (ledger.contract_version === 3 &&
+      task.state === "integrated" &&
+      task.lifecycle.pr_merged === "passed")
+  );
+}
+
+function completeTaskLifecycleAtom(
+  ledger: Ledger,
+  request: Request,
+  task: Task,
+  lifecycleStage: "pr_merged",
+  evidence: { fact_id: string; evidence_ref: string | null; occurred_at: string },
+): void {
+  if (ledger.contract_version !== 3) return;
+  const index = task.atoms.findIndex((atom) => atom.lifecycle_stage === lifecycleStage);
+  if (index < 0 || task.atoms[index]!.status === "completed") return;
+  requireCondition(
+    task.atoms.slice(0, index).every((atom) => atom.status === "completed"),
+    "ATOMS_PENDING",
+    "Complete the task's pre-merge atoms before recording the merge",
+    4,
+  );
+  requireCondition(
+    ["planned", "running"].includes(task.atoms[index]!.status),
+    "INVALID_TRANSITION",
+    "The task merge atom cannot be completed from its current state",
+    3,
+  );
+  task.atoms[index]!.status = "completed";
+  addEvent(
+    ledger,
+    request,
+    "atom_updated",
+    task.id,
+    {
+      task_id: task.id,
+      atom_id: task.atoms[index]!.id,
+      state: "completed",
+      source: "provider-merge",
+      fact_id: evidence.fact_id,
+      evidence_ref: evidence.evidence_ref,
+    },
+    evidence.occurred_at,
+    `${request.request_id}-atom-${task.atoms[index]!.id}`,
+  );
 }
 
 function taskRuntimeState(task: Task): Record<string, unknown> {
@@ -3302,6 +3363,13 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
             "Contribution task PR must merge before closeout",
             4,
           );
+        if (ledger.contract_version === 3 && isContributionKind(target.kind))
+          requireCondition(
+            target.atoms.every((atom) => atom.status === "completed"),
+            "ATOMS_PENDING",
+            "Complete the task's atoms before closing",
+            4,
+          );
       }
       target.state = state;
       delete target.agent_resume_state;
@@ -3463,9 +3531,9 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
           request.actor.thread_id;
       requireCondition(
         (request.actor.role === "task" || mainOwned || sharedOwned) &&
-          taskExecutionState(target) === "running",
+          taskCanUpdateAtoms(ledger, target),
         "FORBIDDEN",
-        "The running task owner updates its atoms",
+        "The task owner updates atoms while execution is active or completing closeout",
         3,
       );
       const index = target.atoms.findIndex((item) => item.id === parse(id, payload.atom_id));
@@ -4035,6 +4103,12 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
         "Task has an unresolved operation",
         4,
       );
+      requireCondition(
+        taskMergePrerequisitesComplete(ledger, target),
+        "ATOMS_PENDING",
+        "Complete the task's pre-merge atoms before recording the merge",
+        4,
+      );
 
       const pr = parse(externalRef, payload.pr);
       const observation = providerReceipt.parse(payload.provider_observation);
@@ -4155,6 +4229,11 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
       );
       if (!priorPublication) ledger.facts.push(publicationFact);
       if (!priorMerge) ledger.facts.push(mergeFact);
+      completeTaskLifecycleAtom(ledger, request, target, "pr_merged", {
+        fact_id: mergeFact.id,
+        evidence_ref: mergeFact.evidence_ref,
+        occurred_at: mergeFact.observed_at,
+      });
 
       target.pr =
         ledger.contract_version === 3
@@ -4446,9 +4525,9 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
           3,
         );
         requireCondition(
-          target.atoms.every((atom) => atom.status === "completed"),
+          taskMergePrerequisitesComplete(ledger, target),
           "ATOMS_PENDING",
-          "Complete the task's atoms before merging",
+          "Complete the task's pre-merge atoms before merging",
           4,
         );
         requireCondition(
@@ -4796,6 +4875,14 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
           if (target.lifecycle && !legacyLedger(ledger)) target.lifecycle.pr_merged = "passed";
         }
         ledger.facts.push(evidence);
+        if (op.request.mode === "child") {
+          const target = find(ledger.tasks, (item) => item.id === op.request.task_id, "Task");
+          completeTaskLifecycleAtom(ledger, request, target, "pr_merged", {
+            fact_id: evidence.id,
+            evidence_ref: evidence.evidence_ref,
+            occurred_at: evidence.observed_at,
+          });
+        }
         op.receipt_fact_id = evidence.id;
       } else if (outcome === "failed") {
         const observation = z

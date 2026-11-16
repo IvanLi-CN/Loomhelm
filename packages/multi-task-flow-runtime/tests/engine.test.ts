@@ -787,6 +787,83 @@ function readyAtomicFixture() {
   return ledger;
 }
 
+function contract3ChildMergeFixture() {
+  const ledger = readyAtomicFixture();
+  ledger.contract_version = 3;
+  ledger.source_schema_version = null;
+  ledger.groups[0].pr = { state: "unpublished" };
+  ledger.atomic_nodes = structuredClone(ledger.plans[0].atomic_nodes);
+  ledger.atomic_edges = structuredClone(ledger.plans[0].atomic_edges);
+  for (const otherTask of ledger.tasks.slice(1)) otherTask.pr = { state: "unbound" };
+  const task = ledger.tasks[0];
+  const actor = { role: "task", thread_id: "task-a" } as const;
+  const pr = {
+    provider: "github",
+    repository: "example/repo",
+    id: "child-pr",
+    url: "https://github.com/example/repo/pull/child-pr",
+  };
+  const receipt = {
+    ...providerPrReceipt("child-pr", "task-a", base, head),
+    target_branch: "parent",
+  };
+  task.thread_id = actor.thread_id;
+  task.state = "running";
+  task.execution_owner = "task_agent";
+  task.conversation_policy = "task_agent";
+  task.delivery_policy = "child_pr";
+  task.branch = "task-a";
+  task.pr = { state: "open", pr, branch: "task-a", base_branch: "parent" };
+  task.lifecycle.pr_created = "passed";
+  task.atoms[0].status = "completed";
+  task.atoms[1].status = "completed";
+  ledger.events.push(
+    {
+      id: "task-pr-created",
+      type: "lifecycle_recorded",
+      subject_id: task.id,
+      actor_id: actor.thread_id,
+      occurred_at: at,
+      recorded_at: at,
+      data: { target_type: "task", stage: "pr_created", evidence_ref: "child-pr" },
+    },
+    {
+      id: "task-quality-observed",
+      type: "fact_observed",
+      subject_id: task.id,
+      actor_id: actor.thread_id,
+      occurred_at: at,
+      recorded_at: at,
+      data: { fact_id: "task-quality", base_sha: base },
+    },
+  );
+  ledger.facts.push(
+    {
+      id: "child-pr-published",
+      kind: "pr_published",
+      subject_id: task.id,
+      status: "passed",
+      source: "github",
+      observed_at: at,
+      sha: head,
+      evidence_ref: "child-pr",
+      receipt,
+    },
+    {
+      id: "task-quality",
+      kind: "task_quality",
+      subject_id: task.id,
+      status: "passed",
+      source: actor.thread_id,
+      observed_at: at,
+      sha: head,
+      evidence_ref: "task-quality",
+      quality: taskQuality(task.id, actor.thread_id, pr, base, head),
+    },
+  );
+  return { ledger, actor, pr };
+}
+
 test("task readiness starts at the first executable atomic work", () => {
   const ledger = readyAtomicFixture();
 
@@ -867,6 +944,134 @@ test("task readiness starts at the first executable atomic work", () => {
       ),
     ),
   ).toThrow("Earlier atoms must complete first");
+});
+
+test("contract-3 child merge completes merge-pr before task closeout", () => {
+  const { ledger, actor, pr } = contract3ChildMergeFixture();
+  apply(
+    ledger,
+    "merge-claim",
+    request(
+      ledger,
+      "merge-claim",
+      {
+        operation_id: "merge-a",
+        mode: "child",
+        group_id: "g",
+        task_id: "a",
+        target_branch: "parent",
+        expected_base_sha: base,
+        expected_head_sha: head,
+        pr,
+      },
+      actor,
+    ),
+  );
+  expect(ledger.tasks[0]!.atoms.map((atom) => atom.status)).toEqual([
+    "completed",
+    "completed",
+    "planned",
+    "planned",
+  ]);
+
+  apply(
+    ledger,
+    "merge-resolve",
+    request(
+      ledger,
+      "merge-result",
+      {
+        operation_id: "merge-a",
+        outcome: "succeeded",
+        provider_evidence: {
+          id: "merge-fact",
+          kind: "pr_merged",
+          subject_id: "a",
+          status: "passed",
+          source: "github",
+          observed_at: at,
+          sha: merge,
+          evidence_ref: "merge-proof",
+        },
+        provider_observation: {
+          pr,
+          head_sha: head,
+          base_sha: base,
+          merge_sha: merge,
+          state: "merged",
+        },
+      },
+      actor,
+    ),
+  );
+  expect(ledger.tasks[0]!.state).toBe("integrated");
+  expect(ledger.tasks[0]!.atoms.map((atom) => atom.status)).toEqual([
+    "completed",
+    "completed",
+    "completed",
+    "planned",
+  ]);
+  expect(ledger.events).toContainEqual(
+    expect.objectContaining({
+      type: "atom_updated",
+      data: expect.objectContaining({
+        task_id: "a",
+        atom_id: "task-a-merge-pr",
+        state: "completed",
+        fact_id: "merge-fact",
+      }),
+    }),
+  );
+  expect(() =>
+    apply(
+      ledger,
+      "task-update",
+      request(
+        ledger,
+        "close-too-early",
+        {
+          task_id: "a",
+          state: "closed",
+        },
+        actor,
+      ),
+    ),
+  ).toThrow("Complete the task's atoms before closing");
+
+  apply(
+    ledger,
+    "atom-update",
+    request(
+      ledger,
+      "closeout-start",
+      {
+        task_id: "a",
+        atom_id: "task-a-closeout",
+        state: "running",
+      },
+      actor,
+    ),
+  );
+  apply(
+    ledger,
+    "atom-update",
+    request(
+      ledger,
+      "closeout-complete",
+      {
+        task_id: "a",
+        atom_id: "task-a-closeout",
+        state: "completed",
+      },
+      actor,
+    ),
+  );
+  apply(
+    ledger,
+    "task-update",
+    request(ledger, "close-task", { task_id: "a", state: "closed" }, actor),
+  );
+  expect(ledger.tasks[0]!.lifecycle.closed).toBe("passed");
 });
 
 test("contribution dispatch is blocked until the parent PR gate is complete", () => {
