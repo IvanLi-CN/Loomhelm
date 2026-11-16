@@ -8282,7 +8282,7 @@
     {
       "path": "skills/multi-task-flow/lib/package-source.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/package-source.ts",
-      "installedSha256": "28c6c1b0c91323a278d18d74d59383a5b066ffc0e78961cecc3224673e22eecc"
+      "installedSha256": "0e370dd69dd80243f7a7c25ca0a1fa2fc506022f8fe3d4f89e0ec368bf16c3ed"
     },
     {
       "path": "skills/multi-task-flow/scripts/test-skills-artifact.ts",
