@@ -8137,7 +8137,7 @@
     {
       "path": "skills/multi-task-flow/lib/codex-cli-create.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/codex-cli-create.ts",
-      "installedSha256": "4e8504e0d53bcf6c0b66bc7221a8a8ddd07ada44e506c17a7d8b884bd82ff280"
+      "installedSha256": "8c6c9c4a317e7959ee8b2f2ad043d14894f9bc846f012a94a9b54e1421525994"
     },
     {
       "path": "skills/multi-task-flow/lib/conversation-eligibility.ts",
