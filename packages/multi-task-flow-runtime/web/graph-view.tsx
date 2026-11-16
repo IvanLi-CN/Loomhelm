@@ -12,6 +12,7 @@ import {
 } from "@xyflow/react";
 import { TreePalm } from "lucide";
 import React, { memo, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
   accessibleNodeLabel,
@@ -214,34 +215,46 @@ export function createGraphController(context: GraphContext, calculateLayout = l
       },
       style: { stroke: context.css("--muted", "#789096"), strokeWidth: 1.5 },
     }));
+    const graphDirectionTools = document.getElementById("graph-direction-tools");
     return (
       <>
-        <div className="dependency-layout-tools">
-          <span>前置任务 → 后续任务 · 正交连线</span>
-          <label>
-            排列方向{" "}
-            <select
-              value={direction}
-              onChange={(e) => {
-                direction = e.target.value as Direction;
+        {graphDirectionTools
+          ? createPortal(
+          <div className="layout-switch graph-direction-switch" role="group" aria-label="排列方向">
+            <button
+              type="button"
+              className="icon-button layout-option graph-direction-option"
+              aria-label="从上到下"
+              aria-pressed={direction === "DOWN"}
+              data-tooltip="从上到下"
+              onClick={() => {
+                direction = "DOWN";
                 signature = "";
                 viewportInitialized = false;
                 render(latest, latestGroupIds);
               }}
             >
-              <option value="DOWN">从上到下</option>
-              <option value="RIGHT">从左到右</option>
-            </select>
-          </label>
-          <button
-            onClick={() => {
-              instance?.setViewport({ x: 24, y: 24, zoom: 1 });
-              context.setZoom(1);
-            }}
-          >
-            100% 阅读
-          </button>
-        </div>
+              <i data-lucide="arrow-down" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="icon-button layout-option graph-direction-option"
+              aria-label="从左到右"
+              aria-pressed={direction === "RIGHT"}
+              data-tooltip="从左到右"
+              onClick={() => {
+                direction = "RIGHT";
+                signature = "";
+                viewportInitialized = false;
+                render(latest, latestGroupIds);
+              }}
+            >
+              <i data-lucide="arrow-right" aria-hidden="true" />
+            </button>
+          </div>,
+              graphDirectionTools,
+            )
+          : null}
         {error ? (
           <div role="alert" className="notice notice-warning">
             {error}

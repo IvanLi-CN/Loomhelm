@@ -1156,38 +1156,10 @@ export function buildView(
       /* invalid legacy milestones remain pending in the compatibility view */
     }
   }
-  const canonicalDisplayNodes = plan.atomic_nodes.length
-    ? canonicalAtomicNodes.map((node) => ({
-        id: node.id,
-        kind: node.kind === "work" ? ("task" as const) : ("milestone" as const),
-        ref_id: node.kind === "work" && node.scope?.kind === "task" ? node.scope.task_id : null,
-        group_id: node.scope?.delivery_unit_id ?? null,
-        label: node.title,
-        estimate_minutes: null,
-        estimate_basis: null,
-        estimate_confidence: null,
-      }))
-    : nodeData;
-  const canonicalDisplayEdges = plan.atomic_nodes.length
-    ? canonicalAtomicEdges.map((edge) => ({
-        id: edge.id,
-        from_node_id: edge.from_node_id,
-        to_node_id: edge.to_node_id,
-        requires:
-          edge.requires.kind === "source_terminal_success"
-            ? ("completed" as const)
-            : edge.requires.criterion.kind === "pr_published" ||
-                edge.requires.criterion.kind === "release_published"
-              ? ("published" as const)
-              : edge.requires.criterion.kind === "pr_merged"
-                ? ("merged" as const)
-                : edge.requires.criterion.kind === "ci_passed"
-                  ? ("ci_passed" as const)
-                  : edge.requires.criterion.kind === "deployment_succeeded"
-                    ? ("deployed" as const)
-                    : ("verified" as const),
-      }))
-    : plan.edges;
+  // Keep the aggregate graph at the plan level. Atomic nodes are rendered only
+  // in the atomic graph tab; projecting them here duplicates each task card.
+  const canonicalDisplayNodes = nodeData;
+  const canonicalDisplayEdges = plan.edges;
   const selectedTaskIds = new Set(
     plan.nodes.filter((node) => node.kind === "task").map((node) => node.ref_id),
   );

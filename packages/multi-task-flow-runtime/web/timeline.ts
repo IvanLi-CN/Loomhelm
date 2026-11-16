@@ -9,6 +9,17 @@ type TimelineMode = "planned" | "actual";
 type TimelineRange = { start?: Date; end?: Date };
 
 const RELATIVE_EPOCH = Date.parse("2000-01-01T00:00:00.000Z");
+const PLANNED_TRAILING_PADDING_MINUTES = 3 * 60;
+
+function relativeDate(minutes: number): Date {
+  return new Date(RELATIVE_EPOCH + minutes * 60_000);
+}
+
+function relativeAxisLabel(date: Date): string {
+  const timestamp = date instanceof Date ? date.getTime() : Number(date);
+  const minutes = Math.max(0, Math.round((timestamp - RELATIVE_EPOCH) / 60_000));
+  return formatRelativeHours(minutes);
+}
 
 type TimelineContext = {
   getData: () => View | null;
@@ -127,11 +138,22 @@ export function createTimelineController(context: TimelineContext) {
     persist = true,
   ): void => {
     if (!validWindow(start, end)) return;
-    const windowRange = { start: new Date(start), end: new Date(end) };
+    let nextStart = new Date(start);
+    let nextEnd = new Date(end);
+    const bounds = mode === "planned" ? plannedBounds : actualBounds;
+    if (mode === "planned" && bounds.start && bounds.end) {
+      const lower = bounds.start.getTime();
+      const upper = bounds.end.getTime();
+      const span = Math.min(nextEnd.getTime() - nextStart.getTime(), upper - lower);
+      const clampedStart = Math.max(lower, Math.min(nextStart.getTime(), upper - span));
+      nextStart = new Date(clampedStart);
+      nextEnd = new Date(clampedStart + span);
+    }
+    const windowRange = { start: nextStart, end: nextEnd };
     if (mode === "planned") plannedWindow = windowRange;
     else actualWindow = windowRange;
-    if (persist) setTimelineWindow(mode, start.toISOString(), end.toISOString());
-    timeline.setWindow(start, end, { animation: false });
+    if (persist) setTimelineWindow(mode, nextStart.toISOString(), nextEnd.toISOString());
+    timeline.setWindow(nextStart, nextEnd, { animation: false });
     timeline.redraw();
   };
   const adjustWindow = (direction: "in" | "out"): void => {
@@ -298,18 +320,24 @@ export function createTimelineController(context: TimelineContext) {
     const entries: any[] = [];
     const entryTasks = new Map<string, string>();
     const unknown: string[] = [];
+    let plannedEndOffsetMinutes = 0;
     for (const task of tasks) {
       const node = data.nodes.find((item) => item.kind === "task" && item.ref_id === task.id);
       const planRow = data.planned_intervals.find((item) => item.node_id === node?.id);
       const actualRows = data.actual_intervals.filter((item) => item.task_id === task.id);
       if (mode === "planned") {
-        if (planRow?.start && planRow.end && node) {
+        if (
+          planRow?.start_offset_minutes != null &&
+          planRow.end_offset_minutes != null &&
+          node
+        ) {
+          plannedEndOffsetMinutes = Math.max(plannedEndOffsetMinutes, planRow.end_offset_minutes);
           entries.push({
             id: `plan-${task.id}`,
             task_id: task.id,
             group: node.id,
-            start: planRow.start,
-            end: planRow.end,
+            start: relativeDate(planRow.start_offset_minutes),
+            end: relativeDate(planRow.end_offset_minutes),
             content: text(
               "span",
               `${task.title}（${formatRelativeHours(planRow.start_offset_minutes)}～${formatRelativeHours(planRow.end_offset_minutes)}）`,
@@ -344,9 +372,13 @@ export function createTimelineController(context: TimelineContext) {
       const planned = data.planned_intervals.find((item) => item.node_id === node.id);
       const date =
         mode === "planned"
-          ? planned?.start
+          ? planned?.start_offset_minutes != null
+            ? relativeDate(planned.start_offset_minutes)
+            : undefined
           : data.actual_milestones.find((item) => item.node_id === node.id)?.occurred_at;
       if (date) {
+        if (mode === "planned" && planned?.start_offset_minutes != null)
+          plannedEndOffsetMinutes = Math.max(plannedEndOffsetMinutes, planned.start_offset_minutes);
         const label =
           mode === "planned" && planned?.start_offset_minutes != null
             ? `${node.label}（${formatRelativeHours(planned.start_offset_minutes)}）`
@@ -378,7 +410,13 @@ export function createTimelineController(context: TimelineContext) {
     unknownElement.textContent = unknown.length ? `时间未知：${unknown.join("、")}` : "";
     for (const entry of entries) if (entry.task_id) entryTasks.set(entry.id, entry.task_id);
     const requestedWindow = timelineWindow(mode);
-    const fittedWindow = defaultTimelineWindow(entries);
+    const fittedWindow =
+      mode === "planned"
+        ? {
+            start: relativeDate(0),
+            end: relativeDate(plannedEndOffsetMinutes + PLANNED_TRAILING_PADDING_MINUTES),
+          }
+        : defaultTimelineWindow(entries);
     if (mode === "planned") plannedBounds = fittedWindow;
     else actualBounds = fittedWindow;
     const initialWindow =
@@ -404,9 +442,11 @@ export function createTimelineController(context: TimelineContext) {
       ...(mode === "planned"
         ? {
             format: {
-              minorLabels: { hour: "HH时" },
-              majorLabels: { day: "", month: "", year: "" },
+              minorLabels: relativeAxisLabel,
+              majorLabels: () => "",
             },
+            min: plannedBounds.start,
+            max: plannedBounds.end,
           }
         : {}),
       ...(requestedWindow.start && requestedWindow.end ? requestedWindow : fittedWindow),
