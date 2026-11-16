@@ -66,6 +66,9 @@ const {
   requireGroupDispatchGate,
   ownerOfTask,
   taskExecutionState,
+  taskCanUpdateAtoms,
+  taskMergePrerequisitesComplete,
+  completeTaskLifecycleAtom,
   taskRuntimeState,
   taskBoundary,
   hasTaskStarted,
@@ -103,9 +106,9 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
           request.actor.thread_id;
       requireCondition(
         (request.actor.role === "task" || mainOwned || sharedOwned) &&
-          taskExecutionState(target) === "running",
+          taskCanUpdateAtoms(ledger, target),
         "FORBIDDEN",
-        "The running task owner updates its atoms",
+        "The task owner updates atoms while execution is active or completing closeout",
         3,
       );
       const index = target.atoms.findIndex((item) => item.id === parse(id, payload.atom_id));
@@ -117,6 +120,16 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         "ATOMS_PENDING",
         "Earlier atoms must complete first",
         4,
+      );
+      requireCondition(
+        !(
+          ledger.contract_version === 3 &&
+          atom.lifecycle_stage === "pr_merged" &&
+          state === "completed"
+        ),
+        "EVIDENCE_REQUIRED",
+        "The task merge atom is completed by provider merge evidence",
+        5,
       );
       const allowed: Record<string, string[]> = {
         planned: ["running"],
@@ -675,6 +688,12 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         "Task has an unresolved operation",
         4,
       );
+      requireCondition(
+        taskMergePrerequisitesComplete(ledger, target),
+        "ATOMS_PENDING",
+        "Complete the task's pre-merge atoms before recording the merge",
+        4,
+      );
 
       const pr = parse(externalRef, payload.pr);
       const observation = providerReceipt.parse(payload.provider_observation);
@@ -795,6 +814,11 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
       );
       if (!priorPublication) ledger.facts.push(publicationFact);
       if (!priorMerge) ledger.facts.push(mergeFact);
+      completeTaskLifecycleAtom(ledger, request, target, "pr_merged", {
+        fact_id: mergeFact.id,
+        evidence_ref: mergeFact.evidence_ref,
+        occurred_at: mergeFact.observed_at,
+      });
 
       target.pr =
         ledger.contract_version === 3

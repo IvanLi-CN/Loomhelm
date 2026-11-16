@@ -460,6 +460,84 @@ test("external merge reconciliation accepts an unbound task PR binding without r
   ).toMatchObject({ code: "REPLAYED" });
 });
 
+test("legacy external merge reconciliation ignores task atom completion gates", () => {
+  const ledger = fixture();
+  const group = ledger.groups[0]!;
+  const task = ledger.tasks[0]!;
+  const pr = {
+    provider: "github",
+    repository: "example/repo",
+    id: "legacy-1",
+    url: "https://github.com/example/repo/pull/legacy-1",
+  };
+  group.parent_branch = "parent";
+  group.pr = { state: "published", pr, parent_branch: "parent" };
+  task.thread_id = "task-a";
+  task.state = "waiting";
+  task.branch = "branch-a";
+  task.pr = { state: "unbound" };
+  task.execution_owner = "task_agent";
+  task.conversation_policy = "task_agent";
+  task.delivery_policy = "child_pr";
+  task.atoms = [{ id: "legacy-pending", title: "pending", status: "planned" }];
+  ledger.plans[0]!.atoms = [
+    {
+      id: "legacy-pending",
+      title: "pending",
+      task_id: task.id,
+      purpose: "pending",
+      output: "pending",
+    },
+  ];
+  const quality = {
+    id: "legacy-quality",
+    kind: "task_quality" as const,
+    subject_id: task.id,
+    status: "passed" as const,
+    source: task.thread_id,
+    observed_at: at,
+    sha: head,
+    evidence_ref: "workspace:/tmp/legacy-task-a",
+    quality: taskQuality(task.id, task.thread_id, pr, base, head),
+  };
+  const observation = {
+    provider: "github",
+    repository: "example/repo",
+    resource_type: "pr" as const,
+    resource_id: pr.id,
+    branch: "branch-a",
+    target_branch: "parent",
+    base_sha: base,
+    head_sha: head,
+    pr,
+    state: "merged" as const,
+    evidence_ref: "https://github.com/example/repo/pull/legacy-1",
+  };
+  apply(
+    ledger,
+    "protected-approve",
+    request(ledger, "approve-legacy-recovery", {
+      kind: "delivery_unit_recovery",
+      target_id: group.id,
+      approval_id: "legacy-recovery",
+    }),
+  );
+  expect(
+    apply(
+      ledger,
+      "task-external-merge-reconcile",
+      request(ledger, "reconcile-legacy", {
+        task_id: task.id,
+        pr,
+        provider_observation: observation,
+        quality_evidence: quality,
+        merge_sha: merge,
+        recovery_approval_id: "legacy-recovery",
+      }),
+    ),
+  ).toMatchObject({ result: { task_id: task.id, state: "integrated" } });
+});
+
 test("external merge reconciliation preserves mismatch protection for a registered child PR", () => {
   const ledger = fixture();
   ledger.contract_version = 3;

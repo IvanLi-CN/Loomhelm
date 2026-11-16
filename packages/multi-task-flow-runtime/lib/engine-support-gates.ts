@@ -91,9 +91,10 @@ export function addEvent(
   subject: string,
   data: Record<string, unknown>,
   occurredAt: string | null = now(),
+  eventId = request.request_id,
 ): void {
   ledger.events.push({
-    id: request.request_id,
+    id: eventId,
     type,
     subject_id: subject,
     actor_id: request.actor.thread_id,
@@ -632,6 +633,102 @@ export function taskExecutionState(task: {
   agent_resume_state?: "starting" | "running";
 }): string {
   return task.state === "agent_idle" ? (task.agent_resume_state ?? "running") : task.state;
+}
+
+function lifecycleAtomEventId(requestId: string, atomId: string): string {
+  return `atom-${createHash("sha256")
+    .update(`${requestId}\0${atomId}`)
+    .digest("hex")
+    .slice(0, 32)}`;
+}
+
+export function taskMergePrerequisitesComplete(ledger: Ledger, task: Task): boolean {
+  if (ledger.contract_version !== 3) return true;
+  const mergeIndex = task.atoms.findIndex((atom) => atom.lifecycle_stage === "pr_merged");
+  if (mergeIndex < 0) return task.atoms.every((atom) => atom.status === "completed");
+  return (
+    !["blocked", "completed"].includes(task.atoms[mergeIndex]?.status ?? "") &&
+    task.atoms.slice(0, mergeIndex).every((atom) => atom.status === "completed")
+  );
+}
+
+function providerMergeAtomCompletionRecorded(
+  ledger: Ledger,
+  taskId: string,
+  atomId: string,
+  evidence: { fact_id: string; evidence_ref: string | null },
+): boolean {
+  return ledger.events.some(
+    (event) =>
+      event.type === "atom_updated" &&
+      event.subject_id === taskId &&
+      event.data.task_id === taskId &&
+      event.data.atom_id === atomId &&
+      event.data.state === "completed" &&
+      event.data.source === "provider-merge" &&
+      event.data.fact_id === evidence.fact_id &&
+      event.data.evidence_ref === evidence.evidence_ref,
+  );
+}
+
+export function completeTaskLifecycleAtom(
+  ledger: Ledger,
+  request: Request,
+  task: Task,
+  lifecycleStage: "pr_merged",
+  evidence: { fact_id: string; evidence_ref: string | null; occurred_at: string },
+): void {
+  if (ledger.contract_version !== 3) return;
+  const index = task.atoms.findIndex((atom) => atom.lifecycle_stage === lifecycleStage);
+  if (index < 0) return;
+  const atom = task.atoms[index]!;
+  if (atom.status === "completed") {
+    requireCondition(
+      providerMergeAtomCompletionRecorded(ledger, task.id, atom.id, evidence),
+      "EVIDENCE_MISMATCH",
+      "The task merge atom was not completed by this provider merge evidence",
+      5,
+    );
+    return;
+  }
+  requireCondition(
+    task.atoms.slice(0, index).every((candidate) => candidate.status === "completed"),
+    "ATOMS_PENDING",
+    "Complete the task's pre-merge atoms before recording the merge",
+    4,
+  );
+  requireCondition(
+    ["planned", "running"].includes(atom.status),
+    "INVALID_TRANSITION",
+    "The task merge atom cannot be completed from its current state",
+    3,
+  );
+  atom.status = "completed";
+  addEvent(
+    ledger,
+    request,
+    "atom_updated",
+    task.id,
+    {
+      task_id: task.id,
+      atom_id: atom.id,
+      state: "completed",
+      source: "provider-merge",
+      fact_id: evidence.fact_id,
+      evidence_ref: evidence.evidence_ref,
+    },
+    evidence.occurred_at,
+    lifecycleAtomEventId(request.request_id, atom.id),
+  );
+}
+
+export function taskCanUpdateAtoms(ledger: Ledger, task: Task): boolean {
+  return (
+    taskExecutionState(task) === "running" ||
+    (ledger.contract_version === 3 &&
+      task.state === "integrated" &&
+      task.lifecycle.pr_merged === "passed")
+  );
 }
 
 export function taskRuntimeState(task: Task): Record<string, unknown> {

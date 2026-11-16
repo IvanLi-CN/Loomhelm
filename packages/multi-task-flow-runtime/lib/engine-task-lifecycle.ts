@@ -260,6 +260,13 @@ export function executeTaskLifecycleCommand(context: CommandContext): unknown | 
           4,
         );
       if (state === "closed") {
+        if (ledger.contract_version === 3)
+          requireCondition(
+            target.atoms.every((atom) => atom.status === "completed"),
+            "ATOMS_PENDING",
+            "Complete the task's atoms before closing",
+            4,
+          );
         requireCondition(
           !ledger.follow_prs.some(
             (item) => item.origin_task_id === taskId && item.state !== "merged",
