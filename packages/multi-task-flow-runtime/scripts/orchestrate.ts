@@ -396,11 +396,13 @@ try {
     if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
     const parameters = record(operation.request.creation_parameters);
     const profile = executionProfile.parse(operation.request.execution_profile);
+    const role = operation.request.target_type === "group" ? "Delivery Agent" : "Task Agent";
     const reconciliation = await reconcileCliThread({
       thread_id: threadId,
       model: profile.model,
       thinking: profile.thinking,
       source_cwd: String(parameters?.cwd ?? process.cwd()),
+      role,
     });
     const result = store.update((raw) =>
       apply(raw, "dispatch-resolve", {
@@ -454,6 +456,7 @@ try {
         : ledger.tasks.find((item) => item.id === operation.target_id);
     if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
     const profile = executionProfile.parse(operation.request.execution_profile);
+    const role = operation.request.target_type === "group" ? "Delivery Agent" : "Task Agent";
     const creationParameters = {
       title: payload.title,
       prompt: payload.prompt,
@@ -527,6 +530,7 @@ try {
     const creation = await createCliThread({
       title: payload.title,
       prompt: payload.prompt,
+      role,
       native_request_id: nativeRequestId,
       repository: ledger.repository,
       onThreadStarted: (threadId) => {
