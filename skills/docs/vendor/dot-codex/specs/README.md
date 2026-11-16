@@ -89,7 +89,7 @@
 | Topic-level spec model | active | 已实现 | `topic-spec-model/SPEC.md` | `0004-scope-authority-and-topic-spec-boundaries.md` | 让 `docs/specs/**` 回归可追溯主题级需求规格，并以 companion docs 承接实施与历史事实 |
 | Initiative delivery flow | superseded | 历史 | `initiative-flow/SPEC.md` | - | 历史协调契约，已退役 |
 | Dev plan goals-first contract rewrite | active | 已实现 | `dev-plan-goals-first/SPEC.md` | `0004-scope-authority-and-topic-spec-boundaries.md`, `0006-internal-plan-authorization-and-scope-constraints.md`, `0021-runtime-derived-pre-merge-release-route.md`, `0023-dev-plan-release-delivery-scope.md`, `0031-dev-plan-owner-review-projection.md`, `0032-dev-plan-single-finalization-gate.md` | 将显式 `dev-plan` 收敛为 canonical raw-plan 校验后生成九段 owner-facing projection 的单一最终门禁，并保留历史 JSONL 只读兼容 |
-| GUI escalation gate | active | 已实现 | `gui-escalation-gate/SPEC.md` | - | 保留 GUI 插件能力，以 `ego-browser` 作为默认浏览器入口，并把 Chrome control / DevTools 收口为显式例外、Computer Use 收口为最高升级路径 |
+| GUI escalation gate | active | 已实现 | `gui-escalation-gate/SPEC.md` | - | 普通隔离 Web Demo 预览可使用 Codex Desktop 内置浏览器，复杂浏览器工作使用 `ego-browser`，DevTools 收口为显式例外，Computer Use 收口为最高升级路径 |
 | Dev plan default fast-track auto-lock | active | 已实现 | `dev-plan-default-fast-track-auto-lock/SPEC.md` | - | 未显式指定 flow 时默认锁定 `fast-track` + `merge-ready`，并把 `default_fast_track` 纳入合法 flow lock 证据 |
 | Git skill convergence | active | 已实现 | `git-skill-convergence/SPEC.md` | - | 将纯 git/local repo 操作收敛为 `git-branch`、`git-worktree`、`git-sync`、`git-cleanup`，并清退旧 prompts/skills |
 | Mainline baseline and topic branch freshness contract | active | 已实现 | `mainline-baseline-topic-branch-freshness/SPEC.md` | - | 显式 `$dev-plan` 必须声明具体开发基线，并把 shared workflow 的 topic branch 创建 / 双阶段同步收敛成统一合同 |

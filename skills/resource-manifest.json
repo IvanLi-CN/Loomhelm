@@ -154,7 +154,7 @@
     },
     {
       "path": "skills/bin/modules/checks/browser.ts",
-      "installedSha256": "6f48ea921df61bcad153af12fda6dc097b8f0a5db8c168392e0d0deaa745700f"
+      "installedSha256": "c56901876c72fc155b3d081bf708fdc3f4f87974c822d5c95fe4b5ad236b6a03"
     },
     {
       "path": "skills/bin/modules/checks/candidate_tree_digest.ts",
@@ -2874,7 +2874,7 @@
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/README.md",
-      "installedSha256": "5c07be95ef11ef326323931f456187ce705d7a9cab15ddeeb069b51915cce851"
+      "installedSha256": "8a2175410eb92c6087fb40028d5184d5ce79a805d66c366df852979588ad011a"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/a4ge9-stable-preview-runtime/HISTORY.md",
@@ -4594,15 +4594,15 @@
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/global-port-preview-governance/HISTORY.md",
-      "installedSha256": "0eefea22dcb2dcdc0c4ddb09446dd63501fba769970523dfdbf8c003e2d6f8fc"
+      "installedSha256": "4516d13bc2db0ff2e66e4dff01f4db9223d048ddf68df66a7123b4126bb9a919"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/global-port-preview-governance/IMPLEMENTATION.md",
-      "installedSha256": "3b51a19abbf305020b865a389f24df65e96e4623e230175c37ff7f9b7403e589"
+      "installedSha256": "a243b602d777a9a77bf2fe4a6983b31ff1dc86985fb8cca027942b4c5ebe7478"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/global-port-preview-governance/SPEC.md",
-      "installedSha256": "36cd5a7a98d0f521d6b1ec8cfdd16906645f85b9c59f24297a4330c5c957b4f6"
+      "installedSha256": "76debbfc68e983a684618243cfb090ab72ff9f516e34b6e43019b25ba8659078"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/global-solutions-docs-migrate/HISTORY.md",
@@ -4646,15 +4646,15 @@
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/gui-escalation-gate/HISTORY.md",
-      "installedSha256": "87f09d34ee8f474322b87b8f02f98101bbfb304190f378cd212a90a0941cb33b"
+      "installedSha256": "d8671920afacc3c11b8a6cd636c7821201bd82b0fde3e00d411555e8bc794f1b"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/gui-escalation-gate/IMPLEMENTATION.md",
-      "installedSha256": "557a707b974d3ccb8467ab48d3ccf2a8b1b18b0080fcb2f08436d6306e4af98e"
+      "installedSha256": "e3e9b792177ece99c934e5cdb238aab7310fbfd04075a3fa54b6c779e3480046"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/gui-escalation-gate/SPEC.md",
-      "installedSha256": "dc2dfd3d3b6d70361ec3bdfa06772cb1dca9b2b544a788a71410897311bf27db"
+      "installedSha256": "4bbf11f37d433306652b220c354f11583fbe68e435e818623cd48fc8945ad1e9"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/gui-escalation-gate/replay/cases.txt",
@@ -4662,11 +4662,11 @@
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/gui-escalation-gate/replay/negative-chrome-fallback-after-ego-browser-failed.jsonl",
-      "installedSha256": "049b74924442e4866fc3eac6740dd76e838d81b4cf689303df7ad6cb1e5f1135"
+      "installedSha256": "cf188c1f4ae54303ae02d8bf3106195da2e6c90a7d864ce05b89976ff59e6a88"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/gui-escalation-gate/replay/negative-chrome-fallback-after-ego-browser-unavailable.jsonl",
-      "installedSha256": "9ab65bb2d1f1afb35e9ee58a44fb3036ba51e4fef6a836fd6708f1cba16a2f31"
+      "installedSha256": "98211f6d86ecd89f3d18c6c18e50868b1577101b293f519cbdc0457e361398cf"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/gui-escalation-gate/replay/positive-ego-browser-first.jsonl",
@@ -6914,7 +6914,7 @@
     },
     {
       "path": "skills/gui-escalation-gate/SKILL.md",
-      "installedSha256": "aa5997139b212d16dd741c57cf86819f8f3e99888c72b1e32bb60d27398aa046"
+      "installedSha256": "896e79860410bd52c5810e19dde0cabb09ac22ffa6d2bf6aca9a1ed7eb6779ae"
     },
     {
       "path": "skills/hardware-doc-ingest/SKILL.md",
@@ -7361,7 +7361,7 @@
     {
       "path": "skills/multi-task-flow/scripts/orchestrate.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/orchestrate.ts",
-      "installedSha256": "b93efa6ede569caf04c76169879388d59528eea0e0898490a873afdea345a128"
+      "installedSha256": "5513e23e35ed7d6c1ea6d6ec262199a94b5b7c2ae1c14a82a269bf407eb98ebb"
     },
     {
       "path": "skills/multi-task-flow/scripts/service.ts",
@@ -7988,7 +7988,7 @@
     },
     {
       "path": "skills/ui-visual-evidence/SKILL.md",
-      "installedSha256": "74bb90c874cb7fd4de991b9aa8cf307d285478736f5089fe462bfae66c03221a"
+      "installedSha256": "3737b9c328b09616596e1b82c437a03d605202803f69fcb428a8d19ce5435181"
     },
     {
       "path": "skills/ui-visual-evidence/agents/openai.yaml",
@@ -8142,7 +8142,7 @@
     {
       "path": "skills/multi-task-flow/lib/codex-cli-create.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/codex-cli-create.ts",
-      "installedSha256": "3c2c6c97d06ac112a7e5d2ffeca76e6eccc640fede036c4f19cd9d1d886ccd55"
+      "installedSha256": "cc8a6704307240da8fa984e8ad3f56b3f2fddfe7820c89941397344ba78f1fa6"
     },
     {
       "path": "skills/multi-task-flow/lib/conversation-eligibility.ts",
@@ -8167,7 +8167,7 @@
     {
       "path": "skills/multi-task-flow/tests/codex-cli-create.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/codex-cli-create.test.ts",
-      "installedSha256": "a2be3400b15990b0350fcc2a6dac2c613a4b78b68be69aa4447332e7dcdd5c0e"
+      "installedSha256": "02dd6ec149e90460494bff9320d35674a5dfda4b05de46c989d7cbc40382daf6"
     },
     {
       "path": "skills/multi-task-flow/tests/conversation-archive.test.ts",

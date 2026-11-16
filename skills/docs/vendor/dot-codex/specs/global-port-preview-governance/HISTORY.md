@@ -16,6 +16,7 @@
 - Preview wrappers claim the lease before binding their listener, preventing a failed claim from temporarily occupying an owner-facing port.
 - Preview wrappers now hold the registry lock through listener binding and reject duplicate startup, preventing active-owner replacement and PID-before-listener GC races.
 - Failed claim verification or persistence now stops the listener that was created during startup, keeping service cleanup aligned with the lease transaction.
+- Current preview routing permits the Codex Desktop built-in browser for ordinary isolated, login-free, read-only local Web Demo previews, while complex browser work remains on `$ego-browser`.
 - `826a50f` docs: enforce local preview port governance
 - `c530b57` chore: retire legacy service manager stack
 - `b39a914` docs(specs): adopt topic-level spec model

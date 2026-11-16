@@ -65,7 +65,8 @@ Rules:
   - use `ui_demo` for changed full page/flow evidence
 - Web/App UI without Storybook:
   - prefer a deterministic mock preview or test/demo surface
-  - use `$ego-browser` for browser validation and capture
+  - in Codex Desktop, use the host built-in browser for ordinary isolated, login-free local Web Demo preview; use `$ego-browser` for complex browser validation and capture
+  - outside Codex Desktop, use `$ego-browser` for browser validation and capture
 - Firmware / embedded display UI:
   - prefer `$firmware-display-preview`
 - `target_app_window` is the exception path:
@@ -133,8 +134,8 @@ Rules:
 
 - Before the first `$ego-browser` command, read and follow its task-space workflow.
 - `storybook_docs` / `storybook_canvas` => use `$storybook-screenshots`
-- `ui_demo` => use `$ego-browser` for ordinary browser validation; use the explicit `chrome-devtools` exception path only when viewport emulation or element-first capture is required, and keep capture scope limited to the relevant demo-rendered surface
-- `mock_ui` => use `$ego-browser` for ordinary browser validation; use the explicit `chrome-devtools` exception path only when viewport emulation or element-first capture is required, and keep capture scope limited to the relevant rendered surface
+- `ui_demo` => in Codex Desktop, use the host built-in browser for ordinary isolated, login-free local Web Demo preview; use `$ego-browser` for complex browser validation and capture; use the explicit `chrome-devtools` exception path only when viewport emulation or element-first capture is required, and keep capture scope limited to the relevant demo-rendered surface
+- `mock_ui` => in Codex Desktop, use the host built-in browser for ordinary isolated, login-free local preview; use `$ego-browser` for complex browser validation and capture; use the explicit `chrome-devtools` exception path only when viewport emulation or element-first capture is required, and keep capture scope limited to the relevant rendered surface
 - `firmware_preview` => use `$firmware-display-preview`
 - `target_app_window` => only after explicit owner approval
 

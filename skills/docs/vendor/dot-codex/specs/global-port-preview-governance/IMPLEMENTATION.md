@@ -58,7 +58,7 @@ None
 - `c530b57` chore: retire legacy service manager stack
 - `b39a914` docs(specs): adopt topic-level spec model
 - Automatic allocation now defaults to stable scope-random ports at or above `10000`.
-- `AGENTS.md` 现在明确要求：默认浏览器入口是 `$ego-browser`；Chrome control 与 `chrome-devtools` 只保留显式例外路径。
+- `AGENTS.md` 现在明确要求：Codex Desktop 内置浏览器承接普通隔离本地 Web Demo 预览，复杂浏览器工作使用 `$ego-browser`，`chrome-devtools` 只保留显式例外路径。
 - `AGENTS.md` 现在明确要求：默认共享浏览器上下文；只有在共享状态会污染验证结果或引入不可接受副作用时，才允许在 `chrome-devtools` 例外路径里带 `task_scope_id` + `isolation_reason` 申请单一可复用的隔离上下文。
 - Port lease registration and heartbeats now separate the PID value being recorded from an optional expected-owner guard; the dashboard wrapper atomically claims an empty-PID lease under the registry lock, binds before writing its PID, rejects duplicate startup, then passes both its recorded port and expected PID so stale processes cannot change or release replacement leases.
 - The dashboard wrapper also retains its listener cleanup handle before claim verification and persistence, so a failed startup cannot leave an unmanaged local listener.
