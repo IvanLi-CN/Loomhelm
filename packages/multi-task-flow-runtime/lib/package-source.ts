@@ -21,6 +21,7 @@ export function copySkillSources(root, output, { dependencies = false } = {}) {
     const allowedSourceRoots = [
       resolve(root, "skills") + "/",
       resolve(root, "packages/multi-task-flow-runtime") + "/",
+      resolve(root, "docs/specs/multi-task-flow-unified-atomic-orchestration") + "/",
     ];
     if (
       !path.startsWith("skills/") ||
