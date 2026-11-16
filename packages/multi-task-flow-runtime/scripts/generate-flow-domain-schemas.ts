@@ -11,8 +11,8 @@ writeFileSync(
   output,
   JSON.stringify(
     {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "$id": "https://loomhelm.dev/schemas/multi-task-flow/domain-schemas.json",
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: "https://loomhelm.dev/schemas/multi-task-flow/domain-schemas.json",
       plan: z.toJSONSchema(plan),
       group: z.toJSONSchema(group),
       task: z.toJSONSchema(task),

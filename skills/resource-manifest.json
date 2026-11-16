@@ -8277,7 +8277,7 @@
     {
       "path": "skills/multi-task-flow/lib/flow-domain-schemas.json",
       "sourcePath": "packages/multi-task-flow-runtime/lib/flow-domain-schemas.json",
-      "installedSha256": "993606c7cb323bb2513cdd187a5ee43060a3bc4dfab97041c2834f2ab819a4a5"
+      "installedSha256": "9bc7a56810b9d582e52a9eb8788e7e97b77585b1e52cb0d910c13bd044a5a469"
     },
     {
       "path": "skills/multi-task-flow/lib/package-source.ts",

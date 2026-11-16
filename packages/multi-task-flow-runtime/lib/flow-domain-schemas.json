@@ -12586,6 +12586,7 @@
                 "task_blocked",
                 "task_rebased",
                 "task_integrated",
+                "external_merge_reconciled",
                 "task_completed",
                 "task_closed",
                 "merge_claimed",
