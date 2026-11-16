@@ -44,6 +44,7 @@ export type AppViewContext = {
   labels: Record<string, string>;
   taskKindLabel: (kind: string) => string;
   applyOutputs: (next: OutputSnapshot, requestEpoch?: string | null) => void;
+  outputEpoch: () => string | null;
   clearDetails: () => void;
   connection: (status: "live" | "stale" | "connecting") => void;
   createIcons: typeof createIcons;
@@ -98,6 +99,30 @@ export type AppViewContext = {
   };
   showWorkerDiagnostic: (value: Partial<WorkerDiagnostic> & { code?: string }) => void;
 };
+
+export function applyViewOutputSnapshot(
+  applyOutputs: AppViewContext["applyOutputs"],
+  result: Pick<ViewResponse, "view" | "output_epoch" | "output_revision">,
+  requestEpoch: string | null,
+): void {
+  applyOutputs(
+    {
+      output_epoch: result.output_epoch ?? "static-demo",
+      output_revision: result.output_revision ?? 0,
+      outputs: Object.fromEntries([
+        ...result.view.tasks.map((task) => [
+          task.id,
+          task.latest_agent_output ?? initialOutput(task.thread_id),
+        ]),
+        ...result.view.groups.map((group) => [
+          `group:${group.id}`,
+          group.latest_agent_output ?? initialOutput(group.agent_thread_id),
+        ]),
+      ]),
+    },
+    requestEpoch,
+  );
+}
 
 export function createAppViewController(context: AppViewContext) {
   const { state } = context;
@@ -341,6 +366,7 @@ export function createAppViewController(context: AppViewContext) {
   async function refresh(): Promise<void> {
     if (state.reconnectBlocked) return;
     const serial = ++state.requestSerial;
+    const outputEpoch = context.outputEpoch();
     const requestedPlan = state.activePlan;
     try {
       const query = requestedPlan ? `?plan=${encodeURIComponent(requestedPlan)}` : "";
@@ -378,23 +404,7 @@ export function createAppViewController(context: AppViewContext) {
       state.revision = result.revision;
       state.activePlanId = result.active_plan_id;
       state.data = result.view;
-      context.applyOutputs(
-        {
-          output_epoch: result.output_epoch ?? "static-demo",
-          output_revision: result.output_revision ?? 0,
-          outputs: Object.fromEntries([
-            ...state.data.tasks.map((task) => [
-              task.id,
-              task.latest_agent_output ?? initialOutput(task.thread_id),
-            ]),
-            ...state.data.groups.map((group) => [
-              `group:${group.id}`,
-              group.latest_agent_output ?? initialOutput(group.agent_thread_id),
-            ]),
-          ]),
-        },
-        undefined,
-      );
+      applyViewOutputSnapshot(context.applyOutputs, result, outputEpoch);
       const currentPhase = derivePhase(state.data.tasks, state.data.execution_phase);
       const explicitUrlState = parseViewState(window.location.search);
       if (hasValidTabParam(window.location.search))

@@ -878,6 +878,7 @@ const appView = createAppViewController({
   labels,
   taskKindLabel,
   applyOutputs,
+  outputEpoch: () => outputSnapshots.epoch,
   clearDetails,
   connection,
   createIcons,
