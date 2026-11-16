@@ -8,6 +8,7 @@ import {
   createCliThread,
   INITIALIZATION_PROMPT,
   initializationPrompt,
+  readThreadEvidence,
   reconcileCliThread,
   runInitialization,
   verifyInitializationTurn,
@@ -177,6 +178,39 @@ test("reconciliation requires the matching completed handshake before checking t
     turn_completed: true,
   });
   expect(verified).toEqual([["/codex/owned", input.cwd, "thread-a"]]);
+});
+
+test("reconciliation hydrates handshake items separately from the turn summary", async () => {
+  const calls: string[] = [];
+  const request = async (_socket: any, _buffer: any, _id: number, method: string) => {
+    calls.push(method);
+    if (method === "thread/read") return { result: { thread: await thread() } };
+    if (method === "thread/turns/list")
+      return { result: { data: [{ id: "turn-a", status: "completed", items: [] }] } };
+    return {
+      result: {
+        data: [
+          {
+            turnId: "turn-a",
+            item: {
+              type: "userMessage",
+              content: [{ type: "text", text: initializationPrompt("Task Agent") }],
+            },
+          },
+          { turnId: "turn-a", item: { type: "agentMessage", text: "待命。" } },
+        ],
+      },
+    };
+  };
+  const evidence = await readThreadEvidence(
+    {} as any,
+    { value: Buffer.alloc(0) },
+    "thread-a",
+    2,
+    request,
+  );
+  expect(() => verifyInitializationTurn(evidence.turn, "Task Agent")).not.toThrow();
+  expect(calls).toEqual(["thread/read", "thread/turns/list", "thread/items/list"]);
 });
 
 test("interrupted or workful initialization remains unreconcilable", async () => {
