@@ -61,7 +61,19 @@ export async function runFlowCommand(
 		if (
 			typeof domain.$schema !== "string" ||
 			typeof domain.$id !== "string" ||
-			!["plan", "group", "task", "ledger", "execution_profile", "notification", "fact", "resource"].every(
+			![
+				"plan",
+				"group",
+				"task",
+				"ledger",
+				"execution_profile",
+				"baseline_receipt",
+				"notification",
+				"fact",
+				"resource",
+				"atomic_node",
+				"atomic_edge",
+			].every(
 				(name) => name in domain,
 			)
 		)

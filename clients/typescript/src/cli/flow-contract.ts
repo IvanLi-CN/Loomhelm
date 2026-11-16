@@ -6,6 +6,7 @@ const id = {
 	maxLength: 128,
 	pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
 } as const;
+const requestId = { ...id, maxLength: 96, pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$" } as const;
 const textValue = { type: "string", minLength: 1 } as const;
 const stringValue = { type: "string" } as const;
 const booleanValue = { type: "boolean" } as const;
@@ -13,6 +14,7 @@ const numberValue = { type: "number" } as const;
 const objectValue = { type: "object", additionalProperties: true } as const;
 const stringArrayValue = { type: "array", items: stringValue } as const;
 const idArrayValue = { type: "array", items: id } as const;
+const nonEmptyIdArrayValue = { type: "array", items: id, minItems: 1 } as const;
 const nullableId = { oneOf: [id, { type: "null" }] } as const;
 const shaValue = {
 	type: "string",
@@ -47,6 +49,8 @@ const notificationReceipt = {
 		recipient_thread_id: textValue,
 		prompt_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
 	},
+	if: { properties: { provider: { const: "codex-app-tools" } } },
+	then: { required: ["recipient_thread_id", "prompt_digest"] },
 } as const;
 const publicationReceipt = {
 	type: "object",
@@ -205,7 +209,13 @@ const field = (name: string): JsonSchema => {
 		name === "integration_commits" ||
 		name === "evidence_refs"
 	)
-		return name === "integration_commits" ? commitArrayValue : stringArrayValue;
+		return name === "integration_commits"
+			? commitArrayValue
+			: name === "evidence_refs"
+				? stringArrayValue
+				: name === "resource_ids"
+					? nonEmptyIdArrayValue
+					: idArrayValue;
 	if (
 		[
 			"plan",
@@ -294,7 +304,7 @@ const mutationRequest = (payload: JsonSchema): JsonSchema => ({
 	properties: {
 		run_id: id,
 		actor,
-		request_id: id,
+		request_id: requestId,
 		expected_revision: { type: "integer", minimum: 0 },
 		payload,
 	},
@@ -832,6 +842,7 @@ add(
 	"notification-sent",
 	["provider_receipt", "notification_id"],
 	["notification_id", "ledger_status", "delivery_status", "ack_status"],
+	{ payloadOverrides: { provider_receipt: notificationReceipt } },
 );
 add(
 	"notification-ack",
