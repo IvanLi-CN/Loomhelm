@@ -5179,3 +5179,167 @@ test("contract-3 baseline sync refreshes an advanced lineage without changing na
   ).toThrow("current development baseline");
   expect(JSON.stringify(ledger)).toBe(before);
 });
+
+test("external merge reconciliation records exact child lifecycle facts without regressing lineage", () => {
+  const ledger = fixture();
+  ledger.contract_version = 3;
+  ledger.source_schema_version = null;
+  const group = ledger.groups[0]!;
+  const task = ledger.tasks[0]!;
+  const pr = {
+    provider: "github",
+    repository: "example/repo",
+    id: "1",
+    url: "https://github.com/example/repo/pull/1",
+  };
+  group.parent_branch = "parent";
+  group.pr = { state: "published", pr, parent_branch: "parent" };
+  task.thread_id = "task-a";
+  task.state = "waiting";
+  task.branch = "branch-a";
+  task.base_sha = base;
+  task.execution_owner = "task_agent";
+  task.conversation_policy = "task_agent";
+  task.delivery_policy = "child_pr";
+  const quality = {
+    id: "quality-a",
+    kind: "task_quality" as const,
+    subject_id: task.id,
+    status: "passed" as const,
+    source: task.thread_id,
+    observed_at: at,
+    sha: head,
+    evidence_ref: "workspace:/tmp/task-a",
+    quality: taskQuality(task.id, task.thread_id, pr, base, head),
+  };
+  const observation = {
+    provider: "github",
+    repository: "example/repo",
+    resource_type: "pr" as const,
+    resource_id: "1",
+    branch: "branch-a",
+    target_branch: "parent",
+    base_sha: base,
+    head_sha: head,
+    pr,
+    state: "merged" as const,
+    evidence_ref: "https://github.com/example/repo/pull/1",
+  };
+  apply(
+    ledger,
+    "protected-approve",
+    request(ledger, "approve-recovery", {
+      kind: "delivery_unit_recovery",
+      target_id: group.id,
+      approval_id: "recovery-a",
+    }),
+  );
+  const result = apply(
+    ledger,
+    "task-external-merge-reconcile",
+    request(ledger, "reconcile-a", {
+      task_id: task.id,
+      pr,
+      provider_observation: observation,
+      quality_evidence: quality,
+      merge_sha: merge,
+      recovery_approval_id: "recovery-a",
+    }),
+  );
+  expect(result).toMatchObject({
+    result: { task_id: task.id, state: "integrated", current_group_sha: merge },
+  });
+  expect(ledger.tasks[0]!.pr).toMatchObject({ state: "merged", pr, merge_sha: merge });
+  expect(ledger.tasks[0]!.lifecycle).toMatchObject({ pr_created: "passed", pr_merged: "passed" });
+  expect(ledger.facts.map((fact) => fact.kind)).toEqual([
+    "task_quality",
+    "pr_published",
+    "pr_merged",
+  ]);
+  expect(ledger.events.at(-1)).toMatchObject({
+    type: "external_merge_reconciled",
+    data: { quality_fact_id: "quality-a", current_group_sha: merge },
+  });
+  expect(
+    apply(
+      ledger,
+      "task-external-merge-reconcile",
+      request(ledger, "reconcile-a", {
+        task_id: task.id,
+        pr,
+        provider_observation: observation,
+        quality_evidence: quality,
+        merge_sha: merge,
+        recovery_approval_id: "recovery-a",
+      }),
+    ),
+  ).toMatchObject({ code: "REPLAYED" });
+});
+
+test("external merge reconciliation rejects incomplete quality evidence without mutation", () => {
+  const ledger = fixture();
+  ledger.contract_version = 3;
+  ledger.source_schema_version = null;
+  const group = ledger.groups[0]!;
+  const task = ledger.tasks[0]!;
+  const pr = {
+    provider: "github",
+    repository: "example/repo",
+    id: "1",
+    url: "https://github.com/example/repo/pull/1",
+  };
+  group.parent_branch = "parent";
+  group.pr = { state: "published", pr, parent_branch: "parent" };
+  task.thread_id = "task-a";
+  task.state = "waiting";
+  task.branch = "branch-a";
+  task.base_sha = base;
+  const observation = {
+    provider: "github",
+    repository: "example/repo",
+    resource_type: "pr" as const,
+    resource_id: "1",
+    branch: "branch-a",
+    target_branch: "parent",
+    base_sha: base,
+    head_sha: head,
+    pr,
+    state: "merged" as const,
+    evidence_ref: "github://pr/1",
+  };
+  apply(
+    ledger,
+    "protected-approve",
+    request(ledger, "approve-recovery", {
+      kind: "delivery_unit_recovery",
+      target_id: group.id,
+      approval_id: "recovery-a",
+    }),
+  );
+  const before = JSON.stringify(ledger);
+  expect(() =>
+    apply(
+      ledger,
+      "task-external-merge-reconcile",
+      request(ledger, "reconcile-a", {
+        task_id: task.id,
+        pr,
+        provider_observation: observation,
+        quality_evidence: {
+          id: "quality-a",
+          kind: "task_quality",
+          subject_id: task.id,
+          status: "passed",
+          source: "wrong-thread",
+          observed_at: at,
+          sha: head,
+          evidence_ref: "github://quality",
+          quality: taskQuality(task.id, "wrong-thread", pr, base, head),
+        },
+        merge_sha: merge,
+        recovery_approval_id: "recovery-a",
+      }),
+    ),
+  ).toThrow("source-bound task quality");
+  expect(JSON.stringify(ledger)).toBe(before);
+});
