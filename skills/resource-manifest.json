@@ -7586,7 +7586,7 @@
     {
       "path": "skills/multi-task-flow/tests/ui/responsive-width-contract.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/ui/responsive-width-contract.test.ts",
-      "installedSha256": "1d98119a576d2fdf7caa529af839c224967d7cdf859871b36839ae55c5149350"
+      "installedSha256": "a60a47fc68b275667ef5146c717a160a709e63495934963f5e19f707149c0b09"
     },
     {
       "path": "skills/multi-task-flow/tests/ui/service-navigation.test.ts",
@@ -7631,7 +7631,7 @@
     {
       "path": "skills/multi-task-flow/web/app.css",
       "sourcePath": "packages/multi-task-flow-runtime/web/app.css",
-      "installedSha256": "360ff11afe28b21eb58a39ec6faf61f9920f149c893aea8642d2df0a65667143"
+      "installedSha256": "7e65bd769403b5b39d0a287e8a00bba4e28e2147912a70388576ba06d7aa0bd2"
     },
     {
       "path": "skills/multi-task-flow/web/app.ts",
