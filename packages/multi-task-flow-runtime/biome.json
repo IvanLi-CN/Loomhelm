@@ -48,6 +48,15 @@
         "noSelfCompare": "warn",
         "noShadowRestrictedNames": "warn",
         "useIterableCallbackReturn": "warn"
+      },
+      "style": {
+        "noExcessiveLinesPerFile": {
+          "level": "error",
+          "options": {
+            "maxLines": 1000,
+            "skipBlankLines": false
+          }
+        }
       }
     }
   },
@@ -63,5 +72,23 @@
     "clientKind": "git",
     "enabled": true,
     "useIgnoreFile": true
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["tests/**/*.ts", "tests/**/*.tsx"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noExcessiveLinesPerFile": {
+              "level": "error",
+              "options": {
+                "maxLines": 2000,
+                "skipBlankLines": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }
