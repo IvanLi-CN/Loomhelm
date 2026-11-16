@@ -107,6 +107,19 @@ test("tall medium task boards compress through their ancestor chain", () => {
   expect(tall).toContain(".workspace-tasks .task-layout-board { min-height: 0; }");
 });
 
+test("wide timeline views constrain the chart to the viewport height", () => {
+  const wide = css.slice(css.lastIndexOf("@media (min-width: 1445px) {"));
+  expect(wide).toContain(".main { margin-bottom: 0; padding-bottom: 0; }");
+  expect(wide).toContain("height: max(610px, calc(100dvh - 190px));");
+  expect(wide).toContain(
+    ".workspace-main { min-height: 0; display: flex; flex-direction: column; }",
+  );
+  expect(wide).toContain(
+    ".workspace-view { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; }",
+  );
+  expect(wide).toContain("height: auto !important; min-height: 0;");
+});
+
 test("identity actions follow the project name instead of filling the title row", () => {
   expect(css).toContain(".identity-copy { flex: 0 1 auto; min-width: 0; }");
   expect(css).toContain("text-overflow: ellipsis; white-space: nowrap;");
@@ -144,6 +157,16 @@ test("mobile header actions use 44px touch targets and 18px icons", () => {
 test("plan info content does not reserve an empty scrollbar gutter", () => {
   const planInfo = css.match(/\.plan-info-content \{[^}]+\}/)?.[0] ?? "";
   expect(planInfo).not.toContain("scrollbar-gutter: stable");
+});
+
+test("timeline vertical scrolling stays on vis-timeline side panel", () => {
+  expect(css).toContain(
+    ".timeline-view .vis-panel.vis-center { cursor: grab; touch-action: pan-x pan-y !important; overflow: hidden !important; }",
+  );
+  expect(css).toContain(
+    ".timeline-view .vis-panel.vis-left { cursor: grab; touch-action: pan-x pan-y !important; overflow-x: hidden !important; overflow-y: scroll !important; }",
+  );
+  expect(css).not.toContain(".vis-panel.vis-center::-webkit-scrollbar");
 });
 
 test("runtime identity state uses a compact semantic chip", () => {
