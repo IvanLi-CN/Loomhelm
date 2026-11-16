@@ -1,175 +1,122 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import type { Socket } from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { runProcess } from "@loomhelm/runtime-core/modules/core/process";
 import { connectSocket, record, rpc, socketPath } from "../lib/codex-rpc";
+import {
+  AgentRole,
+  boundedMessage,
+  CliCreationInput,
+  CliRun,
+  CodexCreationError,
+  CodexDiagnostic,
+  diagnostic,
+  diagnosticFromError,
+  diagnosticsFromError,
+  diagnosticText,
+  initializationPrompt,
+  isWorkItem,
+  parseInitializationEvent,
+  pushDiagnostic,
+  RepositoryIdentity,
+  verifyInitializationTurn,
+} from "./codex-cli-initialization";
 
-export type AgentRole = "Delivery Agent" | "Task Agent";
-export function initializationPrompt(role: AgentRole): string {
-  return `$multi-task-flow\n\n你是本次运行中的 ${role}，由主 Agent 委派到独立工作区。当前只是初始化握手：正式派发前只回复 READY，不要开始正式任务，也不要读取或修改文件、调用工具或执行命令。主 Agent 稍后会发送正式派发消息；收到后再按本 Skill 读取任务上下文并推进自己的任务。`;
-}
-function legacyInitializationPrompt(role: AgentRole): string {
-  return initializationPrompt(role).replace("，也不要调用工具、读取或修改文件、执行命令。", "。");
-}
-function historicalInitializationPrompt(role: AgentRole): string {
-  return `$multi-task-flow\n\n你是本次运行中的 ${role}，由主 Agent 委派到独立工作区。主 Agent 稍后会发送正式派发消息；收到后按本 Skill 读取任务上下文并推进自己的任务。正式派发前不要开始正式任务。`;
-}
-export const INITIALIZATION_PROMPT = initializationPrompt("Task Agent");
-
-const handshakeItemTypes = new Set(["user_message", "agent_message", "reasoning"]);
-
-function normalizedItemType(value: unknown): string {
-  return typeof value === "string"
-    ? value
-        .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-        .replace(/-/g, "_")
-        .toLowerCase()
-    : "";
-}
-
-function isIgnorableInitializationDiagnostic(value: unknown): boolean {
-  const item = record(value);
-  const message = typeof item?.message === "string" ? item.message.trim() : "";
-  return (
-    normalizedItemType(item?.type) === "error" &&
-    (/^`?\[features\]\.multi_agent`? is deprecated\./.test(message) ||
-      /^Codex is ignoring \d+ unrecognized configuration settings?\.$/.test(message) ||
-      message === "loading hooks from two config layers; prefer a single representation")
-  );
-}
-
-function isWorkItem(value: unknown): boolean {
-  const item = record(value);
-  return (
-    item === null ||
-    (!handshakeItemTypes.has(normalizedItemType(item.type)) &&
-      !isIgnorableInitializationDiagnostic(item))
-  );
-}
-
-function itemText(item: Record<string, unknown>): string {
-  if (typeof item.text === "string") {
-    if ("content" in item) throw new Error("Initialization item content is malformed");
-    return item.text;
-  }
-  if (typeof item.content === "string") return item.content;
-  if (!Array.isArray(item.content)) return "";
-  return item.content
-    .map((part: unknown) => {
-      const value = record(part);
-      if (!value || normalizedItemType(value.type) !== "text" || typeof value.text !== "string")
-        throw new Error("Initialization item content is malformed");
-      return value.text;
-    })
-    .join("");
-}
-
-function verifyInitializationItems(turn: unknown, role: AgentRole): void {
-  const value = record(turn);
-  if (!Array.isArray(value.items)) throw new Error("Initialization items are unavailable");
-  const items = value.items.map((item) => {
-    const parsed = record(item);
-    if (!parsed) throw new Error("Initialization item is malformed");
-    return parsed;
-  });
-  const userMessages = items.filter((item) => normalizedItemType(item.type) === "user_message");
-  const userMessage = userMessages[0];
-  if (
-    userMessages.length !== 1 ||
-    !userMessage ||
-    ![
-      initializationPrompt(role),
-      legacyInitializationPrompt(role),
-      historicalInitializationPrompt(role),
-    ].includes(itemText(userMessage))
-  )
-    throw new Error("Initialization prompt does not match the expected agent role");
-  if (
-    !items.some(
-      (item) =>
-        normalizedItemType(item.type) === "agent_message" && itemText(item).trim().length > 0,
-    )
-  )
-    throw new Error("Initialization response is unavailable");
-  if (items.some(isWorkItem))
-    throw new Error("Initialization recorded work instead of a handshake");
-}
-
-/** Only a completed, work-free turn with the exact role prompt can be reconciled. */
-export function verifyInitializationTurn(turn: unknown, role: AgentRole = "Task Agent"): void {
-  const value = record(turn);
-  if (value?.status !== "completed") throw new Error("Initialization turn is not completed");
-  verifyInitializationItems(turn, role);
-}
-
-/** An interrupted initialization may only be recovered if it remained work-free. */
-export function verifyInterruptedInitializationTurn(
-  turn: unknown,
-  role: AgentRole = "Task Agent",
-): void {
-  const value = record(turn);
-  if (value?.status !== "interrupted" && value?.status !== "failed")
-    throw new Error("Initialization turn is not interrupted");
-  verifyInitializationItems(turn, role);
-}
-
-export type CliRun = {
-  thread_id?: string;
-  exit_code: number | null;
-  turn_completed: boolean;
-  events: string[];
-  error?: string;
-};
-export type CliCreationInput = {
-  title: string;
-  prompt: string;
-  model: string;
-  thinking: string;
-  cwd?: string;
-  role?: AgentRole;
-  repository?: RepositoryIdentity;
-  native_request_id?: string;
-  onThreadStarted?: (threadId: string) => void;
-};
-export type RepositoryIdentity = { host: string; owner: string; name: string };
+export * from "./codex-cli-initialization";
 
 /** Each process belongs to this attempt; no shell or inherited stdin. */
 export async function runInitialization(input: CliCreationInput): Promise<CliRun> {
-  const result: CliRun = { exit_code: null, turn_completed: false, events: [] };
+  const result: CliRun = {
+    exit_code: null,
+    turn_completed: false,
+    events: [],
+    initialization_items: [],
+    diagnostics: [],
+    timed_out: false,
+  };
   const decoder = new StringDecoder("utf8");
+  const stderrDecoder = new StringDecoder("utf8");
   const controller = new AbortController();
   let pending = "";
-  const abort = (error: string) => {
-    result.error ??= error;
+  let stderrPending = "";
+  let stderrDiagnosticCount = 0;
+  const stderrLine = (value: string) => {
+    const message = boundedMessage(value);
+    if (message && stderrDiagnosticCount < 8 && /error|warn|failed|timed out/i.test(message)) {
+      stderrDiagnosticCount += 1;
+      pushDiagnostic(result.diagnostics, diagnostic("process", "CODEX_STDERR", message, "warning"));
+    }
+  };
+  const stderrChunk = (chunk: Uint8Array) => {
+    stderrPending += stderrDecoder.write(chunk);
+    if (stderrPending.length > 64 * 1024) stderrPending = "";
+    for (;;) {
+      const end = stderrPending.indexOf("\n");
+      if (end < 0) break;
+      stderrLine(stderrPending.slice(0, end));
+      stderrPending = stderrPending.slice(end + 1);
+    }
+  };
+  const abort = (error: CodexCreationError) => {
+    for (const item of error.diagnostics) pushDiagnostic(result.diagnostics, item);
+    result.error ??= diagnosticText(error);
     controller.abort();
   };
   const line = (value: string) => {
     if (!value.trim() || result.error) return;
     try {
-      const event = JSON.parse(value);
-      const type = String(event.type);
-      if (result.events.length < 64) result.events.push(type);
-      if (type === "thread.started") {
-        if (result.thread_id || typeof event.thread_id !== "string" || !event.thread_id)
-          throw new Error("Ambiguous thread identity");
+      const event = parseInitializationEvent(JSON.parse(value));
+      if (result.events.length < 64) result.events.push(event.type);
+      if (event.diagnostic) {
+        pushDiagnostic(result.diagnostics, event.diagnostic);
+        if (event.type === "turn.failed" || event.type === "error")
+          throw new CodexCreationError(event.diagnostic);
+      }
+      if (event.type === "thread.started") {
+        if (result.thread_id || !event.thread_id)
+          throw new CodexCreationError(
+            diagnostic(
+              "event",
+              "CODEX_THREAD_IDENTITY_AMBIGUOUS",
+              "Codex emitted an ambiguous thread identity",
+              "error",
+            ),
+          );
         result.thread_id = event.thread_id;
         input.onThreadStarted?.(event.thread_id);
       }
-      if (type === "turn.completed") result.turn_completed = true;
-      if (type === "turn.failed" || type === "error") throw new Error("Initialization turn failed");
-      const params = record(event.params);
-      const hasEventItem = Object.hasOwn(event, "item");
-      const hasParamsItem = params !== null && Object.hasOwn(params, "item");
-      if (hasEventItem && hasParamsItem) throw new Error("Ambiguous CLI item evidence");
-      const item = hasEventItem ? event.item : hasParamsItem ? params?.item : undefined;
-      if ((hasEventItem || hasParamsItem) && isWorkItem(item))
-        throw new Error(
-          `Initialization attempted work instead of a handshake: ${JSON.stringify(item).slice(0, 500)}`,
+      if (event.type === "turn.completed") result.turn_completed = true;
+      const item = record(event.item);
+      if (item && result.initialization_items.length < 64) result.initialization_items.push(item);
+      if (
+        event.item !== undefined &&
+        isWorkItem(event.item) &&
+        record(event.item)?.type !== "error"
+      )
+        throw new CodexCreationError(
+          diagnostic(
+            "event",
+            "CODEX_INITIALIZATION_WORK_STARTED",
+            `Initialization attempted work instead of a handshake: ${JSON.stringify(event.item).slice(0, 500)}`,
+            "error",
+          ),
         );
     } catch (error) {
-      abort(error instanceof SyntaxError ? "Invalid CLI JSONL" : String(error));
+      abort(
+        error instanceof CodexCreationError
+          ? error
+          : new CodexCreationError(
+              diagnostic(
+                "event",
+                error instanceof SyntaxError ? "CODEX_INVALID_JSON" : "CODEX_EVENT_PARSE_FAILED",
+                error instanceof SyntaxError ? "Codex emitted invalid JSONL" : String(error),
+                "error",
+              ),
+              { cause: error },
+            ),
+      );
     }
   };
   const configured = Number(process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS ?? 300_000);
@@ -197,16 +144,30 @@ export async function runInitialization(input: CliCreationInput): Promise<CliRun
           : 300_000,
       maxCapturedOutputBytes: 0,
       outputSink: (stream, chunk) => {
-        // Drain diagnostics without exposing credentials or retaining logs.
-        if (stream !== "stdout" || result.error) return;
+        // Parse stdout events and retain only bounded stderr diagnostics.
+        if (stream === "stderr") {
+          stderrChunk(chunk);
+          return;
+        }
+        if (result.error) return;
         pending += decoder.write(chunk);
         if (pending.length > 1024 * 1024) {
           pending = "";
-          abort("CLI event exceeds limit");
+          abort(
+            new CodexCreationError(
+              diagnostic(
+                "event",
+                "CODEX_EVENT_SIZE_LIMIT",
+                "Codex event stream exceeded the 1 MiB limit",
+                "error",
+              ),
+            ),
+          );
           return;
         }
-        let end: number;
-        while ((end = pending.indexOf("\n")) >= 0) {
+        for (;;) {
+          const end = pending.indexOf("\n");
+          if (end < 0) break;
           const next = pending.slice(0, end);
           pending = pending.slice(end + 1);
           line(next);
@@ -215,17 +176,120 @@ export async function runInitialization(input: CliCreationInput): Promise<CliRun
     });
     pending += decoder.end();
     if (pending.trim()) line(pending);
+    stderrPending += stderrDecoder.end();
+    if (stderrPending.trim()) stderrLine(stderrPending);
     result.exit_code = execution.exitCode;
-    if (execution.timedOut) result.error ??= "CLI initialization timed out; reconcile before retry";
+    result.timed_out = execution.timedOut;
+    if (execution.timedOut) {
+      pushDiagnostic(
+        result.diagnostics,
+        diagnostic(
+          "process",
+          "CODEX_INITIALIZATION_TIMEOUT",
+          "Codex initialization timed out; reconcile before retry",
+          "error",
+          true,
+        ),
+      );
+    }
+    if (execution.exitCode !== 0) {
+      const signal = execution.exitCode >= 128 ? ` (signal ${execution.exitCode - 128})` : "";
+      pushDiagnostic(
+        result.diagnostics,
+        diagnostic(
+          "process",
+          "CODEX_PROCESS_EXITED",
+          `codex exec exited with code ${execution.exitCode}${signal}`,
+          "error",
+          true,
+        ),
+      );
+    }
+    if (!result.turn_completed && !result.error)
+      pushDiagnostic(
+        result.diagnostics,
+        diagnostic(
+          "process",
+          "CODEX_TURN_INCOMPLETE",
+          "codex exec exited without a completed initialization turn",
+          "error",
+          true,
+        ),
+      );
+    if (!result.error && result.diagnostics.some((item) => item.severity === "error")) {
+      const failure = result.diagnostics.find((item) => item.severity === "error");
+      if (failure) result.error = diagnosticText(new CodexCreationError(failure));
+    }
   } catch (error) {
-    result.error ??= `Codex initialization process failed: ${String(error).slice(0, 300)}`;
+    const failure =
+      error instanceof CodexCreationError
+        ? error
+        : new CodexCreationError(
+            diagnostic(
+              "process",
+              "CODEX_PROCESS_FAILED",
+              `Codex initialization process failed: ${String(error)}`,
+              "error",
+              true,
+            ),
+            { cause: error },
+          );
+    for (const item of failure.diagnostics) pushDiagnostic(result.diagnostics, item);
+    result.error ??= diagnosticText(failure);
   }
   return result;
 }
 
+function appServerDiagnostic(error: unknown): CodexDiagnostic {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("identity mismatch"))
+    return diagnostic("validation", "CODEX_THREAD_IDENTITY_MISMATCH", message, "error");
+  if (
+    message.includes("unavailable") ||
+    message.includes("ENOENT") ||
+    message.includes("ECONNREFUSED")
+  )
+    return diagnostic("app_server", "CODEX_APP_SERVER_UNAVAILABLE", message, "warning", true);
+  if (message.includes("timed out"))
+    return diagnostic("app_server", "CODEX_APP_SERVER_TIMEOUT", message, "warning", true);
+  if (message.includes("rejected"))
+    return diagnostic("app_server", "CODEX_APP_SERVER_REQUEST_REJECTED", message, "error");
+  return diagnostic("app_server", "CODEX_APP_SERVER_READ_FAILED", message, "warning", true);
+}
+
+function worktreeDiagnostic(error: unknown): CodexDiagnostic {
+  return diagnostic(
+    "worktree",
+    "CODEX_WORKTREE_VERIFICATION_FAILED",
+    error instanceof Error ? error.message : String(error),
+    "error",
+  );
+}
+
+function errorWithDiagnostics(
+  error: unknown,
+  fallback: CodexDiagnostic,
+  previous: CodexDiagnostic[] = [],
+): CodexCreationError {
+  const primary = error instanceof CodexCreationError ? error.diagnostic : fallback;
+  const all = [...previous];
+  for (const item of diagnosticsFromError(error)) pushDiagnostic(all, item);
+  pushDiagnostic(all, primary);
+  return new CodexCreationError(primary, { cause: error, diagnostics: all });
+}
+
 async function readAndNameThread(threadId: string, title: string): Promise<ReconciliationRead> {
   const path = socketPath();
-  if (!path) throw new Error("App-server read control is unavailable");
+  if (!path)
+    throw new CodexCreationError(
+      diagnostic(
+        "app_server",
+        "CODEX_APP_SERVER_UNAVAILABLE",
+        "Codex app-server control is unavailable",
+        "warning",
+        true,
+      ),
+    );
   const { socket, buffer: initial } = await connectSocket(path);
   const buffer = { value: initial };
   try {
@@ -241,7 +305,15 @@ async function readAndNameThread(threadId: string, title: string): Promise<Recon
       [2, "thread/name/set", { threadId, name: title }],
     ] as const) {
       const response = await rpc(socket, buffer, id, method, params);
-      if (response.error) throw new Error(`${method} rejected`);
+      if (response.error)
+        throw new CodexCreationError(
+          diagnostic(
+            "app_server",
+            "CODEX_APP_SERVER_REQUEST_REJECTED",
+            `${method} rejected`,
+            "error",
+          ),
+        );
     }
     return await readThreadEvidence(socket, buffer, threadId, 3);
   } finally {
@@ -316,7 +388,32 @@ export function verifyWorktree(cwd: string, source: string, threadId: string): s
   return git(actual, ["rev-parse", "HEAD"]);
 }
 
-type ReconciliationRead = {
+/** Find the unique worktree that Codex assigned to the observed CLI thread. */
+export function findOwnedWorktree(source: string, threadId: string): string {
+  const listing = execFileSync("git", ["-C", source, "worktree", "list", "--porcelain"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  const roots = [...listing.matchAll(/^worktree (.+)$/gm)].map((match) => match[1]);
+  const matches = roots.filter((root): root is string => {
+    try {
+      const gitPath = execFileSync(
+        "git",
+        ["-C", root, "rev-parse", "--path-format=absolute", "--git-path", "codex-thread.json"],
+        { encoding: "utf8", timeout: 10_000 },
+      ).trim();
+      if (!existsSync(gitPath)) return false;
+      const ownership = JSON.parse(readFileSync(gitPath, "utf8"));
+      return ownership.version === 1 && ownership.ownerThreadId === threadId;
+    } catch {
+      return false;
+    }
+  });
+  if (matches.length !== 1) throw new Error("Unique Codex-owned worktree unavailable");
+  return realpathSync(matches[0]);
+}
+
+export type ReconciliationRead = {
   thread: Record<string, unknown>;
   turn: Record<string, unknown>;
 };
@@ -347,9 +444,20 @@ export async function readThreadEvidence(
     threadId,
     includeTurns: false,
   });
-  if (response.error) throw new Error("thread/read rejected");
+  if (response.error)
+    throw new CodexCreationError(
+      diagnostic("app_server", "CODEX_THREAD_READ_REJECTED", "thread/read rejected", "error"),
+    );
   const thread = record(record(response.result)?.thread);
-  if (!thread || thread.id !== threadId) throw new Error("Thread identity mismatch");
+  if (!thread || thread.id !== threadId)
+    throw new CodexCreationError(
+      diagnostic(
+        "validation",
+        "CODEX_THREAD_IDENTITY_MISMATCH",
+        "Thread identity mismatch",
+        "error",
+      ),
+    );
   const turns = await request(socket, buffer, requestId + 1, "thread/turns/list", {
     threadId,
     sortDirection: "asc",
@@ -359,7 +467,15 @@ export async function readThreadEvidence(
   const turnData = record(turns.result)?.data;
   const turn = Array.isArray(turnData) ? record(turnData[0]) : null;
   if (turns.error || !turn || typeof turn.id !== "string")
-    throw new Error("Initialization turn evidence unavailable");
+    throw new CodexCreationError(
+      diagnostic(
+        "app_server",
+        "CODEX_INITIALIZATION_TURN_UNAVAILABLE",
+        "Initialization turn evidence unavailable",
+        "warning",
+        true,
+      ),
+    );
   let cursor: unknown;
   const cursors = new Set<unknown>();
   const turnItems: Record<string, unknown>[] = [];
@@ -418,33 +534,55 @@ export async function readThreadEvidence(
 
 export async function readReconciliationEvidence(threadId: string): Promise<ReconciliationRead> {
   const path = socketPath();
-  if (!path) throw new Error("App-server read control is unavailable");
-  const { socket, buffer: initial } = await connectSocket(path);
+  if (!path)
+    throw new CodexCreationError(
+      diagnostic(
+        "app_server",
+        "CODEX_APP_SERVER_UNAVAILABLE",
+        "Codex app-server control is unavailable",
+        "warning",
+        true,
+      ),
+    );
+  const timeout = reconciliationTimeoutMs();
+  const { socket, buffer: initial } = await connectSocket(path, timeout);
   const buffer = { value: initial };
   try {
-    const initialized = await rpc(socket, buffer, 1, "initialize", {
+    const request: typeof rpc = (requestSocket, requestBuffer, requestId, method, params) =>
+      rpc(requestSocket, requestBuffer, requestId, method, params, { timeoutMs: timeout });
+    const initialized = await request(socket, buffer, 1, "initialize", {
       clientInfo: { name: "multi-task-flow", version: "2" },
       capabilities: { experimentalApi: true },
     });
     if (initialized.error) throw new Error("Codex app-server initialization rejected");
-    return await readThreadEvidence(socket, buffer, threadId);
+    return await readThreadEvidence(socket, buffer, threadId, 2, request);
   } finally {
     socket.destroy();
   }
 }
 
+function reconciliationTimeoutMs(): number {
+  const configured = Number(process.env.MULTI_TASK_FLOW_CODEX_RECONCILE_TIMEOUT_MS ?? 5_000);
+  return Number.isFinite(configured) && configured >= 1_000 && configured <= 60_000
+    ? configured
+    : 5_000;
+}
+
 export async function readThreadRecord(threadId: string): Promise<Record<string, unknown>> {
   const path = socketPath();
   if (!path) throw new Error("App-server read control is unavailable");
-  const { socket, buffer: initial } = await connectSocket(path);
+  const timeout = reconciliationTimeoutMs();
+  const { socket, buffer: initial } = await connectSocket(path, timeout);
   const buffer = { value: initial };
+  const request: typeof rpc = (requestSocket, requestBuffer, requestId, method, params) =>
+    rpc(requestSocket, requestBuffer, requestId, method, params, { timeoutMs: timeout });
   try {
-    const initialized = await rpc(socket, buffer, 1, "initialize", {
+    const initialized = await request(socket, buffer, 1, "initialize", {
       clientInfo: { name: "multi-task-flow", version: "2" },
       capabilities: { experimentalApi: true },
     });
     if (initialized.error) throw new Error("Codex app-server initialization rejected");
-    const response = await rpc(socket, buffer, 2, "thread/read", {
+    const response = await request(socket, buffer, 2, "thread/read", {
       threadId,
       includeTurns: false,
     });
@@ -457,6 +595,61 @@ export async function readThreadRecord(threadId: string): Promise<Record<string,
   }
 }
 
+async function readCompletedTurn(threadId: string): Promise<Record<string, unknown>> {
+  const path = socketPath();
+  if (!path)
+    throw new CodexCreationError(
+      diagnostic(
+        "app_server",
+        "CODEX_APP_SERVER_UNAVAILABLE",
+        "Codex app-server control is unavailable",
+        "warning",
+        true,
+      ),
+    );
+  const timeout = reconciliationTimeoutMs();
+  const { socket, buffer: initial } = await connectSocket(path, timeout);
+  const buffer = { value: initial };
+  const request: typeof rpc = (requestSocket, requestBuffer, requestId, method, params) =>
+    rpc(requestSocket, requestBuffer, requestId, method, params, { timeoutMs: timeout });
+  try {
+    const initialized = await request(socket, buffer, 1, "initialize", {
+      clientInfo: { name: "multi-task-flow", version: "2" },
+      capabilities: { experimentalApi: true },
+    });
+    if (initialized.error) throw new Error("Codex app-server initialization rejected");
+    const response = await request(socket, buffer, 2, "thread/turns/list", {
+      threadId,
+      sortDirection: "asc",
+      limit: 1,
+      itemsView: "summary",
+    });
+    const data = record(response.result)?.data;
+    const turn = Array.isArray(data) ? record(data[0]) : null;
+    if (response.error || !turn || turn.status !== "completed" || typeof turn.id !== "string")
+      throw new CodexCreationError(
+        diagnostic(
+          "app_server",
+          "CODEX_COMPLETED_TURN_UNAVAILABLE",
+          "Completed initialization turn unavailable",
+          "warning",
+          true,
+        ),
+      );
+    return turn;
+  } finally {
+    socket.destroy();
+  }
+}
+
+export type ReconciliationMode = "app-server" | "worktree-fallback" | "not-attempted";
+
+export type ReconciliationDependencies = {
+  read: (threadId: string) => Promise<ReconciliationRead>;
+  verify: (cwd: string, source: string, threadId: string) => string;
+  findWorktree?: (source: string, threadId: string) => string;
+  readCompletedTurn?: (threadId: string) => Promise<Record<string, unknown>>;
+};
 export async function reconcileCliThread(
   input: {
     thread_id: string;
@@ -465,18 +658,97 @@ export async function reconcileCliThread(
     source_cwd: string;
     role?: AgentRole;
   },
-  dependencies: {
-    read: (threadId: string) => Promise<ReconciliationRead>;
-    verify: (cwd: string, source: string, threadId: string) => string;
-  } = { read: readReconciliationEvidence, verify: verifyWorktree },
+  dependencies: ReconciliationDependencies = {
+    read: readReconciliationEvidence,
+    verify: verifyWorktree,
+  },
 ) {
-  const { thread, turn } = await dependencies.read(input.thread_id);
-  if (thread.id !== input.thread_id) throw new Error("Thread identity mismatch");
+  let thread: Record<string, unknown>;
+  let turn: Record<string, unknown>;
+  const diagnostics: CodexDiagnostic[] = [];
+  let reconciliation_mode: ReconciliationMode = "app-server";
+  const fail = (error: unknown, fallback: CodexDiagnostic): never => {
+    throw errorWithDiagnostics(error, fallback, diagnostics);
+  };
+  try {
+    ({ thread, turn } = await dependencies.read(input.thread_id));
+  } catch (error) {
+    const readFailure = appServerDiagnostic(error);
+    if (readFailure.code === "CODEX_THREAD_IDENTITY_MISMATCH")
+      throw errorWithDiagnostics(error, readFailure, diagnostics);
+    pushDiagnostic(diagnostics, readFailure);
+    reconciliation_mode = "worktree-fallback";
+    pushDiagnostic(
+      diagnostics,
+      diagnostic(
+        "validation",
+        "CODEX_WORKTREE_FALLBACK_USED",
+        "App-server evidence was unavailable; using the uniquely owned worktree",
+        "info",
+      ),
+    );
+    let workspacePath: string;
+    try {
+      workspacePath = (dependencies.findWorktree ?? findOwnedWorktree)(
+        input.source_cwd,
+        input.thread_id,
+      );
+    } catch (fallbackError) {
+      throw errorWithDiagnostics(fallbackError, worktreeDiagnostic(fallbackError), diagnostics);
+    }
+    try {
+      turn = await (dependencies.readCompletedTurn ?? readCompletedTurn)(input.thread_id);
+    } catch (turnError) {
+      throw errorWithDiagnostics(turnError, appServerDiagnostic(turnError), diagnostics);
+    }
+    thread = {
+      id: input.thread_id,
+      cwd: workspacePath,
+      model: input.model,
+      reasoningEffort: input.thinking,
+    };
+  }
+  if (thread.id !== input.thread_id)
+    fail(
+      new Error("Thread identity mismatch"),
+      diagnostic(
+        "validation",
+        "CODEX_THREAD_IDENTITY_MISMATCH",
+        "Thread identity mismatch",
+        "error",
+      ),
+    );
   if (thread.model !== input.model || thread.reasoningEffort !== input.thinking)
-    throw new Error("CLI execution profile mismatch");
-  if (typeof thread.cwd !== "string") throw new Error("Thread working directory unavailable");
-  verifyInitializationTurn(turn, input.role);
-  const initialHead = dependencies.verify(thread.cwd, input.source_cwd, input.thread_id);
+    fail(
+      new Error("CLI execution profile mismatch"),
+      diagnostic(
+        "validation",
+        "CODEX_EXECUTION_PROFILE_MISMATCH",
+        "CLI execution profile mismatch",
+        "error",
+      ),
+    );
+  if (typeof thread.cwd !== "string")
+    fail(
+      new Error("Thread working directory unavailable"),
+      diagnostic(
+        "validation",
+        "CODEX_WORKTREE_PATH_UNAVAILABLE",
+        "Thread working directory unavailable",
+        "error",
+      ),
+    );
+  try {
+    verifyInitializationTurn(turn, input.role);
+  } catch (error) {
+    fail(error, diagnosticFromError(error, "validation", "CODEX_INITIALIZATION_INVALID"));
+  }
+  let initialHead: string;
+  try {
+    initialHead = dependencies.verify(thread.cwd, input.source_cwd, input.thread_id);
+  } catch (error) {
+    throw errorWithDiagnostics(error, worktreeDiagnostic(error), diagnostics);
+  }
   return {
     thread_id: input.thread_id,
     workspace_path: thread.cwd,
@@ -487,12 +759,21 @@ export async function reconcileCliThread(
     evidence_ref: `codex-thread-reconcile:${input.thread_id}`,
     initialization_turn_id: turn.id,
     created_at: new Date().toISOString(),
+    reconciliation_mode,
+    diagnostics,
   };
 }
 
+export type CliCreationDependencies = {
+  run: (input: CliCreationInput) => Promise<CliRun>;
+  read: (threadId: string, title: string) => Promise<ReconciliationRead>;
+  verify: (cwd: string, source: string, threadId: string) => string;
+  findWorktree?: (source: string, threadId: string) => string;
+};
+
 export async function createCliThread(
   input: CliCreationInput,
-  dependencies = {
+  dependencies: CliCreationDependencies = {
     run: runInitialization,
     read: readAndNameThread,
     verify: verifyWorktree,
@@ -503,31 +784,114 @@ export async function createCliThread(
   const base = { native_request_id, evidence_ref, model: input.model, thinking: input.thinking };
   let execution: CliRun | undefined;
   let workspace_path: string | undefined;
+  let reconciliation_mode: ReconciliationMode = "not-attempted";
+  const diagnostics: CodexDiagnostic[] = [];
   try {
     if (input.repository) verifyRepositoryIdentity(input.cwd ?? process.cwd(), input.repository);
     execution = await dependencies.run({ ...input, native_request_id });
+    for (const item of execution.diagnostics ?? []) pushDiagnostic(diagnostics, item);
     if (
       execution.error ||
       execution.exit_code !== 0 ||
       !execution.turn_completed ||
       !execution.thread_id
     )
-      throw new Error(
-        execution.error ??
-          "Initialization did not finish with a unique persisted thread and normal exit",
+      throw new CodexCreationError(
+        execution.diagnostics?.find((item) => item.severity === "error") ??
+          diagnostic(
+            "process",
+            "CODEX_INITIALIZATION_INCOMPLETE",
+            execution.error ??
+              "Initialization did not finish with a unique persisted thread and normal exit",
+            "error",
+            true,
+          ),
+        { diagnostics },
       );
-    const evidence = await dependencies.read(execution.thread_id, input.title);
-    verifyInitializationTurn(evidence.turn, input.role);
+    let evidence: ReconciliationRead;
+    try {
+      evidence = await dependencies.read(execution.thread_id, input.title);
+      reconciliation_mode = "app-server";
+    } catch (error) {
+      const readFailure = appServerDiagnostic(error);
+      if (readFailure.code === "CODEX_THREAD_IDENTITY_MISMATCH")
+        throw errorWithDiagnostics(error, readFailure, diagnostics);
+      pushDiagnostic(diagnostics, readFailure);
+      reconciliation_mode = "worktree-fallback";
+      pushDiagnostic(
+        diagnostics,
+        diagnostic(
+          "validation",
+          "CODEX_WORKTREE_FALLBACK_USED",
+          "App-server evidence was unavailable; using the uniquely owned worktree",
+          "info",
+        ),
+      );
+      // codex exec may own a completed thread that the shared daemon reports as notLoaded.
+      // The CLI protocol and the unique owner worktree are the authoritative creation evidence.
+      let fallbackWorkspace: string;
+      try {
+        fallbackWorkspace = (dependencies.findWorktree ?? findOwnedWorktree)(
+          input.cwd ?? process.cwd(),
+          execution.thread_id,
+        );
+      } catch (fallbackError) {
+        throw errorWithDiagnostics(fallbackError, worktreeDiagnostic(fallbackError), diagnostics);
+      }
+      evidence = {
+        thread: {
+          id: execution.thread_id,
+          cwd: fallbackWorkspace,
+          model: input.model,
+          reasoningEffort: input.thinking,
+        },
+        turn: {
+          id: `codex-exec:${execution.thread_id}`,
+          status: "completed",
+          items: execution.initialization_items,
+        },
+      };
+    }
     const thread = evidence.thread;
+    if (thread.id !== execution.thread_id)
+      throw new CodexCreationError(
+        diagnostic(
+          "validation",
+          "CODEX_THREAD_IDENTITY_MISMATCH",
+          "Thread identity mismatch",
+          "error",
+        ),
+      );
     if (thread.model !== input.model || thread.reasoningEffort !== input.thinking)
-      throw new Error("CLI execution profile mismatch");
-    if (typeof thread.cwd !== "string") throw new Error("Thread working directory unavailable");
+      throw new CodexCreationError(
+        diagnostic(
+          "validation",
+          "CODEX_EXECUTION_PROFILE_MISMATCH",
+          "CLI execution profile mismatch",
+          "error",
+        ),
+      );
+    if (typeof thread.cwd !== "string")
+      throw new CodexCreationError(
+        diagnostic(
+          "validation",
+          "CODEX_WORKTREE_PATH_UNAVAILABLE",
+          "Thread working directory unavailable",
+          "error",
+        ),
+      );
+    verifyInitializationTurn(evidence.turn, input.role);
     workspace_path = thread.cwd;
-    const initial_head = dependencies.verify(
-      thread.cwd,
-      input.cwd ?? process.cwd(),
-      execution.thread_id,
-    );
+    let initial_head: string;
+    try {
+      initial_head = dependencies.verify(
+        thread.cwd,
+        input.cwd ?? process.cwd(),
+        execution.thread_id,
+      );
+    } catch (error) {
+      throw errorWithDiagnostics(error, worktreeDiagnostic(error), diagnostics);
+    }
     return {
       ...base,
       outcome: "succeeded" as const,
@@ -538,9 +902,14 @@ export async function createCliThread(
       turn_completed: execution.turn_completed,
       events: execution.events,
       initialization_turn_id: typeof evidence.turn.id === "string" ? evidence.turn.id : undefined,
+      reconciliation_mode,
+      diagnostics,
     };
   } catch (error) {
     // A failed CLI can allocate a worktree before it emits thread.started.
+    for (const item of diagnosticsFromError(error)) pushDiagnostic(diagnostics, item);
+    const failure = diagnosticFromError(error, "validation", "CODEX_CREATION_FAILED", "error");
+    pushDiagnostic(diagnostics, failure);
     return {
       ...base,
       outcome: "unknown" as const,
@@ -549,7 +918,9 @@ export async function createCliThread(
       exit_code: execution?.exit_code ?? null,
       turn_completed: execution?.turn_completed ?? false,
       events: execution?.events ?? [],
-      error: String(error).slice(0, 500),
+      reconciliation_mode,
+      diagnostics,
+      error: diagnosticText(error),
     };
   }
 }

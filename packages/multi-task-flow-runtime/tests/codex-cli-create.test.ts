@@ -2,15 +2,25 @@ import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type CliRun,
   createCliThread,
+  findOwnedWorktree,
   INITIALIZATION_PROMPT,
   initializationPrompt,
+  parseInitializationEvent,
   readReconciliationEvidence,
   readThreadEvidence,
   reconcileCliThread,
@@ -32,6 +42,9 @@ const completed: CliRun = {
   exit_code: 0,
   turn_completed: true,
   events: ["thread.started", "turn.completed"],
+  initialization_items: [],
+  diagnostics: [],
+  timed_out: false,
 };
 const handshakeTurn = (
   status: string,
@@ -136,6 +149,25 @@ test("initialization ignores the known multi-agent deprecation diagnostic", () =
   ).toThrow("recorded work");
 });
 
+test("real Codex startup diagnostics are observable without becoming handshake failures", () => {
+  const event = parseInitializationEvent({
+    type: "item.completed",
+    item: {
+      type: "error",
+      message: "`[features].multi_agent` is deprecated",
+    },
+  });
+  expect(event).toMatchObject({
+    type: "item.completed",
+    diagnostic: {
+      stage: "event",
+      code: "CODEX_EVENT_DIAGNOSTIC",
+      severity: "warning",
+    },
+  });
+  expect(() => verifyInitializationTurn(handshakeTurn("completed", "Task Agent"))).not.toThrow();
+});
+
 test("bind requires both process exit and initialization completion, preserving identity on every ambiguous result", async () => {
   for (const result of [
     { ...completed, exit_code: 1 },
@@ -222,6 +254,78 @@ test("malformed handshake evidence remains unreconcilable", () => {
   ).toThrow("content is malformed");
 });
 
+test("creation fallback preserves the exec identity when app-server reads are unavailable", async () => {
+  const calls: string[][] = [];
+  const receipt = await createCliThread(input, {
+    run: async () => ({
+      ...completed,
+      initialization_items: handshakeTurn("completed", "Task Agent").items,
+    }),
+    read: async () => {
+      throw new Error("thread is not loaded");
+    },
+    findWorktree: (source, threadId) => {
+      calls.push([source, threadId]);
+      return "/codex/owned";
+    },
+    verify: (...args) => {
+      calls.push(args);
+      return "c".repeat(40);
+    },
+  });
+  expect(receipt).toMatchObject({
+    outcome: "succeeded",
+    thread_id: "thread-a",
+    workspace_path: "/codex/owned",
+    initial_head: "c".repeat(40),
+    initialization_turn_id: "codex-exec:thread-a",
+    reconciliation_mode: "worktree-fallback",
+  });
+  expect(receipt.diagnostics).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ code: "CODEX_APP_SERVER_READ_FAILED", severity: "warning" }),
+      expect.objectContaining({ code: "CODEX_WORKTREE_FALLBACK_USED", severity: "info" }),
+    ]),
+  );
+  expect(calls).toEqual([
+    [input.cwd, "thread-a"],
+    ["/codex/owned", input.cwd, "thread-a"],
+  ]);
+});
+
+test("creation rejects a read from a different thread even when its profile matches", async () => {
+  const receipt = await createCliThread(input, {
+    run: async () => completed,
+    read: async () => ({
+      thread: { ...(await thread()), id: "thread-other" },
+      turn: handshakeTurn("completed"),
+    }),
+    verify: () => "a".repeat(40),
+  });
+  expect(receipt.outcome).toBe("unknown");
+  expect(receipt.error).toContain("CODEX_THREAD_IDENTITY_MISMATCH");
+  expect(receipt.diagnostics).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ code: "CODEX_THREAD_IDENTITY_MISMATCH", severity: "error" }),
+    ]),
+  );
+});
+
+test("creation does not recover after an app-server identity mismatch", async () => {
+  const receipt = await createCliThread(input, {
+    run: async () => completed,
+    read: async () => {
+      throw new Error("Thread identity mismatch");
+    },
+    findWorktree: () => {
+      throw new Error("fallback must not run");
+    },
+    verify: () => "a".repeat(40),
+  });
+  expect(receipt.outcome).toBe("unknown");
+  expect(receipt.error).toContain("Thread identity mismatch");
+});
+
 test("reconciliation requires the matching completed handshake before checking the worktree", async () => {
   const verified: string[][] = [];
   const result = await reconcileCliThread(
@@ -252,7 +356,129 @@ test("reconciliation requires the matching completed handshake before checking t
   expect(verified).toEqual([["/codex/owned", input.cwd, "thread-a"]]);
 });
 
-test("reconciliation hydrates handshake items separately from the turn summary", async () => {
+test("reconciliation falls back to the uniquely owned worktree and completed turn", async () => {
+  const verified: string[][] = [];
+  const result = await reconcileCliThread(
+    {
+      thread_id: "thread-a",
+      model: input.model,
+      thinking: input.thinking,
+      source_cwd: input.cwd,
+    },
+    {
+      read: async () => {
+        throw new Error("thread is not loaded");
+      },
+      findWorktree: (source, threadId) => {
+        expect(source).toBe(input.cwd);
+        expect(threadId).toBe("thread-a");
+        return "/codex/owned";
+      },
+      readCompletedTurn: async (threadId) => {
+        expect(threadId).toBe("thread-a");
+        return {
+          ...handshakeTurn("completed", "Task Agent"),
+          id: "turn-reconciled",
+        };
+      },
+      verify: (...args) => {
+        verified.push(args);
+        return "d".repeat(40);
+      },
+    },
+  );
+  expect(result).toMatchObject({
+    thread_id: "thread-a",
+    workspace_path: "/codex/owned",
+    initial_head: "d".repeat(40),
+    initialization_turn_id: "turn-reconciled",
+    reconciliation_mode: "worktree-fallback",
+  });
+  expect(result.diagnostics).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ code: "CODEX_APP_SERVER_READ_FAILED", severity: "warning" }),
+      expect.objectContaining({ code: "CODEX_WORKTREE_FALLBACK_USED", severity: "info" }),
+    ]),
+  );
+  expect(verified).toEqual([["/codex/owned", input.cwd, "thread-a"]]);
+});
+
+test("reconciliation rejects a wrong observed thread before inspecting its worktree", async () => {
+  await expect(
+    reconcileCliThread(
+      {
+        thread_id: "thread-a",
+        model: input.model,
+        thinking: input.thinking,
+        source_cwd: input.cwd,
+      },
+      {
+        read: async () => ({
+          thread: { ...(await thread()), id: "thread-other" },
+          turn: handshakeTurn("completed"),
+        }),
+        verify: () => {
+          throw new Error("worktree must not be inspected for a wrong thread");
+        },
+      },
+    ),
+  ).rejects.toThrow("Thread identity mismatch");
+});
+
+test("reconciliation does not recover after an app-server identity mismatch", async () => {
+  await expect(
+    reconcileCliThread(
+      {
+        thread_id: "thread-a",
+        model: input.model,
+        thinking: input.thinking,
+        source_cwd: input.cwd,
+      },
+      {
+        read: async () => {
+          throw new Error("Thread identity mismatch");
+        },
+        findWorktree: () => {
+          throw new Error("fallback must not run");
+        },
+        verify: () => "a".repeat(40),
+      },
+    ),
+  ).rejects.toThrow("Thread identity mismatch");
+});
+
+test("owned worktree lookup requires exactly matching Codex thread metadata", () => {
+  const root = mkdtempSync(join(tmpdir(), "cli-owned-worktree-"));
+  const source = join(root, "source");
+  const owned = join(root, "owned");
+  mkdirSync(source);
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main", source]);
+    execFileSync("git", ["-C", source, "config", "user.email", "test@example.com"]);
+    execFileSync("git", ["-C", source, "config", "user.name", "Test"]);
+    writeFileSync(join(source, "tracked"), "fixture\n");
+    execFileSync("git", ["-C", source, "add", "tracked"]);
+    execFileSync("git", ["-C", source, "commit", "-qm", "fixture"]);
+    execFileSync("git", ["-C", source, "worktree", "add", "--detach", owned, "HEAD"]);
+    const metadata = execFileSync(
+      "git",
+      ["-C", owned, "rev-parse", "--path-format=absolute", "--git-path", "codex-thread.json"],
+      { encoding: "utf8" },
+    ).trim();
+    writeFileSync(metadata, JSON.stringify({ version: 1, ownerThreadId: "thread-a" }) + "\n");
+    expect(findOwnedWorktree(source, "thread-a")).toBe(realpathSync(owned));
+    expect(() => findOwnedWorktree(source, "thread-other")).toThrow(
+      "Unique Codex-owned worktree unavailable",
+    );
+  } finally {
+    try {
+      execFileSync("git", ["-C", source, "worktree", "remove", "--force", owned]);
+    } catch {}
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reconciliation uses the turn summary without requiring item hydration", async () => {
   const calls: string[] = [];
   const request = async (_socket: any, _buffer: any, _id: number, method: string) => {
     calls.push(method);
@@ -501,7 +727,7 @@ test("real subprocess receives literal argv and EOF, never the formal prompt; th
       capture = join(root, "argv.json");
     writeFileSync(
       executable,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({argv:process.argv.slice(2),nativeRequestId:process.env.MULTI_TASK_FLOW_NATIVE_REQUEST_ID}));process.stdin.on('end',()=>{console.log(JSON.stringify({type:'thread.started',thread_id:'real-event'}));setTimeout(()=>console.log(JSON.stringify({type:'turn.completed'})),30)});process.stdin.resume();`,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({argv:process.argv.slice(2),nativeRequestId:process.env.MULTI_TASK_FLOW_NATIVE_REQUEST_ID}));process.stderr.write('warning: startup diagnostic\\n');process.stdin.on('end',()=>{console.log(JSON.stringify({type:'thread.started',thread_id:'real-event'}));console.log(JSON.stringify({type:'item.completed',item:{type:'error',message:'startup diagnostic'}}));setTimeout(()=>console.log(JSON.stringify({type:'turn.completed'})),30)});process.stdin.resume();`,
     );
     chmodSync(executable, 0o755);
     process.env.PATH = `${root}:${oldPath}`;
@@ -513,7 +739,17 @@ test("real subprocess receives literal argv and EOF, never the formal prompt; th
     });
     expect(result.exit_code).toBe(0);
     expect(result.turn_completed).toBe(true);
+    expect(result.events).toContain("item.completed");
     expect(observed).toEqual(["real-event"]);
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "CODEX_STDERR",
+          message: "warning: startup diagnostic",
+          severity: "warning",
+        }),
+      ]),
+    );
     expect(JSON.parse(readFileSync(capture, "utf8"))).toEqual({
       argv: [
         "exec",
@@ -540,7 +776,12 @@ test("real subprocess receives literal argv and EOF, never the formal prompt; th
     );
     const failed = await runInitialization(input);
     expect(failed.thread_id).toBe("partial");
-    expect(failed.error).toContain("attempted work");
+    expect(failed.error).toContain("CODEX_INITIALIZATION_WORK_STARTED");
+    expect(failed.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "CODEX_INITIALIZATION_WORK_STARTED", severity: "error" }),
+      ]),
+    );
     expect(failed.exit_code).not.toBe(0);
   } finally {
     process.env.PATH = oldPath;

@@ -7087,7 +7087,7 @@
     {
       "path": "skills/multi-task-flow/lib/codex-rpc.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/codex-rpc.ts",
-      "installedSha256": "84ea5b069a57eabcc054a9e965a4c5c36ffbf9224eeb660116931db2cc2eaadb"
+      "installedSha256": "93b699eeb5288ceff0ba30385e0aa950b262947e710425146b750b01faead87b"
     },
     {
       "path": "skills/multi-task-flow/lib/codex-socket.ts",
@@ -7361,7 +7361,7 @@
     {
       "path": "skills/multi-task-flow/scripts/orchestrate.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/orchestrate.ts",
-      "installedSha256": "2bdd9ce4dfa40032bad05540a617a409318a7219529d31ba10d845be521bb436"
+      "installedSha256": "800d5fd199db333cbf3549a93edd7958ffd662f07b7aeb7777473748811d2ab8"
     },
     {
       "path": "skills/multi-task-flow/scripts/service.ts",
@@ -8137,7 +8137,7 @@
     {
       "path": "skills/multi-task-flow/lib/codex-cli-create.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/codex-cli-create.ts",
-      "installedSha256": "23d6187abdbc6dbd0cdcdd0affcab00fed93774d8f9dff316198fefeafbdfec3"
+      "installedSha256": "8c6c9c4a317e7959ee8b2f2ad043d14894f9bc846f012a94a9b54e1421525994"
     },
     {
       "path": "skills/multi-task-flow/lib/conversation-eligibility.ts",
@@ -8162,7 +8162,7 @@
     {
       "path": "skills/multi-task-flow/tests/codex-cli-create.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/codex-cli-create.test.ts",
-      "installedSha256": "225af412c5585c11033969a1f89c6850819d18b93dff918d809b7a595820e9cf"
+      "installedSha256": "32c600b3cf099e00f3ea2b3e00f8d70a05140a1721cf0418dbfb7468aa91d45c"
     },
     {
       "path": "skills/multi-task-flow/tests/conversation-archive.test.ts",
@@ -8252,7 +8252,7 @@
     {
       "path": "skills/multi-task-flow/scripts/check-client-skills.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/check-client-skills.ts",
-      "installedSha256": "3ea6e9c035c6d0f354cef5f183413e7b4b4385e8ec0706e6ad2fd272cd9014c2"
+      "installedSha256": "88fc8a654258fa368e3971c8ded2a67858d8e33d3861d03d46e1e2a08e979c67"
     },
     {
       "path": "skills/multi-task-flow/tests/check-skills-installation.test.ts",
@@ -8733,6 +8733,11 @@
       "path": "skills/spec-sync/scripts/_runtime/modules/docs/spec_migration.ts",
       "sourcePath": "skills/spec-sync/scripts/_runtime/modules/docs/spec_migration.ts",
       "installedSha256": "06094de16ee7fefbd34b2022be16649a98af52347a1dd750f8fbfd27a6ceb4d5"
+    },
+    {
+      "path": "skills/multi-task-flow/lib/codex-cli-initialization.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/lib/codex-cli-initialization.ts",
+      "installedSha256": "5cc04bf8e889b642567213e8b9771f388a0fedaea45ca17c08e79f4bd58bd45c"
     },
     {
       "path": "skills/multi-task-flow/tests/service-release.test.ts",
