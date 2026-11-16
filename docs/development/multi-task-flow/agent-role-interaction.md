@@ -6,7 +6,7 @@
 
 | 角色 | CLI actor | 身份绑定 | 主要责任 | 写入边界 |
 | - | - | - | - | - |
-| 主 Agent（main Agent） | `role: "main"` | `control.owner_thread_id` | 归纳计划、批准运行、维护全局依赖图、选择交付拓扑、派发和对账、处理跨单元异常、最终收口 | 全局计划、交付单元调度、任务派发、通知确认和受保护操作；不能伪造其他 Agent 的任务事实 |
+| 主 Agent（main Agent） | `role: "main"` | `control.owner_thread_id` | 归纳计划、批准运行、维护全局依赖图、选择交付拓扑、派发和对账、处理跨单元异常、最终收口 | 全局计划、交付单元调度、通知意图/发送 attempt/receipt 对账和受保护操作；不能伪造其他 Agent 的任务事实 |
 | 交付 Agent（Delivery Agent） | `role: "group"` | `groups[].agent_thread_id` | 管理一个 regular DeliveryUnit 的父分支、集成 PR、集成验收、发布/部署/验证义务和 closeout | 仅所属 DeliveryUnit 生命周期、交付单元原子、父 PR/合并事实和自身协调状态 |
 | 任务 Agent（Task Agent） | `role: "task"` | `tasks[].thread_id` | 读取自身任务上下文，推进原子、工作区、任务分支、child PR、rebase、合并和 closeout | 仅自身 Task、原子、任务 PR 和证据；不能创建或派发其他任务，不能修改依赖图或交付单元所有权 |
 
@@ -42,7 +42,7 @@ Bootstrap DeliveryUnit 是唯一由主 Agent 持有的交付单元：其 `owner_
 
 AtomicNode/AtomicEdge 是唯一编排事实。Task 和 DeliveryUnit 状态是从原子、里程碑、外部 PR/CI/release/deployment/verification facts 推导的读取投影；Agent idle、连接状态、最新输出和观察器断开属于 runtime observation，不能覆盖业务状态。
 
-任务首次进入 `ready` 时账本生成可派发 notification；主 Agent确认收件并重新评估依赖后才能调用 `dispatch-claim`。`waiting`、`blocked` 和 DeliveryUnit coordination state 表达依赖与门禁，不创建新的 coordination Task。创建、通知、发布、合并和部署出现 unknown 时保留 operation、claim、容量和原生身份，先 reconcile；不能用错误消息推断副作用未发生。
+任务首次进入 `ready` 时账本生成可派发 notification；主 Agent确认通知意图、发送 attempt 和 provider receipt，并重新评估依赖后才能调用 `dispatch-claim`；收件 Agent 通过自身绑定的对话产生 `notification-ack`。`waiting`、`blocked` 和 DeliveryUnit coordination state 表达依赖与门禁，不创建新的 coordination Task。创建、通知、发布、合并和部署出现 unknown 时保留 operation、claim、容量和原生身份，先 reconcile；不能用错误消息推断副作用未发生。
 
 ### Release、deployment、verification 与 closeout
 
@@ -55,6 +55,16 @@ release、deployment 和 verification 是显式原子，不能从 contribution T
 - CLI 写入必须带 revision fence；相同 request 只能以相同 canonical input 幂等重放。
 - 原生创建必须经过 `dispatch-claim → conversation-create → native evidence reconcile → formal handoff`；绕过路径是编排违规，不能静默接管结果。
 - Task 完成、child PR 集成、DeliveryUnit 父 PR 合并、release/deployment/verification 和 closeout 是不同状态边界，不能互相替代。
+
+## 本轮审计证据
+
+以下证据记录本轮实现与上述 canonical 要求的差异；它们不新增 runtime 语义，且在消除前阻止 `merge-ready / Step 5C Ready`。
+
+| 证据 ID | 类型 | 可复现事实 | 影响 | 处理 |
+| - | - | - | - | - |
+| MTF-AUDIT-001 | Runtime 偏差 | `group-closeout-reconcile` 的 `outcome: "unknown"` 保留 `closed`，后续 `deliveryUnitPrMergedFromLedger`/dispatch gate 不读取该不确定结果。 | closeout 证据不足时仍可能满足后续交付门禁，与本指南的 unknown/reconcile 要求冲突。 | 本轮不修改 runtime 语义；Step 5C 阻塞，需单独修复与回归测试。 |
+| MTF-AUDIT-002 | 验证缺口 | contract-3 mock 流直接调用 runtime `apply` 的 dispatch bind/resolve，未通过公开 `conversation-create` CLI 路径。 | 未证明 CLI-only native creation 边界在完整 mock 流中不可绕过。 | 保留为 follow-up 验证项；不以现有测试通过替代 CLI 边界证据。 |
+| MTF-AUDIT-003 | 验证缺口 | closeout 测试为其他任务和部分 merge facts 构造 fixture 事实，未覆盖 provider `closed`/缺失 receipt/unknown closeout 的拒绝路径。 | 未证明每个 child PR 都经 Task Agent merge receipt 后才允许 DeliveryUnit closeout。 | 保留为 follow-up 验证项；本轮不伪造 readiness。 |
 
 ## 参考
 
