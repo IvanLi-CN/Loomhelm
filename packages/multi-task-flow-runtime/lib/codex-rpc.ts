@@ -145,9 +145,10 @@ export async function rpc(
     );
     const onData = (chunk: Buffer) => {
       buffer.value = Buffer.concat([buffer.value, chunk]);
+      let matched: JsonRecord | undefined;
       while (true) {
         const frame = framePayload(buffer.value);
-        if (!frame) return;
+        if (!frame) break;
         buffer.value = buffer.value.subarray(frame.consumed);
         if (frame.opcode === 8) {
           clearTimeout(timer);
@@ -155,13 +156,13 @@ export async function rpc(
           reject(new Error("Codex app-server closed the WebSocket"));
           return;
         }
-        const response = parseRpc(frame.payload);
-        if (!response || response.id !== id) continue;
-        clearTimeout(timer);
-        socket.off("data", onData);
-        resolve(response);
-        return;
+        const parsed = parseRpc(frame.payload);
+        if (parsed?.id === id) matched = parsed;
       }
+      if (!matched) return;
+      clearTimeout(timer);
+      socket.off("data", onData);
+      resolve(matched);
     };
     socket.on("data", onData);
   });

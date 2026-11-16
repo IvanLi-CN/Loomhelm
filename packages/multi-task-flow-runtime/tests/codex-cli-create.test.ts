@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +15,7 @@ import {
   verifyInitializationTurn,
   verifyRepositoryIdentity,
 } from "../lib/codex-cli-create";
+import { rpc, websocketFrame } from "../lib/codex-rpc";
 
 const input = {
   title: "test",
@@ -53,6 +55,28 @@ const thread = async () => ({
 const read = async () => ({
   thread: await thread(),
   turn: handshakeTurn("completed", "Task Agent"),
+});
+
+test("app-server RPC drains coalesced frames after the matching response", async () => {
+  const socket = new EventEmitter() as EventEmitter & {
+    write: (value: Buffer) => void;
+  };
+  socket.write = () => {
+    queueMicrotask(() =>
+      socket.emit(
+        "data",
+        Buffer.concat([
+          websocketFrame(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } })),
+          websocketFrame(JSON.stringify({ method: "turn/updated", params: {} })),
+        ]),
+      ),
+    );
+  };
+  const buffer = { value: Buffer.alloc(0) };
+  await expect(rpc(socket as any, buffer, 1, "thread/read", {})).resolves.toMatchObject({
+    result: { ok: true },
+  });
+  expect(buffer.value).toHaveLength(0);
 });
 
 test("initialization prompt gives the creation phase enough context without authorizing work", () => {
