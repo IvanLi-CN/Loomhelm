@@ -146,6 +146,16 @@ test("plan info content does not reserve an empty scrollbar gutter", () => {
   expect(planInfo).not.toContain("scrollbar-gutter: stable");
 });
 
+test("timeline vertical scrolling stays on vis-timeline side panel", () => {
+  expect(css).toContain(
+    ".timeline-view .vis-panel.vis-center { cursor: grab; touch-action: pan-x pan-y !important; overflow: hidden !important; }",
+  );
+  expect(css).toContain(
+    ".timeline-view .vis-panel.vis-left { cursor: grab; touch-action: pan-x pan-y !important; overflow-x: hidden !important; overflow-y: scroll !important; }",
+  );
+  expect(css).not.toContain(".vis-panel.vis-center::-webkit-scrollbar");
+});
+
 test("runtime identity state uses a compact semantic chip", () => {
   expect(css).toContain(".plan-info-identity-state svg { width: 12px; height: 12px; }");
   expect(css).toContain("background: var(--pill-positive-bg);");

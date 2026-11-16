@@ -308,9 +308,8 @@ h1 { margin: 3px 0 0; color: var(--text); font-size: 26px; line-height: 1.14; fo
 #planned-timeline, #actual-timeline { height: 284px; }
 .timeline-view .vis-timeline { height: 100% !important; border: 0; font-family: inherit; user-select: none; }
 .timeline-view .vis-loading-screen { display: none !important; }
-.timeline-view .vis-panel.vis-center { cursor: grab; touch-action: pan-x pan-y !important; overflow: auto !important; scrollbar-width: none; }
-.timeline-view .vis-panel.vis-center::-webkit-scrollbar { display: none; }
-.timeline-view .vis-panel.vis-left { cursor: grab; touch-action: pan-x pan-y !important; overflow: hidden !important; }
+.timeline-view .vis-panel.vis-center { cursor: grab; touch-action: pan-x pan-y !important; overflow: hidden !important; }
+.timeline-view .vis-panel.vis-left { cursor: grab; touch-action: pan-x pan-y !important; overflow-x: hidden !important; overflow-y: scroll !important; }
 .timeline-view .vis-panel.vis-center { overscroll-behavior: contain; }
 .timeline-view .vis-panel.vis-center:active { cursor: grabbing; }
 .timeline-view .vis-panel.vis-center.is-panning { cursor: grabbing; }
