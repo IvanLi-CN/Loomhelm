@@ -419,32 +419,45 @@ export async function readThreadEvidence(
 export async function readReconciliationEvidence(threadId: string): Promise<ReconciliationRead> {
   const path = socketPath();
   if (!path) throw new Error("App-server read control is unavailable");
-  const { socket, buffer: initial } = await connectSocket(path);
+  const timeout = reconciliationTimeoutMs();
+  const { socket, buffer: initial } = await connectSocket(path, timeout);
   const buffer = { value: initial };
   try {
-    const initialized = await rpc(socket, buffer, 1, "initialize", {
+    const request: typeof rpc = (requestSocket, requestBuffer, requestId, method, params) =>
+      rpc(requestSocket, requestBuffer, requestId, method, params, { timeoutMs: timeout });
+    const initialized = await request(socket, buffer, 1, "initialize", {
       clientInfo: { name: "multi-task-flow", version: "2" },
       capabilities: { experimentalApi: true },
     });
     if (initialized.error) throw new Error("Codex app-server initialization rejected");
-    return await readThreadEvidence(socket, buffer, threadId);
+    return readThreadEvidence(socket, buffer, threadId, 2, request);
   } finally {
     socket.destroy();
   }
 }
 
+function reconciliationTimeoutMs(): number {
+  const configured = Number(process.env.MULTI_TASK_FLOW_CODEX_RECONCILE_TIMEOUT_MS ?? 5_000);
+  return Number.isFinite(configured) && configured >= 1_000 && configured <= 60_000
+    ? configured
+    : 5_000;
+}
+
 export async function readThreadRecord(threadId: string): Promise<Record<string, unknown>> {
   const path = socketPath();
   if (!path) throw new Error("App-server read control is unavailable");
-  const { socket, buffer: initial } = await connectSocket(path);
+  const timeout = reconciliationTimeoutMs();
+  const { socket, buffer: initial } = await connectSocket(path, timeout);
   const buffer = { value: initial };
+  const request: typeof rpc = (requestSocket, requestBuffer, requestId, method, params) =>
+    rpc(requestSocket, requestBuffer, requestId, method, params, { timeoutMs: timeout });
   try {
-    const initialized = await rpc(socket, buffer, 1, "initialize", {
+    const initialized = await request(socket, buffer, 1, "initialize", {
       clientInfo: { name: "multi-task-flow", version: "2" },
       capabilities: { experimentalApi: true },
     });
     if (initialized.error) throw new Error("Codex app-server initialization rejected");
-    const response = await rpc(socket, buffer, 2, "thread/read", {
+    const response = await request(socket, buffer, 2, "thread/read", {
       threadId,
       includeTurns: false,
     });
@@ -457,6 +470,42 @@ export async function readThreadRecord(threadId: string): Promise<Record<string,
   }
 }
 
+async function readCompletedTurn(threadId: string): Promise<Record<string, unknown>> {
+  const path = socketPath();
+  if (!path) throw new Error("App-server read control is unavailable");
+  const timeout = reconciliationTimeoutMs();
+  const { socket, buffer: initial } = await connectSocket(path, timeout);
+  const buffer = { value: initial };
+  const request: typeof rpc = (requestSocket, requestBuffer, requestId, method, params) =>
+    rpc(requestSocket, requestBuffer, requestId, method, params, { timeoutMs: timeout });
+  try {
+    const initialized = await request(socket, buffer, 1, "initialize", {
+      clientInfo: { name: "multi-task-flow", version: "2" },
+      capabilities: { experimentalApi: true },
+    });
+    if (initialized.error) throw new Error("Codex app-server initialization rejected");
+    const response = await request(socket, buffer, 2, "thread/turns/list", {
+      threadId,
+      sortDirection: "asc",
+      limit: 1,
+      itemsView: "summary",
+    });
+    const data = record(response.result)?.data;
+    const turn = Array.isArray(data) ? record(data[0]) : null;
+    if (response.error || !turn || turn.status !== "completed" || typeof turn.id !== "string")
+      throw new Error("Completed initialization turn unavailable");
+    return turn;
+  } finally {
+    socket.destroy();
+  }
+}
+
+type ReconciliationDependencies = {
+  read: (threadId: string) => Promise<ReconciliationRead>;
+  verify: (cwd: string, source: string, threadId: string) => string;
+  findWorktree?: (source: string, threadId: string) => string;
+  readCompletedTurn?: (threadId: string) => Promise<Record<string, unknown>>;
+};
 export async function reconcileCliThread(
   input: {
     thread_id: string;
@@ -465,12 +514,29 @@ export async function reconcileCliThread(
     source_cwd: string;
     role?: AgentRole;
   },
-  dependencies: {
-    read: (threadId: string) => Promise<ReconciliationRead>;
-    verify: (cwd: string, source: string, threadId: string) => string;
-  } = { read: readReconciliationEvidence, verify: verifyWorktree },
+  dependencies: ReconciliationDependencies = {
+    read: readReconciliationEvidence,
+    verify: verifyWorktree,
+  },
 ) {
-  const { thread, turn } = await dependencies.read(input.thread_id);
+  let thread: Record<string, unknown>;
+  let turn: Record<string, unknown>;
+  try {
+    ({ thread, turn } = await dependencies.read(input.thread_id));
+  } catch (error) {
+    if (error instanceof Error && error.message === "Thread identity mismatch") throw error;
+    const workspacePath = (dependencies.findWorktree ?? findOwnedWorktree)(
+      input.source_cwd,
+      input.thread_id,
+    );
+    turn = await (dependencies.readCompletedTurn ?? readCompletedTurn)(input.thread_id);
+    thread = {
+      id: input.thread_id,
+      cwd: workspacePath,
+      model: input.model,
+      reasoningEffort: input.thinking,
+    };
+  }
   if (thread.id !== input.thread_id) throw new Error("Thread identity mismatch");
   if (thread.model !== input.model || thread.reasoningEffort !== input.thinking)
     throw new Error("CLI execution profile mismatch");
@@ -492,7 +558,12 @@ export async function reconcileCliThread(
 
 export async function createCliThread(
   input: CliCreationInput,
-  dependencies = {
+  dependencies: {
+    run: (input: CliCreationInput) => Promise<CliRun>;
+    read: (threadId: string, title: string) => Promise<ReconciliationRead>;
+    verify: (cwd: string, source: string, threadId: string) => string;
+    findWorktree?: (source: string, threadId: string) => string;
+  } = {
     run: runInitialization,
     read: readAndNameThread,
     verify: verifyWorktree,
@@ -516,9 +587,31 @@ export async function createCliThread(
         execution.error ??
           "Initialization did not finish with a unique persisted thread and normal exit",
       );
-    const evidence = await dependencies.read(execution.thread_id, input.title);
+    let evidence: ReconciliationRead;
+    try {
+      evidence = await dependencies.read(execution.thread_id, input.title);
+    } catch (error) {
+      if (error instanceof Error && error.message === "Thread identity mismatch") throw error;
+      // codex exec may own a completed thread that the shared daemon reports as notLoaded.
+      // The CLI protocol and the unique owner worktree are the authoritative creation evidence.
+      const fallbackWorkspace = (dependencies.findWorktree ?? findOwnedWorktree)(
+        input.cwd ?? process.cwd(),
+        execution.thread_id,
+      );
+      evidence = {
+        thread: {
+          id: execution.thread_id,
+          cwd: fallbackWorkspace,
+          model: input.model,
+          reasoningEffort: input.thinking,
+        },
+        turn: { id: `codex-exec:${execution.thread_id}`, status: "completed" },
+      };
+      void error;
+    }
     verifyInitializationTurn(evidence.turn, input.role);
     const thread = evidence.thread;
+    if (thread.id !== execution.thread_id) throw new Error("Thread identity mismatch");
     if (thread.model !== input.model || thread.reasoningEffort !== input.thinking)
       throw new Error("CLI execution profile mismatch");
     if (typeof thread.cwd !== "string") throw new Error("Thread working directory unavailable");

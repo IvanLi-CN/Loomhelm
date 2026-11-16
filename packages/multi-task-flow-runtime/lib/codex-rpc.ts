@@ -81,12 +81,15 @@ export function parseRpc(value: Buffer): JsonRecord | null {
   }
 }
 
-export async function connectSocket(path: string): Promise<{ socket: Socket; buffer: Buffer }> {
+export async function connectSocket(
+  path: string,
+  connectionTimeoutMs = timeoutMs(),
+): Promise<{ socket: Socket; buffer: Buffer }> {
   const socket = createConnection(path);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error("Codex app-server socket connection timed out")),
-      timeoutMs(),
+      connectionTimeoutMs,
     );
     socket.once("connect", () => {
       clearTimeout(timer);
@@ -102,7 +105,7 @@ export async function connectSocket(path: string): Promise<{ socket: Socket; buf
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error("Codex app-server WebSocket handshake timed out")),
-      timeoutMs(),
+      connectionTimeoutMs,
     );
     const onData = (chunk: Buffer) => {
       header = Buffer.concat([header, chunk]);
@@ -136,13 +139,14 @@ export async function rpc(
   id: number | string,
   method: string,
   params: JsonRecord,
+  options: { timeoutMs?: number } = {},
 ): Promise<JsonRecord> {
   socket.write(websocketFrame(JSON.stringify({ jsonrpc: "2.0", id, method, params })));
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`Codex app-server timed out waiting for ${method}`)),
-      timeoutMs(),
-    );
+    const timer = setTimeout(() => {
+      socket.off("data", onData);
+      reject(new Error(`Codex app-server timed out waiting for ${method}`));
+    }, options.timeoutMs ?? timeoutMs());
     const onData = (chunk: Buffer) => {
       buffer.value = Buffer.concat([buffer.value, chunk]);
       let matched: JsonRecord | undefined;

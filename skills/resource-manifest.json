@@ -7087,7 +7087,7 @@
     {
       "path": "skills/multi-task-flow/lib/codex-rpc.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/codex-rpc.ts",
-      "installedSha256": "84ea5b069a57eabcc054a9e965a4c5c36ffbf9224eeb660116931db2cc2eaadb"
+      "installedSha256": "93b699eeb5288ceff0ba30385e0aa950b262947e710425146b750b01faead87b"
     },
     {
       "path": "skills/multi-task-flow/lib/codex-socket.ts",
