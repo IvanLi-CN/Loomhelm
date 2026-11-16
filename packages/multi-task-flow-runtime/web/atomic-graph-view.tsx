@@ -158,7 +158,9 @@ const AtomicCard = memo(function AtomicCard({ data }: NodeProps) {
             {kindGlyph(value.nodeKind, value.boundary, value.atomRole)}
           </div>
         ) : (
-          <div className="atomic-custom-label">{value.title}</div>
+          <div className="atomic-custom-label" data-tooltip={`${value.kind}：${value.title}`}>
+            {value.title}
+          </div>
         )
       ) : (
         <>
@@ -200,14 +202,19 @@ function atomicEdgeLabel(value: string): string {
     .join("、");
 }
 
-function atomRole(title: string, nodeKind: AtomicCardData["nodeKind"]): AtomicCardData["atomRole"] {
+function atomRole(
+  nodeId: string,
+  nodeKind: AtomicCardData["nodeKind"],
+): AtomicCardData["atomRole"] {
   if (nodeKind === "milestone") return "verification";
-  if (/准备.*分支/u.test(title)) return "branch";
-  if (/创建.*PR/u.test(title)) return "pr-create";
-  if (/合并.*PR/u.test(title)) return "pr-merge";
-  if (/收口|验收/u.test(title)) return "closeout";
-  if (/验证|核验|证据/u.test(title)) return "verification";
-  return "implementation";
+  const presetRole = nodeId.match(
+    /(?:task|group)-atom-[^/]+-(prepare-branch|prepare-parent|create-pr|merge-pr|closeout)$/u,
+  )?.[1];
+  if (presetRole === "prepare-branch" || presetRole === "prepare-parent") return "branch";
+  if (presetRole === "create-pr") return "pr-create";
+  if (presetRole === "merge-pr") return "pr-merge";
+  if (presetRole === "closeout") return "closeout";
+  return "other";
 }
 
 const AtomicRoutedEdge = memo(function AtomicRoutedEdge(props: EdgeProps) {
@@ -406,7 +413,9 @@ export function createAtomicGraphController(context: GraphContext) {
                 : "终点"
               : node.nodeKind === "milestone"
                 ? "里程碑"
-                : "原子任务",
+                : node.nodeKind === "group"
+                  ? "交付单元"
+                  : "任务原子",
           state: node.stateLabel ?? "",
           scope: (() => {
             const view = context.getData();
@@ -439,7 +448,7 @@ export function createAtomicGraphController(context: GraphContext) {
           acceptanceCount: node.acceptance_count ?? 0,
           diagnostics: node.diagnostics ?? [],
           atomRole: atomRole(
-            node.title,
+            node.id,
             node.nodeKind === "boundary"
               ? "boundary"
               : node.nodeKind === "milestone"
@@ -492,6 +501,7 @@ export function createAtomicGraphController(context: GraphContext) {
             : 1,
       },
     }));
+    const atomicViewTools = document.getElementById("atomic-view-tools");
     return (
       <>
         {projection?.warnings.length ? (
@@ -500,13 +510,8 @@ export function createAtomicGraphController(context: GraphContext) {
             <span>{projection.warnings.length} 项节点或连线需要核查；异常事实仍保留在图中。</span>
           </div>
         ) : null}
-        <div className="dependency-layout-tools">
-          <span>
-            <strong>原子依赖图</strong>
-            <small>
-              {projection?.nodes.length ?? 0} 个节点 · {projection?.edges.length ?? 0} 条依赖
-            </small>
-          </span>
+        <div className="atomic-graph-count" aria-live="polite">
+          {projection?.nodes.length ?? 0} 个节点 · {projection?.edges.length ?? 0} 条依赖
         </div>
         <ReactFlow
           className={`atomic-react-flow ${displayMode}`}
@@ -563,45 +568,81 @@ export function createAtomicGraphController(context: GraphContext) {
             正在计算布局…
           </span>
         ) : null}
-        {createPortal(
-          <>
-            <label>
-              显示{" "}
-              <select
-                aria-label="节点显示"
-                value={displayMode}
-                onChange={(event) => {
-                  displayMode = event.target.value as "compact" | "full";
-                  localStorage.setItem(
-                    `loomhelm:atomic-display-mode:${location.pathname}`,
-                    displayMode,
-                  );
-                  signature = "";
-                  render(latestNodes, latestEdges);
-                }}
-              >
-                <option value="compact">简略</option>
-                <option value="full">完整</option>
-              </select>
-            </label>
-            <label>
-              方向{" "}
-              <select
-                aria-label="排列方向"
-                value={direction}
-                onChange={(event) => {
-                  direction = event.target.value as Direction;
-                  signature = "";
-                  render(latestNodes, latestEdges);
-                }}
-              >
-                <option value="DOWN">从上到下</option>
-                <option value="RIGHT">从左到右</option>
-              </select>
-            </label>
-          </>,
-          document.getElementById("atomic-view-tools")!,
-        )}
+        {atomicViewTools
+          ? createPortal(
+              <>
+                <fieldset className="layout-switch atomic-layout-switch" aria-label="节点显示">
+                  <button
+                    type="button"
+                    className="icon-button layout-option"
+                    aria-label="简略显示"
+                    aria-pressed={displayMode === "compact"}
+                    data-tooltip="简略显示"
+                    onClick={() => {
+                      displayMode = "compact";
+                      localStorage.setItem(
+                        `loomhelm:atomic-display-mode:${location.pathname}`,
+                        displayMode,
+                      );
+                      signature = "";
+                      render(latestNodes, latestEdges);
+                    }}
+                  >
+                    <i data-lucide="layout-grid" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button layout-option"
+                    aria-label="完整显示"
+                    aria-pressed={displayMode === "full"}
+                    data-tooltip="完整显示"
+                    onClick={() => {
+                      displayMode = "full";
+                      localStorage.setItem(
+                        `loomhelm:atomic-display-mode:${location.pathname}`,
+                        displayMode,
+                      );
+                      signature = "";
+                      render(latestNodes, latestEdges);
+                    }}
+                  >
+                    <i data-lucide="list" aria-hidden="true" />
+                  </button>
+                </fieldset>
+                <fieldset className="layout-switch atomic-layout-switch" aria-label="排列方向">
+                  <button
+                    type="button"
+                    className="icon-button layout-option"
+                    aria-label="从左到右"
+                    aria-pressed={direction === "RIGHT"}
+                    data-tooltip="从左到右"
+                    onClick={() => {
+                      direction = "RIGHT";
+                      signature = "";
+                      render(latestNodes, latestEdges);
+                    }}
+                  >
+                    <i data-lucide="arrow-right" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button layout-option"
+                    aria-label="从上到下"
+                    aria-pressed={direction === "DOWN"}
+                    data-tooltip="从上到下"
+                    onClick={() => {
+                      direction = "DOWN";
+                      signature = "";
+                      render(latestNodes, latestEdges);
+                    }}
+                  >
+                    <i data-lucide="arrow-down" aria-hidden="true" />
+                  </button>
+                </fieldset>
+              </>,
+              atomicViewTools,
+            )
+          : null}
       </>
     );
   }

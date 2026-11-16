@@ -279,6 +279,10 @@ for (const file of packagedResources(
   copy(file.path, file.installedSha256, false, file.sourcePath ?? file.path);
 copyPackageManifest();
 writeToolkitPackageMetadata();
+writeGenerated(
+  "skills/multi-task-flow/lib/flow-domain-schemas.json",
+  readFileSync(resolve(root, "packages/multi-task-flow-runtime/lib/flow-domain-schemas.json")),
+);
 for (const name of ["index.html", "app.js", "app.css"])
   copy(
     `skills/multi-task-flow/dist/${name}`,

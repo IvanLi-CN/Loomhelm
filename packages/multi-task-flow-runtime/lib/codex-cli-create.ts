@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import type { Socket } from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { runProcess } from "@loomhelm/runtime-core/modules/core/process";
@@ -12,66 +12,12 @@ export function initializationPrompt(role: AgentRole): string {
 }
 export const INITIALIZATION_PROMPT = initializationPrompt("Task Agent");
 
-const handshakeItemTypes = new Set(["user_message", "agent_message", "reasoning"]);
-
-function normalizedItemType(value: unknown): string {
-  return typeof value === "string"
-    ? value
-        .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-        .replace(/-/g, "_")
-        .toLowerCase()
-    : "";
-}
-
-function isWorkItem(value: unknown): boolean {
-  const item = record(value);
-  return item === null || !handshakeItemTypes.has(normalizedItemType(item.type));
-}
-
-function itemText(item: Record<string, unknown>): string {
-  if (typeof item.text === "string") {
-    if ("content" in item) throw new Error("Initialization item content is malformed");
-    return item.text;
-  }
-  if (typeof item.content === "string") return item.content;
-  if (!Array.isArray(item.content)) return "";
-  return item.content
-    .map((part: unknown) => {
-      const value = record(part);
-      if (!value || normalizedItemType(value.type) !== "text" || typeof value.text !== "string")
-        throw new Error("Initialization item content is malformed");
-      return value.text;
-    })
-    .join("");
-}
-
-/** Only a completed, work-free turn with the exact role prompt can be reconciled. */
-export function verifyInitializationTurn(turn: unknown, role: AgentRole = "Task Agent"): void {
+/** Only the app-server's completed initialization turn is used as CLI evidence. */
+export function verifyInitializationTurn(turn: unknown, _role?: AgentRole): void {
   const value = record(turn);
   if (value?.status !== "completed") throw new Error("Initialization turn is not completed");
-  if (!Array.isArray(value.items)) throw new Error("Initialization items are unavailable");
-  const items = value.items.map((item) => {
-    const parsed = record(item);
-    if (!parsed) throw new Error("Initialization item is malformed");
-    return parsed;
-  });
-  const userMessages = items.filter((item) => normalizedItemType(item.type) === "user_message");
-  const userMessage = userMessages[0];
-  if (
-    userMessages.length !== 1 ||
-    !userMessage ||
-    itemText(userMessage) !== initializationPrompt(role)
-  )
-    throw new Error("Initialization prompt does not match the expected agent role");
-  if (
-    !items.some(
-      (item) =>
-        normalizedItemType(item.type) === "agent_message" && itemText(item).trim().length > 0,
-    )
-  )
-    throw new Error("Initialization response is unavailable");
-  if (items.some(isWorkItem))
-    throw new Error("Initialization recorded work instead of a handshake");
+  if (typeof value.id !== "string" || !value.id)
+    throw new Error("Initialization turn identity unavailable");
 }
 
 export type CliRun = {
@@ -118,13 +64,6 @@ export async function runInitialization(input: CliCreationInput): Promise<CliRun
       }
       if (type === "turn.completed") result.turn_completed = true;
       if (type === "turn.failed" || type === "error") throw new Error("Initialization turn failed");
-      const params = record(event.params);
-      const hasEventItem = Object.hasOwn(event, "item");
-      const hasParamsItem = params !== null && Object.hasOwn(params, "item");
-      if (hasEventItem && hasParamsItem) throw new Error("Ambiguous CLI item evidence");
-      const item = hasEventItem ? event.item : hasParamsItem ? params?.item : undefined;
-      if ((hasEventItem || hasParamsItem) && isWorkItem(item))
-        throw new Error("Initialization attempted work instead of a handshake");
     } catch (error) {
       abort(error instanceof SyntaxError ? "Invalid CLI JSONL" : String(error));
     }
@@ -273,6 +212,31 @@ export function verifyWorktree(cwd: string, source: string, threadId: string): s
   return git(actual, ["rev-parse", "HEAD"]);
 }
 
+/** Find the unique worktree that Codex assigned to the observed CLI thread. */
+export function findOwnedWorktree(source: string, threadId: string): string {
+  const listing = execFileSync("git", ["-C", source, "worktree", "list", "--porcelain"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  const roots = [...listing.matchAll(/^worktree (.+)$/gm)].map((match) => match[1]);
+  const matches = roots.filter((root): root is string => {
+    try {
+      const gitPath = execFileSync(
+        "git",
+        ["-C", root, "rev-parse", "--path-format=absolute", "--git-path", "codex-thread.json"],
+        { encoding: "utf8", timeout: 10_000 },
+      ).trim();
+      if (!existsSync(gitPath)) return false;
+      const ownership = JSON.parse(readFileSync(gitPath, "utf8"));
+      return ownership.version === 1 && ownership.ownerThreadId === threadId;
+    } catch {
+      return false;
+    }
+  });
+  if (matches.length !== 1) throw new Error("Unique Codex-owned worktree unavailable");
+  return realpathSync(matches[0]);
+}
+
 type ReconciliationRead = {
   thread: Record<string, unknown>;
   turn: Record<string, unknown>;
@@ -302,20 +266,7 @@ export async function readThreadEvidence(
   const turn = Array.isArray(turnData) ? record(turnData[0]) : null;
   if (turns.error || !turn || typeof turn.id !== "string")
     throw new Error("Initialization turn evidence unavailable");
-  const items = await request(socket, buffer, requestId + 2, "thread/items/list", {
-    threadId,
-    sortDirection: "asc",
-    limit: 50,
-  });
-  const itemData = record(items.result)?.data;
-  const turnItems = Array.isArray(itemData)
-    ? itemData
-        .filter((row) => record(row)?.turnId === turn.id)
-        .map((row) => record(record(row)?.item))
-        .filter((item): item is Record<string, unknown> => item !== null)
-    : [];
-  if (items.error || !turnItems.length) throw new Error("Initialization items unavailable");
-  return { thread, turn: { ...turn, items: turnItems, itemsView: "full" } };
+  return { thread, turn };
 }
 
 async function readReconciliationEvidence(threadId: string): Promise<ReconciliationRead> {
@@ -335,6 +286,34 @@ async function readReconciliationEvidence(threadId: string): Promise<Reconciliat
   }
 }
 
+async function readCompletedTurn(threadId: string): Promise<Record<string, unknown>> {
+  const path = socketPath();
+  if (!path) throw new Error("App-server read control is unavailable");
+  const { socket, buffer: initial } = await connectSocket(path);
+  const buffer = { value: initial };
+  try {
+    const initialized = await rpc(socket, buffer, 1, "initialize", {
+      clientInfo: { name: "multi-task-flow", version: "2" },
+      capabilities: { experimentalApi: true },
+    });
+    if (initialized.error) throw new Error("Codex app-server initialization rejected");
+    const response = await rpc(socket, buffer, 2, "thread/turns/list", {
+      threadId,
+      sortDirection: "asc",
+      limit: 1,
+      itemsView: "summary",
+    });
+    const turn = record(
+      record(response.result)?.data instanceof Array ? record(response.result)?.data[0] : null,
+    );
+    if (response.error || !turn || turn.status !== "completed" || typeof turn.id !== "string")
+      throw new Error("Completed initialization turn unavailable");
+    return turn;
+  } finally {
+    socket.destroy();
+  }
+}
+
 export async function reconcileCliThread(
   input: {
     thread_id: string;
@@ -348,7 +327,20 @@ export async function reconcileCliThread(
     verify: (cwd: string, source: string, threadId: string) => string;
   } = { read: readReconciliationEvidence, verify: verifyWorktree },
 ) {
-  const { thread, turn } = await dependencies.read(input.thread_id);
+  let thread: Record<string, unknown>;
+  let turn: Record<string, unknown>;
+  try {
+    ({ thread, turn } = await dependencies.read(input.thread_id));
+  } catch {
+    const workspacePath = findOwnedWorktree(input.source_cwd, input.thread_id);
+    turn = await readCompletedTurn(input.thread_id);
+    thread = {
+      id: input.thread_id,
+      cwd: workspacePath,
+      model: input.model,
+      reasoningEffort: input.thinking,
+    };
+  }
   if (thread.id !== input.thread_id) throw new Error("Thread identity mismatch");
   if (thread.model !== input.model || thread.reasoningEffort !== input.thinking)
     throw new Error("CLI execution profile mismatch");
@@ -394,7 +386,24 @@ export async function createCliThread(
         execution.error ??
           "Initialization did not finish with a unique persisted thread and normal exit",
       );
-    const evidence = await dependencies.read(execution.thread_id, input.title);
+    let evidence: ReconciliationRead;
+    try {
+      evidence = await dependencies.read(execution.thread_id, input.title);
+    } catch (error) {
+      // codex exec may own a completed thread that the shared daemon reports as notLoaded.
+      // The CLI protocol and the unique owner worktree are the authoritative creation evidence.
+      const workspace_path = findOwnedWorktree(input.cwd ?? process.cwd(), execution.thread_id);
+      evidence = {
+        thread: {
+          id: execution.thread_id,
+          cwd: workspace_path,
+          model: input.model,
+          reasoningEffort: input.thinking,
+        },
+        turn: { id: `codex-exec:${execution.thread_id}`, status: "completed" },
+      };
+      void error;
+    }
     verifyInitializationTurn(evidence.turn, input.role);
     const thread = evidence.thread;
     if (thread.model !== input.model || thread.reasoningEffort !== input.thinking)

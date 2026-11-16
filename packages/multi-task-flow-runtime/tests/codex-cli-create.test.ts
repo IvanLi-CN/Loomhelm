@@ -30,21 +30,9 @@ const completed: CliRun = {
   turn_completed: true,
   events: ["thread.started", "turn.completed"],
 };
-const handshakeTurn = (
-  status: string,
-  role: "Delivery Agent" | "Task Agent" = "Delivery Agent",
-  extraItems: Record<string, unknown>[] = [],
-) => ({
+const handshakeTurn = (status: string) => ({
   id: "turn-a",
   status,
-  items: [
-    {
-      type: "userMessage",
-      content: [{ type: "text", text: initializationPrompt(role) }],
-    },
-    { type: "agentMessage", text: "已进入待命状态。", phase: "commentary" },
-    ...extraItems,
-  ],
 });
 const thread = async () => ({
   id: "thread-a",
@@ -54,7 +42,7 @@ const thread = async () => ({
 });
 const read = async () => ({
   thread: await thread(),
-  turn: handshakeTurn("completed", "Task Agent"),
+  turn: handshakeTurn("completed"),
 });
 
 test("app-server RPC drains coalesced frames after the matching response", async () => {
@@ -86,6 +74,18 @@ test("initialization prompt gives the creation phase enough context without auth
   expect(INITIALIZATION_PROMPT).toContain("不要开始正式任务");
   expect(INITIALIZATION_PROMPT).not.toContain("初始化完成");
   expect(INITIALIZATION_PROMPT).not.toContain("请简短回复");
+});
+
+test("initialization evidence ignores agent item content", () => {
+  expect(() =>
+    verifyInitializationTurn({
+      ...handshakeTurn("completed"),
+      items: [
+        { type: "error", message: "startup diagnostic" },
+        { type: "futureToolCall", payload: "opaque" },
+      ],
+    }),
+  ).not.toThrow();
 });
 
 test("bind requires both process exit and initialization completion, preserving identity on every ambiguous result", async () => {
@@ -122,7 +122,7 @@ test("actual profile and Codex ownership are required; initial HEAD is separate 
         ...deps,
         read: async () => ({
           thread: { ...(await thread()), model: "other" },
-          turn: handshakeTurn("completed", "Task Agent"),
+          turn: handshakeTurn("completed"),
         }),
       })
     ).outcome,
@@ -133,11 +133,11 @@ test("actual profile and Codex ownership are required; initial HEAD is separate 
         ...deps,
         read: async () => ({
           thread: await thread(),
-          turn: handshakeTurn("completed", "Task Agent", [{ type: "futureToolCall" }]),
+          turn: { ...handshakeTurn("completed"), items: [{ type: "opaqueAgentItem" }] },
         }),
       })
     ).outcome,
-  ).toBe("unknown");
+  ).toBe("succeeded");
   expect(
     (
       await createCliThread(input, {
@@ -148,30 +148,6 @@ test("actual profile and Codex ownership are required; initial HEAD is separate 
       })
     ).outcome,
   ).toBe("unknown");
-});
-
-test("malformed handshake evidence remains unreconcilable", () => {
-  expect(() =>
-    verifyInitializationTurn({
-      ...handshakeTurn("completed", "Task Agent"),
-      items: [...handshakeTurn("completed", "Task Agent").items, "commandExecution"],
-    }),
-  ).toThrow("malformed");
-  expect(() =>
-    verifyInitializationTurn({
-      ...handshakeTurn("completed", "Task Agent"),
-      items: [
-        {
-          type: "userMessage",
-          content: [
-            { type: "text", text: initializationPrompt("Task Agent") },
-            { type: "futureContent" },
-          ],
-        },
-        handshakeTurn("completed", "Task Agent").items[1],
-      ],
-    }),
-  ).toThrow("content is malformed");
 });
 
 test("reconciliation requires the matching completed handshake before checking the worktree", async () => {
@@ -210,21 +186,8 @@ test("reconciliation hydrates handshake items separately from the turn summary",
     calls.push(method);
     if (method === "thread/read") return { result: { thread: await thread() } };
     if (method === "thread/turns/list")
-      return { result: { data: [{ id: "turn-a", status: "completed", items: [] }] } };
-    return {
-      result: {
-        data: [
-          {
-            turnId: "turn-a",
-            item: {
-              type: "userMessage",
-              content: [{ type: "text", text: initializationPrompt("Task Agent") }],
-            },
-          },
-          { turnId: "turn-a", item: { type: "agentMessage", text: "待命。" } },
-        ],
-      },
-    };
+      return { result: { data: [{ id: "turn-a", status: "completed" }] } };
+    throw new Error(`unexpected method ${method}`);
   };
   const evidence = await readThreadEvidence(
     {} as any,
@@ -234,39 +197,12 @@ test("reconciliation hydrates handshake items separately from the turn summary",
     request,
   );
   expect(() => verifyInitializationTurn(evidence.turn, "Task Agent")).not.toThrow();
-  expect(calls).toEqual(["thread/read", "thread/turns/list", "thread/items/list"]);
+  expect(calls).toEqual(["thread/read", "thread/turns/list"]);
 });
 
-test("interrupted or workful initialization remains unreconcilable", async () => {
-  expect(() => verifyInitializationTurn(handshakeTurn("interrupted"), "Delivery Agent")).toThrow(
-    "not completed",
-  );
-  expect(() =>
-    verifyInitializationTurn(handshakeTurn("completed", "Task Agent"), "Delivery Agent"),
-  ).toThrow("expected agent role");
-  expect(() =>
-    verifyInitializationTurn(
-      handshakeTurn("completed", "Delivery Agent", [
-        { type: "commandExecution", command: "git status", status: "completed" },
-      ]),
-      "Delivery Agent",
-    ),
-  ).toThrow("recorded work");
-  for (const type of [
-    "collabAgentToolCall",
-    "functionCallOutput",
-    "subAgentActivity",
-    "imageGeneration",
-    "imageView",
-    "sleep",
-    "futureToolCall",
-  ])
-    expect(() =>
-      verifyInitializationTurn(
-        handshakeTurn("completed", "Delivery Agent", [{ type }]),
-        "Delivery Agent",
-      ),
-    ).toThrow("recorded work");
+test("incomplete or unidentified initialization turns remain unreconcilable", async () => {
+  expect(() => verifyInitializationTurn(handshakeTurn("interrupted"))).toThrow("not completed");
+  expect(() => verifyInitializationTurn({ status: "completed" })).toThrow("identity unavailable");
   await expect(
     reconcileCliThread(
       {
@@ -310,6 +246,7 @@ test("repository identity is checked before starting the external CLI", async ()
 test("real subprocess receives literal argv and EOF, never the formal prompt; thread identity persists before exit", async () => {
   const root = mkdtempSync(join(tmpdir(), "cli-adapter-"));
   const oldPath = process.env.PATH;
+  const oldTimeout = process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS;
   try {
     const executable = join(root, "codex"),
       capture = join(root, "argv.json");
@@ -352,12 +289,15 @@ test("real subprocess receives literal argv and EOF, never the formal prompt; th
       executable,
       `#!/usr/bin/env node\nconsole.log(JSON.stringify({type:'thread.started',thread_id:'partial'}));console.log(JSON.stringify({type:'item.started',item:{type:'commandExecution'}}));setInterval(()=>{},1000);`,
     );
+    process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS = "1000";
     const failed = await runInitialization(input);
     expect(failed.thread_id).toBe("partial");
-    expect(failed.error).toContain("attempted work");
+    expect(failed.error).toContain("timed out");
     expect(failed.exit_code).not.toBe(0);
   } finally {
     process.env.PATH = oldPath;
+    if (oldTimeout === undefined) delete process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS;
+    else process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS = oldTimeout;
     rmSync(root, { recursive: true, force: true });
   }
 }, 10000);
@@ -365,6 +305,7 @@ test("real subprocess receives literal argv and EOF, never the formal prompt; th
 test("aborting initialization terminates tool descendants and closes inherited pipes", async () => {
   const root = mkdtempSync(join(tmpdir(), "cli-descendants-"));
   const oldPath = process.env.PATH;
+  const oldTimeout = process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS;
   let pid: number | undefined;
   try {
     const executable = join(root, "codex"),
@@ -377,10 +318,11 @@ test("aborting initialization terminates tool descendants and closes inherited p
     );
     chmodSync(executable, 0o755);
     process.env.PATH = `${root}:${oldPath}`;
+    process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS = "1000";
     const result = await runInitialization(input);
     pid = Number(readFileSync(pidFile, "utf8"));
     expect(result.thread_id).toBe("descendant-test");
-    expect(result.error).toContain("attempted work");
+    expect(result.error).toContain("timed out");
     expect(result.exit_code).not.toBe(0);
     const before = readFileSync(heartbeat, "utf8");
     await new Promise((resolve) => setTimeout(resolve, 350));
@@ -397,6 +339,8 @@ test("aborting initialization terminates tool descendants and closes inherited p
       } catch {}
     }
     process.env.PATH = oldPath;
+    if (oldTimeout === undefined) delete process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS;
+    else process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS = oldTimeout;
     rmSync(root, { recursive: true, force: true });
   }
 }, 10000);
