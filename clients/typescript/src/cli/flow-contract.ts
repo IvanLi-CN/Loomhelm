@@ -7,7 +7,7 @@ const numberValue = { type: "number" } as const;
 const objectValue = { type: "object", additionalProperties: true } as const;
 const arrayValue = { type: "array", items: objectValue } as const;
 const domainRef = (name: string): JsonSchema => ({ $ref: `#/$defs/${name}` });
-const providerReceipt = {
+const notificationReceipt = {
 	type: "object",
 	additionalProperties: false,
 	required: ["provider", "evidence_ref"],
@@ -18,6 +18,44 @@ const providerReceipt = {
 		recipient_thread_id: id,
 		prompt_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
 	},
+} as const;
+const publicationReceipt = {
+	type: "object",
+	additionalProperties: false,
+	required: [
+		"provider",
+		"repository",
+		"resource_type",
+		"resource_id",
+		"branch",
+		"target_branch",
+		"base_sha",
+		"head_sha",
+		"pr",
+		"state",
+		"evidence_ref",
+	],
+	properties: {
+		provider: id,
+		repository: id,
+		resource_type: { enum: ["branch", "pr"] },
+		resource_id: id,
+		branch: id,
+		target_branch: { type: ["string", "null"], minLength: 1 },
+		base_sha: { type: ["string", "null"], minLength: 1 },
+		head_sha: { type: ["string", "null"], minLength: 1 },
+		pr: { oneOf: [objectValue, { type: "null" }] },
+		state: { enum: ["exists", "open", "merged", "absent", "unknown"] },
+		evidence_ref: id,
+	},
+} as const;
+const providerReceipt = {
+	oneOf: [notificationReceipt, publicationReceipt],
+} as const;
+const revisionInput = {
+	type: "object",
+	additionalProperties: false,
+	properties: { reason: { type: ["string", "null"] } },
 } as const;
 
 const actor = {
@@ -50,6 +88,7 @@ const field = (name: string): JsonSchema => {
 		return booleanValue;
 	if (name === "provider_receipt") return providerReceipt;
 	if (name === "error") return stringValue;
+	if (name === "revision") return revisionInput;
 	if (
 		name.endsWith("_ids") ||
 		name === "integration_commits" ||
@@ -123,7 +162,7 @@ const field = (name: string): JsonSchema => {
 		name === "status"
 	)
 		return stringValue;
-	if (name === "expected_revision" || name === "revision") return numberValue;
+	if (name === "expected_revision") return numberValue;
 	return objectValue;
 };
 
@@ -150,7 +189,7 @@ const mutationRequest = (payload: JsonSchema): JsonSchema => ({
 });
 const successResponse = (result: JsonSchema): JsonSchema => ({
 	type: "object",
-	additionalProperties: false,
+	additionalProperties: true,
 	required: ["ok", "code", "revision", "result"],
 	properties: {
 		ok: { const: true },
@@ -158,6 +197,10 @@ const successResponse = (result: JsonSchema): JsonSchema => ({
 		revision: { type: "integer", minimum: 0 },
 		result,
 	},
+});
+const resultSchema = (names: readonly string[]): JsonSchema => ({
+	...objectSchema(names),
+	additionalProperties: true,
 });
 const command = (
 	payloadNames: readonly string[],
@@ -182,7 +225,7 @@ const command = (
 			}
 		: mutationRequest(objectSchema(payloadNames, options.optionalPayload)),
 	response: {
-		success: successResponse(objectSchema(resultNames)),
+		success: successResponse(resultSchema(resultNames)),
 		error: errorResponse,
 	},
 });
@@ -252,7 +295,11 @@ add(
 	"execution-profile-recommend",
 	["target_type", "target_id", "execution_profile"],
 	["target_type", "target_id", "execution_profile"],
-	{ optionalPayload: ["target_id"] },
+);
+add(
+	"execution-profile-update",
+	["target_type", "target_id", "execution_profile"],
+	["target_type", "target_id", "execution_profile"],
 );
 add(
 	"dispatch-progress",
@@ -303,13 +350,13 @@ add(
 		"evidence_ref",
 	],
 	["target_type", "target_id", "stage"],
-	{ optionalPayload: ["branch", "resource_ids", "baseline", "evidence_ref"] },
+	{ optionalPayload: ["baseline"] },
 );
 add(
 	"milestone-record",
 	["target_type", "target_id", "milestone_id", "title", "evidence_ref"],
 	["milestone_id"],
-	{ optionalPayload: ["title", "evidence_ref"] },
+	{ optionalPayload: ["evidence_ref"] },
 );
 add(
 	"publish-branch-claim",
@@ -375,7 +422,7 @@ add(
 	"task-runtime-observe",
 	["task_id", "thread_id", "runtime", "observed_at", "turn_id"],
 	["state"],
-	{ optionalPayload: ["thread_id", "turn_id"] },
+	{ optionalPayload: ["turn_id"] },
 );
 add(
 	"task-update",
@@ -429,6 +476,26 @@ add(
 	"group-base-reconcile",
 	["group_id", "provider_observation"],
 	["group_id", "previous_sha", "current_sha"],
+);
+add(
+	"task-external-merge-reconcile",
+	[
+		"task_id",
+		"recovery_approval_id",
+		"pr",
+		"provider_observation",
+		"merge_sha",
+		"quality_evidence",
+	],
+	[
+		"task_id",
+		"state",
+		"pr",
+		"quality_fact_id",
+		"publication_fact_id",
+		"merge_fact_id",
+		"current_group_sha",
+	],
 );
 add("task-pr", ["task_id", "pr"], ["task_id", "pr"]);
 add("task-base", ["task_id", "base_sha", "evidence"], ["task_id", "base_sha"], {
@@ -501,7 +568,7 @@ add(
 		"included_task_ids",
 	],
 	["operation_id", "next_group_id", "reassigned_task_ids"],
-	{ optionalPayload: ["provider_evidence", "next_group", "included_task_ids"] },
+	{},
 );
 add("fact-record", ["fact"], ["fact_id"]);
 add(
@@ -515,9 +582,7 @@ add(
 		"target",
 	],
 	["operation_id"],
-	{
-		optionalPayload: ["task_id", "owner_approval_id", "expected_sha", "target"],
-	},
+	{},
 );
 add(
 	"action-resolve",
@@ -737,13 +802,14 @@ const specialCommands: Record<string, JsonSchema> = {
 					successResponse({
 						type: "object",
 						additionalProperties: false,
-						required: ["notifications", "pending"],
+						required: ["notifications", "pending", "unacknowledged"],
 						properties: {
 							notifications: {
 								type: "array",
 								items: domainRef("notification"),
 							},
 							pending: { type: "integer", minimum: 0 },
+							unacknowledged: { type: "integer", minimum: 0 },
 						},
 					}),
 				],
