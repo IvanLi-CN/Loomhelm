@@ -14,3 +14,7 @@ pre-commit:
       stage_fixed: true
     react-doctor:
       run: scripts/check-react-doctor --staged
+    multi-task-flow-biome:
+      files: git diff --cached --name-only --diff-filter=ACMRT
+      glob: "packages/multi-task-flow-runtime/**/*.{ts,tsx}"
+      run: bun run --cwd packages/multi-task-flow-runtime check:staged
