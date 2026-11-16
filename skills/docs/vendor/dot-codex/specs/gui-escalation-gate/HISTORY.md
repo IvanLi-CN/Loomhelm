@@ -10,3 +10,4 @@
 - Browser-task GUI escalation 现在先尝试 `$agent-browser`，再仅在满足明确例外时使用 Chrome control 或 DevTools，防止因工具不可用猜测而主观切换路线。
 - Browser-task recovery 不维护 project-owned headless-proof browser layer；若 `$agent-browser` 被阻断且没有可用例外，agent 只能报告 blocker 或按 GUI gate 评估升级，不得自起新的 Chrome/Chromium/`9222` 调试实例来伪造 DevTools Surface。
 - `AGENTS.md` 保持短入口职责，DevTools isolated-context 细则下沉到 `skills/gui-escalation-gate/SKILL.md` 与本 spec。
+- 当前活动契约移除 `chrome:control-chrome` 例外入口；历史记录和回归材料保留原有决策事实。
