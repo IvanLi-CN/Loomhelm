@@ -129,6 +129,30 @@ const closeoutObservation = {
 		evidence_ref: textValue,
 	},
 } as const;
+const notificationDeliveryResult = {
+	type: "object",
+	additionalProperties: true,
+	required: [
+		"result",
+		"replayed",
+		"delivery_attempt_id",
+		"should_send",
+		"next_action",
+		"tool_request",
+		"receipt_command",
+		"receipt_identity",
+	],
+	properties: {
+		result: objectValue,
+		replayed: booleanValue,
+		delivery_attempt_id: id,
+		should_send: booleanValue,
+		next_action: { enum: ["send_message_to_thread", "notification-reconcile"] },
+		tool_request: { oneOf: [objectValue, { type: "null" }] },
+		receipt_command: { const: "notification-reconcile" },
+		receipt_identity: objectValue,
+	},
+} as const;
 const providerReceipt = {
 	oneOf: [notificationReceipt, publicationReceipt],
 } as const;
@@ -1006,11 +1030,17 @@ const specialCommands: Record<string, JsonSchema> = {
 	},
 };
 
+Object.assign(entries, specialCommands);
+
 for (const name of ["dispatch-bind-request", "dispatch-resolve"]) {
 	entries[name] = { ...entries[name], access: "internal", availability: "cli-only" };
 }
-
-Object.assign(entries, specialCommands);
+for (const name of ["notification-prepare", "notification-send"]) {
+	entries[name] = {
+		...entries[name],
+		response: { success: successResponse(notificationDeliveryResult), error: errorResponse },
+	};
+}
 
 export const FLOW_CONTRACT = Object.freeze({
 	$schema: "https://json-schema.org/draft/2020-12/schema",

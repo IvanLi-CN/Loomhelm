@@ -61,6 +61,10 @@ test("flow schema exposes the versioned command contract", () => {
 			.result.required,
 		["notifications", "pending", "unacknowledged"],
 	);
+	const notificationPrepareResult = commands["notification-prepare"].response.success
+		.properties.result;
+	assert.equal(notificationPrepareResult.properties.result.type, "object");
+	assert.equal(notificationPrepareResult.properties.delivery_attempt_id.type, "string");
 });
 
 test("the packaged Skill contract mirrors the canonical repository contract", () => {
