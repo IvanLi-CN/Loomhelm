@@ -16,7 +16,8 @@ export const INITIALIZATION_PROMPT = initializationPrompt("Task Agent");
 export function verifyInitializationTurn(turn: unknown, _role?: AgentRole): void {
   const value = record(turn);
   if (value?.status !== "completed") throw new Error("Initialization turn is not completed");
-  if (typeof value.id !== "string" || !value.id) throw new Error("Initialization turn identity unavailable");
+  if (typeof value.id !== "string" || !value.id)
+    throw new Error("Initialization turn identity unavailable");
 }
 
 export type CliRun = {
