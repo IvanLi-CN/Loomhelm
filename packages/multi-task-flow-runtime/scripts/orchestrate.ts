@@ -5,8 +5,12 @@ import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import { readCodexCapabilities } from "../lib/codex-agent-api";
 import {
   createCliThread,
+  readReconciliationEvidence,
+  readThreadRecord,
   reconcileCliThread,
+  verifyInterruptedInitializationTurn,
   verifyRepositoryIdentity,
+  verifyWorktree,
 } from "../lib/codex-cli-create";
 import { versionEnvelope } from "../lib/contract";
 import { sweepConversationArchives } from "../lib/conversation-archive";
@@ -372,6 +376,130 @@ try {
         code: delivery?.replayed ? "REPLAYED" : "APPLIED",
         revision: delivery?.revision,
         result: delivery,
+      }),
+    );
+  } else if (command === "creation-recover") {
+    const parsed = requestSchema.parse(input);
+    const payload = z.object({ operation_id: id }).strict().parse(parsed.payload);
+    const store = new LedgerStore(root, parsed.run_id);
+    const ledger = validateLedger(store.read());
+    if (parsed.actor.role !== "main" || parsed.actor.thread_id !== ledger.control.owner_thread_id)
+      throw new ContractError(
+        "ACTOR_MISMATCH",
+        "Creation recovery must be run by the bound main thread",
+      );
+    const operation = ledger.operations.find(
+      (item) => item.id === payload.operation_id && item.kind === "dispatch",
+    );
+    if (!operation) throw new ContractError("NOT_FOUND", "Dispatch operation not found");
+    if (operation.status !== "unknown")
+      throw new ContractError("OPERATION_TERMINAL", "Dispatch is not awaiting creation recovery");
+    if (!operation.request.native_request_id)
+      throw new ContractError("NATIVE_REQUEST_CONFLICT", "Dispatch has no bound native request");
+    if (operation.request.handoff_notification_id)
+      throw new ContractError(
+        "HANDOFF_ALREADY_SENT",
+        "Formal handoff was already created; initialization recovery is unsafe",
+        5,
+      );
+    const creation = record(operation.request.creation_result);
+    const creationEvidence = record(creation?.native_evidence);
+    const threadId =
+      operation.request.observed_thread_id ??
+      (typeof creation?.thread_id === "string" ? creation.thread_id : undefined) ??
+      (typeof creationEvidence?.thread_id === "string" ? creationEvidence.thread_id : undefined);
+    if (!threadId)
+      throw new ContractError("NATIVE_REQUEST_CONFLICT", "No observed thread identity");
+    const profile = executionProfile.parse(operation.request.execution_profile);
+    const target =
+      operation.request.target_type === "group"
+        ? ledger.groups.find((item) => item.id === operation.target_id)
+        : ledger.tasks.find((item) => item.id === operation.target_id);
+    if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
+    const parameters = record(operation.request.creation_parameters);
+    const role = operation.request.target_type === "group" ? "Delivery Agent" : "Task Agent";
+    let initializationStatus: string;
+    let workspacePath: string | undefined;
+    let initializationRoleMismatch = false;
+    let evidenceWithTurn: Awaited<ReturnType<typeof readReconciliationEvidence>> | null = null;
+    try {
+      evidenceWithTurn = await readReconciliationEvidence(threadId);
+      if (evidenceWithTurn.thread.id !== threadId)
+        throw new ContractError("CREATION_EVIDENCE_CONFLICT", "Thread identity mismatch", 5);
+      if (
+        typeof evidenceWithTurn.thread.model === "string" &&
+        evidenceWithTurn.thread.model !== profile.model
+      )
+        throw new ContractError("PROFILE_CONFLICT", "CLI execution profile mismatch", 5);
+      if (
+        typeof evidenceWithTurn.thread.reasoningEffort === "string" &&
+        evidenceWithTurn.thread.reasoningEffort !== profile.thinking
+      )
+        throw new ContractError("PROFILE_CONFLICT", "CLI reasoning profile mismatch", 5);
+      try {
+        verifyInterruptedInitializationTurn(evidenceWithTurn.turn, role);
+      } catch (error) {
+        if (role !== "Delivery Agent") throw error;
+        verifyInterruptedInitializationTurn(evidenceWithTurn.turn, "Task Agent");
+        initializationRoleMismatch = true;
+      }
+      initializationStatus = String(evidenceWithTurn.turn.status);
+      workspacePath =
+        typeof evidenceWithTurn.thread.cwd === "string" ? evidenceWithTurn.thread.cwd : undefined;
+    } catch (error) {
+      const thread = await readThreadRecord(threadId);
+      const creationError = String(creationEvidence?.error ?? "");
+      const earlyAbort =
+        creationEvidence?.exit_code === 143 &&
+        creationEvidence?.turn_completed === false &&
+        creationError.includes("Initialization attempted work instead of a handshake");
+      if (!earlyAbort || typeof thread.cwd !== "string") throw error;
+      const sourceCwd = typeof parameters?.cwd === "string" ? parameters.cwd : process.cwd();
+      verifyWorktree(thread.cwd, sourceCwd, threadId);
+      initializationStatus = "aborted-before-turn-evidence";
+      workspacePath = thread.cwd;
+    }
+    const result = store.update((raw) =>
+      apply(raw, "dispatch-resolve", {
+        ...parsed,
+        payload: {
+          operation_id: operation.id,
+          outcome: "failed",
+          thread_id: threadId,
+          native_evidence: {
+            source: "multi-task-flow-recovery",
+            native_tool_name: "codex exec",
+            operation_id: operation.id,
+            native_request_id: operation.request.native_request_id,
+            model: profile.model,
+            thinking: profile.thinking,
+            thread_id: threadId,
+            initialization_status: initializationStatus,
+            turn_completed: false,
+            process_started: true,
+            resources_created: true,
+            formal_handoff_sent: false,
+            recovery_kind: "initialization-interrupted",
+            initialization_role_mismatch: initializationRoleMismatch,
+            evidence_ref: `codex-thread-recovery:${threadId}`,
+            error: `Initialization turn status: ${initializationStatus}`,
+            created_at: new Date().toISOString(),
+            workspace_path: workspacePath,
+            source_cwd: typeof parameters?.cwd === "string" ? parameters.cwd : undefined,
+          },
+        },
+      }),
+    );
+    console.log(
+      JSON.stringify({
+        ...record(result),
+        revision: validateLedger(store.read()).revision,
+        result: {
+          operation_id: operation.id,
+          outcome: "failed",
+          thread_id: threadId,
+          reason: `Initialization turn status: ${initializationStatus}`,
+        },
       }),
     );
   } else if (command === "creation-reconcile") {

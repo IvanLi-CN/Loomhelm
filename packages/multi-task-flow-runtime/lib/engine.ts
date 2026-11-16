@@ -1945,9 +1945,19 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
         requireGroupDispatchGate(ledger, targetGroup);
       const evidence = object(payload.native_evidence ?? {});
       const observed = creationObservations(op, payload);
+      const interruptedInitializationRecovery =
+        outcome === "failed" &&
+        evidence.source === "multi-task-flow-recovery" &&
+        evidence.recovery_kind === "initialization-interrupted" &&
+        ["interrupted", "failed", "aborted-before-turn-evidence"].includes(
+          String(evidence.initialization_status),
+        ) &&
+        evidence.thread_id === observed.thread_id &&
+        evidence.turn_completed === false &&
+        evidence.formal_handoff_sent === false;
       if (outcome === "failed")
         requireCondition(
-          Object.keys(observed).length === 0,
+          Object.keys(observed).length === 0 || interruptedInitializationRecovery,
           "UNKNOWN_REQUIRES_RECONCILIATION",
           "Known creation identity, resources or execution require reconciliation",
           5,
@@ -1961,7 +1971,11 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
         );
       if (op.request.execution_profile && outcome !== "unknown") {
         requireCondition(
-          ["multi-task-flow-cli", "multi-task-flow-reconcile"].includes(String(evidence.source)) &&
+          [
+            "multi-task-flow-cli",
+            "multi-task-flow-reconcile",
+            ...(outcome === "failed" ? ["multi-task-flow-recovery"] : []),
+          ].includes(String(evidence.source)) &&
             (ledger.contract_version < 3
               ? ["thread/start", "codex exec"].includes(String(evidence.native_tool_name))
               : evidence.native_tool_name === "codex exec") &&
@@ -1989,7 +2003,11 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
         );
       if (ledger.contract_version >= 3 && outcome !== "unknown")
         requireCondition(
-          ["multi-task-flow-cli", "multi-task-flow-reconcile"].includes(String(evidence.source)) &&
+          [
+            "multi-task-flow-cli",
+            "multi-task-flow-reconcile",
+            ...(outcome === "failed" ? ["multi-task-flow-recovery"] : []),
+          ].includes(String(evidence.source)) &&
             evidence.native_tool_name === "codex exec" &&
             object(op.request.creation_parameters ?? {}).transport === "codex-exec",
           "EVIDENCE_REQUIRED",
@@ -1998,14 +2016,15 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
         );
       if (evidence.native_tool_name === "codex exec" && outcome === "failed")
         requireCondition(
-          !op.request.observed_thread_id &&
-            !payload.thread_id &&
-            !evidence.thread_id &&
-            !evidence.workspace_path &&
-            !evidence.initial_head &&
-            !evidence.turn_completed &&
-            evidence.process_started === false &&
-            evidence.resources_created === false,
+          interruptedInitializationRecovery ||
+            (!op.request.observed_thread_id &&
+              !payload.thread_id &&
+              !evidence.thread_id &&
+              !evidence.workspace_path &&
+              !evidence.initial_head &&
+              !evidence.turn_completed &&
+              evidence.process_started === false &&
+              evidence.resources_created === false),
           "UNKNOWN_REQUIRES_RECONCILIATION",
           "Only proven pre-creation failure may release a CLI dispatch; observed identities require reconciliation",
           5,
@@ -2068,7 +2087,9 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
         const evidence = object(payload.native_evidence);
         requireCondition(
           typeof op.request.native_request_id === "string" &&
-            ["create_thread", "multi-task-flow-cli"].includes(evidence.source) &&
+            ["create_thread", "multi-task-flow-cli", "multi-task-flow-recovery"].includes(
+              evidence.source,
+            ) &&
             evidence.operation_id === op.id &&
             evidence.native_request_id === op.request.native_request_id &&
             (evidence.native_tool_name === "create_thread" ||

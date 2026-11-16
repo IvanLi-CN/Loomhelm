@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,13 +11,14 @@ import {
   createCliThread,
   INITIALIZATION_PROMPT,
   initializationPrompt,
+  readReconciliationEvidence,
   readThreadEvidence,
   reconcileCliThread,
   runInitialization,
   verifyInitializationTurn,
   verifyRepositoryIdentity,
 } from "../lib/codex-cli-create";
-import { rpc, websocketFrame } from "../lib/codex-rpc";
+import { framePayload, parseRpc, rpc, websocketFrame } from "../lib/codex-rpc";
 
 const input = {
   title: "test",
@@ -30,9 +33,21 @@ const completed: CliRun = {
   turn_completed: true,
   events: ["thread.started", "turn.completed"],
 };
-const handshakeTurn = (status: string) => ({
+const handshakeTurn = (
+  status: string,
+  role: "Delivery Agent" | "Task Agent" = "Delivery Agent",
+  extraItems: Record<string, unknown>[] = [],
+) => ({
   id: "turn-a",
   status,
+  items: [
+    {
+      type: "userMessage",
+      content: [{ type: "text", text: initializationPrompt(role) }],
+    },
+    { type: "agentMessage", text: "已进入待命状态。", phase: "commentary" },
+    ...extraItems,
+  ],
 });
 const thread = async () => ({
   id: "thread-a",
@@ -42,8 +57,25 @@ const thread = async () => ({
 });
 const read = async () => ({
   thread: await thread(),
-  turn: handshakeTurn("completed"),
+  turn: handshakeTurn("completed", "Task Agent"),
 });
+
+function serverWebsocketFrame(value: Record<string, unknown>): Buffer {
+  const payload = Buffer.from(JSON.stringify(value));
+  if (payload.length < 126) return Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
+  if (payload.length <= 0xffff) {
+    const header = Buffer.alloc(4);
+    header[0] = 0x81;
+    header[1] = 126;
+    header.writeUInt16BE(payload.length, 2);
+    return Buffer.concat([header, payload]);
+  }
+  const header = Buffer.alloc(10);
+  header[0] = 0x81;
+  header[1] = 127;
+  header.writeBigUInt64BE(BigInt(payload.length), 2);
+  return Buffer.concat([header, payload]);
+}
 
 test("app-server RPC drains coalesced frames after the matching response", async () => {
   const socket = new EventEmitter() as EventEmitter & {
@@ -76,15 +108,24 @@ test("initialization prompt gives the creation phase enough context without auth
   expect(INITIALIZATION_PROMPT).not.toContain("请简短回复");
 });
 
-test("initialization evidence ignores agent item content", () => {
+test("initialization ignores the known multi-agent deprecation diagnostic", () => {
   expect(() =>
-    verifyInitializationTurn({
-      ...handshakeTurn("completed"),
-      items: [
-        { type: "error", message: "startup diagnostic" },
-        { type: "futureToolCall", payload: "opaque" },
-      ],
-    }),
+    verifyInitializationTurn(
+      handshakeTurn("completed", "Task Agent", [
+        {
+          type: "error",
+          message: "`[features].multi_agent` is deprecated. It still controls the V1 fallback.",
+        },
+        {
+          type: "error",
+          message: "Codex is ignoring 1 unrecognized configuration setting.",
+        },
+        {
+          type: "error",
+          message: "loading hooks from two config layers; prefer a single representation",
+        },
+      ]),
+    ),
   ).not.toThrow();
 });
 
@@ -122,7 +163,7 @@ test("actual profile and Codex ownership are required; initial HEAD is separate 
         ...deps,
         read: async () => ({
           thread: { ...(await thread()), model: "other" },
-          turn: handshakeTurn("completed"),
+          turn: handshakeTurn("completed", "Task Agent"),
         }),
       })
     ).outcome,
@@ -133,11 +174,11 @@ test("actual profile and Codex ownership are required; initial HEAD is separate 
         ...deps,
         read: async () => ({
           thread: await thread(),
-          turn: { ...handshakeTurn("completed"), items: [{ type: "opaqueAgentItem" }] },
+          turn: handshakeTurn("completed", "Task Agent", [{ type: "futureToolCall" }]),
         }),
       })
     ).outcome,
-  ).toBe("succeeded");
+  ).toBe("unknown");
   expect(
     (
       await createCliThread(input, {
@@ -148,6 +189,30 @@ test("actual profile and Codex ownership are required; initial HEAD is separate 
       })
     ).outcome,
   ).toBe("unknown");
+});
+
+test("malformed handshake evidence remains unreconcilable", () => {
+  expect(() =>
+    verifyInitializationTurn({
+      ...handshakeTurn("completed", "Task Agent"),
+      items: [...handshakeTurn("completed", "Task Agent").items, "commandExecution"],
+    }),
+  ).toThrow("malformed");
+  expect(() =>
+    verifyInitializationTurn({
+      ...handshakeTurn("completed", "Task Agent"),
+      items: [
+        {
+          type: "userMessage",
+          content: [
+            { type: "text", text: initializationPrompt("Task Agent") },
+            { type: "futureContent" },
+          ],
+        },
+        handshakeTurn("completed", "Task Agent").items[1],
+      ],
+    }),
+  ).toThrow("content is malformed");
 });
 
 test("reconciliation requires the matching completed handshake before checking the worktree", async () => {
@@ -186,8 +251,21 @@ test("reconciliation hydrates handshake items separately from the turn summary",
     calls.push(method);
     if (method === "thread/read") return { result: { thread: await thread() } };
     if (method === "thread/turns/list")
-      return { result: { data: [{ id: "turn-a", status: "completed" }] } };
-    throw new Error(`unexpected method ${method}`);
+      return { result: { data: [{ id: "turn-a", status: "completed", items: [] }] } };
+    return {
+      result: {
+        data: [
+          {
+            turnId: "turn-a",
+            item: {
+              type: "userMessage",
+              content: [{ type: "text", text: initializationPrompt("Task Agent") }],
+            },
+          },
+          { turnId: "turn-a", item: { type: "agentMessage", text: "待命。" } },
+        ],
+      },
+    };
   };
   const evidence = await readThreadEvidence(
     {} as any,
@@ -197,12 +275,112 @@ test("reconciliation hydrates handshake items separately from the turn summary",
     request,
   );
   expect(() => verifyInitializationTurn(evidence.turn, "Task Agent")).not.toThrow();
-  expect(calls).toEqual(["thread/read", "thread/turns/list"]);
+  expect(calls).toEqual(["thread/read", "thread/turns/list", "thread/items/list"]);
 });
 
-test("incomplete or unidentified initialization turns remain unreconcilable", async () => {
-  expect(() => verifyInitializationTurn(handshakeTurn("interrupted"))).toThrow("not completed");
-  expect(() => verifyInitializationTurn({ status: "completed" })).toThrow("identity unavailable");
+test("reconciliation keeps the app-server socket open until evidence is read", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "multi-task-flow-reconcile-"));
+  const path = join(directory, "app-server.sock");
+  const server = createServer((client) => {
+    let incoming = Buffer.alloc(0);
+    let upgraded = false;
+    client.on("data", (chunk) => {
+      incoming = Buffer.concat([incoming, chunk]);
+      if (!upgraded) {
+        const boundary = incoming.indexOf("\r\n\r\n");
+        if (boundary < 0) return;
+        const header = incoming.subarray(0, boundary + 4).toString("utf8");
+        const key = header.match(/Sec-WebSocket-Key: ([^\r\n]+)/i)?.[1];
+        if (!key) throw new Error("WebSocket key missing");
+        const accept = createHash("sha1")
+          .update(key.trim() + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+          .digest("base64");
+        client.write(
+          `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+        );
+        incoming = incoming.subarray(boundary + 4);
+        upgraded = true;
+      }
+      while (upgraded) {
+        const frame = framePayload(incoming);
+        if (!frame) return;
+        incoming = incoming.subarray(frame.consumed);
+        const request = parseRpc(frame.payload);
+        const id = request?.id;
+        const method = request?.method;
+        if (typeof id !== "string" && typeof id !== "number") continue;
+        const result =
+          method === "initialize"
+            ? {}
+            : method === "thread/read"
+              ? { thread: { id: "thread-a", cwd: "/codex/owned" } }
+              : method === "thread/turns/list"
+                ? { data: [{ id: "turn-a", status: "completed", items: [] }] }
+                : {
+                    data: [
+                      {
+                        turnId: "turn-a",
+                        item: {
+                          type: "userMessage",
+                          content: [{ type: "text", text: initializationPrompt("Task Agent") }],
+                        },
+                      },
+                      { turnId: "turn-a", item: { type: "agentMessage", text: "待命。" } },
+                    ],
+                  };
+        client.write(serverWebsocketFrame({ jsonrpc: "2.0", id, result }));
+      }
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(path, () => resolve());
+  });
+  const previous = process.env.CODEX_APP_SERVER_SOCKET;
+  process.env.CODEX_APP_SERVER_SOCKET = path;
+  try {
+    await expect(readReconciliationEvidence("thread-a")).resolves.toMatchObject({
+      thread: { id: "thread-a" },
+      turn: { id: "turn-a" },
+    });
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_APP_SERVER_SOCKET;
+    else process.env.CODEX_APP_SERVER_SOCKET = previous;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("interrupted or workful initialization remains unreconcilable", async () => {
+  expect(() => verifyInitializationTurn(handshakeTurn("interrupted"), "Delivery Agent")).toThrow(
+    "not completed",
+  );
+  expect(() =>
+    verifyInitializationTurn(handshakeTurn("completed", "Task Agent"), "Delivery Agent"),
+  ).toThrow("expected agent role");
+  expect(() =>
+    verifyInitializationTurn(
+      handshakeTurn("completed", "Delivery Agent", [
+        { type: "commandExecution", command: "git status", status: "completed" },
+      ]),
+      "Delivery Agent",
+    ),
+  ).toThrow("recorded work");
+  for (const type of [
+    "collabAgentToolCall",
+    "functionCallOutput",
+    "subAgentActivity",
+    "imageGeneration",
+    "imageView",
+    "sleep",
+    "futureToolCall",
+  ])
+    expect(() =>
+      verifyInitializationTurn(
+        handshakeTurn("completed", "Delivery Agent", [{ type }]),
+        "Delivery Agent",
+      ),
+    ).toThrow("recorded work");
   await expect(
     reconcileCliThread(
       {
@@ -246,7 +424,6 @@ test("repository identity is checked before starting the external CLI", async ()
 test("real subprocess receives literal argv and EOF, never the formal prompt; thread identity persists before exit", async () => {
   const root = mkdtempSync(join(tmpdir(), "cli-adapter-"));
   const oldPath = process.env.PATH;
-  const oldTimeout = process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS;
   try {
     const executable = join(root, "codex"),
       capture = join(root, "argv.json");
@@ -289,15 +466,12 @@ test("real subprocess receives literal argv and EOF, never the formal prompt; th
       executable,
       `#!/usr/bin/env node\nconsole.log(JSON.stringify({type:'thread.started',thread_id:'partial'}));console.log(JSON.stringify({type:'item.started',item:{type:'commandExecution'}}));setInterval(()=>{},1000);`,
     );
-    process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS = "1000";
     const failed = await runInitialization(input);
     expect(failed.thread_id).toBe("partial");
-    expect(failed.error).toContain("timed out");
+    expect(failed.error).toContain("attempted work");
     expect(failed.exit_code).not.toBe(0);
   } finally {
     process.env.PATH = oldPath;
-    if (oldTimeout === undefined) delete process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS;
-    else process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS = oldTimeout;
     rmSync(root, { recursive: true, force: true });
   }
 }, 10000);
@@ -305,7 +479,6 @@ test("real subprocess receives literal argv and EOF, never the formal prompt; th
 test("aborting initialization terminates tool descendants and closes inherited pipes", async () => {
   const root = mkdtempSync(join(tmpdir(), "cli-descendants-"));
   const oldPath = process.env.PATH;
-  const oldTimeout = process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS;
   let pid: number | undefined;
   try {
     const executable = join(root, "codex"),
@@ -318,11 +491,10 @@ test("aborting initialization terminates tool descendants and closes inherited p
     );
     chmodSync(executable, 0o755);
     process.env.PATH = `${root}:${oldPath}`;
-    process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS = "1000";
     const result = await runInitialization(input);
     pid = Number(readFileSync(pidFile, "utf8"));
     expect(result.thread_id).toBe("descendant-test");
-    expect(result.error).toContain("timed out");
+    expect(result.error).toContain("attempted work");
     expect(result.exit_code).not.toBe(0);
     const before = readFileSync(heartbeat, "utf8");
     await new Promise((resolve) => setTimeout(resolve, 350));
@@ -339,8 +511,6 @@ test("aborting initialization terminates tool descendants and closes inherited p
       } catch {}
     }
     process.env.PATH = oldPath;
-    if (oldTimeout === undefined) delete process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS;
-    else process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS = oldTimeout;
     rmSync(root, { recursive: true, force: true });
   }
 }, 10000);
