@@ -95,7 +95,7 @@ function stable(value: any): string {
   return JSON.stringify(value);
 }
 
-function authorize(ledger: Ledger, actor: Request["actor"]): void {
+export function authorize(ledger: Ledger, actor: Request["actor"]): void {
   requireCondition(
     ledger.control.ownership === "bound",
     "OWNER_UNCERTAIN",
