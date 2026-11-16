@@ -6,7 +6,6 @@ import type { ProcessOptions } from "../runtime/process.ts";
 import { SkillsRuntime } from "../toolkit.ts";
 import {
 	enrichFlowContract,
-	FLOW_CONTRACT,
 	flowHelp,
 } from "./flow-contract.ts";
 
@@ -47,21 +46,27 @@ export async function runFlowCommand(
 	if (args[0] === "schema") {
 		if (args.length !== 3 || args[1] !== "--format" || args[2] !== "json")
 			throw new Error("Usage: flow schema --format json");
-		let contract: Record<string, unknown> = FLOW_CONTRACT;
+		const domainPath = resolve(
+			new SkillsRuntime().root,
+			"skills/multi-task-flow/lib/flow-domain-schemas.json",
+		);
+		let domain: Record<string, unknown>;
 		try {
-			const domain = JSON.parse(
-				await readFile(
-					resolve(
-						new SkillsRuntime().root,
-						"skills/multi-task-flow/lib/flow-domain-schemas.json",
-					),
-					"utf8",
-				),
-			) as Record<string, unknown>;
-			contract = enrichFlowContract(domain);
-		} catch {
-			// Source checkouts can inspect the command registry before their packaged resources exist.
+			domain = JSON.parse(await readFile(domainPath, "utf8")) as Record<string, unknown>;
+		} catch (error) {
+			throw new Error(`FLOW_SCHEMA_UNAVAILABLE: cannot read packaged domain schema at ${domainPath}`, {
+				cause: error,
+			});
 		}
+		if (
+			typeof domain.$schema !== "string" ||
+			typeof domain.$id !== "string" ||
+			!["plan", "group", "task", "ledger", "execution_profile", "notification", "fact", "resource"].every(
+				(name) => name in domain,
+			)
+		)
+			throw new Error("FLOW_SCHEMA_INVALID: packaged domain schema is incomplete");
+		const contract = enrichFlowContract(domain);
 		console.log(JSON.stringify(contract));
 		return;
 	}

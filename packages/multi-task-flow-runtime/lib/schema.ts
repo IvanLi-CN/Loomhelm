@@ -626,6 +626,29 @@ export const notification = z
     updated_at: timestamp,
   })
   .strict();
+export const resource = z
+  .object({
+    id,
+    kind: z.enum(["conversation", "worktree", "branch", "port", "service"]),
+    target: nullableText,
+    status: z.enum([
+      "unknown",
+      "active",
+      "pending",
+      "closed",
+      "archive_failed",
+      "archive_unknown",
+      "unarchive_failed",
+      "unarchive_unknown",
+      "not_applicable",
+    ]),
+    evidence_ref: nullableText,
+    error: nullableText.optional(),
+    last_attempt_at: timestamp.nullable().optional(),
+    operation_id: nullableText.optional(),
+    archive_policy: z.enum(["auto", "manual"]).optional(),
+  })
+  .strict();
 export const ledgerSchema = z
   .object({
     schema_version: z.literal(2),
@@ -704,31 +727,7 @@ export const ledgerSchema = z
         .strict(),
     ),
     notifications: z.array(notification),
-    resources: z.array(
-      z
-        .object({
-          id,
-          kind: z.enum(["conversation", "worktree", "branch", "port", "service"]),
-          target: nullableText,
-          status: z.enum([
-            "unknown",
-            "active",
-            "pending",
-            "closed",
-            "archive_failed",
-            "archive_unknown",
-            "unarchive_failed",
-            "unarchive_unknown",
-            "not_applicable",
-          ]),
-          evidence_ref: nullableText,
-          error: nullableText.optional(),
-          last_attempt_at: timestamp.nullable().optional(),
-          operation_id: nullableText.optional(),
-          archive_policy: z.enum(["auto", "manual"]).optional(),
-        })
-        .strict(),
-    ),
+    resources: z.array(resource),
     updated_at: timestamp,
   })
   .strict();

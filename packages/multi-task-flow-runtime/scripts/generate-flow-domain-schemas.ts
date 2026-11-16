@@ -3,7 +3,17 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { atomicEdge, atomicNode } from "../lib/atomic-orchestration";
-import { executionProfile, group, ledgerSchema, notification, plan, task } from "../lib/schema";
+import {
+  baselineReceipt,
+  executionProfile,
+  fact,
+  group,
+  ledgerSchema,
+  notification,
+  plan,
+  resource,
+  task,
+} from "../lib/schema";
 
 const output = join(import.meta.dir, "../lib/flow-domain-schemas.json");
 mkdirSync(join(import.meta.dir, "../lib"), { recursive: true });
@@ -17,7 +27,10 @@ writeFileSync(
       group: z.toJSONSchema(group),
       task: z.toJSONSchema(task),
       execution_profile: z.toJSONSchema(executionProfile),
+      baseline_receipt: z.toJSONSchema(baselineReceipt),
       notification: z.toJSONSchema(notification),
+      fact: z.toJSONSchema(fact),
+      resource: z.toJSONSchema(resource),
       ledger: z.toJSONSchema(ledgerSchema),
       atomic_node: z.toJSONSchema(atomicNode),
       atomic_edge: z.toJSONSchema(atomicEdge),

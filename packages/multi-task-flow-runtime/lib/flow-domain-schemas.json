@@ -4520,6 +4520,40 @@
     ],
     "additionalProperties": false
   },
+  "baseline_receipt": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "sha": {
+        "type": "string",
+        "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+      },
+      "head": {
+        "type": "string",
+        "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+      },
+      "clean": {
+        "type": "boolean",
+        "const": true
+      },
+      "source": {
+        "type": "string",
+        "minLength": 1
+      },
+      "fetched_at": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+      }
+    },
+    "required": [
+      "sha",
+      "head",
+      "clean",
+      "source"
+    ],
+    "additionalProperties": false
+  },
   "notification": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -4629,6 +4663,592 @@
       "last_reconciliation_id",
       "last_error",
       "updated_at"
+    ],
+    "additionalProperties": false
+  },
+  "fact": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "child_review",
+          "task_quality",
+          "pr_merged",
+          "branch_published",
+          "pr_published",
+          "ci_passed",
+          "published",
+          "deployed",
+          "verified",
+          "baseline_verified"
+        ]
+      },
+      "subject_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "passed",
+          "failed",
+          "unknown"
+        ]
+      },
+      "source": {
+        "type": "string",
+        "minLength": 1
+      },
+      "observed_at": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+      },
+      "sha": {
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "evidence_ref": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "quality": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+              },
+              "thread_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pr": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "repository": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "url": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "provider",
+                  "repository",
+                  "id",
+                  "url"
+                ],
+                "additionalProperties": false
+              },
+              "base_sha": {
+                "type": "string",
+                "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+              },
+              "head_sha": {
+                "type": "string",
+                "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+              },
+              "acceptance_refs": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "checks": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "passed"
+                    },
+                    "evidence_ref": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "status",
+                    "evidence_ref"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "task_id",
+              "thread_id",
+              "pr",
+              "base_sha",
+              "head_sha",
+              "acceptance_refs",
+              "checks"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "receipt": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "minLength": 1
+              },
+              "repository": {
+                "type": "string",
+                "minLength": 1
+              },
+              "resource_type": {
+                "type": "string",
+                "enum": [
+                  "branch",
+                  "pr"
+                ]
+              },
+              "resource_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "branch": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target_branch": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "base_sha": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "head_sha": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pr": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "repository": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "url": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "uri"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "provider",
+                      "repository",
+                      "id",
+                      "url"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "exists",
+                  "open",
+                  "merged",
+                  "absent",
+                  "unknown"
+                ]
+              },
+              "evidence_ref": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "provider",
+              "repository",
+              "resource_type",
+              "resource_id",
+              "branch",
+              "target_branch",
+              "base_sha",
+              "head_sha",
+              "pr",
+              "state",
+              "evidence_ref"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "baseline": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "target_type": {
+                "type": "string",
+                "enum": [
+                  "group",
+                  "task"
+                ]
+              },
+              "target_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+              },
+              "dispatch_operation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+              },
+              "native_request_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "thread_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "initial",
+                  "refresh"
+                ]
+              },
+              "previous_baseline": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "sha": {
+                        "type": "string",
+                        "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+                      },
+                      "head": {
+                        "type": "string",
+                        "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+                      },
+                      "clean": {
+                        "type": "boolean",
+                        "const": true
+                      },
+                      "source": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "fetched_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      }
+                    },
+                    "required": [
+                      "sha",
+                      "head",
+                      "clean",
+                      "source"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lineage_event_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "lineage_sha": {
+                "type": "string",
+                "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+              },
+              "branch": {
+                "type": "string",
+                "minLength": 1
+              },
+              "resource_ids": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+                }
+              },
+              "receipt": {
+                "type": "object",
+                "properties": {
+                  "sha": {
+                    "type": "string",
+                    "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+                  },
+                  "head": {
+                    "type": "string",
+                    "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+                  },
+                  "clean": {
+                    "type": "boolean",
+                    "const": true
+                  },
+                  "source": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "fetched_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  }
+                },
+                "required": [
+                  "sha",
+                  "head",
+                  "clean",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "observed_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              }
+            },
+            "required": [
+              "target_type",
+              "target_id",
+              "dispatch_operation_id",
+              "native_request_id",
+              "thread_id",
+              "mode",
+              "previous_baseline",
+              "lineage_event_id",
+              "lineage_sha",
+              "branch",
+              "resource_ids",
+              "receipt",
+              "observed_at"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "kind",
+      "subject_id",
+      "status",
+      "source",
+      "observed_at",
+      "sha",
+      "evidence_ref"
+    ],
+    "additionalProperties": false
+  },
+  "resource": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "conversation",
+          "worktree",
+          "branch",
+          "port",
+          "service"
+        ]
+      },
+      "target": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "unknown",
+          "active",
+          "pending",
+          "closed",
+          "archive_failed",
+          "archive_unknown",
+          "unarchive_failed",
+          "unarchive_unknown",
+          "not_applicable"
+        ]
+      },
+      "evidence_ref": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "error": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "last_attempt_at": {
+        "anyOf": [
+          {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "operation_id": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "archive_policy": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "manual"
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "kind",
+      "target",
+      "status",
+      "evidence_ref"
     ],
     "additionalProperties": false
   },

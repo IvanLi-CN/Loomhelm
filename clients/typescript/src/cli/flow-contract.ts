@@ -1,21 +1,50 @@
 type JsonSchema = Record<string, unknown>;
 
-const id = { type: "string", minLength: 1 } as const;
+const id = {
+	type: "string",
+	minLength: 1,
+	maxLength: 128,
+	pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+} as const;
+const textValue = { type: "string", minLength: 1 } as const;
 const stringValue = { type: "string" } as const;
 const booleanValue = { type: "boolean" } as const;
 const numberValue = { type: "number" } as const;
 const objectValue = { type: "object", additionalProperties: true } as const;
-const arrayValue = { type: "array", items: objectValue } as const;
+const stringArrayValue = { type: "array", items: stringValue } as const;
+const idArrayValue = { type: "array", items: id } as const;
+const nullableId = { oneOf: [id, { type: "null" }] } as const;
+const shaValue = {
+	type: "string",
+	pattern: "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+} as const;
+const sha40Value = { type: "string", pattern: "^[a-f0-9]{40}$" } as const;
+const commitArrayValue = {
+	type: "array",
+	items: sha40Value,
+	minItems: 1,
+} as const;
 const domainRef = (name: string): JsonSchema => ({ $ref: `#/$defs/${name}` });
+const externalRefValue = {
+	type: "object",
+	additionalProperties: false,
+	required: ["provider", "repository", "id", "url"],
+	properties: {
+		provider: textValue,
+		repository: textValue,
+		id: textValue,
+		url: { type: ["string", "null"], format: "uri" },
+	},
+} as const;
 const notificationReceipt = {
 	type: "object",
 	additionalProperties: false,
 	required: ["provider", "evidence_ref"],
 	properties: {
-		provider: id,
-		evidence_ref: id,
+		provider: textValue,
+		evidence_ref: textValue,
 		message_id: { type: ["string", "null"], minLength: 1 },
-		recipient_thread_id: id,
+		recipient_thread_id: textValue,
 		prompt_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
 	},
 } as const;
@@ -36,17 +65,68 @@ const publicationReceipt = {
 		"evidence_ref",
 	],
 	properties: {
-		provider: id,
-		repository: id,
+		provider: textValue,
+		repository: textValue,
 		resource_type: { enum: ["branch", "pr"] },
-		resource_id: id,
-		branch: id,
+		resource_id: textValue,
+		branch: textValue,
 		target_branch: { type: ["string", "null"], minLength: 1 },
-		base_sha: { type: ["string", "null"], minLength: 1 },
-		head_sha: { type: ["string", "null"], minLength: 1 },
-		pr: { oneOf: [objectValue, { type: "null" }] },
+		base_sha: { oneOf: [shaValue, { type: "null" }] },
+		head_sha: { oneOf: [shaValue, { type: "null" }] },
+		pr: { oneOf: [externalRefValue, { type: "null" }] },
 		state: { enum: ["exists", "open", "merged", "absent", "unknown"] },
-		evidence_ref: id,
+		evidence_ref: textValue,
+	},
+} as const;
+const groupBaseObservation = {
+	type: "object",
+	additionalProperties: false,
+	required: ["branch", "sha", "source", "evidence_ref"],
+	properties: {
+		branch: textValue,
+		sha: shaValue,
+		source: textValue,
+		evidence_ref: textValue,
+		ancestor_sha: { oneOf: [shaValue, { type: "null" }] },
+	},
+} as const;
+const groupBaseReconciliation = {
+	type: "object",
+	additionalProperties: false,
+	required: ["operation", "branch", "previous_sha", "sha", "parent_pr", "source", "evidence_ref"],
+	properties: {
+		operation: { const: "update-branch" },
+		branch: textValue,
+		previous_sha: shaValue,
+		sha: shaValue,
+		parent_pr: externalRefValue,
+		source: textValue,
+		evidence_ref: textValue,
+	},
+} as const;
+const mergeObservation = {
+	type: "object",
+	additionalProperties: false,
+	required: ["pr", "head_sha", "base_sha", "merge_sha", "state"],
+	properties: {
+		pr: externalRefValue,
+		head_sha: shaValue,
+		base_sha: shaValue,
+		merge_sha: shaValue,
+		state: { const: "merged" },
+	},
+} as const;
+const closeoutObservation = {
+	type: "object",
+	additionalProperties: false,
+	required: ["pr", "provider_state", "merge_sha", "source", "observed_at", "evidence_ref"],
+	properties: {
+		pr: externalRefValue,
+		provider_state: { enum: ["merged", "closed", "open", "unknown"] },
+		merge_sha: { oneOf: [shaValue, { type: "null" }] },
+		source: textValue,
+		observed_at: { type: "string", format: "date-time" },
+		evidence_ref: textValue,
 	},
 } as const;
 const providerReceipt = {
@@ -89,12 +169,19 @@ const field = (name: string): JsonSchema => {
 	if (name === "provider_receipt") return providerReceipt;
 	if (name === "error") return stringValue;
 	if (name === "revision") return revisionInput;
+	if (name === "expected_previous_baseline")
+		return { oneOf: [objectValue, { type: "null" }] };
+	if (name === "expected_lineage_sha") return { oneOf: [shaValue, { type: "null" }] };
+	if (name === "runtime") return { enum: ["active", "idle", "unknown"] };
+	if (name === "evidence" || name === "handling_evidence" || name === "change_class")
+		return stringValue;
+	if (name === "sha" || name.endsWith("_sha")) return shaValue;
 	if (
 		name.endsWith("_ids") ||
 		name === "integration_commits" ||
 		name === "evidence_refs"
 	)
-		return { type: "array", items: id };
+		return name === "integration_commits" ? commitArrayValue : stringArrayValue;
 	if (
 		[
 			"plan",
@@ -132,7 +219,7 @@ const field = (name: string): JsonSchema => {
 			name === "authorized_action_ids" ||
 			name === "inherited_outputs" ||
 			name === "uninherited_outputs"
-			? arrayValue
+			? stringArrayValue
 			: objectValue;
 	}
 	if (
@@ -169,11 +256,12 @@ const field = (name: string): JsonSchema => {
 const objectSchema = (
 	names: readonly string[],
 	optional: readonly string[] = [],
+	overrides: Record<string, JsonSchema> = {},
 ): JsonSchema => ({
 	type: "object",
 	additionalProperties: false,
 	required: names.filter((name) => !optional.includes(name)),
-	properties: Object.fromEntries(names.map((name) => [name, field(name)])),
+	properties: Object.fromEntries(names.map((name) => [name, overrides[name] ?? field(name)])),
 });
 const mutationRequest = (payload: JsonSchema): JsonSchema => ({
 	type: "object",
@@ -198,9 +286,26 @@ const successResponse = (result: JsonSchema): JsonSchema => ({
 		result,
 	},
 });
-const resultSchema = (names: readonly string[]): JsonSchema => ({
-	...objectSchema(names),
+const resultField = (name: string): JsonSchema =>
+	name.endsWith("_id") ||
+	name.endsWith("_thread_id")
+		? nullableId
+			: name === "notification_request"
+				? { oneOf: [objectValue, { type: "null" }] }
+			: name === "previous_sha" || name === "sha"
+				? { oneOf: [shaValue, { type: "null" }] }
+			: field(name);
+const resultSchema = (
+	names: readonly string[],
+	optional: readonly string[] = [],
+	overrides: Record<string, JsonSchema> = {},
+): JsonSchema => ({
+	type: "object",
 	additionalProperties: true,
+	required: names.filter((name) => !optional.includes(name)),
+	properties: Object.fromEntries(
+		names.map((name) => [name, overrides[name] ?? resultField(name)]),
+	),
 });
 const command = (
 	payloadNames: readonly string[],
@@ -208,6 +313,10 @@ const command = (
 	options: {
 		access?: string;
 		optionalPayload?: readonly string[];
+		optionalResult?: readonly string[];
+		payloadOverrides?: Record<string, JsonSchema>;
+		payloadAnyOfRequired?: readonly (readonly string[])[];
+		resultOverrides?: Record<string, JsonSchema>;
 		read?: boolean;
 	} = {},
 ): JsonSchema => ({
@@ -220,12 +329,23 @@ const command = (
 				properties: {
 					run_id: id,
 					actor,
-					payload: objectSchema(payloadNames, options.optionalPayload),
+				payload: objectSchema(payloadNames, options.optionalPayload, options.payloadOverrides),
 				},
 			}
-		: mutationRequest(objectSchema(payloadNames, options.optionalPayload)),
+		: mutationRequest(
+				Object.assign(
+					objectSchema(payloadNames, options.optionalPayload, options.payloadOverrides),
+					options.payloadAnyOfRequired
+						? {
+							anyOf: options.payloadAnyOfRequired.map((names) => ({ required: names })),
+						}
+						: {},
+				),
+			),
 	response: {
-		success: successResponse(resultSchema(resultNames)),
+		success: successResponse(
+			resultSchema(resultNames, options.optionalResult, options.resultOverrides),
+		),
 		error: errorResponse,
 	},
 });
@@ -283,7 +403,10 @@ add(
 	"dispatch-resolve",
 	["operation_id", "outcome", "native_evidence", "thread_id"],
 	["operation_id", "outcome", "thread_id", "notification_request"],
-	{ optionalPayload: ["thread_id", "native_evidence"] },
+	{
+		optionalPayload: ["thread_id", "native_evidence"],
+		optionalResult: ["notification_request"],
+	},
 );
 add("execution-profile-migrate", ["execution_profile"], ["execution_profile"]);
 add(
@@ -295,11 +418,20 @@ add(
 	"execution-profile-recommend",
 	["target_type", "target_id", "execution_profile"],
 	["target_type", "target_id", "execution_profile"],
+	{ optionalPayload: ["execution_profile"] },
 );
 add(
 	"execution-profile-update",
 	["target_type", "target_id", "execution_profile"],
 	["target_type", "target_id", "execution_profile"],
+	{
+		payloadOverrides: {
+			execution_profile: { oneOf: [domainRef("execution_profile"), { type: "null" }] },
+		},
+		resultOverrides: {
+			execution_profile: { oneOf: [domainRef("execution_profile"), { type: "null" }] },
+		},
+	},
 );
 add(
 	"dispatch-progress",
@@ -328,14 +460,12 @@ add(
 	],
 	["target_type", "target_id", "mode", "previous_sha", "sha", "fact_id"],
 	{
-		optionalPayload: [
-			"dispatch_operation_id",
-			"expected_previous_baseline",
-			"expected_lineage_sha",
-			"lineage_event_id",
-			"branch",
-			"resource_ids",
-		],
+		payloadOverrides: {
+			baseline: domainRef("baseline_receipt"),
+			expected_previous_baseline: {
+				oneOf: [domainRef("baseline_receipt"), { type: "null" }],
+			},
+		},
 	},
 );
 add(
@@ -375,12 +505,12 @@ add(
 	],
 	["operation_id", "outcome"],
 	{
-		optionalPayload: [
-			"provider_receipt",
-			"provider_observation",
-			"fact_id",
-			"verified_no_effect",
-		],
+		optionalPayload: ["provider_receipt", "provider_observation", "verified_no_effect"],
+		payloadAnyOfRequired: [["provider_receipt"], ["provider_observation"]],
+		payloadOverrides: {
+			provider_receipt: publicationReceipt,
+			provider_observation: publicationReceipt,
+		},
 	},
 );
 add(
@@ -396,7 +526,7 @@ add(
 		"target_branch",
 	],
 	["operation_id"],
-	{ optionalPayload: ["pr", "target_branch"] },
+	{},
 );
 add(
 	"publish-pr-resolve",
@@ -410,12 +540,12 @@ add(
 	],
 	["operation_id", "outcome"],
 	{
-		optionalPayload: [
-			"provider_receipt",
-			"provider_observation",
-			"fact_id",
-			"verified_no_effect",
-		],
+		optionalPayload: ["provider_receipt", "provider_observation", "verified_no_effect"],
+		payloadAnyOfRequired: [["provider_receipt"], ["provider_observation"]],
+		payloadOverrides: {
+			provider_receipt: publicationReceipt,
+			provider_observation: publicationReceipt,
+		},
 	},
 );
 add(
@@ -448,6 +578,12 @@ add(
 		"evidence_ref",
 	],
 	["task_id", "state", "equivalent_integration"],
+	{
+		payloadOverrides: {
+			task_head_sha: sha40Value,
+			parent_merge_sha: sha40Value,
+		},
+	},
 );
 add(
 	"atom-update",
@@ -471,11 +607,13 @@ add(
 	"group-base",
 	["group_id", "provider_observation"],
 	["group_id", "current_sha"],
+	{ payloadOverrides: { provider_observation: groupBaseObservation } },
 );
 add(
 	"group-base-reconcile",
 	["group_id", "provider_observation"],
 	["group_id", "previous_sha", "current_sha"],
+	{ payloadOverrides: { provider_observation: groupBaseReconciliation } },
 );
 add(
 	"task-external-merge-reconcile",
@@ -496,12 +634,21 @@ add(
 		"merge_fact_id",
 		"current_group_sha",
 	],
+	{
+		payloadOverrides: {
+			pr: externalRefValue,
+			provider_observation: publicationReceipt,
+			quality_evidence: domainRef("fact"),
+		},
+	},
 );
 add("task-pr", ["task_id", "pr"], ["task_id", "pr"]);
 add("task-base", ["task_id", "base_sha", "evidence"], ["task_id", "base_sha"], {
 	optionalPayload: ["evidence"],
 });
-add("task-quality-record", ["task_id", "base_sha", "evidence"], ["fact_id"]);
+add("task-quality-record", ["task_id", "base_sha", "evidence"], ["fact_id"], {
+	payloadOverrides: { evidence: domainRef("fact") },
+});
 add(
 	"follow-pr-update",
 	[
@@ -513,9 +660,7 @@ add(
 		"affected_task_ids",
 	],
 	["follow_pr_id", "target_branch"],
-	{
-		optionalPayload: ["origin_task_id", "origin_group_id", "affected_task_ids"],
-	},
+	{},
 );
 add(
 	"merge-claim",
@@ -535,14 +680,13 @@ add(
 	["operation_id"],
 	{
 		optionalPayload: [
-			"group_id",
 			"task_id",
 			"original_parent_pr",
 			"original_parent_merge_sha",
 			"follow_pr_id",
-			"target_branch",
 			"owner_approval_id",
 		],
+		payloadOverrides: { original_parent_merge_sha: sha40Value },
 	},
 );
 add(
@@ -555,7 +699,13 @@ add(
 		"notification_status",
 		"notification_request",
 	],
-	{ optionalPayload: ["provider_evidence", "provider_observation"] },
+	{
+		optionalPayload: ["provider_evidence", "provider_observation"],
+		payloadOverrides: {
+			provider_evidence: domainRef("fact"),
+			provider_observation: mergeObservation,
+		},
+	},
 );
 add("cut-claim", ["group_id", "rule_id"], ["operation_id", "drained"]);
 add(
@@ -570,7 +720,9 @@ add(
 	["operation_id", "next_group_id", "reassigned_task_ids"],
 	{},
 );
-add("fact-record", ["fact"], ["fact_id"]);
+add("fact-record", ["fact"], ["fact_id"], {
+	payloadOverrides: { fact: domainRef("fact") },
+});
 add(
 	"action-claim",
 	[
@@ -600,6 +752,7 @@ add(
 			"lineage_evidence",
 			"provider_observation",
 		],
+		payloadOverrides: { provider_evidence: domainRef("fact") },
 	},
 );
 add(
@@ -619,12 +772,8 @@ add(
 		"ack_status",
 	],
 	{
-		optionalPayload: [
-			"provider_receipt",
-			"outcome",
-			"delivery_attempt_id",
-			"error",
-		],
+		optionalPayload: ["error"],
+		payloadOverrides: { provider_receipt: notificationReceipt },
 	},
 );
 add(
@@ -671,7 +820,9 @@ add(
 		"ack_status",
 	],
 );
-add("resource-update", ["resource"], ["resource_id", "status"]);
+add("resource-update", ["resource"], ["resource_id", "status"], {
+	payloadOverrides: { resource: domainRef("resource") },
+});
 add("run-complete", ["evidence"], ["state"]);
 add(
 	"group-close",
@@ -697,7 +848,7 @@ add(
 		"evidence_refs",
 	],
 	["group_id", "state", "outcome", "reconciliation_id"],
-	{ optionalPayload: ["provider_observation", "reason", "evidence_refs"] },
+	{ payloadOverrides: { provider_observation: closeoutObservation } },
 );
 add(
 	"group-reopen",
@@ -735,15 +886,15 @@ const specialCommands: Record<string, JsonSchema> = {
 		["operation_id", "outcome", "thread_id", "notification_request"],
 		{
 			access: "external-write",
-			optionalPayload: ["thread_id", "notification_request"],
+			optionalResult: ["thread_id", "notification_request"],
 		},
 	),
 	"creation-reconcile": command(
 		["operation_id"],
-		["operation_id", "outcome", "thread_id", "notification_delivery"],
+		["operation_id", "outcome", "thread_id", "notification_delivery", "reason"],
 		{
 			access: "reconcile",
-			optionalPayload: ["thread_id", "notification_delivery"],
+			optionalResult: ["thread_id", "notification_delivery", "reason"],
 		},
 	),
 	"notification-prepare": command(
@@ -771,6 +922,7 @@ const specialCommands: Record<string, JsonSchema> = {
 							"error",
 						],
 						["delivery_attempt_id", "error"],
+						{ provider_receipt: notificationReceipt },
 					),
 				),
 				{
@@ -854,6 +1006,10 @@ const specialCommands: Record<string, JsonSchema> = {
 	},
 };
 
+for (const name of ["dispatch-bind-request", "dispatch-resolve"]) {
+	entries[name] = { ...entries[name], access: "internal", availability: "cli-only" };
+}
+
 Object.assign(entries, specialCommands);
 
 export const FLOW_CONTRACT = Object.freeze({
@@ -866,29 +1022,160 @@ export const FLOW_CONTRACT = Object.freeze({
 		"bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --input -",
 	commands: entries,
 	error_codes: [
+		"ACTION_NOT_APPROVED",
+		"ACTION_NOT_PLANNED",
+		"ACTIVE_GROUP_IDLE",
 		"ACTOR_MISMATCH",
+		"APPLIED",
 		"ARCHIVE_IN_FLIGHT",
+		"ATOMS_PENDING",
+		"ATTEMPT_EXISTS",
+		"ATTEMPT_MISMATCH",
+		"BASELINE_CONFLICT",
+		"BASELINE_MISMATCH",
+		"BASELINE_NOT_VERIFIED",
+		"BASELINE_REQUIRED",
+		"BASE_CHANGED",
+		"BASE_NOT_READY",
+		"BASE_UNCHANGED",
+		"BLOCK_REASON_REQUIRED",
 		"BODY_TOO_LARGE",
+		"BRANCH_MISMATCH",
+		"BRANCH_NOT_PUBLISHED",
+		"CAPACITY",
+		"CI_PENDING",
+		"CLI_ONLY_DISPATCH",
+		"CONTROL_OWNERSHIP_UNKNOWN",
+		"CONVERSATION_ARCHIVED",
+		"CREATED",
+		"CREATION_EVIDENCE_CONFLICT",
+		"CREATION_PENDING",
+		"CUT_ALREADY_APPLIED",
+		"CUT_ALREADY_CLAIMED",
+		"CUT_NOT_READY",
+		"CUT_ORDER",
+		"CUT_PENDING",
+		"CUT_SCOPE_MISMATCH",
 		"CYCLE",
+		"DELIVERY_GATE_PENDING",
+		"DEPENDENCIES_PENDING",
+		"DISPATCH_NOT_READY",
+		"EVIDENCE_MISMATCH",
+		"EVIDENCE_REQUIRED",
+		"EXECUTION_PENDING",
+		"FOLLOW_PR_EXISTS",
+		"FOLLOW_PR_PENDING",
 		"FORBIDDEN",
+		"GROUPS_PENDING",
+		"GROUP_CHANGED",
+		"GROUP_CLOSED",
+		"GROUP_CLOSE_REQUIRED",
+		"GROUP_CUT",
+		"GROUP_EXECUTION_SEPARATE",
+		"GROUP_EXISTS",
+		"GROUP_MISMATCH",
+		"GROUP_NOT_ACTIVE",
+		"GROUP_NOT_MERGED",
+		"GROUP_NOT_READY",
+		"HANDOFF_PENDING",
+		"IDENTITY_IMMUTABLE",
+		"ID_CONFLICT",
+		"INCOMPATIBLE_LEDGER",
 		"INVALID_ARGUMENTS",
 		"INVALID_COMMAND",
+		"INVALID_FACT",
 		"INVALID_INPUT",
+		"INVALID_MIGRATION",
+		"INVALID_NEW_GROUP",
+		"INVALID_NEW_TASK",
+		"INVALID_NEXT_GROUP",
+		"INVALID_NOTIFICATION",
 		"INVALID_PLAN",
+		"INVALID_PLAN_HANDOFF",
 		"INVALID_PROFILE",
 		"INVALID_RESULT",
+		"INVALID_TRANSITION",
+		"INVALID_WAIT_TARGET",
+		"IO_ERROR",
 		"LEDGER_UNREADABLE",
+		"LEGACY_PLAN_ACTION",
+		"LIFECYCLE_BLOCKED",
+		"LINEAGE_MISMATCH",
+		"MAIN_TASK_REQUIRED",
+		"MERGE_PENDING",
 		"MIGRATION_CONFLICT",
+		"MILESTONE_EXISTS",
+		"NATIVE_RECEIPT_REQUIRED",
 		"NATIVE_REQUEST_CONFLICT",
+		"NOTIFICATION_ALREADY_SENT",
+		"NOTIFICATION_IN_FLIGHT",
+		"NOTIFICATION_NOT_SENT",
+		"NOTIFICATION_NOT_UNKNOWN",
+		"NOTIFICATION_TERMINAL",
+		"NOT_DISPATCHABLE",
 		"NOT_FOUND",
+		"OK",
+		"OPERATIONS_PENDING",
+		"OPERATION_EXISTS",
+		"OPERATION_PENDING",
+		"OPERATION_TERMINAL",
 		"ORPHAN_GROUP",
+		"OWNER_UNCERTAIN",
+		"PLAN_EXISTS",
+		"PLAN_MISMATCH",
+		"PLAN_NOT_APPROVED",
+		"PLAN_NOT_DISPATCHABLE",
 		"PLAN_NOT_FOUND",
+		"PLAN_NOT_SCHEDULABLE",
+		"PLAN_REVISION_EMPTY",
+		"PLAN_REVISION_HOLD",
+		"PLAN_REVISION_PENDING",
+		"PREVIOUS_GROUP_NOT_MERGED",
 		"PROFILE_CONFLICT",
-		"RUN_EXISTS",
-		"UNKNOWN_COMMAND",
-		"VIEWER_BINDING_INVALID",
+		"PROFILE_FROZEN",
+		"PROFILE_MIGRATION_REQUIRED",
+		"PROTECTED_ACTION_NOT_APPROVED",
+		"PR_MISMATCH",
+		"PR_NOT_MERGED",
+		"PR_NOT_PUBLISHED",
+		"PR_NOT_READY",
+		"PUBLICATION_PENDING",
+		"QUALITY_REQUIRED",
+		"RECIPIENT_UNBOUND",
+		"RECONCILIATION_EXISTS",
+		"RECONCILIATION_REQUIRED",
+		"REPLAYED",
+		"REPOSITORY_MISMATCH",
+		"RESOURCE_MISMATCH",
+		"RESOURCE_TERMINAL",
 		"REVISION_CONFLICT",
+		"REVISION_EVIDENCE_REQUIRED",
+		"REVISION_PENDING",
+		"REVISION_REASON_REQUIRED",
+		"RUN_ALREADY_COMPLETE",
+		"RUN_EXISTS",
+		"RUN_MISMATCH",
+		"SHARED_DELIVERY_UNIT_DISPATCH",
+		"SHARED_DELIVERY_UNIT_PR",
+		"TARGET_MISMATCH",
+		"TARGET_NOT_ACTIVE",
+		"TASKS_PENDING",
+		"TASK_BASE_REQUIRED",
+		"TASK_CHANGED",
+		"TASK_MIGRATION_REQUIRED",
+		"TASK_MISMATCH",
+		"TASK_NOT_ACTIVE",
+		"TASK_PR_BINDING_INCOMPLETE",
+		"THREAD_CONFLICT",
+		"TRANSPORT_REQUIRED",
 		"UNKNOWN",
+		"UNKNOWN_COMMAND",
+		"UNKNOWN_REQUIRES_RECONCILIATION",
+		"UNKNOWN_TASK",
+		"VIEWER_BINDING_INVALID",
+		"VIEWER_RENEWAL_FAILED",
+		"WAIT_REASON_REQUIRED",
+		"WORKSPACE_NOT_READY",
 	],
 	sources: {
 		runtime_validation: "packages/multi-task-flow-runtime/lib/engine.ts",
