@@ -11,7 +11,7 @@ import {
 import { versionEnvelope } from "../lib/contract";
 import { sweepConversationArchives } from "../lib/conversation-archive";
 import { desktopHandoff } from "../lib/desktop-handoff";
-import { actorSchema, apply, requestSchema } from "../lib/engine";
+import { actorSchema, apply, authorize, requestSchema } from "../lib/engine";
 import { ContractError } from "../lib/errors";
 import {
   effectiveProfile,
@@ -343,15 +343,7 @@ try {
       .strict()
       .parse(input);
     const ledger = validateLedger(new LedgerStore(root, parsed.run_id).read());
-    const allowed =
-      ledger.control.ownership === "bound" &&
-      (parsed.actor.role === "main"
-        ? parsed.actor.thread_id === ledger.control.owner_thread_id
-        : parsed.actor.role === "group"
-          ? ledger.groups.some((g) => g.agent_thread_id === parsed.actor.thread_id)
-          : ledger.tasks.some((t) => t.thread_id === parsed.actor.thread_id));
-    if (!allowed)
-      throw new ContractError("ACTOR_MISMATCH", "Conversation is not bound to the run", 3);
+    authorize(ledger, parsed.actor);
     const notifications = parsed.status
       ? ledger.notifications.filter((item) => item.status === parsed.status)
       : ledger.notifications;
