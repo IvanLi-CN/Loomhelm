@@ -66,6 +66,7 @@ release、deployment 和 verification 是显式原子，不能从 contribution T
 | MTF-AUDIT-002 | 验证缺口 | contract-3 mock 流直接调用 runtime `apply` 的 dispatch bind/resolve，未通过公开 `conversation-create` CLI 路径。 | 未证明 CLI-only native creation 边界在完整 mock 流中不可绕过。 | 保留为 follow-up 验证项；不以现有测试通过替代 CLI 边界证据。 |
 | MTF-AUDIT-003 | 验证缺口 | closeout 测试为其他任务和部分 merge facts 构造 fixture 事实，未覆盖 provider `closed`/缺失 receipt/unknown closeout 的拒绝路径。 | 未证明每个 child PR 都经 Task Agent merge receipt 后才允许 DeliveryUnit closeout。 | 保留为 follow-up 验证项；本轮不伪造 readiness。 |
 | MTF-AUDIT-004 | Runtime 偏差 | `dispatch-claim` 未检查 ready notification 是否已由收件方确认，pending/failed task-ready notification 仍可进入 claim。 | 两阶段通知确认与派发并发门禁未被 runtime 强制执行。 | 本轮不修改 runtime 语义；Step 5C 继续阻塞，需单独修复与回归测试。 |
+| MTF-AUDIT-005 | Runtime 偏差 | `deliveryUnitPrMergedFromLedger` 对 canonical PR 的比较为恒真表达式，未实际核对最新 merge receipt 的 PR identity。 | provider PR identity 不匹配时仍可能被视为可合并，破坏交付单元 merge gate。 | 本轮不修改 runtime 语义；Step 5C 继续阻塞，需单独修复与回归测试。 |
 
 ## 参考
 

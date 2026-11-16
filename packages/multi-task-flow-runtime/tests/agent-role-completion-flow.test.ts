@@ -402,7 +402,7 @@ test("mock Codex handshakes preserve Delivery Agent and Task Agent roles", async
       {
         run: async (input) => {
           const inputRole = input.role ?? role;
-          calls.push({ role: inputRole, prompt: initializationPrompt(inputRole) });
+          calls.push({ role: inputRole, prompt: input.prompt });
           return {
             thread_id: `${role === "Delivery Agent" ? "delivery" : "task"}-thread`,
             exit_code: 0,
@@ -432,8 +432,8 @@ test("mock Codex handshakes preserve Delivery Agent and Task Agent roles", async
     expect(result).toMatchObject({ outcome: "succeeded", thread_id: expect.any(String) });
   }
   expect(calls.map((call) => call.role)).toEqual(["Delivery Agent", "Task Agent"]);
-  expect(calls[0]?.prompt).toContain("Delivery Agent");
-  expect(calls[1]?.prompt).toContain("Task Agent");
+  expect(calls[0]?.prompt).toBe("formal handoff follows");
+  expect(calls[1]?.prompt).toBe("formal handoff follows");
 });
 
 test("mock completion flow uses CLI evidence, revision fencing and reconcile-first recovery", () => {
