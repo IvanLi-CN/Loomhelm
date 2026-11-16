@@ -2,16 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { apply, type Request } from "../lib/engine";
 import { type Ledger, type Task, validateLedger } from "../lib/schema";
 import {
+  approve,
   at,
   base,
-  head,
-  merge,
-  groupActor,
-  main,
   fixture,
+  groupActor,
+  head,
+  main,
+  merge,
   request,
   taskQuality,
-  approve,
   v2Fixture,
 } from "./engine-fixtures";
 
@@ -619,4 +619,3 @@ test("external merge reconciliation rejects incomplete quality evidence without 
   ).toThrow("source-bound task quality");
   expect(JSON.stringify(ledger)).toBe(before);
 });
-

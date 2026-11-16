@@ -1,19 +1,19 @@
-import { z } from "zod";
+import type { z } from "zod";
 import {
   deliveryUnitExternalFacts,
   taskPrBinding,
   validateAtomicGraph,
 } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
-import { ledgerSchema, type Ledger, type Task } from "./schema-models";
+import { collectCutAssignmentEvidence } from "./schema-cut";
+import { canonicalJson, validateDevPlanHandoff, validatePlan } from "./schema-handoff";
+import { type Ledger, ledgerSchema, type Task } from "./schema-models";
+import { normalizeLegacyLedger } from "./schema-normalization";
 import {
   isContributionKind,
   validateDeliveryTopologies,
   validateTaskExecutionPolicies,
 } from "./schema-policies";
-import { canonicalJson, validatePlan, validateDevPlanHandoff } from "./schema-handoff";
-import { collectCutAssignmentEvidence } from "./schema-cut";
-import { normalizeLegacyLedger } from "./schema-normalization";
 
 function parseLedger(value: unknown): Ledger {
   return ledgerSchema.parse(normalizeLegacyLedger(value));
@@ -391,4 +391,3 @@ export function validateLedger(value: unknown): Ledger {
     collectCutAssignmentEvidence(parsed, active);
   return parsed;
 }
-

@@ -1,13 +1,8 @@
 import { z } from "zod";
-import { group, task, cutEvidence, id, type Ledger, type Plan } from "./schema-models";
-import { isContributionKind } from "./schema-policies";
-import {
-  canonicalJson,
-  sameMembers,
-  sameTaskStructure,
-  taskStateAtEvent,
-} from "./schema-handoff";
 import { requireCondition } from "../lib/errors";
+import { canonicalJson, sameMembers, sameTaskStructure, taskStateAtEvent } from "./schema-handoff";
+import { cutEvidence, group, id, type Ledger, type Plan, task } from "./schema-models";
+import { isContributionKind } from "./schema-policies";
 
 const sha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 
@@ -356,5 +351,3 @@ export function collectCutAssignmentEvidence(ledger: Ledger, active: Plan): CutA
     );
   return { assignments, dynamicGroupIds };
 }
-
-

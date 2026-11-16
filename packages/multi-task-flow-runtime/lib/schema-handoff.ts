@@ -2,18 +2,6 @@ import { createHash } from "node:crypto";
 import { posix as posixPath } from "node:path";
 import { z } from "zod";
 import {
-  atomEdge,
-  group,
-  plan,
-  planHandoffSource,
-  task,
-  executionPhase,
-  type Ledger,
-  type Plan,
-  type Task,
-} from "./schema-models";
-import { isContributionKind, type DevPlanHandoffSource } from "./schema-policies";
-import {
   atomicNode,
   validateAtomicBoundaries,
   validateAtomicGraph,
@@ -22,11 +10,28 @@ import {
 } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
 import { topologicalOrder, validateGrouping } from "../lib/graph";
+import {
+  type atomEdge,
+  executionPhase,
+  type group,
+  type Ledger,
+  type Plan,
+  plan,
+  planHandoffSource,
+  type Task,
+  type task,
+} from "./schema-models";
+import { type DevPlanHandoffSource, isContributionKind } from "./schema-policies";
 
-const requirementsPath = z.string().trim().min(1).nullable().refine(
-  (value) => value === null || /^requirements\/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.md$/.test(value),
-  "requirements_path must reference a Markdown file under requirements/",
-);
+const requirementsPath = z
+  .string()
+  .trim()
+  .min(1)
+  .nullable()
+  .refine(
+    (value) => value === null || /^requirements\/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.md$/.test(value),
+    "requirements_path must reference a Markdown file under requirements/",
+  );
 const sha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 
 export type DevPlanHandoff = z.infer<typeof planHandoff>;
@@ -783,5 +788,3 @@ export function theoreticalScheduleIssues(candidate: Plan): TheoreticalScheduleI
     }
   return issues;
 }
-
-

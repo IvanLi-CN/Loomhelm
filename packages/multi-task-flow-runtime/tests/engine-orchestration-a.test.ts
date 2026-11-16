@@ -2,28 +2,29 @@ import { describe, expect, test } from "bun:test";
 import {
   apply,
   deliveryUnitPrMerged,
+  type Request,
   ready,
   requireGroupDispatchGate,
-  type Request,
 } from "../lib/engine";
 import { deriveExecutionPhase } from "../lib/revisions";
 import { type Ledger, type Plan, type Task, validateLedger } from "../lib/schema";
 import {
-  at,
-  base,
-  head,
-  groupActor,
-  main,
-  fixture,
-  request,
-  taskQuality,
   approve,
   approveV2,
-  readyAtomicFixture,
-  readyBootstrapFixture,
-  v2Fixture,
+  at,
+  base,
+  fixture,
+  groupActor,
+  head,
+  main,
+  merge,
   providerBranchReceipt,
   providerPrReceipt,
+  readyAtomicFixture,
+  readyBootstrapFixture,
+  request,
+  taskQuality,
+  v2Fixture,
 } from "./engine-fixtures";
 
 describe("orchestration state", () => {
@@ -1451,7 +1452,4 @@ describe("orchestration state", () => {
       expect(ledger.groups[0].lifecycle.closed).toBe("passed");
     },
   );
-
-
 });
-

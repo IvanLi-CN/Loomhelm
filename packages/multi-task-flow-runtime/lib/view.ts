@@ -30,9 +30,9 @@ import {
 } from "../lib/schema";
 import { createAtomProjection } from "../lib/view-atoms";
 import { type AgentOutput, initialOutput } from "../web/agent-output";
-
-import * as viewHelpers from "./view-readiness";
 import type { PlannedInterval, ReadinessBlocker } from "./view-readiness";
+import * as viewHelpers from "./view-readiness";
+
 export type { PlannedInterval } from "./view-readiness";
 
 const RELATIVE_EPOCH = Date.parse("2000-01-01T00:00:00.000Z");

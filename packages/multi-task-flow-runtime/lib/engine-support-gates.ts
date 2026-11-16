@@ -50,8 +50,8 @@ import {
   validateSchedulablePlan,
   validateTaskExecutionPolicies,
 } from "../lib/schema";
-import * as core from "./engine-support-core";
 import type { Request } from "./engine-support-core";
+import * as core from "./engine-support-core";
 
 const {
   parse,
@@ -232,7 +232,10 @@ export function addOperation(
 export function activeOperation(item: Ledger["operations"][number]): boolean {
   return item.status === "claimed" || item.status === "unknown";
 }
-export function creationObservations(op: Ledger["operations"][number], payload: Record<string, any>) {
+export function creationObservations(
+  op: Ledger["operations"][number],
+  payload: Record<string, any>,
+) {
   const observed: Record<string, any> = { ...object(op.request.creation_observations ?? {}) };
   const previous = object(op.request.creation_result ?? {});
   for (const report of [
@@ -484,7 +487,10 @@ export function deliveryUnitPrMerged(group: Ledger["groups"][number]): boolean {
   );
 }
 
-export function deliveryUnitPrMergedFromLedger(ledger: Ledger, group: Ledger["groups"][number]): boolean {
+export function deliveryUnitPrMergedFromLedger(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+): boolean {
   if (legacyLedger(ledger)) return deliveryUnitPrMerged(group);
   const latest = latestFact(ledger, group.id, "pr_merged");
   const canonicalPr = group.pr && "state" in group.pr ? group.pr.pr : group.pr;
@@ -711,5 +717,3 @@ export function validateRevisionReason(revision: NonNullable<Plan["revision"]>):
       5,
     );
 }
-
-

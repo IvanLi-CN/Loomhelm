@@ -734,4 +734,3 @@ export const ledgerSchema = z
 export type Ledger = z.infer<typeof ledgerSchema>;
 export type Plan = z.infer<typeof plan>;
 export type Task = z.infer<typeof task>;
-

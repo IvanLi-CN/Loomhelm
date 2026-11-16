@@ -1,7 +1,12 @@
-import { requireCondition } from "../lib/errors";
-import { executionPhase, executionProfile, planHandoffSource, planRevision } from "./schema-models";
-import type { Task } from "./schema-models";
 import { z } from "zod";
+import { requireCondition } from "../lib/errors";
+import type {
+  executionPhase,
+  executionProfile,
+  planHandoffSource,
+  planRevision,
+  Task,
+} from "./schema-models";
 
 export const TASK_EXECUTION_POLICY_FIELDS = [
   "execution_owner",
@@ -32,7 +37,7 @@ export function taskExecutionPolicyDeclarationGaps(
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
     const task = item as Record<string, unknown>;
     const missing_fields = TASK_EXECUTION_POLICY_FIELDS.filter(
-      (field) => !Object.prototype.hasOwnProperty.call(task, field),
+      (field) => !Object.hasOwn(task, field),
     );
     return missing_fields.length
       ? [
@@ -247,4 +252,3 @@ export function recommendedExecutionProfile(
   return { ...fallback };
 }
 export type DevPlanHandoffSource = z.infer<typeof planHandoffSource>;
-

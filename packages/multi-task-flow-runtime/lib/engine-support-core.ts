@@ -23,7 +23,7 @@ import {
   defaultGroupAtoms,
   deliveryTopologyForGroup,
   executionProfile,
-  externalRef,
+  type externalRef,
   fact,
   group,
   id,
@@ -36,7 +36,7 @@ import {
   operation,
   type Plan,
   plan,
-  providerReceipt,
+  type providerReceipt,
   recommendedExecutionProfile,
   type Task,
   task,
@@ -700,4 +700,3 @@ export function lineageEventMatches(
     ].includes(shaValue)
   );
 }
-

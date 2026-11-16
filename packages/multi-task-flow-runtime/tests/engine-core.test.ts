@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { apply, deliveryUnitPrMerged, ready, requireGroupDispatchGate, type Request } from "../lib/engine";
+import {
+  apply,
+  deliveryUnitPrMerged,
+  type Request,
+  ready,
+  requireGroupDispatchGate,
+} from "../lib/engine";
 import { deriveExecutionPhase } from "../lib/revisions";
 import {
   type Ledger,
@@ -9,21 +15,21 @@ import {
   validateLedger,
 } from "../lib/schema";
 import {
-  at,
-  base,
-  head,
-  merge,
-  groupActor,
-  main,
   approve,
   approveV2,
+  at,
+  base,
   fixture,
-  request,
-  readyAtomicFixture,
-  readyBootstrapFixture,
-  v2Fixture,
+  groupActor,
+  head,
+  main,
+  merge,
   providerBranchReceipt,
   providerPrReceipt,
+  readyAtomicFixture,
+  readyBootstrapFixture,
+  request,
+  v2Fixture,
 } from "./engine-fixtures";
 
 test("task execution policy rejects contradictory ownership and preserves legacy absence", () => {
@@ -63,7 +69,6 @@ test("task execution policy rejects contradictory ownership and preserves legacy
     })[0]?.code,
   ).toBe("TASK_EXECUTION_POLICY_INCOMPLETE");
 });
-
 
 test("planned delivery units cannot record running execution", () => {
   const ledger = fixture();
@@ -413,7 +418,6 @@ test("terminal task creates a pending conversation archive resource", () => {
     expect.objectContaining({ kind: "conversation", target: "task-b-thread", status: "pending" }),
   );
 });
-
 
 test("task readiness starts at the first executable atomic work", () => {
   const ledger = readyAtomicFixture();
@@ -1194,5 +1198,3 @@ test("contract-3 regular dispatch uses the repository target branch and current 
     expect((error as any).details.missing).toEqual(["parent_pr"]);
   }
 });
-
-

@@ -2,29 +2,29 @@ import { describe, expect, test } from "bun:test";
 import {
   apply,
   deliveryUnitPrMerged,
+  type Request,
   ready,
   requireGroupDispatchGate,
-  type Request,
 } from "../lib/engine";
 import { deriveExecutionPhase } from "../lib/revisions";
 import { type Ledger, type Plan, type Task, validateLedger } from "../lib/schema";
 import {
-  at,
-  base,
-  head,
-  merge,
-  groupActor,
-  main,
-  fixture,
-  request,
-  taskQuality,
   approve,
   approveV2,
-  readyAtomicFixture,
-  readyBootstrapFixture,
-  v2Fixture,
+  at,
+  base,
+  fixture,
+  groupActor,
+  head,
+  main,
+  merge,
   providerBranchReceipt,
   providerPrReceipt,
+  readyAtomicFixture,
+  readyBootstrapFixture,
+  request,
+  taskQuality,
+  v2Fixture,
 } from "./engine-fixtures";
 
 describe("orchestration state", () => {
@@ -1300,6 +1300,4 @@ describe("orchestration state", () => {
     expect((apply(ledger, "execution-profile-migrate", input) as any).code).toBe("REPLAYED");
     expect(ledger.events.at(-1)?.type).toBe("execution_profile_migrated");
   });
-
 });
-

@@ -1,10 +1,10 @@
-import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
+import { z } from "zod";
 import type { ConnectObserver } from "../lib/conversation-output";
 import { ContractError } from "../lib/errors";
-import { z } from "zod";
 import {
   type RuntimeMetadata,
   runtimeMetadata,
@@ -36,17 +36,9 @@ import { parseViewerRoute } from "../scripts/viewer-gateway";
 import { createWorkerGeneration, ViewerWorkerPool } from "../scripts/viewer-runtime";
 import { startUnixViewerWorkerServer, viewerWorkerSocketPath } from "../scripts/viewer-socket";
 import { createUnixViewerWorker, dataVersionOf, workerKeyOf } from "../scripts/viewer-worker";
-import { serviceLog } from "./service-log";
-import { cachedVersionDiscovery } from "./service-update";
-import { ensureViewerBinding, readViewerBinding, type ViewerBinding } from "./viewer-binding";
 import {
-  type WorkerDiagnosticStage,
-  WorkerDiagnosticStore,
-  workerDiagnosticFromError,
-} from "./worker-diagnostics";
-import {
-  agentLease,
   agentInput,
+  agentLease,
   authFailureLocation,
   body,
   html,
@@ -57,10 +49,19 @@ import {
   readOnlyView,
   redirect,
   releaseWorkerResponse,
+  runEntryPath,
   script,
   selectAssets,
-  runEntryPath,
 } from "./service-http-helpers";
+import { serviceLog } from "./service-log";
+import { cachedVersionDiscovery } from "./service-update";
+import { ensureViewerBinding, readViewerBinding, type ViewerBinding } from "./viewer-binding";
+import {
+  type WorkerDiagnosticStage,
+  WorkerDiagnosticStore,
+  workerDiagnosticFromError,
+} from "./worker-diagnostics";
+
 export { agentLease, listRuns, selectAssets } from "./service-http-helpers";
 export async function startSharedViewer(
   state: ServiceState,

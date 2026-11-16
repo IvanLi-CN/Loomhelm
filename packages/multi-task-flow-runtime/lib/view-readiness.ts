@@ -41,8 +41,6 @@ export type PlannedInterval = {
   end_offset_minutes: number | null;
 };
 
-
-
 export function compatibilityAtomicNodeState(node: AtomicNode, ledger: Ledger): AtomicNode {
   if (node.kind === "boundary") {
     const started =
@@ -226,7 +224,10 @@ export function latestParentPrFact(ledger: Ledger, groupId: string) {
     .at(-1);
 }
 
-export function parentPrDefinitivelyAbsent(ledger: Ledger, group: Ledger["groups"][number]): boolean {
+export function parentPrDefinitivelyAbsent(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+): boolean {
   const latest = latestParentPrFact(ledger, group.id);
   const publicationPending = ledger.operations.some(
     (operation) =>
@@ -305,7 +306,10 @@ export function allowsBootstrapMainOwnedStart(
   );
 }
 
-export function allowsBootstrapGroupStart(ledger: Ledger, group: Ledger["groups"][number]): boolean {
+export function allowsBootstrapGroupStart(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+): boolean {
   const workspaceAtom = group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
   return Boolean(
     group.state === "active" &&
@@ -461,14 +465,19 @@ export function planSchedulingIssues(ledger: Ledger, plan: Plan): PlanCompletene
     : [];
 }
 
-export function taskSchedulingIssues(ledger: Ledger): Array<PlanCompletenessIssue & { group_id: string }> {
+export function taskSchedulingIssues(
+  ledger: Ledger,
+): Array<PlanCompletenessIssue & { group_id: string }> {
   if (ledger.source_schema_version === 1) return [];
   return ledger.tasks.flatMap((task) =>
     taskExecutionPolicyIssues(task).map((issue) => ({ ...issue, group_id: task.group_id })),
   );
 }
 
-export function activeGroupDispatch(ledger: Ledger, groupId: string): Ledger["operations"][number] | null {
+export function activeGroupDispatch(
+  ledger: Ledger,
+  groupId: string,
+): Ledger["operations"][number] | null {
   return (
     ledger.operations.find(
       (operation) =>
@@ -773,4 +782,3 @@ export function runtimeReadinessProjection(
     byGroup,
   };
 }
-

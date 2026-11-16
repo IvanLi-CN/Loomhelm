@@ -2,8 +2,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import type { StaticViewerProvenance } from "../lib/runtime-metadata";
 import { ContractError } from "../lib/errors";
+import type { StaticViewerProvenance } from "../lib/runtime-metadata";
 import { dashboardHeaders } from "../lib/server";
 import { readBodyWithinLimit } from "../lib/server-files";
 import { requireApi, requireLedgerCompatibility } from "../lib/service-contract";
@@ -201,4 +201,3 @@ export function releaseWorkerResponse(
     headers: response.headers,
   });
 }
-

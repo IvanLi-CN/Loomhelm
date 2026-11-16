@@ -9,7 +9,13 @@ export const at = "2026-01-01T00:00:00.000Z";
 export const main = { role: "main", thread_id: "main-thread" } as const;
 export const groupActor = { role: "group", thread_id: "group-thread" } as const;
 
-export function taskQuality(taskId: string, threadId: string, pr: any, baseSha: string, headSha: string) {
+export function taskQuality(
+  taskId: string,
+  threadId: string,
+  pr: any,
+  baseSha: string,
+  headSha: string,
+) {
   return {
     task_id: taskId,
     thread_id: threadId,
@@ -195,7 +201,6 @@ export function approve(ledger: ReturnType<typeof fixture>) {
     }),
   );
 }
-
 
 export function v2Fixture() {
   const ledger: any = structuredClone(fixture());
@@ -387,7 +392,6 @@ export function readyAtomicFixture() {
   return ledger;
 }
 
-
 export function providerBranchReceipt(branch: string, sha: string) {
   return {
     provider: "github",
@@ -424,6 +428,3 @@ export function providerPrReceipt(id: string, branch: string, baseSha: string, h
     evidence_ref: `provider:pr:${id}`,
   };
 }
-
-
-

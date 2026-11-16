@@ -111,4 +111,3 @@ export function normalizeLegacyLedger(value: unknown): unknown {
     })),
   };
 }
-
