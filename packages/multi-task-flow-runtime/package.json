@@ -5,6 +5,7 @@
   "scripts": {
     "format": "biome check --write .",
     "format:check": "biome check --assist-enabled=true --enforce-assist=true --diagnostic-level=error .",
+    "check:staged": "biome check --staged --assist-enabled=true --enforce-assist=true --diagnostic-level=error .",
     "lint": "biome lint .",
     "check:style": "bun run format:check && bun run lint",
     "test": "bun test --path-ignore-patterns 'tests/ui/**'",
