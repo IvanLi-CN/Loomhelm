@@ -1,15 +1,16 @@
 import { ContractError, requireCondition } from "../lib/errors";
-import type { Ledger, Plan } from "../lib/schema";
+import type { Ledger } from "../lib/schema";
 import { validateLedger } from "../lib/schema";
-import { executeCommandA } from "./engine-commands-a";
-import { executeCommandB } from "./engine-commands-b";
-import { executeCommandC1 } from "./engine-commands-c1";
-import { executeCommandC2 } from "./engine-commands-c2";
-import { executeCommandD1 } from "./engine-commands-d1";
-import { executeCommandD2 } from "./engine-commands-d2";
-import { executeCommandE } from "./engine-commands-e";
-import { executeCommandF1 } from "./engine-commands-f1";
-import { executeCommandF2 } from "./engine-commands-f2";
+import { closeoutCommands, executeCloseoutCommand } from "./engine-closeout";
+import { type CommandDomain, indexCommandDomains } from "./engine-command-context";
+import { coordinationCommands, executeCoordinationCommand } from "./engine-coordination";
+import {
+  evidenceDeliveryCommands,
+  executeEvidenceDeliveryCommand,
+} from "./engine-evidence-delivery";
+import { executeExecutionCommand, executionCommands } from "./engine-execution";
+import { executeGroupLifecycleCommand, groupLifecycleCommands } from "./engine-group-lifecycle";
+import { executeMergeCutCommand, mergeCutCommands } from "./engine-merge-cut";
 import type { Request } from "./engine-support-core";
 import * as core from "./engine-support-core";
 import { actorSchema, authorize, now, requestSchema, stable } from "./engine-support-core";
@@ -21,6 +22,12 @@ import {
   notificationDirective,
   ready,
 } from "./engine-support-gates";
+import { executeTaskIntegrationCommand, taskIntegrationCommands } from "./engine-task-integration";
+import { executeTaskLifecycleCommand, taskLifecycleCommands } from "./engine-task-lifecycle";
+import {
+  executeWorkspacePublicationCommand,
+  workspacePublicationCommands,
+} from "./engine-workspace-publication";
 
 export type { Request };
 export { actorSchema, requestSchema };
@@ -30,25 +37,18 @@ export const deliveryUnitPrMerged = support.deliveryUnitPrMerged;
 export const requireGroupDispatchGate = support.requireGroupDispatchGate;
 export { authorize, ready };
 
-type CommandHandler = (context: {
-  ledger: Ledger;
-  command: string;
-  request: Request;
-  payload: Record<string, any>;
-  currentPlan: () => Plan;
-}) => unknown | undefined;
-
-const handlers: CommandHandler[] = [
-  executeCommandA,
-  executeCommandB,
-  executeCommandC1,
-  executeCommandC2,
-  executeCommandD1,
-  executeCommandD2,
-  executeCommandE,
-  executeCommandF1,
-  executeCommandF2,
+const domains: CommandDomain[] = [
+  { commands: coordinationCommands, handle: executeCoordinationCommand },
+  { commands: executionCommands, handle: executeExecutionCommand },
+  { commands: taskLifecycleCommands, handle: executeTaskLifecycleCommand },
+  { commands: groupLifecycleCommands, handle: executeGroupLifecycleCommand },
+  { commands: workspacePublicationCommands, handle: executeWorkspacePublicationCommand },
+  { commands: taskIntegrationCommands, handle: executeTaskIntegrationCommand },
+  { commands: mergeCutCommands, handle: executeMergeCutCommand },
+  { commands: evidenceDeliveryCommands, handle: executeEvidenceDeliveryCommand },
+  { commands: closeoutCommands, handle: executeCloseoutCommand },
 ];
+const commandHandlers = indexCommandDomains(domains);
 
 export function execute(ledger: Ledger, command: string, request: Request): unknown {
   if (command !== "binding-resolve") authorize(ledger, request.actor);
@@ -59,9 +59,11 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
     payload: request.payload,
     currentPlan: () => core.approved(ledger),
   };
-  for (const handler of handlers) {
+  const handler = commandHandlers.get(command);
+  if (handler) {
     const result = handler(context);
     if (result !== undefined) return result;
+    throw new ContractError("COMMAND_HANDLER_MISSING", `Command domain did not handle: ${command}`);
   }
   throw new ContractError("UNKNOWN_COMMAND", `Unsupported command: ${command}`);
 }

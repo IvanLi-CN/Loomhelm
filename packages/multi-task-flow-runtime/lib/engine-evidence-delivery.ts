@@ -1,57 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ContractError, requireCondition } from "../lib/errors";
-import {
-  effectiveProfile,
-  materializeRecommendation,
-  profileFreezeReason,
-  RECOMMENDATION_VERSION,
-} from "../lib/execution-profile";
-import { migrateProfile } from "../lib/profile-migration";
-import {
-  buildPlanRevision,
-  deriveExecutionPhase,
-  evidenceRequired,
-  reasonRequired,
-  revisionInput,
-} from "../lib/revisions";
-import * as schema from "../lib/schema";
-import {
-  baselineReceipt,
-  changeReason,
-  collectCutAssignmentEvidence,
-  cutEvidence,
-  defaultGroupAtoms,
-  deliveryTopologyForGroup,
-  executionProfile,
-  externalRef,
-  fact,
-  group,
-  id,
-  isContributionKind,
-  type Ledger,
-  ledgerSchema,
-  milestone,
-  notification,
-  notificationOption,
-  operation,
-  type Plan,
-  plan,
-  providerReceipt,
-  recommendedExecutionProfile,
-  type Task,
-  task,
-  theoreticalScheduleIssues,
-  validateDeliveryTopologies,
-  validateDevPlanHandoff,
-  validateInitialRuntimeState,
-  validateLedger,
-  validateNewTaskKinds,
-  validatePlan,
-  validateSchedulablePlan,
-  validateTaskExecutionPolicies,
-} from "../lib/schema";
-import type { Request } from "./engine-support-core";
+import { fact, id } from "../lib/schema";
+import type { CommandContext } from "./engine-command-context";
 import * as core from "./engine-support-core";
 import * as support from "./engine-support-gates";
 
@@ -124,15 +75,15 @@ const {
   groupBaseReconciliation,
 } = support;
 
-export type ExecutionContext = {
-  ledger: Ledger;
-  command: string;
-  request: Request;
-  payload: Record<string, any>;
-  currentPlan: () => Plan;
-};
+export const evidenceDeliveryCommands = [
+  "fact-record",
+  "action-claim",
+  "action-resolve",
+  "notification-deliver",
+  "notification-reconcile",
+] as const;
 
-export function executeCommandF1(context: ExecutionContext): unknown | undefined {
+export function executeEvidenceDeliveryCommand(context: CommandContext): unknown | undefined {
   const { ledger, command, request, payload, currentPlan } = context;
   switch (command) {
     case "fact-record": {

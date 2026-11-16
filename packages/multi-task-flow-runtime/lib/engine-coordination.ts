@@ -1,57 +1,27 @@
-import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { ContractError, requireCondition } from "../lib/errors";
+import { requireCondition } from "../lib/errors";
 import {
   effectiveProfile,
   materializeRecommendation,
   profileFreezeReason,
-  RECOMMENDATION_VERSION,
 } from "../lib/execution-profile";
-import { migrateProfile } from "../lib/profile-migration";
+import { buildPlanRevision, revisionInput } from "../lib/revisions";
 import {
-  buildPlanRevision,
-  deriveExecutionPhase,
-  evidenceRequired,
-  reasonRequired,
-  revisionInput,
-} from "../lib/revisions";
-import * as schema from "../lib/schema";
-import {
-  baselineReceipt,
   changeReason,
   collectCutAssignmentEvidence,
-  cutEvidence,
-  defaultGroupAtoms,
-  deliveryTopologyForGroup,
-  executionProfile,
-  externalRef,
-  fact,
   group,
   id,
   isContributionKind,
-  type Ledger,
-  ledgerSchema,
-  milestone,
-  notification,
-  notificationOption,
-  operation,
-  type Plan,
   plan,
-  providerReceipt,
-  recommendedExecutionProfile,
   type Task,
   task,
-  theoreticalScheduleIssues,
-  validateDeliveryTopologies,
   validateDevPlanHandoff,
   validateInitialRuntimeState,
-  validateLedger,
   validateNewTaskKinds,
   validatePlan,
-  validateSchedulablePlan,
   validateTaskExecutionPolicies,
 } from "../lib/schema";
-import type { Request } from "./engine-support-core";
+import type { CommandContext } from "./engine-command-context";
 import * as core from "./engine-support-core";
 import * as support from "./engine-support-gates";
 
@@ -123,15 +93,20 @@ const {
   validateRevisionReason,
 } = support;
 
-export type ExecutionContext = {
-  ledger: Ledger;
-  command: string;
-  request: Request;
-  payload: Record<string, any>;
-  currentPlan: () => Plan;
-};
+export const coordinationCommands = [
+  "binding-resolve",
+  "link-verification",
+  "plan-propose",
+  "plan-approve",
+  "protected-approve",
+  "plan-abandon",
+  "task-migrate",
+  "dispatch-claim",
+  "dispatch-group-claim",
+  "dispatch-resolve",
+] as const;
 
-export function executeCommandA(context: ExecutionContext): unknown | undefined {
+export function executeCoordinationCommand(context: CommandContext): unknown | undefined {
   const { ledger, command, request, payload, currentPlan } = context;
   switch (command) {
     case "binding-resolve": {
