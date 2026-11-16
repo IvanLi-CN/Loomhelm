@@ -2068,9 +2068,7 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
         const evidence = object(payload.native_evidence);
         requireCondition(
           typeof op.request.native_request_id === "string" &&
-            ["create_thread", "multi-task-flow-cli", "multi-task-flow-recovery"].includes(
-              evidence.source,
-            ) &&
+            ["create_thread", "multi-task-flow-cli"].includes(evidence.source) &&
             evidence.operation_id === op.id &&
             evidence.native_request_id === op.request.native_request_id &&
             (evidence.native_tool_name === "create_thread" ||
