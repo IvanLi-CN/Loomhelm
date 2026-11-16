@@ -295,7 +295,9 @@ async function readThreadEvidence(
     threadId,
     sortDirection: "asc",
     limit: 1,
-    itemsView: "full",
+    // Full history hydration can hang on an interrupted initialization turn.
+    // Summary preserves the handshake items we validate and keeps reconciliation bounded.
+    itemsView: "summary",
   });
   const turnData = record(turns.result)?.data;
   const turn = Array.isArray(turnData) ? record(turnData[0]) : null;
