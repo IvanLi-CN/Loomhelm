@@ -11,11 +11,14 @@ export const viewerBindingSchema = z
   .object({
     schema_version: z.literal(1),
     run_id: z.string().min(1),
-    package_name: z.string().min(1),
-    package_version: z.string().min(1),
-    build_id: z.string().min(1),
-    source_sha: z.string().min(1),
-    compatibility_line: z.string().min(1),
+    package_name: z.literal("@loomhelm/multi-task-flow"),
+    package_version: z.union([
+      z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
+      z.literal("source-preview"),
+    ]),
+    build_id: z.string().regex(/^[a-f0-9]{64}$/),
+    source_sha: z.string().regex(/^[a-f0-9]{40}$/),
+    compatibility_line: z.string().regex(/^compat-v\d+$/),
     ledger_contract: z.number().int().positive(),
     api_contract: z.number().int().positive(),
     frontend_contract: z.number().int().positive(),
@@ -37,12 +40,15 @@ function bindingLockPath(state: ServiceState, runId: string): string {
 }
 
 export function readViewerBinding(state: ServiceState, runId: string): ViewerBinding | null {
-  const path = viewerBindingPath(state, runId);
+  const expectedRunId = safeId(runId);
+  const path = viewerBindingPath(state, expectedRunId);
   if (!existsSync(path)) return null;
   try {
-    return viewerBindingSchema.parse(
+    const binding = viewerBindingSchema.parse(
       JSON.parse(readRegularNoFollow(path, state.paths.root).toString("utf8")),
     );
+    if (binding.run_id !== expectedRunId) throw new Error("viewer binding run identity mismatch");
+    return binding;
   } catch {
     throw new ContractError("VIEWER_BINDING_INVALID", "Run version binding is invalid", 2);
   }

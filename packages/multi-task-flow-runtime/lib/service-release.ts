@@ -11,6 +11,7 @@ import { readRegular } from "../lib/store";
 export const releaseFiles = [
   "viewer",
   "skills/multi-task-flow/scripts/service.ts",
+  "skills/multi-task-flow/scripts/viewer-worker-process.ts",
   "skills/multi-task-flow/dist/index.html",
   "skills/multi-task-flow/dist/app.js",
   "skills/multi-task-flow/dist/app.css",
@@ -115,7 +116,10 @@ export function verifyRelease(root: string): ReleaseManifest {
     };
     walk("");
     // Resolve the actual service import graph inside the verified resource set.
-    const pending = ["skills/multi-task-flow/scripts/service.ts"];
+    const pending = [
+      "skills/multi-task-flow/scripts/service.ts",
+      "skills/multi-task-flow/scripts/viewer-worker-process.ts",
+    ];
     const visited = new Set<string>();
     while (pending.length) {
       const file = pending.pop()!;

@@ -1,5 +1,13 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { PortRegistry } from "@loomhelm/runtime-core/modules/workspace/port_registry";
 import { ServiceAuth } from "../lib/service-auth";
@@ -9,8 +17,14 @@ import { runDaemon } from "../lib/service-lifecycle";
 import { installRelease, nativeServiceControl, switchRelease } from "../lib/service-maintenance";
 import { verifyRelease } from "../lib/service-release";
 import { LedgerStore } from "../lib/store";
+import { writeViewerBinding } from "../lib/viewer-binding";
 import { serviceCommand } from "../scripts/service";
-import { fixtureRelease, fixtureRun, serviceFixture } from "./service-fixture";
+import {
+  fixtureLegacyRelease,
+  fixtureRelease,
+  fixtureRun,
+  serviceFixture,
+} from "./service-fixture";
 
 const roots: string[] = [];
 const servers: Awaited<ReturnType<typeof startSharedViewer>>[] = [];
@@ -121,6 +135,238 @@ test("multi-run routing has one listener and isolated worker streams", async () 
       })
     ).status,
   ).toBe(403);
+});
+test("run service projection exposes the runtime identity used by the version details surface", async () => {
+  const { root, state } = fixture();
+  const release = fixtureRelease(root);
+  fixtureRun(state.paths.data, "runtime-identity");
+  const viewer = await startSharedViewer(
+    state,
+    release.manifest,
+    join(release.source, "skills/multi-task-flow/dist"),
+    0,
+  );
+  servers.push(viewer);
+  const base = `http://127.0.0.1:${viewer.port}`;
+  const headers = { authorization: "Bearer " + new ServiceAuth(state).credential() };
+  const response = await fetch(base + "/runs/runtime-identity/api/service", { headers });
+  expect(response.status).toBe(200);
+  const value = (await response.json()) as {
+    runtime: { static_viewer: { source: string }; daemon: { service_contract: string | null } };
+  };
+  expect(value.runtime.static_viewer.source).toBe("unknown");
+  expect(value.runtime.daemon.service_contract).toBe(release.manifest.service_version);
+});
+test("run service projection follows a historical Worker binding", async () => {
+  const { root, state } = fixture();
+  const previous = fixtureRelease(root, "previous");
+  const current = fixtureRelease(root, "current");
+  mkdirSync(state.paths.releases, { recursive: true });
+  cpSync(previous.source, join(state.paths.releases, previous.manifest.build_id), {
+    recursive: true,
+  });
+  state.saveConfig({
+    schema_version: 1,
+    port: 49152,
+    registry_dir: join(root, "registry"),
+    current_build: current.manifest.build_id,
+    previous_build: previous.manifest.build_id,
+    agent_ttl_ms: 60_000,
+    package_name: "@loomhelm/multi-task-flow",
+    package_version: "0.0.0-current",
+    compatibility_line: "compat-v1",
+    skill_version: current.manifest.skill_version,
+    service_contract: current.manifest.service_version,
+    ledger_contract: current.manifest.ledger_contract ?? 3,
+    api_contract: current.manifest.api_versions[0]!,
+    frontend_contract: current.manifest.frontend_contracts[0]!,
+    viewer_contract: current.manifest.viewer_contract,
+    source_sha: current.manifest.source_sha,
+    artifact_build_id: current.manifest.build_id,
+  });
+  fixtureRun(state.paths.data, "historical-runtime");
+  writeViewerBinding(state, {
+    schema_version: 1,
+    run_id: "historical-runtime",
+    package_name: "@loomhelm/multi-task-flow",
+    package_version: previous.manifest.service_version,
+    build_id: previous.manifest.build_id,
+    source_sha: previous.manifest.source_sha,
+    compatibility_line: "compat-v1",
+    ledger_contract: previous.manifest.ledger_contract ?? 2,
+    api_contract: previous.manifest.api_versions[0]!,
+    frontend_contract: previous.manifest.frontend_contracts[0]!,
+    viewer_contract: previous.manifest.viewer_contract,
+    revision: 0,
+    request_id: "test-historical-binding",
+    updated_at: new Date().toISOString(),
+  });
+  const viewer = await startSharedViewer(
+    state,
+    current.manifest,
+    join(current.source, "skills/multi-task-flow/dist"),
+    0,
+  );
+  servers.push(viewer);
+  const response = await fetch(
+    `http://127.0.0.1:${viewer.port}/runs/historical-runtime/api/service`,
+    { headers: { authorization: "Bearer " + new ServiceAuth(state).credential() } },
+  );
+  expect(response.status).toBe(200);
+  const value = (await response.json()) as {
+    runtime: { static_viewer: Record<string, unknown>; daemon: Record<string, unknown> };
+  };
+  expect(value.runtime.static_viewer).toMatchObject({
+    source: "package",
+    package_version: previous.manifest.service_version,
+    build_id: previous.manifest.build_id,
+    source_sha: previous.manifest.source_sha,
+    skill_version: previous.manifest.skill_version,
+  });
+  expect(value.runtime.daemon).toMatchObject({
+    package_version: "0.0.0-current",
+    build_id: current.manifest.build_id,
+    source_sha: current.manifest.source_sha,
+  });
+});
+test("schema-1 historical bindings remain diagnostic-only and cannot start a Worker", async () => {
+  const { root, state } = fixture();
+  const current = fixtureRelease(root, "current");
+  const legacy = fixtureLegacyRelease(root);
+  const legacyManifest = verifyRelease(legacy.source);
+  mkdirSync(state.paths.releases, { recursive: true });
+  cpSync(legacy.source, join(state.paths.releases, legacyManifest.build_id), { recursive: true });
+  state.saveConfig({
+    schema_version: 1,
+    port: 49152,
+    registry_dir: join(root, "registry"),
+    current_build: current.manifest.build_id,
+    previous_build: legacyManifest.build_id,
+    agent_ttl_ms: 60_000,
+    package_name: "@loomhelm/multi-task-flow",
+    package_version: "0.0.0-current",
+    compatibility_line: "compat-v1",
+    skill_version: current.manifest.skill_version,
+    service_contract: "1",
+    ledger_contract: current.manifest.ledger_contract ?? 3,
+    api_contract: current.manifest.api_versions[0]!,
+    frontend_contract: current.manifest.frontend_contracts[0]!,
+    viewer_contract: current.manifest.viewer_contract,
+    source_sha: current.manifest.source_sha,
+    artifact_build_id: current.manifest.build_id,
+  });
+  fixtureRun(state.paths.data, "historical-legacy");
+  writeViewerBinding(state, {
+    schema_version: 1,
+    run_id: "historical-legacy",
+    package_name: "@loomhelm/multi-task-flow",
+    package_version: "0.2.41",
+    build_id: legacyManifest.build_id,
+    source_sha: legacyManifest.source_sha,
+    compatibility_line: "compat-v1",
+    ledger_contract: legacyManifest.ledger_contract ?? 2,
+    api_contract: legacyManifest.api_versions[0]!,
+    frontend_contract: legacyManifest.frontend_contracts[0]!,
+    viewer_contract: legacyManifest.viewer_contract,
+    revision: 0,
+    request_id: "test-legacy-binding",
+    updated_at: new Date().toISOString(),
+  });
+  const viewer = await startSharedViewer(
+    state,
+    current.manifest,
+    join(current.source, "skills/multi-task-flow/dist"),
+    0,
+  );
+  servers.push(viewer);
+  const response = await fetch(
+    `http://127.0.0.1:${viewer.port}/runs/historical-legacy/api/service`,
+    { headers: { authorization: "Bearer " + new ServiceAuth(state).credential() } },
+  );
+  expect(response.status).toBe(503);
+  expect(await response.json()).toMatchObject({ code: "VIEWER_BINDING_RELEASE_UNSUPPORTED" });
+});
+test("run service projection follows custom assets over a historical binding", async () => {
+  const { root, state } = fixture();
+  const previous = fixtureRelease(root, "previous");
+  const current = fixtureRelease(root, "current");
+  mkdirSync(state.paths.releases, { recursive: true });
+  cpSync(previous.source, join(state.paths.releases, previous.manifest.build_id), {
+    recursive: true,
+  });
+  state.saveConfig({
+    schema_version: 1,
+    port: 49152,
+    registry_dir: join(root, "registry"),
+    current_build: current.manifest.build_id,
+    previous_build: previous.manifest.build_id,
+    agent_ttl_ms: 60_000,
+    package_name: "@loomhelm/multi-task-flow",
+    package_version: "0.0.0-current",
+    compatibility_line: "compat-v1",
+    skill_version: current.manifest.skill_version,
+    service_contract: current.manifest.service_version,
+    ledger_contract: current.manifest.ledger_contract ?? 3,
+    api_contract: current.manifest.api_versions[0]!,
+    frontend_contract: current.manifest.frontend_contracts[0]!,
+    viewer_contract: current.manifest.viewer_contract,
+    source_sha: current.manifest.source_sha,
+    artifact_build_id: current.manifest.build_id,
+  });
+  const { store } = fixtureRun(state.paths.data, "historical-custom");
+  writeViewerBinding(state, {
+    schema_version: 1,
+    run_id: "historical-custom",
+    package_name: "@loomhelm/multi-task-flow",
+    package_version: previous.manifest.service_version,
+    build_id: previous.manifest.build_id,
+    source_sha: previous.manifest.source_sha,
+    compatibility_line: "compat-v1",
+    ledger_contract: previous.manifest.ledger_contract ?? 2,
+    api_contract: previous.manifest.api_versions[0]!,
+    frontend_contract: previous.manifest.frontend_contracts[0]!,
+    viewer_contract: previous.manifest.viewer_contract,
+    revision: 0,
+    request_id: "test-historical-custom-binding",
+    updated_at: new Date().toISOString(),
+  });
+  const custom = join(store.runPath, "view");
+  mkdirSync(custom);
+  cpSync(join(current.source, "skills/multi-task-flow/dist"), custom, { recursive: true });
+  writeFileSync(
+    join(custom, "index.html"),
+    "<!-- custom-view-marker -->\n" +
+      readFileSync(join(current.source, "skills/multi-task-flow/dist/index.html"), "utf8"),
+  );
+  writeFileSync(
+    join(custom, "view.manifest.json"),
+    JSON.stringify({ api_version: 1, frontend_contract: 1 }),
+  );
+  const viewer = await startSharedViewer(
+    state,
+    current.manifest,
+    join(current.source, "skills/multi-task-flow/dist"),
+    0,
+  );
+  servers.push(viewer);
+  const response = await fetch(
+    `http://127.0.0.1:${viewer.port}/runs/historical-custom/api/service`,
+    { headers: { authorization: "Bearer " + new ServiceAuth(state).credential() } },
+  );
+  expect(response.status).toBe(200);
+  const value = (await response.json()) as {
+    runtime: { static_viewer: Record<string, unknown> };
+  };
+  expect(value.runtime.static_viewer).toMatchObject({
+    source: "custom-view",
+    package_name: null,
+    build_id: null,
+  });
+  const page = await fetch(`http://127.0.0.1:${viewer.port}/runs/historical-custom/`, {
+    headers: { authorization: "Bearer " + new ServiceAuth(state).credential() },
+  });
+  expect(page.status).toBe(200);
+  expect(await page.text()).toContain("custom-view-marker");
 });
 test("one worker serves consecutive contract-3 run pages", async () => {
   const { root, state } = fixture();

@@ -6,6 +6,14 @@ import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { z } from "zod";
 import type { ConnectObserver } from "../lib/conversation-output";
 import { ContractError } from "../lib/errors";
+import {
+  type RuntimeMetadata,
+  runtimeMetadata,
+  runtimeMetadataFromViewer,
+  type StaticViewerProvenance,
+  staticViewerProvenanceSchema,
+  unknownStaticViewerProvenance,
+} from "../lib/runtime-metadata";
 import { createRunDashboard, dashboardHeaders } from "../lib/server";
 import { readBodyWithinLimit } from "../lib/server-files";
 import { ServiceAuth } from "../lib/service-auth";
@@ -32,7 +40,7 @@ import { startUnixViewerWorkerServer, viewerWorkerSocketPath } from "../scripts/
 import { createUnixViewerWorker, dataVersionOf, workerKeyOf } from "../scripts/viewer-worker";
 import { serviceLog } from "./service-log";
 import { cachedVersionDiscovery } from "./service-update";
-import { ensureViewerBinding, readViewerBinding } from "./viewer-binding";
+import { ensureViewerBinding, readViewerBinding, type ViewerBinding } from "./viewer-binding";
 import {
   type WorkerDiagnosticStage,
   WorkerDiagnosticStore,
@@ -71,6 +79,24 @@ const agentInput = z
     api_version: z.literal(1),
   })
   .strict();
+const exactPackageVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const packageIdentitySchema = z
+  .object({
+    package_name: z.literal("@loomhelm/multi-task-flow"),
+    version: z.string().regex(exactPackageVersion),
+    source_sha: z.string().regex(/^[a-f0-9]{40}$/),
+    compatibility_line: z.string().regex(/^compat-v\d+$/),
+    build_id: z.string().regex(/^[a-f0-9]{64}$/),
+    contracts: z
+      .object({
+        ledger: z.number().int().positive(),
+        api: z.number().int().positive(),
+        frontend: z.number().int().positive(),
+        viewer: z.number().int().positive(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
 export function agentLease(input: z.infer<typeof agentInput>) {
   safeId(input.thread_id);
   safeId(input.run_id);
@@ -114,7 +140,11 @@ export function listRuns(root: string, offset = 0) {
   };
 }
 
-export function selectAssets(root: string, runId: string, shared: string) {
+export function selectAssets(
+  root: string,
+  runId: string,
+  shared: string,
+): { path: string; warning: string | null; source?: StaticViewerProvenance["source"] } {
   const custom = join(root, "runs", safeId(runId), "view");
   if (!existsSync(custom)) return { path: shared, warning: null };
   try {
@@ -124,7 +154,7 @@ export function selectAssets(root: string, runId: string, shared: string) {
       .strict()
       .parse(JSON.parse(readRegular(join(custom, "view.manifest.json"))));
     requireApi(manifest.api_version);
-    return { path: custom, warning: null };
+    return { path: custom, warning: null, source: "custom-view" };
   } catch {
     return {
       path: shared,
@@ -288,8 +318,204 @@ export async function startSharedViewer(
     string,
     (request: Request, runId: string, path: string) => Promise<Response>
   >();
-  const workerBuilds = new Map<string, { build_id: string; package_version: string }>();
+  const workerBuilds = new Map<
+    string,
+    { build_id: string; package_version: string; release_root: string | null }
+  >();
   const warnings = new Map<string, string | null>();
+  const runtimeConfig = (() => {
+    try {
+      return state.config();
+    } catch {
+      return {};
+    }
+  })();
+  const sharedSource: StaticViewerProvenance["source"] | undefined = sourceRevision
+    ? "source-preview"
+    : undefined;
+  const bindingReleases = new Map<string, ReleaseManifest | null>();
+  const verifiedPackageBindings = new Set<string>();
+  const currentBindingIdentity = {
+    package_name: serviceConfig.package_name ?? "@loomhelm/multi-task-flow",
+    package_version: serviceConfig.package_version ?? manifest.service_version,
+    build_id: manifest.build_id,
+    source_sha: serviceConfig.source_sha ?? manifest.source_sha,
+    compatibility_line: serviceConfig.compatibility_line ?? "compat-v1",
+    ledger_contract: serviceConfig.ledger_contract ?? manifest.ledger_contract ?? 3,
+    api_contract: serviceConfig.api_contract ?? manifest.api_versions[0] ?? 1,
+    frontend_contract: serviceConfig.frontend_contract ?? manifest.frontend_contracts[0] ?? 1,
+    viewer_contract: serviceConfig.viewer_contract ?? manifest.viewer_contract,
+  };
+  const bindingMismatch = (): never => {
+    throw new ContractError(
+      "VIEWER_BINDING_IDENTITY_MISMATCH",
+      "Run version binding does not match its verified viewer identity",
+      2,
+    );
+  };
+  function releaseForBinding(binding: ViewerBinding): ReleaseManifest | null {
+    if (bindingReleases.has(binding.build_id)) return bindingReleases.get(binding.build_id) ?? null;
+    const root = join(state.paths.releases, binding.build_id);
+    if (!existsSync(root)) {
+      bindingReleases.set(binding.build_id, null);
+      return null;
+    }
+    try {
+      const release = verifyRelease(root);
+      if (release.build_id !== binding.build_id) bindingMismatch();
+      bindingReleases.set(binding.build_id, release);
+      return release;
+    } catch (error) {
+      if (error instanceof ContractError && error.code === "VIEWER_BINDING_IDENTITY_MISMATCH")
+        throw error;
+      throw new ContractError(
+        "VIEWER_BINDING_RELEASE_INVALID",
+        "Run version binding points to an invalid viewer release",
+        2,
+      );
+    }
+  }
+  function verifyExternalPackageBinding(binding: ViewerBinding): void {
+    if (
+      binding.package_name !== "@loomhelm/multi-task-flow" ||
+      binding.package_version === "source-preview" ||
+      !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(binding.package_version)
+    )
+      bindingMismatch();
+    const key = [
+      binding.package_name,
+      binding.package_version,
+      binding.build_id,
+      binding.source_sha,
+      binding.compatibility_line,
+      binding.ledger_contract,
+      binding.api_contract,
+      binding.frontend_contract,
+      binding.viewer_contract,
+    ].join(":");
+    if (verifiedPackageBindings.has(key)) return;
+    const result = Runtime.spawnSync(
+      [
+        process.execPath,
+        "x",
+        "--bun",
+        "--package",
+        `${binding.package_name}@${binding.package_version}`,
+        "multi-task-flow",
+        "--version",
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 120_000 },
+    );
+    if (result.exitCode !== 0) {
+      throw new ContractError(
+        "VIEWER_BINDING_IDENTITY_UNAVAILABLE",
+        "Historical viewer package identity could not be verified",
+        2,
+      );
+    }
+    let identity: z.infer<typeof packageIdentitySchema>;
+    try {
+      identity = packageIdentitySchema.parse(JSON.parse(result.stdout.toString("utf8")));
+    } catch {
+      throw new ContractError(
+        "VIEWER_BINDING_IDENTITY_INVALID",
+        "Historical viewer package returned an invalid identity",
+        2,
+      );
+    }
+    if (
+      identity.package_name !== binding.package_name ||
+      identity.version !== binding.package_version ||
+      identity.build_id !== binding.build_id ||
+      identity.source_sha !== binding.source_sha ||
+      identity.compatibility_line !== binding.compatibility_line ||
+      identity.contracts.ledger !== binding.ledger_contract ||
+      identity.contracts.api !== binding.api_contract ||
+      identity.contracts.frontend !== binding.frontend_contract ||
+      identity.contracts.viewer !== binding.viewer_contract
+    )
+      bindingMismatch();
+    verifiedPackageBindings.add(key);
+  }
+  function verifyBindingIdentity(binding: ViewerBinding): ReleaseManifest | null {
+    if (binding.build_id === currentBindingIdentity.build_id) {
+      if (
+        binding.package_name !== currentBindingIdentity.package_name ||
+        binding.package_version !== currentBindingIdentity.package_version ||
+        binding.source_sha !== currentBindingIdentity.source_sha ||
+        binding.compatibility_line !== currentBindingIdentity.compatibility_line ||
+        binding.ledger_contract !== currentBindingIdentity.ledger_contract ||
+        binding.api_contract !== currentBindingIdentity.api_contract ||
+        binding.frontend_contract !== currentBindingIdentity.frontend_contract ||
+        binding.viewer_contract !== currentBindingIdentity.viewer_contract
+      )
+        bindingMismatch();
+      return null;
+    }
+    const release = releaseForBinding(binding);
+    if (release) {
+      if (release.schema_version !== 2)
+        throw new ContractError(
+          "VIEWER_BINDING_RELEASE_UNSUPPORTED",
+          "Historical viewer release is diagnostic-only and cannot serve a run",
+          2,
+        );
+      if (
+        binding.source_sha !== release.source_sha ||
+        binding.ledger_contract !== (release.ledger_contract ?? 2) ||
+        binding.api_contract !== release.api_versions[0] ||
+        binding.frontend_contract !== release.frontend_contracts[0] ||
+        binding.viewer_contract !== release.viewer_contract
+      )
+        bindingMismatch();
+      return release;
+    }
+    verifyExternalPackageBinding(binding);
+    return null;
+  }
+  function boundViewerProvenance(
+    binding: ViewerBinding,
+    verifiedRelease: ReleaseManifest | null,
+  ): StaticViewerProvenance {
+    const release = verifiedRelease;
+    const source: StaticViewerProvenance["source"] = release
+      ? release.schema_version === 1
+        ? "legacy-bundle"
+        : "package"
+      : "package";
+    const provenance = {
+      schema_version: 1,
+      source,
+      package_name: binding.package_name,
+      package_version: binding.package_version,
+      compatibility_line: binding.compatibility_line,
+      skill_version: release?.skill_version ?? null,
+      viewer_contract: binding.viewer_contract,
+      build_id: /^[a-f0-9]{64}$/.test(binding.build_id) ? binding.build_id : null,
+      source_sha: /^[a-f0-9]{40}$/.test(binding.source_sha) ? binding.source_sha : null,
+    };
+    const parsed = staticViewerProvenanceSchema.safeParse(provenance);
+    return parsed.success ? parsed.data : unknownStaticViewerProvenance(source);
+  }
+  function runtimeForRun(id: string, binding: ViewerBinding): RuntimeMetadata {
+    safeId(id);
+    const verifiedRelease = verifyBindingIdentity(binding);
+    const assets = selectAssets(state.paths.data, id, assetsDir);
+    if (!assets.source && !sharedSource && binding.build_id !== manifest.build_id)
+      return runtimeMetadataFromViewer(
+        boundViewerProvenance(binding, verifiedRelease),
+        runtimeConfig,
+        manifest,
+        assets.warning,
+      );
+    return runtimeMetadata(
+      assets.path,
+      runtimeConfig,
+      manifest,
+      assets.warning,
+      assets.source ?? sharedSource,
+    );
+  }
   let timeoutServer: Pick<Awaited<ReturnType<typeof Runtime.serve>>, "timeout"> | undefined;
   let gatewayPort = port;
   function getRun(id: string) {
@@ -350,6 +576,7 @@ export async function startSharedViewer(
       const selected = workerBuilds.get(workerKey) ?? {
         build_id: manifest.build_id,
         package_version: serviceConfig.package_version ?? manifest.service_version,
+        release_root: null,
       };
       // Synthetic observers are an explicit test/preview seam. Keep the same
       // Unix-socket contract while retaining the injected observer in-process;
@@ -395,15 +622,23 @@ export async function startSharedViewer(
               process.execPath,
               new URL("../scripts/viewer-worker-process.ts", import.meta.url).pathname,
             ]
-          : [
-              process.execPath,
-              "x",
-              "--bun",
-              "--package",
-              `@loomhelm/multi-task-flow@${selected.package_version}`,
-              "multi-task-flow",
-              "worker-process",
-            ];
+          : selected.release_root
+            ? [
+                process.execPath,
+                join(
+                  selected.release_root,
+                  "skills/multi-task-flow/scripts/viewer-worker-process.ts",
+                ),
+              ]
+            : [
+                process.execPath,
+                "x",
+                "--bun",
+                "--package",
+                `@loomhelm/multi-task-flow@${selected.package_version}`,
+                "multi-task-flow",
+                "worker-process",
+              ];
       const child = Bun.spawn(childCommand, {
         env: {
           ...process.env,
@@ -412,7 +647,11 @@ export async function startSharedViewer(
           MTF_WORKER_GENERATION: generation,
           MTF_WORKER_DATA_ROOT: state.paths.data,
           MTF_WORKER_PORT: String(gatewayPort),
-          ...(selected.build_id === manifest.build_id ? { MTF_WORKER_ASSETS: assetsDir } : {}),
+          ...(selected.build_id === manifest.build_id
+            ? { MTF_WORKER_ASSETS: assetsDir }
+            : selected.release_root
+              ? { MTF_WORKER_ASSETS: join(selected.release_root, "skills/multi-task-flow/dist") }
+              : {}),
         },
         stdout: "ignore",
         stderr: "ignore",
@@ -662,6 +901,7 @@ export async function startSharedViewer(
               frontend_contract: manifest.frontend_contracts[0] ?? 1,
               viewer_contract: manifest.viewer_contract,
             });
+            const runtime = runtimeForRun(id, binding);
             return json({
               surface: "orchestration",
               current: binding,
@@ -671,7 +911,8 @@ export async function startSharedViewer(
                 build_id: manifest.build_id,
                 compatibility_line: serviceConfig.compatibility_line,
               },
-              warning: warnings.get(id),
+              warning: runtime.warning ?? warnings.get(id) ?? null,
+              runtime,
               ...(versionDiscovery
                 ? {
                     update_hint: {
@@ -717,11 +958,23 @@ export async function startSharedViewer(
             viewer_contract: manifest.viewer_contract,
           });
           getRun(id); // Gateway owns lifecycle observation; the selected Worker owns response rendering.
-          const version = dataVersionOf(ledger, binding.viewer_contract, binding.build_id);
+          const assets = selectAssets(state.paths.data, id, assetsDir);
+          const verifiedRelease = verifyBindingIdentity(binding);
+          const usesCurrentAssets = Boolean(assets.source || sharedSource);
+          const workerBuildId = usesCurrentAssets ? manifest.build_id : binding.build_id;
+          const workerPackageVersion =
+            workerBuildId === manifest.build_id
+              ? (serviceConfig.package_version ?? manifest.service_version)
+              : binding.package_version;
+          const version = dataVersionOf(ledger, binding.viewer_contract, workerBuildId);
           const workerKey = workerKeyOf(version);
           workerBuilds.set(workerKey, {
-            build_id: binding.build_id,
-            package_version: binding.package_version,
+            build_id: workerBuildId,
+            package_version: workerPackageVersion,
+            release_root:
+              workerBuildId === binding.build_id && verifiedRelease?.schema_version === 2
+                ? join(state.paths.releases, binding.build_id)
+                : null,
           });
           let workerStage: WorkerDiagnosticStage = "worker_select";
           let lease: Awaited<ReturnType<typeof workerPool.acquire>>;

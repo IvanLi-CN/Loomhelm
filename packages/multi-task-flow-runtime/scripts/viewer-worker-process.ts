@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { createRunDashboard } from "../lib/server";
+import { selectAssets } from "../lib/service-http";
 import { parseViewerRoute } from "./viewer-gateway";
 import { startUnixViewerWorkerServer } from "./viewer-socket";
 
@@ -22,11 +23,12 @@ const resources = new Map<string, ReturnType<typeof createRunDashboard>>();
 function getRun(runId: string) {
   const existing = resources.get(runId);
   if (existing) return existing;
+  const selectedAssets = selectAssets(dataRoot!, runId, assetsRoot);
   const run = createRunDashboard({
     root: dataRoot!,
     runId,
     port: workerPort,
-    assetsDir: assetsRoot,
+    assetsDir: selectedAssets.path,
   });
   resources.set(runId, run);
   return run;

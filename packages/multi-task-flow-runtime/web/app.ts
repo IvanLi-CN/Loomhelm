@@ -3,6 +3,7 @@ import {
   ArchiveRestore,
   ArchiveX,
   ChevronDown,
+  ChevronRight,
   CircleAlert,
   CircleCheck,
   CircleDashed,
@@ -11,6 +12,7 @@ import {
   CirclePlay,
   Columns3,
   Contrast,
+  Copy,
   createIcons,
   GitMerge,
   GitPullRequest,
@@ -61,7 +63,16 @@ import { type DisplayPhase, defaultTabForPhase, derivePhase } from "./phase";
 import type { ProfileCapabilities, ProfileTarget } from "./profile-editor";
 import { createProfileEditor } from "./profile-editor";
 import { refreshResourcePopover } from "./resource-popover";
-import { planStateSeverity, renderPlanInfoContent } from "./status-row";
+import {
+  parseRuntimeMetadata,
+  type RuntimeMetadata,
+  runtimeWithEmbeddedViewer,
+} from "./runtime-metadata";
+import {
+  closeRuntimeIdentityTooltips,
+  planStateSeverity,
+  renderPlanInfoContent,
+} from "./status-row";
 import { installTaskContextMenu } from "./task-context-menu";
 import { runtimeTaskState } from "./task-state";
 import { formatDuration, formatLocalTime } from "./time";
@@ -91,6 +102,7 @@ const ICONS = {
   Minus,
   Maximize2,
   ChevronDown,
+  ChevronRight,
   CircleDashed,
   CircleDot,
   CirclePlay,
@@ -110,6 +122,7 @@ const ICONS = {
   Archive,
   RefreshCw,
   Info,
+  Copy,
   Settings2,
   SunMoon,
   Sun,
@@ -156,6 +169,7 @@ const defaultKinds = new Set([
   "other",
 ]);
 let data: View | null = null;
+let runtimeMetadata: RuntimeMetadata | null = runtimeWithEmbeddedViewer(null, document);
 let revision = -1;
 const outputSnapshots = new OutputSnapshots();
 function applyOutputs(next: OutputSnapshot, requestEpoch?: string | null): void {
@@ -335,6 +349,17 @@ document.addEventListener("service-session", (event) => {
       ? "stale"
       : ($("connection").dataset.state as "live" | "stale" | "connecting") || "connecting",
   );
+});
+document.addEventListener("loomhelm-runtime", (event) => {
+  runtimeMetadata = runtimeWithEmbeddedViewer(
+    parseRuntimeMetadata((event as CustomEvent).detail),
+    document,
+    { trustEmbeddedViewer: false },
+  );
+  if (data) {
+    renderPlanInfo();
+    createIcons({ icons: ICONS });
+  }
 });
 function connection(status: "live" | "stale" | "connecting"): void {
   if (serviceSessionExpired) status = "stale";
@@ -958,15 +983,30 @@ function planInfoIsOpen(): boolean {
 function planInfoIsDrawer(): boolean {
   return window.innerWidth < DETAILS_PANEL_BREAKPOINT;
 }
+function isVisiblePlanInfoControl(element: HTMLElement): boolean {
+  if (element.hidden || element.getAttribute("aria-hidden") === "true") return false;
+  const collapsed = element.closest("details:not([open])");
+  if (collapsed && element.tagName !== "SUMMARY") return false;
+  for (
+    let current: HTMLElement | null = element;
+    current && current !== document.body;
+    current = current.parentElement
+  ) {
+    if (current.hidden) return false;
+    const style = window.getComputedStyle(current);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+  }
+  return true;
+}
 function positionPlanInfo(): void {
   const trigger = $("plan-info-trigger");
   const panel = $("plan-info-panel");
   if (!planInfoIsOpen() || planInfoIsDrawer()) return;
   const rect = trigger.getBoundingClientRect();
-  const left = Math.max(
-    12,
-    Math.min(window.innerWidth - panel.offsetWidth - 12, rect.right - panel.offsetWidth),
-  );
+  const versionDetailsReservation =
+    window.innerWidth >= 1024 ? Math.min(380, window.innerWidth - 24) + 24 : 0;
+  const maxLeft = window.innerWidth - panel.offsetWidth - 12 - versionDetailsReservation;
+  const left = Math.max(12, Math.min(Math.max(12, maxLeft), rect.right - panel.offsetWidth));
   panel.style.left = `${left}px`;
   panel.style.top = `${Math.max(12, Math.min(window.innerHeight - panel.offsetHeight - 12, rect.bottom + 8))}px`;
 }
@@ -999,6 +1039,7 @@ function openPlanInfo(): void {
   });
 }
 function closePlanInfo(restoreFocus = true): void {
+  closeRuntimeIdentityTooltips();
   const panel = $("plan-info-panel");
   if (!planInfoIsOpen()) return;
   panel.classList.remove("open");
@@ -1013,11 +1054,19 @@ function closePlanInfo(restoreFocus = true): void {
 function trapPlanInfoFocus(event: KeyboardEvent): void {
   if (event.key !== "Tab" || !planInfoIsOpen()) return;
   const panel = $("plan-info-panel");
+  const tooltipRoots = [
+    ...document.querySelectorAll<HTMLElement>(".plan-info-identity-tooltip.is-open"),
+  ];
   const focusable = [
     ...panel.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])',
     ),
-  ].filter((element) => !element.hidden);
+    ...tooltipRoots.flatMap((root) => [
+      ...root.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])',
+      ),
+    ]),
+  ].filter(isVisiblePlanInfoControl);
   if (!focusable.length) {
     event.preventDefault();
     panel.focus();
@@ -1056,8 +1105,9 @@ function renderPlanInfo(): void {
   if (data) {
     $("plan-info-title").textContent =
       `${data.orchestration.repository.owner} / ${data.orchestration.repository.name}`;
-    renderPlanInfoContent($("plan-info-content"), data);
+    renderPlanInfoContent($("plan-info-content"), data, runtimeMetadata);
   } else $("plan-info-content").replaceChildren();
+  if (planInfoIsOpen()) syncPlanInfoSurface();
 }
 function trapDetailsFocus(event: KeyboardEvent): void {
   if (event.key !== "Tab") return;
@@ -1065,9 +1115,9 @@ function trapDetailsFocus(event: KeyboardEvent): void {
   if (!details.classList.contains("open")) return;
   const focusable = [
     ...details.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])',
     ),
-  ].filter((element) => !element.hidden);
+  ].filter(isVisiblePlanInfoControl);
   if (!focusable.length) {
     event.preventDefault();
     details.focus();
@@ -1788,6 +1838,7 @@ window.addEventListener("keydown", (event) => {
   } else if (event.key === "Escape" && viewState.detail) closeDetails();
 });
 window.addEventListener("resize", () => {
+  closeRuntimeIdentityTooltips();
   setDetailsHeight(
     Number.parseFloat(
       getComputedStyle(document.documentElement).getPropertyValue("--details-height"),

@@ -39,6 +39,154 @@ test("focus opens immediately; Escape closes only the tooltip and outside click 
   expect(tooltip.hidden).toBe(true);
 });
 
+test("interactive right placement opens beside the trigger", () => {
+  const trigger = document.createElement("button");
+  const content = document.createElement("div");
+  const tooltip = attachTooltip(trigger, content, "查看版本详情", {
+    interactive: true,
+    placement: "right",
+  });
+  trigger.getBoundingClientRect = () =>
+    ({
+      left: 100,
+      right: 140,
+      top: 120,
+      bottom: 148,
+      width: 40,
+      height: 28,
+      x: 100,
+      y: 120,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  Object.defineProperty(tooltip, "offsetWidth", { configurable: true, value: 200 });
+  Object.defineProperty(tooltip, "offsetHeight", { configurable: true, value: 120 });
+  document.body.append(trigger, tooltip);
+
+  trigger.click();
+
+  expect(tooltip.hidden).toBe(false);
+  expect(tooltip.style.left).toBe("152px");
+  expect(tooltip.style.top).toBe("120px");
+});
+
+test("interactive Escape restores focus to the version-details trigger", () => {
+  const trigger = document.createElement("button");
+  const content = document.createElement("div");
+  const inside = document.createElement("button");
+  content.append(inside);
+  const tooltip = attachTooltip(trigger, content, "查看版本详情", {
+    interactive: true,
+    placement: "right",
+  });
+  document.body.append(trigger, tooltip);
+
+  trigger.click();
+  inside.focus();
+  const escape = new window.KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
+  inside.dispatchEvent(escape);
+
+  expect(escape.defaultPrevented).toBe(true);
+  expect(tooltip.hidden).toBe(true);
+  expect(document.activeElement).toBe(trigger);
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+});
+
+test("right placement narrows beside the owning panel when the viewport edge is blocked", () => {
+  const owner = document.createElement("div");
+  owner.className = "plan-info-panel";
+  const trigger = document.createElement("button");
+  const content = document.createElement("div");
+  const tooltip = attachTooltip(trigger, content, "查看版本详情", {
+    interactive: true,
+    placement: "right",
+  });
+  owner.append(trigger);
+  owner.getBoundingClientRect = () =>
+    ({
+      left: 500,
+      right: 760,
+      top: 100,
+      bottom: 700,
+      width: 260,
+      height: 600,
+      x: 500,
+      y: 100,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  trigger.getBoundingClientRect = () =>
+    ({
+      left: 700,
+      right: 740,
+      top: 120,
+      bottom: 148,
+      width: 40,
+      height: 28,
+      x: 700,
+      y: 120,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  Object.defineProperty(tooltip, "offsetWidth", {
+    configurable: true,
+    get: () => (tooltip.style.width ? Number.parseFloat(tooltip.style.width) : 300),
+  });
+  Object.defineProperty(tooltip, "offsetHeight", { configurable: true, value: 240 });
+  document.body.append(owner, tooltip);
+
+  trigger.click();
+
+  expect(tooltip.dataset.placement).toBe("right");
+  expect(tooltip.style.width).toBe("240px");
+  expect(tooltip.style.left).toBe("772px");
+  expect(tooltip.style.top).toBe("120px");
+});
+
+test("right placement never falls back to the left when the reserved lane has no space", () => {
+  const owner = document.createElement("div");
+  owner.className = "plan-info-panel";
+  const trigger = document.createElement("button");
+  const tooltip = attachTooltip(trigger, document.createElement("div"), "查看版本详情", {
+    interactive: true,
+    placement: "right",
+  });
+  owner.append(trigger);
+  owner.getBoundingClientRect = () =>
+    ({
+      left: 760,
+      right: 1010,
+      top: 100,
+      bottom: 700,
+      width: 250,
+      height: 600,
+      x: 760,
+      y: 100,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  trigger.getBoundingClientRect = () =>
+    ({
+      left: 950,
+      right: 990,
+      top: 120,
+      bottom: 148,
+      width: 40,
+      height: 28,
+      x: 950,
+      y: 120,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  Object.defineProperty(tooltip, "offsetWidth", { configurable: true, value: 300 });
+  Object.defineProperty(tooltip, "offsetHeight", { configurable: true, value: 240 });
+  document.body.append(owner, tooltip);
+
+  trigger.click();
+
+  expect(tooltip.dataset.placement).toBe("right");
+  expect(Number.parseFloat(tooltip.style.left)).toBeGreaterThan(1010);
+});
+
 test("suppresses the one focus caused by opening a panel", () => {
   const { trigger, tooltip } = fixture();
   trigger.dataset.suppressTooltipFocus = "true";

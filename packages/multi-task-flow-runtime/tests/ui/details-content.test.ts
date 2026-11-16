@@ -933,12 +933,21 @@ describe("dashboard details content", () => {
     expect(content).toContain("entry-task");
     expect(content).toContain("a-task");
     expect(content).toContain("b-task");
-    const trigger = document.querySelector<HTMLButtonElement>(".dependency-tooltip-trigger");
-    const tooltip = trigger
-      ? document.getElementById(trigger.getAttribute("aria-describedby") ?? "")
-      : null;
-    expect(trigger?.textContent).toBe("查看 3 项依赖");
-    expect(tooltip?.getAttribute("role")).toBe("tooltip");
-    expect(tooltip?.textContent).toContain("开始");
+    const relations = document.querySelector<HTMLDetailsElement>(".detail-relations");
+    expect(relations).not.toBeNull();
+    expect(relations?.open).toBe(false);
+    expect(relations?.querySelector("summary")?.textContent).toContain("前驱 3 · 后继 0");
+    expect(relations?.querySelectorAll(".detail-relation-path")).toHaveLength(3);
+    expect(relations?.querySelector<HTMLDetailsElement>(".detail-relation-path")?.open).toBe(false);
+    relations!.open = true;
+    relations!.querySelector<HTMLDetailsElement>(".detail-relation-path")!.open = true;
+    details.showTask(view.tasks[0]!);
+    const rerenderedRelations = document.querySelector<HTMLDetailsElement>(".detail-relations");
+    expect(rerenderedRelations?.open).toBe(true);
+    expect(
+      rerenderedRelations?.querySelector<HTMLDetailsElement>(".detail-relation-path")?.open,
+    ).toBe(true);
+    expect(document.querySelector(".detail-relations-trigger")).toBeNull();
+    expect(document.querySelector(".detail-relations-tooltip")).toBeNull();
   });
 });

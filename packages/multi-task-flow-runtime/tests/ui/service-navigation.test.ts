@@ -9,9 +9,44 @@ test("navigation and compatibility warnings stay inside the dashboard", async ()
   dom.document.body.innerHTML =
     '<div class="shell"><header><div class="brand-mark" aria-hidden="true"><span>icon</span></div></header><main><div id="connection-notice" hidden></div></main></div>';
   dom.setInterval = (() => setTimeout(() => {}, 0)) as typeof dom.setInterval;
+  let runtimeEvent: unknown = null;
+  dom.document.addEventListener("loomhelm-runtime", (event) => {
+    runtimeEvent = (event as CustomEvent).detail;
+  });
   dom.fetch = async (url) =>
     new dom.Response(
-      JSON.stringify(url === "api/service" ? { build_id: "candidate", warning: "兼容性提示" } : {}),
+      JSON.stringify(
+        url === "api/service"
+          ? {
+              build_id: "candidate",
+              warning: "兼容性提示",
+              runtime: {
+                static_viewer: {
+                  schema_version: 1,
+                  source: "package",
+                  package_name: "@loomhelm/multi-task-flow",
+                  package_version: "0.2.23",
+                  compatibility_line: "compat-v1",
+                  skill_version: "2.7.10",
+                  viewer_contract: 5,
+                  build_id: "b".repeat(64),
+                  source_sha: "a".repeat(40),
+                },
+                daemon: {
+                  package_name: "@loomhelm/multi-task-flow",
+                  package_version: "0.2.23",
+                  compatibility_line: "compat-v1",
+                  skill_version: "2.7.10",
+                  viewer_contract: 5,
+                  service_contract: "1",
+                  build_id: "b".repeat(64),
+                  source_sha: "a".repeat(40),
+                },
+                warning: "兼容性提示",
+              },
+            }
+          : {},
+      ),
       { status: 200 },
     );
   dom.eval(runClientScript);
@@ -22,6 +57,7 @@ test("navigation and compatibility warnings stay inside the dashboard", async ()
   expect(home?.getAttribute("aria-label")).toBe("全部编排运行");
   expect(home?.getAttribute("aria-hidden")).toBeNull();
   expect(dom.document.querySelector("main .notice")?.textContent).toBe("兼容性提示");
+  expect(runtimeEvent).toMatchObject({ static_viewer: { package_version: "0.2.23" } });
   expect(dom.document.body.textContent).not.toContain("service ensure");
   await dom.happyDOM.close();
 });
