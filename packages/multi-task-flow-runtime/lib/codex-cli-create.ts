@@ -278,32 +278,44 @@ type ReconciliationRead = {
   turn: Record<string, unknown>;
 };
 
-async function readThreadEvidence(
+export async function readThreadEvidence(
   socket: Socket,
   buffer: { value: Buffer },
   threadId: string,
   requestId = 2,
+  request: typeof rpc = rpc,
 ): Promise<ReconciliationRead> {
-  const response = await rpc(socket, buffer, requestId, "thread/read", {
+  const response = await request(socket, buffer, requestId, "thread/read", {
     threadId,
     includeTurns: false,
   });
   if (response.error) throw new Error("thread/read rejected");
   const thread = record(record(response.result)?.thread);
   if (!thread || thread.id !== threadId) throw new Error("Thread identity mismatch");
-  const turns = await rpc(socket, buffer, requestId + 1, "thread/turns/list", {
+  const turns = await request(socket, buffer, requestId + 1, "thread/turns/list", {
     threadId,
     sortDirection: "asc",
     limit: 1,
-    // Full history hydration can hang on an interrupted initialization turn.
-    // Summary preserves the handshake items we validate and keeps reconciliation bounded.
     itemsView: "summary",
   });
   const turnData = record(turns.result)?.data;
   const turn = Array.isArray(turnData) ? record(turnData[0]) : null;
   if (turns.error || !turn || typeof turn.id !== "string")
     throw new Error("Initialization turn evidence unavailable");
-  return { thread, turn };
+  const items = await request(socket, buffer, requestId + 2, "thread/items/list", {
+    threadId,
+    sortDirection: "asc",
+    limit: 50,
+  });
+  const itemData = record(items.result)?.data;
+  const turnItems = Array.isArray(itemData)
+    ? itemData
+        .filter((row) => record(row)?.turnId === turn.id)
+        .map((row) => record(record(row)?.item))
+        .filter((item): item is Record<string, unknown> => item !== null)
+    : [];
+  if (items.error || !turnItems.length) throw new Error("Initialization items unavailable");
+  return { thread, turn: { ...turn, items: turnItems, itemsView: "full" } };
 }
 
 async function readReconciliationEvidence(threadId: string): Promise<ReconciliationRead> {
