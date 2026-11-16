@@ -11,8 +11,10 @@ import {
 
 const missingEgo =
   /(?:没有看到|没看到|未看到|没有可调用|没有可用|不可调用|不可用|失败|only exposed|not exposed|not directly visible|unavailable|failed)[\s\S]{0,160}(?:ego-browser|Ego Browser)|(?:ego-browser|Ego Browser)[\s\S]{0,160}(?:没有看到|没看到|未看到|没有可调用|没有可用|不可调用|不可用|失败|not exposed|not directly visible|unavailable|failed)/i;
-const chromeFallback =
-  /(?:是否|允许|准许|approve|permission|可以|我可以|这次)[\s\S]{0,160}(?:chrome:control-chrome|Chrome Control|control Chrome)[\s\S]{0,120}(?:打开|open|navigate|browser|浏览器|页面|page)|(?:chrome:control-chrome|Chrome Control|control Chrome)[\s\S]{0,160}(?:是否|允许|准许|approve|permission|可以|这次)[\s\S]{0,120}(?:打开|open|navigate|browser|浏览器|页面|page)/i;
+const devtoolsFallback =
+  /(?:是否|允许|准许|approve|permission|可以|我可以|这次)[\s\S]{0,160}(?:chrome-devtools|DevTools)[\s\S]{0,120}(?:打开|open|navigate|browser|浏览器|页面|page)|(?:chrome-devtools|DevTools)[\s\S]{0,160}(?:是否|允许|准许|approve|permission|可以|这次)[\s\S]{0,120}(?:打开|open|navigate|browser|浏览器|页面|page)/i;
+
+const legacyChromeFallback = /chrome:control-chrome|Chrome Control|control Chrome/i;
 
 export function analyzeBrowserReplay(path: string): ReplayResult {
   const findings: Finding[] = [];
@@ -21,12 +23,15 @@ export function analyzeBrowserReplay(path: string): ReplayResult {
     const text = eventText(value);
     if (!text) continue;
     if (missingEgo.test(text)) missingLine = line;
-    if (missingLine !== undefined && chromeFallback.test(text))
+    if (
+      missingLine !== undefined &&
+      (devtoolsFallback.test(text) || legacyChromeFallback.test(text))
+    )
       findings.push(
         finding(
           "BAD_CHROME_FALLBACK",
           line,
-          "Chrome control was offered after ego-browser was reported unavailable or failed.",
+          "A browser exception was offered after ego-browser was reported unavailable or failed.",
         ),
       );
   }
@@ -79,7 +84,7 @@ export function analyzeBrowserPolicy(options: BrowserPolicyOptions): Finding[] {
   for (const term of [
     "$ego-browser",
     "Ego Browser Standard",
-    "Chrome Control Exception Gate",
+    "DevTools Exception Gate",
   ])
     if (!combined.includes(term))
       findings.push(

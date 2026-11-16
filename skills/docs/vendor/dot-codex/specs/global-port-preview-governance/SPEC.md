@@ -8,7 +8,7 @@ None
 
 ## Context and Scope
 
-This topic governs owned local-preview ports, the browser route used to validate owned preview URLs, and DevTools isolation for its explicit exception path. It does not alter external browser runtimes, bundled plugins, or user-owned listeners.
+This topic governs owned local-preview ports, the browser route used to validate owned preview URLs, and DevTools isolation for its explicit exception path. In Codex Desktop, ordinary isolated local Web Demo previews may use the built-in browser, while complex browser work uses `$ego-browser`. It does not alter external browser runtimes, bundled plugins, or user-owned listeners.
 
 ## Requirements
 
@@ -21,8 +21,9 @@ This topic governs owned local-preview ports, the browser route used to validate
 
 ### REQ-EGO-BROWSER-DEFAULT
 
-- Browser validation for an owned local preview MUST use `$ego-browser` by default, with one TaskSpace for the user goal.
-- Chrome control and DevTools MUST remain explicit exceptions; an `$ego-browser` failure MUST NOT authorize a Chrome fallback.
+- Ordinary isolated, login-free, read-only local Web Demo previews MAY use the Codex Desktop built-in browser when the current host exposes it.
+- Complex browser validation for an owned local preview MUST use `$ego-browser` by default, with one TaskSpace for the user goal.
+- DevTools MUST remain an explicit exception; failure of the built-in browser or `$ego-browser` MUST NOT authorize a DevTools fallback.
 
 ### REQ-DEVTOOLS-ISOLATION
 
@@ -33,8 +34,8 @@ This topic governs owned local-preview ports, the browser route used to validate
 
 ### VER-PORT-AND-BROWSER-ROUTING covers: REQ-PORT-LEASE, REQ-EGO-BROWSER-DEFAULT, REQ-DEVTOOLS-ISOLATION
 
-- Port-registry tests cover lease allocation, first PID binding and replacement-owner conflict behavior; browser policy replay checks cover the default route and prohibited Chrome fallback.
-- The acceptance cases below cover an owned preview URL, default ego-browser validation, and the DevTools isolation boundary.
+- Port-registry tests cover lease allocation, first PID binding and replacement-owner conflict behavior; browser policy replay checks cover the prohibited DevTools fallback.
+- The acceptance cases below cover an owned preview URL, built-in preview browsing, complex ego-browser validation, and the DevTools isolation boundary.
 
 ## 背景 / 问题陈述
 
@@ -91,8 +92,8 @@ This topic governs owned local-preview ports, the browser route used to validate
 - 若目标端口属于其他 `scope_id`、其他 worktree 或未知 LISTENing 进程，agent 必须默认改用新的租约端口，并把该端口显式注入启动命令。
 - 未经主人明确授权，agent 不得以 `kill`、`pkill`、`接管旧端口`、`复用他人监听端口` 作为默认冲突解决策略。
 - 任何要交付给主人或用于浏览器验收的 `localhost` / `127.0.0.1` / `::1` URL，都必须先证明它属于当前 scope 的 active lease，或属于当前仓库在本次运行中已启动并验证过的稳定预览端口。
-- `$ego-browser` 是默认浏览器入口；每个用户目标只使用一个 TaskSpace。`chrome:control-chrome` 和 `chrome-devtools` 只允许作为 `AGENTS.md` 明确记载的非默认例外路径。
-- 浏览器工具在 `$ego-browser` 或显式例外不可用时只能报告 blocker 或按 `$gui-escalation-gate` 评估 Computer Use，不得回退到 `osascript`、`open`、`xdg-open` 或类似系统 URL opener。
+- Codex Desktop 内置浏览器可以承接普通隔离、免登录、只读的本地 Web Demo 预览；复杂浏览器工作使用 `$ego-browser`，每个用户目标只使用一个 TaskSpace。
+- 浏览器工具在内置浏览器、`$ego-browser` 或显式例外不可用时只能报告 blocker 或按 `$gui-escalation-gate` 评估 Computer Use，不得回退到 `osascript`、`open`、`xdg-open` 或类似系统 URL opener。
 - 对上述任务，agent 不得通过启动新的 Chrome/Chromium/`9222` 调试实例来伪造 DevTools Surface；这类 `Synthetic DevTools Bootstrap` 只有在主人已于同一 thread 中明确授权这一次浏览器任务这样做时才可例外。
 - `chrome-devtools` 例外路径默认必须复用共享浏览器上下文；当共享状态已足以完成验证时，不得请求 `isolatedContext`。
 - 若 `chrome-devtools` 例外路径需要请求 `isolatedContext`，调用方必须在调用前显式固定 `task_scope_id`，并提供结构化 `isolation_reason`，至少说明：
@@ -130,9 +131,9 @@ This topic governs owned local-preview ports, the browser route used to validate
 - 当本地预览验证需要浏览器时：
   - 先确认 URL 的端口来自当前租约，或来自当前仓库在本次运行中已启动并验证过的稳定预览端口；
   - 若来源不明、端口属于其他 workspace/scope、或只是未知 LISTENing 进程，直接报告 mismatch，不得“试试看打开”；
-  - Agent 默认直接使用 `$ego-browser`，并为用户目标复用一个 TaskSpace；
-  - 只有主人显式点名 `chrome:control-chrome`，或任务必须复用既有 Chrome 会话时，才允许进入 Chrome 例外路径；`chrome-devtools` 仅限主人点名或某条仓库 current-truth skill 明确要求的窄用途；
-  - `$ego-browser` 工具不可用或失败不构成 Chrome Control Surface 例外的证据。
+  - 若是在 Codex Desktop 中进行普通隔离、免登录、只读的本地 Web Demo 预览，优先使用宿主内置浏览器；
+  - 复杂操作、登录态、状态变更、数据提取、调试、QA 或正式浏览器验证使用 `$ego-browser`，并为用户目标复用一个 TaskSpace；
+  - 内置浏览器或 `$ego-browser` 工具不可用或失败不构成 DevTools 例外的证据。
   - 启动新的 Chrome/Chromium/`9222` 调试实例来“补出一个可连的 DevTools”属于 `Synthetic DevTools Bootstrap`，默认禁止。
 - 当 agent 通过 `chrome-devtools` 例外路径打开页面时：
   - 默认使用共享浏览器上下文；
@@ -162,7 +163,7 @@ This topic governs owned local-preview ports, the browser route used to validate
 
 - Given 同一 scope 已有 `web` lease When 再为 `api` 分配端口 Then `api` 应优先落在同一 `port_base + 1`，除非该端口已被占用或正在 LISTEN。
 
-- Given 主人要求“在浏览器打开本地 web demo 给我看” When agent 选择浏览器面 Then 它必须默认先走 `$ego-browser`，并为用户目标使用一个 TaskSpace。
+- Given 主人要求“在浏览器打开本地 web demo 给我看” When agent 在 Codex Desktop 中选择浏览器面且目标是普通隔离、免登录、只读预览 Then 它应优先使用宿主内置浏览器；复杂操作仍应使用 `$ego-browser`。
 
 - Given 共享浏览器上下文已经足以完成当前验证 When agent 通过 `chrome-devtools` 例外路径打开页面 Then 它不得请求 `isolatedContext`。
 
