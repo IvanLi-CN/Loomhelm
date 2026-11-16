@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
+import type { Socket } from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { runProcess } from "@loomhelm/runtime-core/modules/core/process";
 import { connectSocket, record, rpc, socketPath } from "../lib/codex-rpc";
@@ -11,14 +12,7 @@ export function initializationPrompt(role: AgentRole): string {
 }
 export const INITIALIZATION_PROMPT = initializationPrompt("Task Agent");
 
-const workItemTypes = new Set([
-  "command_execution",
-  "file_change",
-  "mcp_tool_call",
-  "web_search",
-  "collab_tool_call",
-  "dynamic_tool_call",
-]);
+const handshakeItemTypes = new Set(["user_message", "agent_message", "reasoning"]);
 
 function normalizedItemType(value: unknown): string {
   return typeof value === "string"
@@ -30,7 +24,8 @@ function normalizedItemType(value: unknown): string {
 }
 
 function isWorkItem(value: unknown): boolean {
-  return workItemTypes.has(normalizedItemType(record(value)?.type));
+  const item = record(value);
+  return item !== null && !handshakeItemTypes.has(normalizedItemType(item.type));
 }
 
 function itemText(item: Record<string, unknown>): string {
@@ -172,7 +167,7 @@ export async function runInitialization(input: CliCreationInput): Promise<CliRun
   return result;
 }
 
-async function readAndNameThread(threadId: string, title: string): Promise<Record<string, any>> {
+async function readAndNameThread(threadId: string, title: string): Promise<ReconciliationRead> {
   const path = socketPath();
   if (!path) throw new Error("App-server read control is unavailable");
   const { socket, buffer: initial } = await connectSocket(path);
@@ -192,11 +187,7 @@ async function readAndNameThread(threadId: string, title: string): Promise<Recor
       const response = await rpc(socket, buffer, id, method, params);
       if (response.error) throw new Error(`${method} rejected`);
     }
-    const response = await rpc(socket, buffer, 3, "thread/read", { threadId, includeTurns: false });
-    if (response.error) throw new Error("thread/read rejected");
-    const thread = record(record(response.result)?.thread);
-    if (!thread || thread.id !== threadId) throw new Error("Thread identity mismatch");
-    return thread;
+    return readThreadEvidence(socket, buffer, threadId, 3);
   } finally {
     socket.destroy();
   }
@@ -274,6 +265,31 @@ type ReconciliationRead = {
   turn: Record<string, unknown>;
 };
 
+async function readThreadEvidence(
+  socket: Socket,
+  buffer: { value: Buffer },
+  threadId: string,
+  requestId = 2,
+): Promise<ReconciliationRead> {
+  const response = await rpc(socket, buffer, requestId, "thread/read", {
+    threadId,
+    includeTurns: false,
+  });
+  if (response.error) throw new Error("thread/read rejected");
+  const thread = record(record(response.result)?.thread);
+  if (!thread || thread.id !== threadId) throw new Error("Thread identity mismatch");
+  const turns = await rpc(socket, buffer, requestId + 1, "thread/turns/list", {
+    threadId,
+    sortDirection: "asc",
+    limit: 1,
+    itemsView: "full",
+  });
+  const turnData = record(turns.result)?.data;
+  const turn = Array.isArray(turnData) ? record(turnData[0]) : null;
+  if (turns.error || !turn) throw new Error("Initialization turn evidence unavailable");
+  return { thread, turn };
+}
+
 async function readReconciliationEvidence(threadId: string): Promise<ReconciliationRead> {
   const path = socketPath();
   if (!path) throw new Error("App-server read control is unavailable");
@@ -285,23 +301,7 @@ async function readReconciliationEvidence(threadId: string): Promise<Reconciliat
       capabilities: { experimentalApi: true },
     });
     if (initialized.error) throw new Error("Codex app-server initialization rejected");
-    const response = await rpc(socket, buffer, 2, "thread/read", {
-      threadId,
-      includeTurns: false,
-    });
-    if (response.error) throw new Error("thread/read rejected");
-    const thread = record(record(response.result)?.thread);
-    if (!thread) throw new Error("Thread identity unavailable");
-    const turns = await rpc(socket, buffer, 3, "thread/turns/list", {
-      threadId,
-      sortDirection: "desc",
-      limit: 1,
-      itemsView: "full",
-    });
-    const turnData = record(turns.result)?.data;
-    const turn = Array.isArray(turnData) ? record(turnData[0]) : null;
-    if (turns.error || !turn) throw new Error("Initialization turn evidence unavailable");
-    return { thread, turn };
+    return readThreadEvidence(socket, buffer, threadId);
   } finally {
     socket.destroy();
   }
@@ -365,7 +365,9 @@ export async function createCliThread(
         execution.error ??
           "Initialization did not finish with a unique persisted thread and normal exit",
       );
-    const thread = await dependencies.read(execution.thread_id, input.title);
+    const evidence = await dependencies.read(execution.thread_id, input.title);
+    verifyInitializationTurn(evidence.turn, input.role);
+    const thread = evidence.thread;
     if (thread.model !== input.model || thread.reasoningEffort !== input.thinking)
       throw new Error("CLI execution profile mismatch");
     if (typeof thread.cwd !== "string") throw new Error("Thread working directory unavailable");

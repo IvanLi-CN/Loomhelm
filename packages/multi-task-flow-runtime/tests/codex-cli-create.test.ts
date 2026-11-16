@@ -27,12 +27,6 @@ const completed: CliRun = {
   turn_completed: true,
   events: ["thread.started", "turn.completed"],
 };
-const read = async () => ({
-  id: "thread-a",
-  cwd: "/codex/owned",
-  model: input.model,
-  reasoningEffort: input.thinking,
-});
 const handshakeTurn = (
   status: string,
   role: "Delivery Agent" | "Task Agent" = "Delivery Agent",
@@ -47,6 +41,16 @@ const handshakeTurn = (
     { type: "agentMessage", text: "已进入待命状态。", phase: "commentary" },
     ...extraItems,
   ],
+});
+const thread = async () => ({
+  id: "thread-a",
+  cwd: "/codex/owned",
+  model: input.model,
+  reasoningEffort: input.thinking,
+});
+const read = async () => ({
+  thread: await thread(),
+  turn: handshakeTurn("completed", "Task Agent"),
 });
 
 test("initialization prompt gives the creation phase enough context without authorizing work", () => {
@@ -89,7 +93,21 @@ test("actual profile and Codex ownership are required; initial HEAD is separate 
     (
       await createCliThread(input, {
         ...deps,
-        read: async () => ({ ...(await read()), model: "other" }),
+        read: async () => ({
+          thread: { ...(await thread()), model: "other" },
+          turn: handshakeTurn("completed", "Task Agent"),
+        }),
+      })
+    ).outcome,
+  ).toBe("unknown");
+  expect(
+    (
+      await createCliThread(input, {
+        ...deps,
+        read: async () => ({
+          thread: await thread(),
+          turn: handshakeTurn("completed", "Task Agent", [{ type: "futureToolCall" }]),
+        }),
       })
     ).outcome,
   ).toBe("unknown");
@@ -117,7 +135,7 @@ test("reconciliation requires the matching completed handshake before checking t
     },
     {
       read: async () => ({
-        thread: await read(),
+        thread: await thread(),
         turn: handshakeTurn("completed"),
       }),
       verify: (...args) => {
@@ -150,6 +168,21 @@ test("interrupted or workful initialization remains unreconcilable", async () =>
       "Delivery Agent",
     ),
   ).toThrow("recorded work");
+  for (const type of [
+    "collabAgentToolCall",
+    "functionCallOutput",
+    "subAgentActivity",
+    "imageGeneration",
+    "imageView",
+    "sleep",
+    "futureToolCall",
+  ])
+    expect(() =>
+      verifyInitializationTurn(
+        handshakeTurn("completed", "Delivery Agent", [{ type }]),
+        "Delivery Agent",
+      ),
+    ).toThrow("recorded work");
   await expect(
     reconcileCliThread(
       {
@@ -161,7 +194,7 @@ test("interrupted or workful initialization remains unreconcilable", async () =>
       },
       {
         read: async () => ({
-          thread: await read(),
+          thread: await thread(),
           turn: handshakeTurn("interrupted"),
         }),
         verify: () => {

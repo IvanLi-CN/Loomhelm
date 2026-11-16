@@ -154,6 +154,42 @@ async function deliverNotification(
   return prepareNativeNotification(store, parsed, notice.id, prompt, direct);
 }
 
+function recordCreationReconciliationUnknown(
+  store: LedgerStore,
+  parsed: z.infer<typeof requestSchema>,
+  operation: Ledger["operations"][number],
+  profile: z.infer<typeof executionProfile>,
+  threadId: string | undefined,
+  error: unknown,
+): unknown {
+  const ledger = validateLedger(store.read());
+  return store.update((raw) =>
+    apply(raw, "dispatch-resolve", {
+      ...parsed,
+      request_id: `${parsed.request_id}-reconcile-unknown`,
+      expected_revision: ledger.revision,
+      payload: {
+        operation_id: operation.id,
+        outcome: "unknown",
+        ...(threadId ? { thread_id: threadId } : {}),
+        native_evidence: {
+          source: "multi-task-flow-reconcile",
+          native_tool_name: "codex exec",
+          operation_id: operation.id,
+          native_request_id: operation.request.native_request_id,
+          model: profile.model,
+          thinking: profile.thinking,
+          ...(threadId ? { thread_id: threadId } : {}),
+          reconciliation_attempted: true,
+          evidence_ref: `codex-thread-reconcile:${threadId ?? operation.request.native_request_id}`,
+          created_at: new Date().toISOString(),
+          error: String(error).slice(0, 500),
+        },
+      },
+    }),
+  );
+}
+
 try {
   const command = process.argv[2];
   if (!command || process.argv[3] !== "--input" || process.argv[4] !== "-")
@@ -368,6 +404,7 @@ try {
       );
     if (!operation.request.native_request_id)
       throw new ContractError("NATIVE_REQUEST_CONFLICT", "Dispatch has no bound native request");
+    const profile = executionProfile.parse(operation.request.execution_profile);
     const creation = record(operation.request.creation_result);
     const evidence = record(creation?.native_evidence);
     const threadId =
@@ -375,11 +412,20 @@ try {
       (typeof creation?.thread_id === "string" ? creation.thread_id : undefined) ??
       (typeof evidence?.thread_id === "string" ? evidence.thread_id : undefined);
     if (!threadId) {
+      const result = record(
+        recordCreationReconciliationUnknown(
+          store,
+          parsed,
+          operation,
+          profile,
+          undefined,
+          "No observed thread identity",
+        ),
+      );
       console.log(
         JSON.stringify({
-          ok: true,
-          code: "UNKNOWN",
-          revision: ledger.revision,
+          ...result,
+          revision: validateLedger(store.read()).revision,
           result: {
             operation_id: operation.id,
             outcome: "unknown",
@@ -395,15 +441,34 @@ try {
         : ledger.tasks.find((item) => item.id === operation.target_id);
     if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
     const parameters = record(operation.request.creation_parameters);
-    const profile = executionProfile.parse(operation.request.execution_profile);
     const role = operation.request.target_type === "group" ? "Delivery Agent" : "Task Agent";
-    const reconciliation = await reconcileCliThread({
-      thread_id: threadId,
-      model: profile.model,
-      thinking: profile.thinking,
-      source_cwd: String(parameters?.cwd ?? process.cwd()),
-      role,
-    });
+    let reconciliation;
+    try {
+      reconciliation = await reconcileCliThread({
+        thread_id: threadId,
+        model: profile.model,
+        thinking: profile.thinking,
+        source_cwd: String(parameters?.cwd ?? process.cwd()),
+        role,
+      });
+    } catch (error) {
+      const result = record(
+        recordCreationReconciliationUnknown(store, parsed, operation, profile, threadId, error),
+      );
+      console.log(
+        JSON.stringify({
+          ...result,
+          revision: validateLedger(store.read()).revision,
+          result: {
+            operation_id: operation.id,
+            outcome: "unknown",
+            thread_id: threadId,
+            reason: String(error).slice(0, 500),
+          },
+        }),
+      );
+      process.exit(0);
+    }
     const result = store.update((raw) =>
       apply(raw, "dispatch-resolve", {
         ...parsed,
