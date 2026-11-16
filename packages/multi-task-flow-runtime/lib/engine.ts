@@ -95,6 +95,13 @@ function stable(value: any): string {
   return JSON.stringify(value);
 }
 
+function lifecycleAtomEventId(requestId: string, atomId: string): string {
+  return `atom-${createHash("sha256")
+    .update(`${requestId}\0${atomId}`)
+    .digest("hex")
+    .slice(0, 32)}`;
+}
+
 export function authorize(ledger: Ledger, actor: Request["actor"]): void {
   requireCondition(
     ledger.control.ownership === "bound",
@@ -1206,12 +1213,31 @@ function taskExecutionState(task: {
 }
 
 function taskMergePrerequisitesComplete(ledger: Ledger, task: Task): boolean {
-  if (ledger.contract_version !== 3) return task.atoms.every((atom) => atom.status === "completed");
+  if (ledger.contract_version !== 3) return true;
   const mergeIndex = task.atoms.findIndex((atom) => atom.lifecycle_stage === "pr_merged");
   if (mergeIndex < 0) return task.atoms.every((atom) => atom.status === "completed");
   return (
-    task.atoms[mergeIndex]?.status !== "blocked" &&
+    !["blocked", "completed"].includes(task.atoms[mergeIndex]?.status ?? "") &&
     task.atoms.slice(0, mergeIndex).every((atom) => atom.status === "completed")
+  );
+}
+
+function providerMergeAtomCompletionRecorded(
+  ledger: Ledger,
+  taskId: string,
+  atomId: string,
+  evidence: { fact_id: string; evidence_ref: string | null },
+): boolean {
+  return ledger.events.some(
+    (event) =>
+      event.type === "atom_updated" &&
+      event.subject_id === taskId &&
+      event.data.task_id === taskId &&
+      event.data.atom_id === atomId &&
+      event.data.state === "completed" &&
+      event.data.source === "provider-merge" &&
+      event.data.fact_id === evidence.fact_id &&
+      event.data.evidence_ref === evidence.evidence_ref,
   );
 }
 
@@ -1233,7 +1259,17 @@ function completeTaskLifecycleAtom(
 ): void {
   if (ledger.contract_version !== 3) return;
   const index = task.atoms.findIndex((atom) => atom.lifecycle_stage === lifecycleStage);
-  if (index < 0 || task.atoms[index]!.status === "completed") return;
+  if (index < 0) return;
+  const atom = task.atoms[index]!;
+  if (atom.status === "completed") {
+    requireCondition(
+      providerMergeAtomCompletionRecorded(ledger, task.id, atom.id, evidence),
+      "EVIDENCE_MISMATCH",
+      "The task merge atom was not completed by this provider merge evidence",
+      5,
+    );
+    return;
+  }
   requireCondition(
     task.atoms.slice(0, index).every((atom) => atom.status === "completed"),
     "ATOMS_PENDING",
@@ -1241,12 +1277,12 @@ function completeTaskLifecycleAtom(
     4,
   );
   requireCondition(
-    ["planned", "running"].includes(task.atoms[index]!.status),
+    ["planned", "running"].includes(atom.status),
     "INVALID_TRANSITION",
     "The task merge atom cannot be completed from its current state",
     3,
   );
-  task.atoms[index]!.status = "completed";
+  atom.status = "completed";
   addEvent(
     ledger,
     request,
@@ -1254,14 +1290,14 @@ function completeTaskLifecycleAtom(
     task.id,
     {
       task_id: task.id,
-      atom_id: task.atoms[index]!.id,
+      atom_id: atom.id,
       state: "completed",
       source: "provider-merge",
       fact_id: evidence.fact_id,
       evidence_ref: evidence.evidence_ref,
     },
     evidence.occurred_at,
-    `${request.request_id}-atom-${task.atoms[index]!.id}`,
+    lifecycleAtomEventId(request.request_id, atom.id),
   );
 }
 
@@ -3546,6 +3582,16 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
         "Earlier atoms must complete first",
         4,
       );
+      requireCondition(
+        !(
+          ledger.contract_version === 3 &&
+          atom.lifecycle_stage === "pr_merged" &&
+          state === "completed"
+        ),
+        "EVIDENCE_REQUIRED",
+        "The task merge atom is completed by provider merge evidence",
+        5,
+      );
       const allowed: Record<string, string[]> = {
         planned: ["running"],
         running: ["blocked", "completed"],
@@ -4792,6 +4838,28 @@ export function execute(ledger: Ledger, command: string, request: Request): unkn
           "Provider observation does not match the merge claim",
           5,
         );
+        if (ledger.contract_version === 3 && op.request.mode === "child") {
+          const receipt = evidence.receipt;
+          requireCondition(
+            receipt !== null &&
+              receipt !== undefined &&
+              evidence.source === ledger.repository.provider &&
+              receipt.provider === ledger.repository.provider &&
+              receipt.repository === `${ledger.repository.owner}/${ledger.repository.name}` &&
+              receipt.resource_type === "pr" &&
+              receipt.resource_id === op.request.pr.id &&
+              receipt.pr !== null &&
+              stable(receipt.pr) === stable(op.request.pr) &&
+              receipt.state === "merged" &&
+              receipt.target_branch === op.request.target_branch &&
+              receipt.base_sha === op.expected_sha &&
+              receipt.head_sha === op.request.expected_head_sha &&
+              receipt.evidence_ref === evidence.evidence_ref,
+            "EVIDENCE_MISMATCH",
+            "Provider merge receipt does not match the configured repository and merge claim",
+            5,
+          );
+        }
         const owner = find(ledger.groups, (item) => item.id === op.target_id, "Group");
         if (op.request.target_branch === owner.parent_branch)
           requireCondition(
