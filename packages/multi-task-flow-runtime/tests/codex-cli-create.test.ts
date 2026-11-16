@@ -8,7 +8,9 @@ import {
   createCliThread,
   INITIALIZATION_PROMPT,
   initializationPrompt,
+  reconcileCliThread,
   runInitialization,
+  verifyInitializationTurn,
   verifyRepositoryIdentity,
 } from "../lib/codex-cli-create";
 
@@ -25,11 +27,31 @@ const completed: CliRun = {
   turn_completed: true,
   events: ["thread.started", "turn.completed"],
 };
-const read = async () => ({
+const handshakeTurn = (
+  status: string,
+  role: "Delivery Agent" | "Task Agent" = "Delivery Agent",
+  extraItems: Record<string, unknown>[] = [],
+) => ({
+  id: "turn-a",
+  status,
+  items: [
+    {
+      type: "userMessage",
+      content: [{ type: "text", text: initializationPrompt(role) }],
+    },
+    { type: "agentMessage", text: "已进入待命状态。", phase: "commentary" },
+    ...extraItems,
+  ],
+});
+const thread = async () => ({
   id: "thread-a",
   cwd: "/codex/owned",
   model: input.model,
   reasoningEffort: input.thinking,
+});
+const read = async () => ({
+  thread: await thread(),
+  turn: handshakeTurn("completed", "Task Agent"),
 });
 
 test("initialization prompt gives the creation phase enough context without authorizing work", () => {
@@ -68,11 +90,26 @@ test("actual profile and Codex ownership are required; initial HEAD is separate 
   expect(success.outcome).toBe("succeeded");
   expect(success.initial_head).toBe("a".repeat(40));
   expect(success).not.toHaveProperty("development_baseline");
+  expect(success.initialization_turn_id).toBe("turn-a");
   expect(
     (
       await createCliThread(input, {
         ...deps,
-        read: async () => ({ ...(await read()), model: "other" }),
+        read: async () => ({
+          thread: { ...(await thread()), model: "other" },
+          turn: handshakeTurn("completed", "Task Agent"),
+        }),
+      })
+    ).outcome,
+  ).toBe("unknown");
+  expect(
+    (
+      await createCliThread(input, {
+        ...deps,
+        read: async () => ({
+          thread: await thread(),
+          turn: handshakeTurn("completed", "Task Agent", [{ type: "futureToolCall" }]),
+        }),
       })
     ).outcome,
   ).toBe("unknown");
@@ -87,9 +124,115 @@ test("actual profile and Codex ownership are required; initial HEAD is separate 
     ).outcome,
   ).toBe("unknown");
 });
+
+test("malformed handshake evidence remains unreconcilable", () => {
+  expect(() =>
+    verifyInitializationTurn({
+      ...handshakeTurn("completed", "Task Agent"),
+      items: [...handshakeTurn("completed", "Task Agent").items, "commandExecution"],
+    }),
+  ).toThrow("malformed");
+  expect(() =>
+    verifyInitializationTurn({
+      ...handshakeTurn("completed", "Task Agent"),
+      items: [
+        {
+          type: "userMessage",
+          content: [
+            { type: "text", text: initializationPrompt("Task Agent") },
+            { type: "futureContent" },
+          ],
+        },
+        handshakeTurn("completed", "Task Agent").items[1],
+      ],
+    }),
+  ).toThrow("content is malformed");
+});
+
+test("reconciliation requires the matching completed handshake before checking the worktree", async () => {
+  const verified: string[][] = [];
+  const result = await reconcileCliThread(
+    {
+      thread_id: "thread-a",
+      model: input.model,
+      thinking: input.thinking,
+      source_cwd: input.cwd,
+      role: "Delivery Agent",
+    },
+    {
+      read: async () => ({
+        thread: await thread(),
+        turn: handshakeTurn("completed"),
+      }),
+      verify: (...args) => {
+        verified.push(args);
+        return "b".repeat(40);
+      },
+    },
+  );
+  expect(result).toMatchObject({
+    thread_id: "thread-a",
+    workspace_path: "/codex/owned",
+    initial_head: "b".repeat(40),
+    turn_completed: true,
+  });
+  expect(verified).toEqual([["/codex/owned", input.cwd, "thread-a"]]);
+});
+
+test("interrupted or workful initialization remains unreconcilable", async () => {
+  expect(() => verifyInitializationTurn(handshakeTurn("interrupted"), "Delivery Agent")).toThrow(
+    "not completed",
+  );
+  expect(() =>
+    verifyInitializationTurn(handshakeTurn("completed", "Task Agent"), "Delivery Agent"),
+  ).toThrow("expected agent role");
+  expect(() =>
+    verifyInitializationTurn(
+      handshakeTurn("completed", "Delivery Agent", [
+        { type: "commandExecution", command: "git status", status: "completed" },
+      ]),
+      "Delivery Agent",
+    ),
+  ).toThrow("recorded work");
+  for (const type of [
+    "collabAgentToolCall",
+    "functionCallOutput",
+    "subAgentActivity",
+    "imageGeneration",
+    "imageView",
+    "sleep",
+    "futureToolCall",
+  ])
+    expect(() =>
+      verifyInitializationTurn(
+        handshakeTurn("completed", "Delivery Agent", [{ type }]),
+        "Delivery Agent",
+      ),
+    ).toThrow("recorded work");
+  await expect(
+    reconcileCliThread(
+      {
+        thread_id: "thread-a",
+        model: input.model,
+        thinking: input.thinking,
+        source_cwd: input.cwd,
+        role: "Delivery Agent",
+      },
+      {
+        read: async () => ({
+          thread: await thread(),
+          turn: handshakeTurn("interrupted"),
+        }),
+        verify: () => {
+          throw new Error("worktree must not be inspected for an incomplete turn");
+        },
+      },
+    ),
+  ).rejects.toThrow("not completed");
+});
 test("repository identity is checked before starting the external CLI", async () => {
   expect(() =>
-    verifyRepositoryIdentity(input.cwd!, { host: "github.com", owner: "other", name: "repo" }),
+    verifyRepositoryIdentity(input.cwd, { host: "github.com", owner: "other", name: "repo" }),
   ).toThrow("Repository identity");
   let started = false;
   const receipt = await createCliThread(
@@ -142,9 +285,14 @@ test("real subprocess receives literal argv and EOF, never the formal prompt; th
       ],
       nativeRequestId: "native-test",
     });
+    const delivery = await runInitialization({ ...input, role: "Delivery Agent" });
+    expect(delivery.exit_code).toBe(0);
+    expect(JSON.parse(readFileSync(capture, "utf8")).argv.at(-1)).toBe(
+      initializationPrompt("Delivery Agent"),
+    );
     writeFileSync(
       executable,
-      `#!/usr/bin/env node\nconsole.log(JSON.stringify({type:'thread.started',thread_id:'partial'}));console.log(JSON.stringify({type:'item.started',item:{type:'command_execution'}}));setInterval(()=>{},1000);`,
+      `#!/usr/bin/env node\nconsole.log(JSON.stringify({type:'thread.started',thread_id:'partial'}));console.log(JSON.stringify({type:'item.started',item:{type:'commandExecution'}}));setInterval(()=>{},1000);`,
     );
     const failed = await runInitialization(input);
     expect(failed.thread_id).toBe("partial");
