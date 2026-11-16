@@ -730,6 +730,7 @@ try {
       "notification-reconcile",
       "merge-resolve",
       "task-migrate",
+      "task-external-merge-reconcile",
     ].includes(command)
   ) {
     await sweepConversationArchives(new LedgerStore(root, input.run_id)).catch(() => {});
