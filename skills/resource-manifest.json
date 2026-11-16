@@ -6962,7 +6962,7 @@
     },
     {
       "path": "skills/multi-task-flow/SKILL.md",
-      "installedSha256": "eb2b45d8e06d42d63331b22b208e74bd052e0750a464f3424baf83f99bb4dd0f"
+      "installedSha256": "a9e3aec76f906dbd3ced9afc0c55a1252e54cb8906a0085035009a70c663e060"
     },
     {
       "path": "skills/multi-task-flow/bun.lock",
@@ -7187,7 +7187,7 @@
     {
       "path": "skills/multi-task-flow/lib/schema.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/schema.ts",
-      "installedSha256": "5caa0715ee1ac085fb5dd6666e40e0ed1055c460a51f463f3e19134a6ca9e12d"
+      "installedSha256": "a1ce4430c4bc7817eb4f621da4db3c5c30338b771d76e6e1fde3b28babe1b40c"
     },
     {
       "path": "skills/multi-task-flow/lib/runtime-metadata.ts",
@@ -7328,6 +7328,11 @@
       "path": "skills/multi-task-flow/package.json",
       "sourcePath": "packages/multi-task-flow-runtime/package.json",
       "installedSha256": "adb60703b756724320bbdad5da3a4c78df689e0f8b0b6def0fd56fe18816ee57"
+    },
+    {
+      "path": "skills/multi-task-flow/references/cli-contract.md",
+      "sourcePath": "docs/specs/multi-task-flow-unified-atomic-orchestration/CLI-CONTRACT.md",
+      "installedSha256": "323ae235d4d54e0b3923e3555a4bb9febb0ded5484374f8cd0b73babc9e8049b"
     },
     {
       "path": "skills/multi-task-flow/references/shared-viewer.md",
@@ -8267,12 +8272,12 @@
     {
       "path": "skills/multi-task-flow/scripts/package-client-skills.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/package-client-skills.ts",
-      "installedSha256": "932d34c7d72a52c5e58635fd7bc037cbf4e8776303e8eed60c87f13e2cdf92ac"
+      "installedSha256": "cf4095a673810185434ca28b637a40f7d7488b63b519051af5ce904d4cecba3f"
     },
     {
       "path": "skills/multi-task-flow/lib/package-source.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/package-source.ts",
-      "installedSha256": "28c6c1b0c91323a278d18d74d59383a5b066ffc0e78961cecc3224673e22eecc"
+      "installedSha256": "0e370dd69dd80243f7a7c25ca0a1fa2fc506022f8fe3d4f89e0ec368bf16c3ed"
     },
     {
       "path": "skills/multi-task-flow/scripts/test-skills-artifact.ts",
