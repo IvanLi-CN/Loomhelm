@@ -200,14 +200,19 @@ function atomicEdgeLabel(value: string): string {
     .join("、");
 }
 
-function atomRole(title: string, nodeKind: AtomicCardData["nodeKind"]): AtomicCardData["atomRole"] {
+function atomRole(
+  nodeId: string,
+  nodeKind: AtomicCardData["nodeKind"],
+): AtomicCardData["atomRole"] {
   if (nodeKind === "milestone") return "verification";
-  if (/准备.*分支/u.test(title)) return "branch";
-  if (/创建.*PR/u.test(title)) return "pr-create";
-  if (/合并.*PR/u.test(title)) return "pr-merge";
-  if (/收口|验收/u.test(title)) return "closeout";
-  if (/验证|核验|证据/u.test(title)) return "verification";
-  return "implementation";
+  const presetRole = nodeId.match(
+    /(?:task|group)-atom-[^/]+-(prepare-branch|prepare-parent|create-pr|merge-pr|closeout)$/u,
+  )?.[1];
+  if (presetRole === "prepare-branch" || presetRole === "prepare-parent") return "branch";
+  if (presetRole === "create-pr") return "pr-create";
+  if (presetRole === "merge-pr") return "pr-merge";
+  if (presetRole === "closeout") return "closeout";
+  return "other";
 }
 
 const AtomicRoutedEdge = memo(function AtomicRoutedEdge(props: EdgeProps) {
@@ -406,7 +411,9 @@ export function createAtomicGraphController(context: GraphContext) {
                 : "终点"
               : node.nodeKind === "milestone"
                 ? "里程碑"
-                : "原子任务",
+                : node.nodeKind === "group"
+                  ? "交付单元"
+                  : "任务原子",
           state: node.stateLabel ?? "",
           scope: (() => {
             const view = context.getData();
@@ -439,7 +446,7 @@ export function createAtomicGraphController(context: GraphContext) {
           acceptanceCount: node.acceptance_count ?? 0,
           diagnostics: node.diagnostics ?? [],
           atomRole: atomRole(
-            node.title,
+            node.id,
             node.nodeKind === "boundary"
               ? "boundary"
               : node.nodeKind === "milestone"
