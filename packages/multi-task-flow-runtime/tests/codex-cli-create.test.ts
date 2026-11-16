@@ -88,6 +88,21 @@ test("initialization prompt gives the creation phase enough context without auth
   expect(INITIALIZATION_PROMPT).not.toContain("请简短回复");
 });
 
+test("startup diagnostics do not count as initialization work", () => {
+  expect(() =>
+    verifyInitializationTurn(
+      {
+        ...handshakeTurn("completed", "Delivery Agent"),
+        items: [
+          { type: "error", message: "deprecated configuration" },
+          ...handshakeTurn("completed", "Delivery Agent").items,
+        ],
+      },
+      "Delivery Agent",
+    ),
+  ).not.toThrow();
+});
+
 test("bind requires both process exit and initialization completion, preserving identity on every ambiguous result", async () => {
   for (const result of [
     { ...completed, exit_code: 1 },

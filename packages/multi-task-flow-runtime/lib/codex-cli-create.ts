@@ -12,7 +12,10 @@ export function initializationPrompt(role: AgentRole): string {
 }
 export const INITIALIZATION_PROMPT = initializationPrompt("Task Agent");
 
-const handshakeItemTypes = new Set(["user_message", "agent_message", "reasoning"]);
+// Codex may emit startup configuration/plugin diagnostics as completed `error`
+// items before the initialization turn starts. They are not agent work and must
+// not abort an otherwise valid handshake.
+const handshakeItemTypes = new Set(["user_message", "agent_message", "reasoning", "error"]);
 
 function normalizedItemType(value: unknown): string {
   return typeof value === "string"
