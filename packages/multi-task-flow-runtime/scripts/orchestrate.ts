@@ -5,6 +5,9 @@ import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import { readCodexCapabilities } from "../lib/codex-agent-api";
 import {
   createCliThread,
+  diagnosticFromError,
+  diagnosticsFromError,
+  diagnosticText,
   reconcileCliThread,
   verifyRepositoryIdentity,
 } from "../lib/codex-cli-create";
@@ -162,7 +165,13 @@ function recordCreationReconciliationUnknown(
   threadId: string | undefined,
   error: unknown,
 ): unknown {
-  const ledger = validateLedger(store.read());
+  const diagnostics = diagnosticsFromError(error);
+  const fallbackDiagnostic = diagnosticFromError(
+    error,
+    "validation",
+    "CODEX_RECONCILIATION_FAILED",
+    "error",
+  );
   return store.update((raw) =>
     apply(raw, "dispatch-resolve", {
       ...parsed,
@@ -182,7 +191,8 @@ function recordCreationReconciliationUnknown(
           ...(threadId ? { thread_id: threadId } : {}),
           reconciliation_attempted: true,
           evidence_ref: `codex-thread-reconcile:${threadId ?? operation.request.native_request_id}`,
-          error: String(error).slice(0, 500),
+          error: diagnosticText(error),
+          diagnostics: diagnostics.length ? diagnostics : [fallbackDiagnostic],
         },
       },
     }),
@@ -449,7 +459,7 @@ try {
     if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
     const parameters = record(operation.request.creation_parameters);
     const role = operation.request.target_type === "group" ? "Delivery Agent" : "Task Agent";
-    let reconciliation;
+    let reconciliation: Awaited<ReturnType<typeof reconcileCliThread>>;
     try {
       reconciliation = await reconcileCliThread({
         thread_id: threadId,
@@ -470,7 +480,8 @@ try {
             operation_id: operation.id,
             outcome: "unknown",
             thread_id: threadId,
-            reason: String(error).slice(0, 500),
+            reason: diagnosticText(error),
+            diagnostics: diagnosticsFromError(error),
           },
         }),
       );
