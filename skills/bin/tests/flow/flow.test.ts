@@ -705,6 +705,14 @@ describe("acceptance and review state", () => {
           canonicalJson({ model: "gpt-6-luna", effort: "max" }),
       ),
     ).toBe(true);
+    expect(() =>
+      openReviewWaveState(normalized, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "e".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
   });
 
   test("rejects retired fixed lane profiles instead of falling back", () => {

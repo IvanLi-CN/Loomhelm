@@ -192,6 +192,9 @@ function isLegacyReviewWave(
     );
     return isRecord(receipt) && receipt.review_receipt_schema === 6;
   });
+  const legacyLaneShape = lanes.every(
+    (rawLane) => isRecord(rawLane) && !isRecord(rawLane.requested_profile),
+  );
   for (const rawLane of lanes) {
     if (
       !isRecord(rawLane) ||
@@ -212,8 +215,8 @@ function isLegacyReviewWave(
       if (![6, 7].includes(Number(receipt.review_receipt_schema))) return false;
     }
     if (isRecord(rawLane.requested_profile)) continue;
-    if (migratedSchemaSix || hasSchemaSixReceipt) continue;
+    if (hasSchemaSixReceipt || (migratedSchemaSix && legacyLaneShape)) continue;
     return false;
   }
-  return migratedSchemaSix || hasSchemaSixReceipt;
+  return hasSchemaSixReceipt || (migratedSchemaSix && legacyLaneShape);
 }
