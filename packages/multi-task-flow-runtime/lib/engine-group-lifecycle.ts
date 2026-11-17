@@ -683,7 +683,15 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         3,
       );
       requireCondition(
-        !ledger.operations.some((item) => item.target_id === taskId && activeOperation(item)),
+        !ledger.operations.some(
+          (item) =>
+            item.kind === "merge" &&
+            activeOperation(item) &&
+            (item.target_id === taskId ||
+              (item.target_id === owner.id &&
+                item.request.mode === "child" &&
+                item.request.task_id === taskId)),
+        ),
         "OPERATION_PENDING",
         "Task has an unresolved operation",
         4,
@@ -707,6 +715,7 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
           observation.state === "merged" &&
           observation.base_sha !== null &&
           observation.head_sha !== null &&
+          observation.merge_sha !== null &&
           observation.target_branch === owner.parent_branch &&
           observation.evidence_ref.length > 0,
         "EVIDENCE_MISMATCH",
@@ -719,6 +728,12 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         .string()
         .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)
         .parse(payload.merge_sha);
+      requireCondition(
+        observation.merge_sha === mergeSha,
+        "EVIDENCE_MISMATCH",
+        "Historical merge SHA must match the provider receipt",
+        5,
+      );
       const taskPr =
         target.pr && "state" in target.pr && target.pr.state === "unbound"
           ? null

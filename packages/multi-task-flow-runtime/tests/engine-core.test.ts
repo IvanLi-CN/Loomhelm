@@ -6,6 +6,7 @@ import {
   ready,
   requireGroupDispatchGate,
 } from "../lib/engine";
+import { taskMergePrerequisitesComplete } from "../lib/engine-support-gates";
 import { deriveExecutionPhase } from "../lib/revisions";
 import {
   type Ledger,
@@ -587,6 +588,26 @@ test("contract-3 child merge completes merge-pr before task closeout", () => {
       ),
     ),
   ).toThrow("Provider merge receipt does not match");
+  expect(() =>
+    apply(
+      ledger,
+      "merge-resolve",
+      request(
+        ledger,
+        "merge-wrong-branch",
+        {
+          operation_id: "merge-a",
+          outcome: "succeeded",
+          provider_evidence: {
+            ...providerEvidence,
+            receipt: { ...providerEvidence.receipt, branch: "other-branch" },
+          },
+          provider_observation: providerObservation,
+        },
+        actor,
+      ),
+    ),
+  ).toThrow("Provider merge receipt does not match");
 
   apply(
     ledger,
@@ -661,6 +682,15 @@ test("contract-3 child merge completes merge-pr before task closeout", () => {
     request(ledger, "close-task", { task_id: "a", state: "closed" }, actor),
   );
   expect(ledger.tasks[0]!.lifecycle.closed).toBe("passed");
+});
+
+test("contract-3 child merge gates follow canonical predecessors instead of atom order", () => {
+  const { ledger } = contract3ChildMergeFixture();
+  const task = ledger.tasks[0]!;
+  const [prepare, create, mergeAtom, closeout] = task.atoms;
+  create!.status = "planned";
+  task.atoms = [prepare!, mergeAtom!, create!, closeout!];
+  expect(taskMergePrerequisitesComplete(ledger, task)).toBe(false);
 });
 
 test("contract-3 merge atom cannot be completed without provider evidence", () => {

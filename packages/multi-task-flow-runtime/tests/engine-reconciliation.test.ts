@@ -10,10 +10,20 @@ import {
   head,
   main,
   merge,
+  readyAtomicFixture,
   request,
   taskQuality,
   v2Fixture,
 } from "./engine-fixtures";
+
+function contract3ReconciliationFixture() {
+  const ledger = readyAtomicFixture();
+  ledger.contract_version = 3;
+  ledger.source_schema_version = null;
+  ledger.tasks[0]!.atoms[0]!.status = "completed";
+  ledger.tasks[0]!.atoms[1]!.status = "completed";
+  return ledger;
+}
 
 test("native group retry ignores a failed attempt and still requires a fresh mainline baseline receipt", () => {
   const ledger = fixture();
@@ -364,9 +374,7 @@ test("contract-3 baseline sync refreshes an advanced lineage without changing na
 });
 
 test("external merge reconciliation accepts an unbound task PR binding without regressing lineage", () => {
-  const ledger = fixture();
-  ledger.contract_version = 3;
-  ledger.source_schema_version = null;
+  const ledger = contract3ReconciliationFixture();
   const group = ledger.groups[0]!;
   const task = ledger.tasks[0]!;
   const pr = {
@@ -405,6 +413,7 @@ test("external merge reconciliation accepts an unbound task PR binding without r
     target_branch: "parent",
     base_sha: base,
     head_sha: head,
+    merge_sha: merge,
     pr,
     state: "merged" as const,
     evidence_ref: "https://github.com/example/repo/pull/1",
@@ -418,6 +427,22 @@ test("external merge reconciliation accepts an unbound task PR binding without r
       approval_id: "recovery-a",
     }),
   );
+  const beforeMismatch = JSON.stringify(ledger);
+  expect(() =>
+    apply(
+      ledger,
+      "task-external-merge-reconcile",
+      request(ledger, "reconcile-wrong-merge-sha", {
+        task_id: task.id,
+        pr,
+        provider_observation: { ...observation, merge_sha: head },
+        quality_evidence: quality,
+        merge_sha: merge,
+        recovery_approval_id: "recovery-a",
+      }),
+    ),
+  ).toThrow("Historical merge SHA");
+  expect(JSON.stringify(ledger)).toBe(beforeMismatch);
   const result = apply(
     ledger,
     "task-external-merge-reconcile",
@@ -509,6 +534,7 @@ test("legacy external merge reconciliation ignores task atom completion gates", 
     target_branch: "parent",
     base_sha: base,
     head_sha: head,
+    merge_sha: merge,
     pr,
     state: "merged" as const,
     evidence_ref: "https://github.com/example/repo/pull/legacy-1",
@@ -539,9 +565,7 @@ test("legacy external merge reconciliation ignores task atom completion gates", 
 });
 
 test("external merge reconciliation preserves mismatch protection for a registered child PR", () => {
-  const ledger = fixture();
-  ledger.contract_version = 3;
-  ledger.source_schema_version = null;
+  const ledger = contract3ReconciliationFixture();
   const group = ledger.groups[0]!;
   const task = ledger.tasks[0]!;
   const registeredPr = {
@@ -595,6 +619,7 @@ test("external merge reconciliation preserves mismatch protection for a register
     target_branch: "parent",
     base_sha: base,
     head_sha: head,
+    merge_sha: merge,
     pr: observedPr,
     state: "merged" as const,
     evidence_ref: "https://github.com/example/repo/pull/1",
@@ -631,9 +656,7 @@ test("external merge reconciliation preserves mismatch protection for a register
 });
 
 test("external merge reconciliation rejects incomplete quality evidence without mutation", () => {
-  const ledger = fixture();
-  ledger.contract_version = 3;
-  ledger.source_schema_version = null;
+  const ledger = contract3ReconciliationFixture();
   const group = ledger.groups[0]!;
   const task = ledger.tasks[0]!;
   const pr = {
@@ -657,6 +680,7 @@ test("external merge reconciliation rejects incomplete quality evidence without 
     target_branch: "parent",
     base_sha: base,
     head_sha: head,
+    merge_sha: merge,
     pr,
     state: "merged" as const,
     evidence_ref: "github://pr/1",

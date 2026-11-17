@@ -64,6 +64,7 @@ const {
   executionPlan,
   approved,
   atomicDependenciesReady,
+  atomicNodeSatisfied,
   legacyLedger,
   deliveryUnitPr,
   taskPrRef,
@@ -371,7 +372,7 @@ export function factSatisfied(
     return !!expectedSha && latest.sha === expectedSha;
   }
   if (kind === "pr_merged") {
-    return ledger.operations.some(
+    const operationSatisfied = ledger.operations.some(
       (item) =>
         item.kind === "merge" &&
         item.target_id === task.group_id &&
@@ -379,6 +380,20 @@ export function factSatisfied(
         item.receipt_fact_id === latest.id &&
         item.request.mode === "child" &&
         item.request.task_id === subjectId,
+    );
+    if (operationSatisfied || ledger.contract_version !== 3) return operationSatisfied;
+    const binding = task.pr && "state" in task.pr && task.pr.state === "merged" ? task.pr : null;
+    const receipt = latest.receipt;
+    return Boolean(
+      task.lifecycle.pr_merged === "passed" &&
+        ["integrated", "closed"].includes(task.state) &&
+        binding?.merge_sha === latest.sha &&
+        receipt?.resource_type === "pr" &&
+        receipt.state === "merged" &&
+        receipt.merge_sha === latest.sha &&
+        receipt.pr !== null &&
+        stable(receipt.pr) === stable(taskPrRef(task)) &&
+        receipt.branch === task.branch,
     );
   }
   const sourceSha = subjectSha(ledger, subjectId);
@@ -643,13 +658,47 @@ function lifecycleAtomEventId(requestId: string, atomId: string): string {
 }
 
 export function taskMergePrerequisitesComplete(ledger: Ledger, task: Task): boolean {
-  if (ledger.contract_version !== 3) return true;
+  if (legacyLedger(ledger)) return true;
+  if (ledger.contract_version !== 3) return task.atoms.every((atom) => atom.status === "completed");
   const mergeIndex = task.atoms.findIndex((atom) => atom.lifecycle_stage === "pr_merged");
-  if (mergeIndex < 0) return task.atoms.every((atom) => atom.status === "completed");
-  return (
-    !["blocked", "completed"].includes(task.atoms[mergeIndex]?.status ?? "") &&
-    task.atoms.slice(0, mergeIndex).every((atom) => atom.status === "completed")
+  if (mergeIndex < 0 || ["blocked", "completed"].includes(task.atoms[mergeIndex]?.status ?? ""))
+    return false;
+  let currentPlan: Plan;
+  try {
+    currentPlan = executionPlan(ledger);
+  } catch {
+    return false;
+  }
+  const nodes = (
+    currentPlan.atomic_nodes?.length ? currentPlan.atomic_nodes : ledger.atomic_nodes
+  ) as any[];
+  const edgeSource = currentPlan.atomic_edges?.some((edge: any) => "from_node_id" in edge)
+    ? currentPlan.atomic_edges
+    : ledger.atomic_edges;
+  const edges = edgeSource.filter((edge: any) => "from_node_id" in edge) as any[];
+  const mergeNode = nodes.find(
+    (node) =>
+      node.id === task.atoms[mergeIndex]!.id &&
+      node.kind === "work" &&
+      node.scope?.kind === "task" &&
+      node.scope.task_id === task.id,
   );
+  if (!mergeNode) return false;
+  const incoming = new Map<string, any[]>();
+  for (const edge of edges)
+    incoming.set(edge.to_node_id, [...(incoming.get(edge.to_node_id) ?? []), edge]);
+  const pending = [...(incoming.get(mergeNode.id) ?? [])];
+  if (!pending.length) return false;
+  const visited = new Set<string>();
+  while (pending.length) {
+    const edge = pending.pop()!;
+    if (visited.has(edge.from_node_id)) continue;
+    visited.add(edge.from_node_id);
+    const source = nodes.find((node) => node.id === edge.from_node_id);
+    if (!source || !atomicNodeSatisfied(ledger, source)) return false;
+    pending.push(...(incoming.get(source.id) ?? []));
+  }
+  return true;
 }
 
 function providerMergeAtomCompletionRecorded(
@@ -680,7 +729,7 @@ export function completeTaskLifecycleAtom(
 ): void {
   if (ledger.contract_version !== 3) return;
   const index = task.atoms.findIndex((atom) => atom.lifecycle_stage === lifecycleStage);
-  if (index < 0) return;
+  requireCondition(index >= 0, "ATOMS_PENDING", "Contract 3 task must declare a pr_merged atom", 4);
   const atom = task.atoms[index]!;
   if (atom.status === "completed") {
     requireCondition(
@@ -692,7 +741,7 @@ export function completeTaskLifecycleAtom(
     return;
   }
   requireCondition(
-    task.atoms.slice(0, index).every((candidate) => candidate.status === "completed"),
+    taskMergePrerequisitesComplete(ledger, task),
     "ATOMS_PENDING",
     "Complete the task's pre-merge atoms before recording the merge",
     4,
