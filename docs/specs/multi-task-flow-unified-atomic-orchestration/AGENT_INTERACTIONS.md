@@ -1,6 +1,6 @@
-# Multi-task Flow Agent 角色交互指南
+# Multi-task Flow Agent 角色与交互设计
 
-本文是维护者阅读 Multi-task Flow 运行时的入口，解释主 Agent（main Agent）、交付 Agent（Delivery Agent）和任务 Agent（Task Agent）如何通过 CLI、原生 Codex 交互和账本协作。本文是解释性指南，不新增角色、状态或命令；规范事实以 [统一原子编排主题](../../specs/multi-task-flow-unified-atomic-orchestration/SPEC.md)、[数据模型](../../specs/multi-task-flow-unified-atomic-orchestration/DATA-MODEL.md)、[状态机](../../specs/multi-task-flow-unified-atomic-orchestration/STATE-MACHINES.md) 和 [CLI 合同](../../specs/multi-task-flow-unified-atomic-orchestration/CLI-CONTRACT.md) 为准。
+本文描述主 Agent（main Agent）、交付 Agent（Delivery Agent）和任务 Agent（Task Agent）的职责、身份边界，以及它们与 CLI、Codex、外部平台和账本之间的交互时序。本文是统一原子编排主题的交互设计配套文档，不新增角色、状态或命令；长期需求与验收见 [SPEC.md](./SPEC.md)，对象关系见 [DATA_MODEL.md](./DATA_MODEL.md)，状态与恢复规则见 [STATE_MACHINES.md](./STATE_MACHINES.md)，命令接口见 [CLI_CONTRACT.md](./CLI_CONTRACT.md)。实现映射、mock 测试覆盖和已知设计偏差统一记录于 [IMPLEMENTATION.md](./IMPLEMENTATION.md#agent-角色交互的实现与验证)。
 
 ## 角色边界
 
@@ -52,7 +52,7 @@ release、deployment 和 verification 是显式原子，不能从 contribution T
 
 以下时序图按 canonical 合同描述应有的交互顺序；CLI 是命令入口，Runtime / Ledger 是授权、原子图、operation、事实和事件的持久边界，Codex 与 Git/CI/发布平台是外部证据来源。Agent 之间的消息只交接身份、读取入口或异常，不能替代账本提交。箭头上标出的命令名是实际命令；“核验”“执行”“读取”等文字是 Agent 或 provider 的动作，不代表新增 CLI 命令。
 
-图中的 `Task completed` 是 canonical 投影；测试中的旧 `Task.state = closed` 是兼容账本收口事实，两者不能混用。每张图表示设计要求，不代表整条链路已经由现有测试证明；下方覆盖表和审计证据明确列出当前验证范围。图中的“单元负责人”在 bootstrap 中是 main Agent，在 regular 中是绑定的 Delivery Agent。
+图中的 `Task completed` 是 canonical 投影；旧 `Task.state = closed` 是兼容账本收口事实，两者不能混用。时序图描述设计要求，实际实现与验证覆盖见 [IMPLEMENTATION.md](./IMPLEMENTATION.md#agent-角色交互的实现与验证)。图中的“单元负责人”在 bootstrap 中是 main Agent，在 regular 中是绑定的 Delivery Agent。
 
 | 图 | 工作流 | 关键责任与门禁 |
 | - | - | - |
@@ -250,7 +250,7 @@ sequenceDiagram
     Note over D,P: 父 PR 合并与 post-merge 继续 S9；最终收口继续 S10
 ```
 
-A → B 只表示计划明确声明的依赖；无依赖任务可在容量允许时并行。消息、任务列表顺序和文件重叠都不产生依赖边。child PR 合并由实现批准覆盖，父 PR 合并另需单元级 protected approval。MTF-AUDIT-002/003 表示现有 mock 测试尚未端到端证明本图全部外部边界。
+A → B 只表示计划明确声明的依赖；无依赖任务可在容量允许时并行。消息、任务列表顺序和文件重叠都不产生依赖边。child PR 合并由实现批准覆盖，父 PR 合并另需单元级 protected approval。
 
 ### S6：Native creation unknown 与 reconcile
 
@@ -327,7 +327,7 @@ sequenceDiagram
     end
 ```
 
-收件者既可能是 Delivery/Task Agent（formal handoff），也可能是 main Agent（进展、后继 ready、完成或升级）。main 只有在自身就是 recipient 时才能 ack。ADR 0035 描述事件产生的 Task Agent 使用 `tool_request` 通知 main；当前 Skill 的原生投递入口要求主对话协调发送。二者的共同持久边界是 intent → attempt → provider receipt → recipient ack，本图按当前 Skill 的投递入口展开，不授予 Task Agent 任意跨线程发送权限。MTF-AUDIT-004 记录了 task-ready ack 尚未在 `dispatch-claim` 中强制检查的实现偏差；不得把本图的应有顺序当成现有防绕过证明。
+收件者既可能是 Delivery/Task Agent（formal handoff），也可能是 main Agent（进展、后继 ready、完成或升级）。main 只有在自身就是 recipient 时才能 ack。事件产生者负责提交账本事实和通知意图，投递协调者使用返回的 `tool_request` 完成发送及 provider 对账，收件者确认处理。持久交接边界是 intent → attempt → provider receipt → recipient ack，发送本身不改变业务状态，也不授予 Task Agent 任意跨线程发送权限。
 
 ### S8：开发基线、原子执行与父分支推进
 
@@ -437,7 +437,7 @@ sequenceDiagram
     Note over M,P: 运行完成不自动清理；保留账本与资源，清理另需主人确认
 ```
 
-MTF-AUDIT-003/005 表示现有 closeout 测试和 canonical PR identity 校验仍不足；本图的完整 gate 是设计要求。Task 的成功投影为 `completed`，旧 Task `closed` 可以表示其他管理性终止，不是证明成功的单独依据。
+Task 的成功投影为 `completed`，旧 Task `closed` 可以表示其他管理性终止，不是证明成功的单独依据。
 
 ### S11：Closeout 对账与受保护恢复
 
@@ -470,7 +470,7 @@ sequenceDiagram
     Note over M,P: 已执行的下游 operation 保留结果，各自 reconcile，不自动回滚
 ```
 
-MTF-AUDIT-001 记录了当前 unknown 核验未真正冻结所有后续门禁的偏差。新增需求使用 S12 的 successor DeliveryUnit，不能借 `group-reopen` 改写原责任边界。
+新增需求使用 S12 的 successor DeliveryUnit，不能借 `group-reopen` 改写原责任边界。
 
 ### S12：Plan revision、task migration 与动态 cut
 
@@ -553,19 +553,6 @@ sequenceDiagram
     Note over A,L: 各分支表示独立拒绝场景，不规定多错误输入的校验优先级
 ```
 
-### 时序图与现有 mock 测试的对应范围
-
-下表用于区分“图要求如此执行”和“测试实际证明了什么”，不是新的验收清单。测试入口为 [agent-role-completion-flow.test.ts](../../../packages/multi-task-flow-runtime/tests/agent-role-completion-flow.test.ts)。
-
-| 图 | 当前 mock 已覆盖的部分 | 尚不能据此宣称的覆盖 |
-| - | - | - |
-| S1、S12 | 使用已批准计划 fixture；拒绝旧 revision | 完整 proposal/批准/修订、migration、cut 外部完成流 |
-| S2、S6 | mock Codex 初始化输入、角色与证据；unknown 后使用 reconcile 证据绑定 | 公开 conversation-create CLI 全链；见 MTF-AUDIT-002 |
-| S3、S4 | bootstrap main-owned / foreign owner 拒绝；shared_delivery 拓扑投影与冲突拒绝 | bootstrap、shared-delivery 的真实 publication、合并和全生命周期逐步完成 |
-| S5、S8、S10 | contract-3 Task dispatch、资源/基线、顺序原子、等价集成及 Task/DeliveryUnit closeout | 所有 child PR 都经完整 provider receipt；canonical 原子根图同步；见 MTF-AUDIT-003 |
-| S7、S13 | pending handoff、request 重放与冲突、foreign actor、旧 revision 拒绝 | 不能证明 pending 通知阻止 dispatch；见 MTF-AUDIT-004 |
-| S9、S11 | 使用 fixture merge / CI 事实走 closeout 门禁 | release/deployment/verification 外部流程、unknown closeout 下游冻结、PR identity 完整拒绝；见 MTF-AUDIT-001/003/005 |
-
 ## 交互不变量
 
 - 每个 Agent 只能使用与其绑定的 `thread_id` 和账本 actor role；复制 ID 不能产生第二个控制器。
@@ -574,22 +561,8 @@ sequenceDiagram
 - 原生创建必须经过 `dispatch-claim → conversation-create → native evidence reconcile → formal handoff`；绕过路径是编排违规，不能静默接管结果。
 - Task 完成、child PR 集成、DeliveryUnit 父 PR 合并、release/deployment/verification 和 closeout 是不同状态边界，不能互相替代。
 
-## 本轮审计证据
-
-以下证据记录本轮实现与上述 canonical 要求的差异；它们不新增 runtime 语义，且在消除前阻止 `merge-ready / Step 5C Ready`。
-
-| 证据 ID | 类型 | 可复现事实 | 影响 | 处理 |
-| - | - | - | - | - |
-| MTF-AUDIT-001 | Runtime 偏差 | `group-closeout-reconcile` 的 `outcome: "unknown"` 保留 `closed`，后续 `deliveryUnitPrMergedFromLedger`/dispatch gate 不读取该不确定结果。 | closeout 证据不足时仍可能满足后续交付门禁，与本指南的 unknown/reconcile 要求冲突。 | 本轮不修改 runtime 语义；Step 5C 阻塞，需单独修复与回归测试。 |
-| MTF-AUDIT-002 | 验证缺口 | contract-3 mock 流直接调用 runtime `apply` 的 dispatch bind/resolve，未通过公开 `conversation-create` CLI 路径。 | 未证明 CLI-only native creation 边界在完整 mock 流中不可绕过。 | 保留为 follow-up 验证项；不以现有测试通过替代 CLI 边界证据。 |
-| MTF-AUDIT-003 | 验证缺口 | closeout 测试为其他任务和部分 merge facts 构造 fixture 事实，未覆盖 provider `closed`/缺失 receipt/unknown closeout 的拒绝路径。 | 未证明每个 child PR 都经 Task Agent merge receipt 后才允许 DeliveryUnit closeout。 | 保留为 follow-up 验证项；本轮不伪造 readiness。 |
-| MTF-AUDIT-004 | Runtime 偏差 | `dispatch-claim` 未检查 ready notification 是否已由收件方确认，pending/failed task-ready notification 仍可进入 claim。 | 两阶段通知确认与派发并发门禁未被 runtime 强制执行。 | 本轮不修改 runtime 语义；Step 5C 继续阻塞，需单独修复与回归测试。 |
-| MTF-AUDIT-005 | Runtime 偏差 | `deliveryUnitPrMergedFromLedger` 对 canonical PR 的比较为恒真表达式，未实际核对最新 merge receipt 的 PR identity。 | provider PR identity 不匹配时仍可能被视为可合并，破坏交付单元 merge gate。 | 本轮不修改 runtime 语义；Step 5C 继续阻塞，需单独修复与回归测试。 |
-
 ## 参考
 
-- [Multi-task Flow Skill](../../../skills/multi-task-flow/SKILL.md)
-- [Native dispatch and reconciliation](../../../skills/multi-task-flow/references/native-dispatch-and-reconciliation.md)
 - [Task Agent ledger-driven progression](../../adr/0035-task-agent-ledger-driven-progression-and-dispatch-notifications.md)
 - [Task execution and delivery boundaries](../../adr/0027-multi-task-flow-task-execution-and-delivery-boundaries.md)
 - [Task Agent child PR ownership](../../adr/0025-task-agent-owned-child-pr-delivery.md)
