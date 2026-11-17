@@ -518,6 +518,10 @@ archive/unarchive 结果不确定的状态 MUST 保留 thread、方向、operati
 
 ## Visual Evidence
 
+多交付单元任务图仅展示一个全局开始和一个全局结束；隔离静态演示已由主人确认。
+
+![任务图的全局起终点](assets/task-graph-global-boundaries.png)
+
 Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，由 owner 确认。
 
 ![指针选择文字，无焦点框](assets/gateway-focus-pointer.png)
