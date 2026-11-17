@@ -138,8 +138,10 @@ export function executeTaskIntegrationCommand(context: CommandContext): unknown 
         .string()
         .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)
         .parse(payload.base_sha);
+      const postMerge = ["release", "deployment", "verification"].includes(target.kind);
+      const expectedLineage = postMerge ? owner.merge_sha : owner.current_sha;
       requireCondition(
-        owner.current_sha === baseSha,
+        expectedLineage === baseSha,
         "BASE_CHANGED",
         "Task base must match the current parent SHA",
         3,
