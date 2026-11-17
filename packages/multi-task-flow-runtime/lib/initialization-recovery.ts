@@ -217,7 +217,7 @@ export async function recoverInitialization(
     throw new Error("Recovery attempt binding changed");
   return dependencies.writer(
     attempt,
-    async (native, restore) => {
+    async (native, restore, confirmTerminalTurn) => {
       if (start) {
         // The private server now owns the native writer lock: inspect again before sending anything.
         verifyRecoveryHistory(
@@ -277,6 +277,8 @@ export async function recoverInitialization(
       const history = await readRecoveryHistory(native, attempt.thread_id);
       verifyRecoveryHistory(history, attempt, source, role, true, dependencies.verify);
       const turnId = String(history.turns[1].id);
+      // Only the fully verified provider history establishes the exact turn's terminal proof.
+      confirmTerminalTurn(turnId);
       if (!attempt.recovery_turn_id) {
         const observed = record(
           store.update((raw) =>

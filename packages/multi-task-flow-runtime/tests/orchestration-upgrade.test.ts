@@ -47,6 +47,28 @@ function fixture() {
 }
 const dependencies = {};
 
+test("unknown or malformed source binding is rejected before atomic publication", () => {
+  for (const invalid of [{ schema_version: 4 }, { unexpected: true }]) {
+    const store = fixture();
+    const path = join(store.runPath, "runtime", "viewer-binding.json");
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), ...invalid }));
+    const ledger = store.readRaw(),
+      binding = readFileSync(path, "utf8");
+    let published = false;
+    expect(() =>
+      upgradeOrchestration(store, target, target, {
+        ...dependencies,
+        afterStage: () => {
+          published = true;
+        },
+      }),
+    ).toThrow();
+    expect(published).toBe(false);
+    expect(store.readRaw()).toBe(ledger);
+    expect(readFileSync(path, "utf8")).toBe(binding);
+  }
+});
+
 test("explicit migration preserves business state and is idempotent", () => {
   const store = fixture();
   const before = store.read();

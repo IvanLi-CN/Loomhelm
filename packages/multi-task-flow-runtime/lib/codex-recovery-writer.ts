@@ -40,7 +40,11 @@ export function requireRecoveryCapability(): void {
 /** A private, task-owned server holds the native writer lock throughout inspection, start and ledger resolution. */
 export async function withRecoveryWriter<T>(
   attempt: RecoveryAttempt,
-  action: (rpc: RecoveryRpc, restore: () => Promise<void>) => Promise<T>,
+  action: (
+    rpc: RecoveryRpc,
+    restore: () => Promise<void>,
+    confirmTerminalTurn: (turnId: string) => void,
+  ) => Promise<T>,
   permissions: { restrict: boolean; capture: (original: RecoveryPermissions) => void },
 ): Promise<T> {
   if (!attempt.permissions)
@@ -62,6 +66,7 @@ export async function withRecoveryWriter<T>(
   let sequence = 0;
   let pending = Buffer.alloc(0);
   let failure: Error | undefined;
+  let terminalTurnId: string | undefined;
   let original = attempt.permissions.original;
   let restoreNeeded = false;
   let settingsSequence = 0;
@@ -263,7 +268,14 @@ export async function withRecoveryWriter<T>(
       if (failure) throw failure;
       return result;
     };
-    const result = await Promise.race([action(guardedRequest, restore), failed]);
+    const result = await Promise.race([
+      action(guardedRequest, restore, (turnId) => {
+        if (!turnId || (attempt.recovery_turn_id && turnId !== attempt.recovery_turn_id))
+          throw new Error("Recovery terminal turn identity changed");
+        terminalTurnId = turnId;
+      }),
+      failed,
+    ]);
     if (failure) throw failure;
     return result;
   } finally {
@@ -277,9 +289,12 @@ export async function withRecoveryWriter<T>(
       socket?.destroy();
       await joined;
       invocation?.removeEventListener("abort", invocationAbort);
-      if (!restoreNeeded && !failure)
+      if (!restoreNeeded && !failure && terminalTurnId)
         resource.end({
           attempt_id: attempt.attempt_id,
+          thread_id: attempt.thread_id,
+          turn_id: terminalTurnId,
+          turn_status: "completed",
           transport_closed: true,
           permissions_restored: true,
         });

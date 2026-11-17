@@ -24,6 +24,7 @@ import {
 } from "./orchestration-migration";
 import { validateLedger } from "./schema";
 import { type LedgerStore, withExclusiveLock } from "./store";
+import { viewerBindingSchema } from "./viewer-binding";
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 export type UpgradeDependencies = {
@@ -124,6 +125,8 @@ export function upgradeOrchestration(
         "A verified binding for this run is required; never infer it from the Gateway",
         4,
       );
+      // Reject unknown or malformed source formats before publishing the writer barrier.
+      viewerBindingSchema.parse(binding);
       const bound = runIdentity.parse(identityOf(binding));
       const source = pending?.source ?? runIdentity.parse(raw.runtime_identity ?? bound);
       if (pending) {
