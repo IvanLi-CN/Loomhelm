@@ -18,12 +18,13 @@
 | `show` | read | `section`: `summary`, `plan`, `tasks`, `operations`, `notifications`, `task-context`, `full`; `task-context` 需要 `task_id` | 重新读取一致快照 |
 | `view` | read | 可选 `plan_id` | 重新读取一致视图 |
 | `migrate` | write | 空 payload，要求绑定 actor、request、expected revision | 仅相同 canonical input 幂等重放 |
-| `conversation-create` | external write | `operation_id`, `title`, `prompt` | 超时、断线或证据不完整只能进入 `creation-reconcile` |
+| `conversation-create` | external write | `operation_id`, `title`, `prompt` | 超时、断线或证据不完整先进入 `creation-reconcile`；确认 interrupted handshake 后可显式 `initialization-recover` |
+| `initialization-recover` | external write | `operation_id` | 仅恢复一次固定握手；持久化 attempt 后只能对账，不能自动重发 |
 | `creation-reconcile` | write/reconcile | `operation_id` | 没有完整 thread、初始化 turn、worktree 和执行配置证据时保持 `unknown` |
 | `notification-prepare` / `notification-send` | external write | `notification_id` | 先领取唯一 attempt；pending/unknown 必须 reconcile |
 | `notification-reconcile` | read or write | status 查询，或标准 mutation envelope | 以 provider evidence 为准，不凭错误消息推断成功 |
 | `execution-profile-migrate`, `execution-profile-default-update`, `execution-profile-recommend` | write | 每个命令的字段见 `flow <command> --help` | 发现 profile conflict 时重新读取目标配置 |
-| 其余 runtime mutation commands | write | 每个命令在 JSON Schema registry 中有独立 request/response 定义；`dispatch-bind-request` 与 `dispatch-resolve` 标记为 `internal`/`cli-only`，只能由 `conversation-create` 编排内部调用 | 先检查返回 code、revision 和 operation 状态 |
+| 其余 runtime mutation commands | write | 每个命令在 JSON Schema registry 中有独立 request/response 定义；`dispatch-bind-request`、`dispatch-resolve`、`initialization-recovery-claim` 和 `initialization-recovery-observe` 标记为 `internal`/`cli-only`，只能由 `conversation-create` 编排内部调用 | 先检查返回 code、revision 和 operation 状态 |
 
 ## Machine-readable surfaces
 
@@ -38,3 +39,9 @@ CLI 错误必须返回 `{ "ok": false, "code": "...", "revision": null|number, "
 ## Ownership
 
 本文件由 CLI/runtime 维护者在仓库中维护；发布包可以携带其副本，Skill 通过 `references/cli-contract.md` 引用它，运行时不会生成或修改 Markdown 文档。JSON Schema registry 是 CLI 的机器契约，Markdown 只负责解释调用语义和恢复规则。
+
+## Interrupted initialization recovery
+
+`initialization-recover` 使用标准 mutation envelope，只允许 bound main；payload 严格为 `{ "operation_id": "..." }`，不接收任意 prompt、模型或 thread。首次调用先检查原始 interrupted 握手和独立 worktree，再追加不可重发的 attempt；任务独占 私有 writer 在取得原生写锁后再次检查历史。当前仅支持已验证的 codex-cli 0.169.0，其他版本 fail closed。成功后返回同一 dispatch 的 succeeded 结果与 handoff notification；失败可能已提交 attempt，因此必须重新读取 revision 和 operation 后通过 `creation-reconcile` 对账，不能根据非零退出码重建会话。
+
+`creation-reconcile` 遇到注册的 recovery attempt 时复读 original/recovery 两个 turn 并核验固定提示和 READY；不会发送新消息。只有 intent、没有可证明的 recovery turn 时保持 unknown，需独立审计。旧的 interrupted turn 不会被覆盖。创建与恢复默认预留初始化预算加 200 秒（覆盖两次有界历史读取、Git 身份核验和关闭），显式 processTimeoutMs 不足时在副作用前报告 FLOW_PROCESS_BUDGET_TOO_SHORT。

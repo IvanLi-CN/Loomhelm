@@ -827,6 +827,32 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
           5,
         );
       if (evidence.native_tool_name === "codex exec" && outcome === "succeeded") {
+        if (op.request.initialization_recovery) {
+          const attempt = object(op.request.initialization_recovery);
+          const recovery = object(evidence.initialization_recovery ?? {});
+          requireCondition(
+            evidence.source === "multi-task-flow-reconcile" &&
+              recovery.attempt_id === attempt.attempt_id &&
+              recovery.original_turn_id === attempt.original_turn_id &&
+              evidence.initialization_turn_id === attempt.original_turn_id &&
+              typeof attempt.recovery_turn_id === "string" &&
+              recovery.recovery_turn_id === attempt.recovery_turn_id &&
+              recovery.prompt_digest === attempt.prompt_digest &&
+              recovery.transport === "codex-app-server-private-unix" &&
+              recovery.native_version === "0.169.0" &&
+              evidence.workspace_path === attempt.workspace_path &&
+              evidence.initial_head === attempt.initial_head,
+            "EVIDENCE_REQUIRED",
+            "Recovery requires the registered original and completed recovery turn chain",
+            5,
+          );
+        } else
+          requireCondition(
+            !evidence.initialization_recovery,
+            "EVIDENCE_REQUIRED",
+            "Unregistered recovery evidence",
+            5,
+          );
         const reconciled = evidence.source === "multi-task-flow-reconcile";
         requireCondition(
           (reconciled || evidence.exit_code === 0) &&

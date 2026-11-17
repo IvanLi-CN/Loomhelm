@@ -1,7 +1,7 @@
 ---
 name: multi-task-flow
 description: 通过隔离的 JSON 账本、按需创建的交付单元和任务对话、PR 协调及已认证的本地仪表板，编排依赖驱动的 Codex 任务。
-version: 2.7.10
+version: 2.7.11
 ---
 
 # Multi-task flow
@@ -46,7 +46,7 @@ version: 2.7.10
 
 主 Agent 在调用 `init` 前 MUST 形成完整 canonical plan：每个 contribution Task 都必须有自己的原子任务；原子图 MUST 明确声明开始节点、结束节点、里程碑节点和全部 `atomic_edges`。系统预设的交付单元生命周期原子只提供节点定义，不提供依赖关系；生命周期关系必须由 Agent 在 plan 中显式声明。运行时不得从任务图、交付单元数组顺序、原子数组顺序或名称推导任何原子依赖。
 
-对话创建只有一条正式路径：`dispatch-claim`/`dispatch-group-claim` → exact-version CLI `conversation-create` → native evidence reconcile → formal dispatch。Contract 3 下任何 Agent 都不得直接调用 `mcp__codex_app__create_thread`、裸 `thread/start`、`codex://threads/...` 或 `thread/resume + turn/start` 创建或启动交付对话；这些结果不能绑定到账本。发现绕过路径时必须记录 `orphan thread / orchestration violation`，保持 claim 和容量占用并停止调度，不能释放 claim 后静默重试或伪造成功。
+对话创建只有一条正式路径：`dispatch-claim`/`dispatch-group-claim` → exact-version CLI `conversation-create` → native evidence reconcile → formal dispatch。Contract 3 下任何 Agent 都不得直接调用 `mcp__codex_app__create_thread`、裸 `thread/start`、`codex://threads/...` 或 `thread/resume + turn/start` 创建或启动交付对话；这些结果不能绑定到账本。唯一例外是由 CLI `initialization-recover` 按 ADR 0038 在同一已观察 thread/worktree 内执行的受审计固定握手恢复，仍不得裸调用原生 API。发现绕过路径时必须记录 `orphan thread / orchestration violation`，保持 claim 和容量占用并停止调度，不能释放 claim 后静默重试或伪造成功。
 
 Delivery Unit 的四个预设生命周期原子必须按 `prepare-parent → create-pr → merge-pr → closeout` 保持可达顺序；Contribution Task 的四个预设生命周期原子必须按 `prepare-branch → create-pr → merge-pr → closeout` 保持可达顺序。两层原子不得混用；不再预设 `verify-integration` 或 `verify-task-pr`。两节点之间允许插入 Agent 创建的 work、milestone 和并行分支，但只能使用 Agent 声明的边形成路径；缺失、逆序、无关或自动补出的关系都必须使计划拒绝。
 
@@ -153,3 +153,7 @@ Contract 3 下任何 Agent 都不得直接调用 `mcp__codex_app__create_thread`
 发现未由 `conversation-create` 产生、未绑定 dispatch operation 或未经过 native evidence 核验的 `codex://threads/<thread-id>` 时，将其标记为 orphan thread / orchestration violation；不得绑定、resolve、handoff、释放 claim 或容量，也不得把它作为依赖事实，暂停受影响运行并交给主人复核。
 
 regular 贡献任务必须先有 workspace ready 和已创建且验证为 open 的 parent PR；只有 main-owned bootstrap 在 workspace ready 且 provider 明确证明 parent PR `absent` 时可例外，pending、unknown、closed 或缺少证据都不满足例外。
+
+## 中断初始化恢复
+
+创建超时或连接中断后先用 `flow creation-reconcile` 对账；如果明确是原始初始化握手 interrupted，可由绑定 main 使用标准 envelope 调用 `flow initialization-recover`，payload 仅包含 `operation_id`。它只在原 thread/worktree 上执行一次固定 READY 握手，不能传正式任务、替换执行配置或创建新会话；仅支持已验证 writer 排斥的 codex-cli 0.169.0。已保存 attempt 后无论退出码如何都不得重发：读取当前 revision，以 `creation-reconcile` 验证注册的 original/recovery turn 链。只有 intent 而无法证明 turn 是否启动时保持 unknown 并报告审计阻塞，不能释放 claim。该入口是受审计的恢复例外，不授权 Agent 裸用 resume/start 操作正式对话。

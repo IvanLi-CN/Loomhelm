@@ -10,14 +10,25 @@ import {
 } from "./flow-contract.ts";
 
 export function flowProcessOptions(
-	config: Pick<ClientConfig, "processTimeoutMs" | "maxOutputBytes">,
+	config: Pick<ClientConfig, "processTimeoutMs" | "maxOutputBytes" | "processTimeoutExplicit">,
 	input: Uint8Array,
 	socket?: string,
+	command?: string,
 ): ProcessOptions {
+	let timeoutMs = config.processTimeoutMs;
+	if (command === "conversation-create" || command === "initialization-recover") {
+		const configured = Number(process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS ?? 300_000);
+		const initializationMs = Number.isFinite(configured) && configured >= 1000 && configured <= 600_000
+			? configured : 300_000;
+		const minimumMs = initializationMs + 200_000;
+		if (config.processTimeoutExplicit && timeoutMs < minimumMs)
+			throw new Error("FLOW_PROCESS_BUDGET_TOO_SHORT: creation requires initialization and reconciliation time before starting");
+		timeoutMs = Math.max(timeoutMs, minimumMs);
+	}
 	return {
 		input,
 		cwd: process.cwd(),
-		timeoutMs: config.processTimeoutMs,
+		timeoutMs,
 		maxOutputBytes: config.maxOutputBytes,
 		env: {
 			...process.env,
@@ -108,7 +119,7 @@ export async function runFlowCommand(
 	const result = await new SkillsRuntime().run(
 		"skills/multi-task-flow/scripts/orchestrate.ts",
 		args,
-		flowProcessOptions(config, Buffer.concat(chunks), selected),
+		flowProcessOptions(config, Buffer.concat(chunks), selected, args[0]),
 	);
 	process.stdout.write(result.stdout);
 	process.stderr.write(result.stderr);

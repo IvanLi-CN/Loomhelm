@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "kind": "persistent-state-migration-record",
+  "migration": {
+    "description": "Append optional initialization_recovery audit data without rewriting original creation evidence",
+    "release_unit_description": "@loomhelm/multi-task-flow",
+    "version_impact": "patch"
+  },
+  "durable_state": {
+    "description": "Flow Ledger schema-2/contract-2 and schema-2/contract-3 operation.request and existing event data",
+    "storage_implementation": "LedgerStore atomic JSON journal with request/revision fencing",
+    "source_compatibility_range": {
+      "from_program_versions": "0.2.53 current supported runtime; historical schema readers retained by repository regression suite",
+      "to_program_version": "0.2.54",
+      "direct_major_skips_supported": false
+    }
+  },
+  "database_migration": {
+    "applicable": false,
+    "ddl_structural_changes": [],
+    "dml_changes": [],
+    "historical_data_backfill_or_transformation": []
+  },
+  "rollout_observability": {
+    "operations_must_remain_separate": true,
+    "operation_sequence": ["preflight", "claim", "writer-lock", "locked-preflight", "handshake", "turn-observation", "reconciliation", "dispatch-resolution"],
+    "progress_signals": ["operation.request.initialization_recovery", "dispatch_request_bound and dispatch_thread_observed existing event types", "native recovery_turn_id", "dispatch resolution and handoff notification identity"],
+    "pause_points": ["before claim", "after claim remains unknown and never resends", "after native observation may reconcile without sending"]
+  },
+  "recovery": {
+    "deployed_migrations_immutable": true,
+    "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
+    "faulty_release_recovery": "forward-repair-by-a-new-program-version",
+    "backup_restore_role": "separate-disaster-recovery"
+  },
+  "validation": {
+    "patch": {
+      "required_test_evidence": ["additive explicit command, existing input/output preserved", "0.2.53 reader accepts candidate-written audit fields and existing event types", "interrupted pre-send and post-send attempts remain unknown; re-entry never resends", "original native request and turn evidence remain immutable"]
+    }
+  }
+}

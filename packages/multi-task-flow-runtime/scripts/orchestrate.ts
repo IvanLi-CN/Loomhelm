@@ -21,6 +21,7 @@ import {
   materializeRecommendation,
   validateProfileCapability,
 } from "../lib/execution-profile";
+import { recoverInitialization } from "../lib/initialization-recovery";
 import { prepareNativeNotification, reconcileNotification } from "../lib/notification-delivery";
 import { mutateExecutionProfile } from "../lib/profile-mutation";
 import {
@@ -384,7 +385,7 @@ try {
         result: delivery,
       }),
     );
-  } else if (command === "creation-reconcile") {
+  } else if (command === "creation-reconcile" || command === "initialization-recover") {
     const parsed = requestSchema.parse(input);
     const payload = z.object({ operation_id: id }).strict().parse(parsed.payload);
     const store = new LedgerStore(root, parsed.run_id);
@@ -459,16 +460,33 @@ try {
     if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
     const parameters = record(operation.request.creation_parameters);
     const role = operation.request.target_type === "group" ? "Delivery Agent" : "Task Agent";
-    let reconciliation: Awaited<ReturnType<typeof reconcileCliThread>>;
+    let reconciliation:
+      | Awaited<ReturnType<typeof reconcileCliThread>>
+      | Awaited<ReturnType<typeof recoverInitialization>>["reconciliation"];
+    let resolutionRevision = parsed.expected_revision;
     try {
-      reconciliation = await reconcileCliThread({
-        thread_id: threadId,
-        model: profile.model,
-        thinking: profile.thinking,
-        source_cwd: String(parameters?.cwd ?? process.cwd()),
-        role,
-      });
+      if (command === "initialization-recover" || operation.request.initialization_recovery) {
+        const recovered = await recoverInitialization(
+          store,
+          parsed,
+          operation.id,
+          command === "initialization-recover",
+        );
+        reconciliation = recovered.reconciliation;
+        resolutionRevision = recovered.revision;
+      } else
+        reconciliation = await reconcileCliThread({
+          thread_id: threadId,
+          model: profile.model,
+          thinking: profile.thinking,
+          source_cwd: String(parameters?.cwd ?? process.cwd()),
+          role,
+        });
     } catch (error) {
+      // Recovery may have committed a durable intent before the native side effect.
+      // Never overwrite it using the caller's now-stale revision or silently resend.
+      if (command === "initialization-recover" || operation.request.initialization_recovery)
+        throw error;
       const result = record(
         recordCreationReconciliationUnknown(store, parsed, operation, profile, threadId, error),
       );
@@ -490,6 +508,7 @@ try {
     const result = store.update((raw) =>
       apply(raw, "dispatch-resolve", {
         ...parsed,
+        expected_revision: resolutionRevision,
         payload: {
           operation_id: operation.id,
           outcome: "succeeded",
@@ -782,8 +801,9 @@ try {
     const store = new LedgerStore(root, parsed.run_id);
     const commandLedger = validateLedger(store.read());
     if (
-      commandLedger.contract_version >= 3 &&
-      ["dispatch-bind-request", "dispatch-resolve"].includes(command)
+      (commandLedger.contract_version >= 3 &&
+        ["dispatch-bind-request", "dispatch-resolve"].includes(command)) ||
+      ["initialization-recovery-claim", "initialization-recovery-observe"].includes(command)
     )
       throw new ContractError(
         "CLI_ONLY_DISPATCH",

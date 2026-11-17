@@ -14,3 +14,7 @@
 - 2026-11-15: Locked Flow-native creation reconciliation as a separate recovery path from the standalone Codex dispatch journal, including evidence requirements, fail-closed unknown handling, idempotency and explicit exact-version release.
 - 2026-11-16: Established the layered CLI contract boundary: repository documentation is the human-readable source, CLI help/schema are runtime surfaces, and the Skill references the packaged contract copy.
 - 2026-11-17: Renamed the project-owned and vendored compound specification documents to underscore-separated names and synchronized their references, resource metadata and validation paths without changing the CLI contract or runtime behavior.
+
+## Interrupted initialization recovery
+
+采用 ADR 0038：显式单次初始化恢复与纯 creation reconciliation 分离；允许只有用户消息的 interrupted 握手，精确兼容历史角色文本，并对创建/恢复增加跨进程预算。恢复 attempt、原始 items 摘要和原生 recovery turn identity 追加保存，重入不重发，不改写旧 turn 或生产账本。

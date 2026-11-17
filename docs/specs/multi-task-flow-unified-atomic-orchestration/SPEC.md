@@ -308,3 +308,11 @@ Contract 3 的 Flow dispatch operation 在 `conversation-create` 超时、进程
 - Pass condition: unknown operation 可由已知 thread 的完整证据安全恢复；证据不足继续 unknown；明确 pre-creation failure 才能 failed；任何重放不会产生第二个 thread、第二个 operation 或第二条 handoff notification。
 
 创建对账是 Flow Ledger 的恢复动作，不是普通 Codex dispatch 的别名。`codex reconcile` 继续服务独立的 Codex dispatch journal；Flow runtime 必须通过 `flow creation-reconcile` 查询并更新正式运行账本。没有已知 thread identity 时，系统不得按标题、cwd、时间或相似度猜测资源；只有额外的、可验证的 native request 查询证据才能解除该限制。
+
+### REQ-INITIALIZATION-RECOVERY-001
+
+`initialization-recover` MUST 仅恢复绑定 main 所拥有的 unknown codex-exec dispatch，保留创建 native request、thread、worktree 和完整执行配置。原始精确角色握手 MUST 为 interrupted 且没有工作 items；允许没有助手回复。failed、active、未知或额外业务 turn MUST 拒绝。
+
+### REQ-INITIALIZATION-RECOVERY-002
+
+恢复 MUST 在原生副作用前持久化唯一、不自动过期的 attempt；恢复 writer MUST 取得原生独占锁后复核完整历史再发送固定握手。超时、崩溃或冲突后的重入 MUST 仅对账已注册 attempt，不新建会话或重发。成功 MUST 复读并绑定 original interrupted turn 与 registered completed recovery turn，保留摘要、配置、owner、HEAD、清洁状态和一次性 handoff 证据。具体边界遵循 ADR 0038。

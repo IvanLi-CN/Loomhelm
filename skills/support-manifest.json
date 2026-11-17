@@ -135,5 +135,11 @@
   "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_paths.ts",
   "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_types.ts",
   "skills/spec-sync/scripts/_runtime/modules/docs/spec_drift_validation.ts",
-  "skills/spec-sync/scripts/_runtime/modules/docs/spec_migration.ts"
+  "skills/spec-sync/scripts/_runtime/modules/docs/spec_migration.ts",
+  "skills/multi-task-flow/lib/codex-recovery-writer.ts",
+  "skills/multi-task-flow/lib/engine-initialization-recovery.ts",
+  "skills/multi-task-flow/lib/initialization-recovery-attempt.ts",
+  "skills/multi-task-flow/lib/initialization-recovery.ts",
+  "skills/multi-task-flow/tests/initialization-recovery.test.ts",
+  "skills/multi-task-flow/tests/codex-recovery-writer.test.ts"
 ]
