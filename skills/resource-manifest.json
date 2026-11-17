@@ -6962,7 +6962,7 @@
     },
     {
       "path": "skills/multi-task-flow/SKILL.md",
-      "installedSha256": "d4cbfa724298bcb7408f7f4a3a3bb1bc68c3f336e838f43099514acbbf3a6796"
+      "installedSha256": "aa4accf8fcb0a1504e45726ac45e6aada5e40db3ec5f47f54508eeed060f258f"
     },
     {
       "path": "skills/multi-task-flow/bun.lock",
@@ -7336,7 +7336,7 @@
     },
     {
       "path": "skills/multi-task-flow/references/shared-viewer.md",
-      "installedSha256": "59064d2500e886ee3515e2b8a3b3b75dcfe850f5c849de9dd7960991105559bc"
+      "installedSha256": "ba8460e446bcabd71c9a4349cddb5487f5642775ac1e507d5bf17b0018c472cb"
     },
     {
       "path": "skills/multi-task-flow/scripts/build-service.ts",
