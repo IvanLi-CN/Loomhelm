@@ -2,7 +2,7 @@
 
 ## Schema contract boundary
 
-- 2026-11-11：新增 `SCHEMA.md` 和 `SCHEMA-CONSTRAINTS.md`，分别定义账本数据结构与跨字段约束。
+- 2026-11-11：新增 `SCHEMA.md` 和 `SCHEMA_CONSTRAINTS.md`，分别定义账本数据结构与跨字段约束。
 
 ## 输出提示边界整改
 

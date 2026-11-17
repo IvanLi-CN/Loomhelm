@@ -1,6 +1,6 @@
 # Unified atomic orchestration data model
 
-本文承载统一原子编排的 canonical schema、Task/DeliveryUnit 投影、外部事实、里程碑和执行策略。需求边界与验收合同以同目录的 [SPEC.md](./SPEC.md) 为准；状态机、状态归属和异常恢复以 [STATE-MACHINES.md](./STATE-MACHINES.md) 为准。
+本文承载统一原子编排的 canonical schema、Task/DeliveryUnit 投影、外部事实、里程碑和执行策略。需求边界与验收合同以同目录的 [SPEC.md](./SPEC.md) 为准；状态机、状态归属和异常恢复以 [STATE_MACHINES.md](./STATE_MACHINES.md) 为准。
 
 ## 1. Canonical 数据结构
 
@@ -10,7 +10,7 @@ canonical 字段使用 `task_id` 和 `delivery_unit_id`；当前实现中的 `gr
 
 #### 磁盘持久化：AtomicNode 与 AtomicEdge
 
-下面代码块只定义磁盘上的 canonical 原子节点和依赖边；其中的 work 生命周期、完成结果和证据引用属于原子编排的持久化事实。运行时观察、评估结果和网页读取结构在 [STATE-MACHINES.md](./STATE-MACHINES.md) 中单独定义，不与本代码块混用。
+下面代码块只定义磁盘上的 canonical 原子节点和依赖边；其中的 work 生命周期、完成结果和证据引用属于原子编排的持久化事实。运行时观察、评估结果和网页读取结构在 [STATE_MACHINES.md](./STATE_MACHINES.md) 中单独定义，不与本代码块混用。
 
 ```ts
 type AtomicNode = WorkAtom | MilestoneNode;
@@ -117,7 +117,7 @@ contribution 和 documentation 原子只能使用 TaskScope；verification、rel
 
 原子节点不创建 Agent 或执行会话，也不保存 `execution_owner`。TaskScope 的执行策略来自 TaskDefinition，DeliveryUnitScope 的执行策略来自 DeliveryUnitDefinition；运行时绑定和执行事实通过 work runtime 与 evidence 记录。
 
-这里的 `WorkRuntime` 和 `WorkResult` 指原子执行事件、结果和 evidence 的持久化事实；它们不等同于 [STATE-MACHINES.md](./STATE-MACHINES.md) 中的 `TaskRuntimeObservation` 或 `DeliveryUnitRuntimeObservation`，后两者只描述当前运行观察。
+这里的 `WorkRuntime` 和 `WorkResult` 指原子执行事件、结果和 evidence 的持久化事实；它们不等同于 [STATE_MACHINES.md](./STATE_MACHINES.md) 中的 `TaskRuntimeObservation` 或 `DeliveryUnitRuntimeObservation`，后两者只描述当前运行观察。
 
 ### 1.2 里程碑条件
 
@@ -125,7 +125,7 @@ contribution 和 documentation 原子只能使用 TaskScope；verification、rel
 
 #### 磁盘持久化：MilestoneCriterion 与 EdgeRequirement
 
-下面代码块只定义磁盘上的 milestone 条件和依赖边要求；`MilestoneEvaluation` 属于 [STATE-MACHINES.md](./STATE-MACHINES.md) 中的运行时派生结果。
+下面代码块只定义磁盘上的 milestone 条件和依赖边要求；`MilestoneEvaluation` 属于 [STATE_MACHINES.md](./STATE_MACHINES.md) 中的运行时派生结果。
 
 ```ts
 type MilestoneCriterion =

@@ -10,7 +10,7 @@ Multi-task Flow 的持久化数据模型、CLI 输入 envelope、运行时 schem
 
 ## Decision
 
-仓库中的 `docs/specs/multi-task-flow-unified-atomic-orchestration/CLI-CONTRACT.md` 是人类可读 CLI 命令契约的唯一手写来源。CLI/runtime 源码和测试是运行时行为与机器 schema 的权威来源。CLI 暴露 `flow --help`、`flow <command> --help` 和 `flow schema --format json`；Skill 只描述编排流程、权限、重试和对账规则，并引用发布包内的 `references/cli-contract.md`。npm 包可以携带由仓库源文档生成或校验的 Markdown 副本，但 CLI 运行时不生成或修改 Markdown。
+仓库中的 `docs/specs/multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md` 是人类可读 CLI 命令契约的唯一手写来源。CLI/runtime 源码和测试是运行时行为与机器 schema 的权威来源。CLI 暴露 `flow --help`、`flow <command> --help` 和 `flow schema --format json`；Skill 只描述编排流程、权限、重试和对账规则，并引用发布包内的 `references/cli-contract.md`。npm 包可以携带由仓库源文档生成或校验的 Markdown 副本，但 CLI 运行时不生成或修改 Markdown。
 
 ## Alternatives
 

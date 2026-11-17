@@ -6,7 +6,7 @@
 - 范围内：原子任务规划、任务调度、交付单元整合、动态切割、安全记账和只读 dashboard。
 - 范围外：迁移旧的会话内协调流程、跨机器或跨 flow 锁，以及未经批准的外部动作。
 
-完整 schema 定义见 [`SCHEMA.md`](./SCHEMA.md)；跨字段、状态和写入约束见 [`SCHEMA-CONSTRAINTS.md`](./SCHEMA-CONSTRAINTS.md)。
+完整 schema 定义见 [`SCHEMA.md`](./SCHEMA.md)；跨字段、状态和写入约束见 [`SCHEMA_CONSTRAINTS.md`](./SCHEMA_CONSTRAINTS.md)。
 
 ## 术语与接口
 

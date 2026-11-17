@@ -2978,18 +2978,18 @@
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/agent-vm/HISTORY.md",
-      "installedSha256": "7aa4ee47b3d106308ef5ffb183da37868b7decfd8102291e51d8305ca25ad562"
+      "installedSha256": "8091d963b4a1303eb25031ccb334c80dfce9d1a69275d6a81bb1d8466b60a17f"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/agent-vm/IMPLEMENTATION.md",
-      "installedSha256": "0dc0deab0b40eb0d9e42734fe62fa043bbba650ffac4c098580130a38e2f7244"
+      "installedSha256": "08b879508bf355dc2ddc2f3ecce5f221c506566746e7806ca48967dcdfdfac4b"
     },
     {
-      "path": "skills/docs/vendor/dot-codex/specs/agent-vm/RECLAMATION-DESIGN.md",
+      "path": "skills/docs/vendor/dot-codex/specs/agent-vm/RECLAMATION_DESIGN.md",
       "installedSha256": "ecda204a69e3fd76eca76936d86694b7bb48f6dff62eb57dcfc017bbd62680d7"
     },
     {
-      "path": "skills/docs/vendor/dot-codex/specs/agent-vm/RETENTION-DESIGN.md",
+      "path": "skills/docs/vendor/dot-codex/specs/agent-vm/RETENTION_DESIGN.md",
       "installedSha256": "eda8846275bb91a67419ad4af132324ed10b7817692e58d856214a29daed3b1e"
     },
     {
@@ -4838,7 +4838,7 @@
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/HISTORY.md",
-      "installedSha256": "72230461f24387bbb5dab5784776f327b6ed6a6b358363c8c55914dd21d66d48"
+      "installedSha256": "3ede9d42548b129dcd5d23e9a8474a684a56dd5b9b523e5c1f5a61c08a024e14"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/IMPLEMENTATION.md",
@@ -4846,7 +4846,7 @@
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/SPEC.md",
-      "installedSha256": "a5bd90d5d57b35bd65a011ea84f0bf5af2e74f74ad67110675c7764adb870884"
+      "installedSha256": "2f4103bc4faf7df3e44b3537d3e5aa473d6ba392cbf641b3185dff38822d4ad4"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/bootstrap-ownership.png",
@@ -7331,7 +7331,7 @@
     },
     {
       "path": "skills/multi-task-flow/references/cli-contract.md",
-      "sourcePath": "docs/specs/multi-task-flow-unified-atomic-orchestration/CLI-CONTRACT.md",
+      "sourcePath": "docs/specs/multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md",
       "installedSha256": "323ae235d4d54e0b3923e3555a4bb9febb0ded5484374f8cd0b73babc9e8049b"
     },
     {
@@ -8019,10 +8019,10 @@
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/SCHEMA.md",
-      "installedSha256": "0a12e46db6c169ccac39d7608dce28c1db94b683e345fcbdd1bdabad90cb9280"
+      "installedSha256": "7152636fe6242d542461cc9260b91c57b106c8d390d96ce4e914bf78124f82a3"
     },
     {
-      "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/SCHEMA-CONSTRAINTS.md",
+      "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/SCHEMA_CONSTRAINTS.md",
       "installedSha256": "81c1b6436e9bf3afd242d9c88e4163d4ece046e3a869d23ee87a4dea16a83c62"
     },
     {
