@@ -680,6 +680,31 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
         "Task already has a dispatch claim",
         4,
       );
+      if (ledger.contract_version === 3) {
+        const readyEvent = ledger.events.findLast(
+          (event) =>
+            event.type === "task_ready" &&
+            Array.isArray(event.data.task_ids) &&
+            event.data.task_ids.includes(target.id),
+        );
+        // Initially ready tasks may be discovered directly by the coordinator.
+        // Once a readiness transition emits an intent, only its recipient can release it.
+        if (readyEvent)
+          requireCondition(
+            ledger.notifications.some(
+              (notice) =>
+                notice.event_id === readyEvent.id &&
+                notice.recipient_thread_id === ledger.control.owner_thread_id &&
+                notice.ledger_status === "committed" &&
+                notice.delivery_status === "sent" &&
+                notice.status === "acknowledged" &&
+                notice.ack_status === "acknowledged",
+            ),
+            "READINESS_ACK_REQUIRED",
+            "The latest task-ready notification requires recipient acknowledgement before dispatch",
+            4,
+          );
+      }
       const running = ledger.tasks.filter((item) =>
         ["starting", "running", "agent_idle"].includes(item.state),
       ).length;

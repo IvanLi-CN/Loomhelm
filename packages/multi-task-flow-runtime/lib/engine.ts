@@ -168,8 +168,7 @@ export function apply(ledger: Ledger, command: string, request: Request): unknow
       notice.enabled &&
       typeof result === "object" &&
       result !== null &&
-      !Array.isArray(result) &&
-      !("notification_request" in result)
+      !Array.isArray(result)
     ) {
       const notification = addNotificationIntent(
         candidate,
