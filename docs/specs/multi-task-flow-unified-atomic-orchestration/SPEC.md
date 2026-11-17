@@ -338,6 +338,8 @@ Contract 3 的 Flow dispatch operation 在 `conversation-create` 超时、进程
 
 创建对账成功后 MUST 复用 dispatch resolution 和 notification idempotency 合同，绑定目标 thread、记录 reconciliation evidence 并最多生成一次 handoff notification；重放相同 request identity MUST 不得重复创建 thread 或发送通知。
 
+派发前置核验 MUST 针对正式 CLI 创建路径、合法 claim 和原生证据对账能力；宿主列出 create/fork 工具本身 MUST NOT 被解释为已绕过或缺少授权隔离的阻塞。Skill 不提供宿主工具撤权或沙箱保证；直接创建仍不受支持，只有经 operation identity 与 native evidence 核验的正式创建结果可以绑定。真实绕过、orphan 和 unknown 继续保留资源及容量并按既有恢复边界停止，不以工具可见性代替调用证据。
+
 ### VER-DISPATCH-001
 
 - covers: `REQ-DISPATCH-001`, `REQ-DISPATCH-002`, `REQ-DISPATCH-003`, `REQ-DISPATCH-004`, `REQ-DISPATCH-005`
