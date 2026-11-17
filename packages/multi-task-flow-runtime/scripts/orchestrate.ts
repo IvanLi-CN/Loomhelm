@@ -14,7 +14,7 @@ import {
 import { versionEnvelope } from "../lib/contract";
 import { sweepConversationArchives } from "../lib/conversation-archive";
 import { desktopHandoff } from "../lib/desktop-handoff";
-import { actorSchema, apply, authorize, requestSchema } from "../lib/engine";
+import { actorSchema, apply, authorize, ready, requestSchema } from "../lib/engine";
 import { ContractError } from "../lib/errors";
 import {
   effectiveProfile,
@@ -808,7 +808,11 @@ try {
     if (
       (commandLedger.contract_version >= 3 &&
         ["dispatch-bind-request", "dispatch-resolve"].includes(command)) ||
-      ["initialization-recovery-claim", "initialization-recovery-observe"].includes(command)
+      [
+        "initialization-recovery-claim",
+        "initialization-recovery-observe",
+        "initialization-recovery-permissions",
+      ].includes(command)
     )
       throw new ContractError(
         "CLI_ONLY_DISPATCH",

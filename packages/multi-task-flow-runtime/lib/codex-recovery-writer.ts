@@ -1,12 +1,28 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdtempSync, realpathSync, rmdirSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readlinkSync,
+  realpathSync,
+  rmdirSync,
+  unlinkSync,
+} from "node:fs";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runProcess } from "@loomhelm/runtime-core/modules/core/process";
 import { isWorkItem } from "./codex-cli-initialization";
 import { connectSocket, framePayload, parseRpc, record, websocketFrame } from "./codex-rpc";
+import { ContractError } from "./errors";
 import type { RecoveryAttempt } from "./initialization-recovery-attempt";
+import {
+  type RecoveryPermissions,
+  readPermissions,
+  restrictedPermissions,
+  samePermissions,
+} from "./recovery-permissions";
 
 export type RecoveryRpc = (
   method: string,
@@ -23,8 +39,15 @@ export function requireRecoveryCapability(): void {
 /** A private, task-owned server holds the native writer lock throughout inspection, start and ledger resolution. */
 export async function withRecoveryWriter<T>(
   attempt: RecoveryAttempt,
-  action: (rpc: RecoveryRpc) => Promise<T>,
+  action: (rpc: RecoveryRpc, restore: () => Promise<void>) => Promise<T>,
+  permissions: { restrict: boolean; capture: (original: RecoveryPermissions) => void },
 ): Promise<T> {
+  if (!attempt.permissions)
+    throw new ContractError(
+      "RECOVERY_PERMISSIONS_UNAVAILABLE",
+      "Recovery historical attempt requires independent audit; original permissions will not be guessed",
+      5,
+    );
   requireRecoveryCapability();
   const directory = mkdtempSync(join(realpathSync(tmpdir()), "mfr-"));
   const path = join(directory, "s");
@@ -34,6 +57,10 @@ export async function withRecoveryWriter<T>(
   let sequence = 0;
   let pending = Buffer.alloc(0);
   let failure: Error | undefined;
+  let original = attempt.permissions.original;
+  let restoreNeeded = false;
+  let settingsSequence = 0;
+  let settings: Record<string, unknown> | undefined;
   const waiting = new Map<
     number,
     { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }
@@ -68,6 +95,32 @@ export async function withRecoveryWriter<T>(
       }
     });
   };
+  const resume = async () => {
+    const response = await request("thread/resume", {
+      threadId: attempt.thread_id,
+      excludeTurns: true,
+    });
+    if (record(response.thread)?.id !== attempt.thread_id)
+      throw new Error("Recovery resumed another thread");
+    return readPermissions(response);
+  };
+  const updatePermissions = async (value: RecoveryPermissions) => {
+    const before = settingsSequence;
+    await request("thread/settings/update", { threadId: attempt.thread_id, ...value });
+    while (settingsSequence === before) {
+      if (failure) throw failure;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!samePermissions(readPermissions({ ...settings, sandbox: settings?.sandboxPolicy }), value))
+      throw new Error("Recovery native permissions update could not be verified");
+  };
+  const restore = async () => {
+    if (!original) throw new Error("Original recovery permissions unavailable");
+    if (restoreNeeded) {
+      await updatePermissions(original);
+    }
+    restoreNeeded = false;
+  };
   let parentSignal: NodeJS.Signals | undefined;
   const signalHandlers = (["SIGINT", "SIGTERM", "SIGHUP"] as const).map((signal) => {
     const handler = () => {
@@ -79,7 +132,7 @@ export async function withRecoveryWriter<T>(
   });
   const execution = runProcess({
     command: "codex",
-    args: ["app-server", "--listen", `unix://${path}`],
+    args: ["app-server", "--disable", "daemon_auto_start", "--listen", `unix://${path}`],
     cwd: attempt.workspace_path,
     signal: abort.signal,
     propagateParentSignal: false,
@@ -124,6 +177,10 @@ export async function withRecoveryWriter<T>(
         } else if (row.id !== undefined)
           throw new Error("Recovery handshake requested a tool or approval");
         const params = record(row.params);
+        if (row.method === "thread/settings/updated" && params?.threadId === attempt.thread_id) {
+          settings = record(params.threadSettings) ?? undefined;
+          settingsSequence++;
+        }
         if (
           (row.method === "item/started" || row.method === "item/completed") &&
           isWorkItem(params?.item)
@@ -138,6 +195,22 @@ export async function withRecoveryWriter<T>(
     while (!existsSync(path)) {
       if (failure) throw failure;
       await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const endpoint = lstatSync(path);
+    // 0.169.0 shortens long Unix addresses using a per-address SHA256 alias, even
+    // with daemon_auto_start disabled. Accept only that exact task address.
+    if (!endpoint.isSocket()) {
+      const alias = join(
+        realpathSync("/tmp"),
+        `codex-daemon-${process.getuid?.()}`,
+        createHash("sha256").update(path).digest("hex"),
+      );
+      if (
+        !endpoint.isSymbolicLink() ||
+        readlinkSync(path) !== alias ||
+        !lstatSync(alias).isSocket()
+      )
+        throw new Error("Recovery requires its own private socket, not a shared daemon redirect");
     }
     const connected = await connectSocket(
       path,
@@ -158,46 +231,61 @@ export async function withRecoveryWriter<T>(
     if (!String(initialized.userAgent).includes("/0.169.0 "))
       throw new Error("Recovery native protocol version mismatch");
     socket.write(websocketFrame(JSON.stringify({ method: "initialized", params: {} })));
-    const resumed = await request("thread/resume", {
-      threadId: attempt.thread_id,
-      model: attempt.execution_profile.model,
-      config: { model_reasoning_effort: attempt.execution_profile.thinking },
-      cwd: attempt.workspace_path,
-      sandbox: "read-only",
-      approvalPolicy: "never",
-      excludeTurns: true,
-    });
-    if (record(resumed.thread)?.id !== attempt.thread_id)
-      throw new Error("Recovery resumed another thread");
+    // A neutral resume acquires the writer fence without changing sticky thread configuration.
+    const current = await resume();
+    if (original) {
+      if (
+        !samePermissions(current, original) &&
+        !samePermissions(current, restrictedPermissions(original))
+      )
+        throw new Error(
+          "Recovery permissions conflict with the frozen original and handshake policies",
+        );
+      restoreNeeded = !samePermissions(current, original);
+    } else {
+      permissions.capture(current); // Synchronous durable write MUST precede the first override.
+      original = current;
+    }
+    if (permissions.restrict) {
+      restoreNeeded = true; // An ambiguous update reply still requires reconciliation.
+      await updatePermissions(restrictedPermissions(original));
+    }
     const guardedRequest: RecoveryRpc = async (method, params) => {
       const result = await request(method, params);
       if (failure) throw failure;
       return result;
     };
-    const result = await Promise.race([action(guardedRequest), failed]);
+    const result = await Promise.race([action(guardedRequest, restore), failed]);
     if (failure) throw failure;
     return result;
   } finally {
-    clearTimeout(timer);
-    abort.abort();
-    socket?.destroy();
-    await joined;
-    // Remove only this invocation's exact socket and empty private directory.
+    // On a live transport, also restore on validation/ledger failure. On transport loss the
+    // durable snapshot remains the only authority for a later reconcile; never report success.
     try {
-      const current = lstatSync(directory);
-      if (
-        current.dev === directoryIdentity.dev &&
-        current.ino === directoryIdentity.ino &&
-        !current.isSymbolicLink()
-      ) {
-        if (existsSync(path) && lstatSync(path).isSocket()) unlinkSync(path);
-        rmdirSync(directory);
-      }
+      if (restoreNeeded && !failure) await restore();
     } finally {
-      for (const [signal, handler] of signalHandlers) process.off(signal, handler);
-      if (parentSignal) {
-        const signal = parentSignal;
-        setImmediate(() => process.kill(process.pid, signal));
+      clearTimeout(timer);
+      abort.abort();
+      socket?.destroy();
+      await joined;
+      // Remove only this invocation's exact socket and empty private directory.
+      try {
+        const current = lstatSync(directory);
+        if (
+          current.dev === directoryIdentity.dev &&
+          current.ino === directoryIdentity.ino &&
+          !current.isSymbolicLink()
+        ) {
+          const entry = lstatSync(path, { throwIfNoEntry: false });
+          if (entry?.isSocket() || entry?.isSymbolicLink()) unlinkSync(path);
+          rmdirSync(directory);
+        }
+      } finally {
+        for (const [signal, handler] of signalHandlers) process.off(signal, handler);
+        if (parentSignal) {
+          const signal = parentSignal;
+          setImmediate(() => process.kill(process.pid, signal));
+        }
       }
     }
   }

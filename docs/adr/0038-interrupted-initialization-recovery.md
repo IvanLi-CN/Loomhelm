@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for the Multi-task Flow runtime；发布与安装升级独立处理。
+Superseded by [ADR 0039](0039-initialization-recovery-permission-transaction.md)。
 
 ## Context
 

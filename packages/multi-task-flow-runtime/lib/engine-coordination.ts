@@ -24,6 +24,7 @@ import {
 import type { CommandContext } from "./engine-command-context";
 import * as core from "./engine-support-core";
 import * as support from "./engine-support-gates";
+import { recoveryDigest } from "./initialization-recovery-attempt";
 
 const {
   parse,
@@ -865,6 +866,9 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
               recovery.prompt_digest === attempt.prompt_digest &&
               recovery.transport === "codex-app-server-private-unix" &&
               recovery.native_version === "0.169.0" &&
+              !!object(attempt.permissions ?? {}).original &&
+              recovery.restored_permissions_digest ===
+                recoveryDigest(object(attempt.permissions).original) &&
               evidence.workspace_path === attempt.workspace_path &&
               evidence.initial_head === attempt.initial_head,
             "EVIDENCE_REQUIRED",
