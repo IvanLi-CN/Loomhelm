@@ -20,7 +20,7 @@ export function requireRecoveryCapability(): void {
     );
 }
 
-/** A private, task-owned server holds the native writer lock throughout inspection and start. */
+/** A private, task-owned server holds the native writer lock throughout inspection, start and ledger resolution. */
 export async function withRecoveryWriter<T>(
   attempt: RecoveryAttempt,
   action: (rpc: RecoveryRpc) => Promise<T>,
@@ -38,8 +38,14 @@ export async function withRecoveryWriter<T>(
     number,
     { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }
   >();
+  let rejectFailure!: (error: Error) => void;
+  const failed = new Promise<never>((_, reject) => {
+    rejectFailure = reject;
+  });
+  void failed.catch(() => {});
   const fail = (error: Error) => {
     failure ??= error;
+    rejectFailure(failure);
     for (const waiter of waiting.values()) waiter.reject(failure);
     waiting.clear();
     abort.abort();
@@ -62,11 +68,21 @@ export async function withRecoveryWriter<T>(
       }
     });
   };
+  let parentSignal: NodeJS.Signals | undefined;
+  const signalHandlers = (["SIGINT", "SIGTERM", "SIGHUP"] as const).map((signal) => {
+    const handler = () => {
+      parentSignal ??= signal;
+      fail(new Error(`Recovery interrupted by ${signal}`));
+    };
+    process.on(signal, handler);
+    return [signal, handler] as const;
+  });
   const execution = runProcess({
     command: "codex",
     args: ["app-server", "--listen", `unix://${path}`],
     cwd: attempt.workspace_path,
     signal: abort.signal,
+    propagateParentSignal: false,
     timeoutMs: budget,
     maxCapturedOutputBytes: 0,
     env: { ...process.env, MULTI_TASK_FLOW_NATIVE_REQUEST_ID: attempt.attempt_id },
@@ -128,6 +144,7 @@ export async function withRecoveryWriter<T>(
       Math.max(1, Math.min(5_000, deadline - Date.now())),
     );
     socket = connected.socket;
+    if (failure) throw failure;
     socket.on("data", onData);
     socket.on("error", fail);
     socket.on("close", () => {
@@ -152,7 +169,12 @@ export async function withRecoveryWriter<T>(
     });
     if (record(resumed.thread)?.id !== attempt.thread_id)
       throw new Error("Recovery resumed another thread");
-    const result = await action(request);
+    const guardedRequest: RecoveryRpc = async (method, params) => {
+      const result = await request(method, params);
+      if (failure) throw failure;
+      return result;
+    };
+    const result = await Promise.race([action(guardedRequest), failed]);
     if (failure) throw failure;
     return result;
   } finally {
@@ -161,14 +183,22 @@ export async function withRecoveryWriter<T>(
     socket?.destroy();
     await joined;
     // Remove only this invocation's exact socket and empty private directory.
-    const current = lstatSync(directory);
-    if (
-      current.dev === directoryIdentity.dev &&
-      current.ino === directoryIdentity.ino &&
-      !current.isSymbolicLink()
-    ) {
-      if (existsSync(path) && lstatSync(path).isSocket()) unlinkSync(path);
-      rmdirSync(directory);
+    try {
+      const current = lstatSync(directory);
+      if (
+        current.dev === directoryIdentity.dev &&
+        current.ino === directoryIdentity.ino &&
+        !current.isSymbolicLink()
+      ) {
+        if (existsSync(path) && lstatSync(path).isSocket()) unlinkSync(path);
+        rmdirSync(directory);
+      }
+    } finally {
+      for (const [signal, handler] of signalHandlers) process.off(signal, handler);
+      if (parentSignal) {
+        const signal = parentSignal;
+        setImmediate(() => process.kill(process.pid, signal));
+      }
     }
   }
 }

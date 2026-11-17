@@ -136,6 +136,7 @@ export async function recoverInitialization(
     verify: verifyWorktree,
     capability: requireRecoveryCapability,
   },
+  commit?: (result: { revision: number; reconciliation: Record<string, unknown> }) => void,
 ) {
   const ledger = validateLedger(store.read());
   if (request.actor.role !== "main" || request.actor.thread_id !== ledger.control.owner_thread_id)
@@ -165,6 +166,7 @@ export async function recoverInitialization(
   const profile = executionProfile.parse(operation.request.execution_profile);
   let revision = request.expected_revision;
   let attempt: RecoveryAttempt;
+  let start = false;
   if (operation.request.initialization_recovery) {
     attempt = recoveryAttempt.parse(operation.request.initialization_recovery);
   } else {
@@ -204,7 +206,16 @@ export async function recoverInitialization(
       ),
     );
     revision = Number(claimed?.revision);
-    await dependencies.writer(attempt, async (native) => {
+    start = true;
+  }
+  if (
+    attempt.native_request_id !== operation.request.native_request_id ||
+    attempt.thread_id !== operation.request.observed_thread_id ||
+    recoveryDigest(attempt.execution_profile) !== recoveryDigest(profile)
+  )
+    throw new Error("Recovery attempt binding changed");
+  return dependencies.writer(attempt, async (native) => {
+    if (start) {
       // The private server now owns the native writer lock: inspect again before sending anything.
       verifyRecoveryHistory(
         await readRecoveryHistory(native, attempt.thread_id),
@@ -253,52 +264,49 @@ export async function recoverInitialization(
           throw new Error("Recovery handshake stopped without completion");
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
-    });
-  }
-  if (
-    attempt.native_request_id !== operation.request.native_request_id ||
-    attempt.thread_id !== operation.request.observed_thread_id ||
-    recoveryDigest(attempt.execution_profile) !== recoveryDigest(profile)
-  )
-    throw new Error("Recovery attempt binding changed");
-  const history = await dependencies.read(attempt.thread_id);
-  verifyRecoveryHistory(history, attempt, source, role, true, dependencies.verify);
-  const turnId = String(history.turns[1].id);
-  if (!attempt.recovery_turn_id) {
-    const observed = record(
-      store.update((raw) =>
-        apply(raw, "initialization-recovery-observe", {
-          ...request,
-          expected_revision: revision,
-          request_id: `recovery-turn-${recoveryDigest(request.request_id)}`,
-          payload: { operation_id: operationId, attempt_id: attempt.attempt_id, turn_id: turnId },
-        }),
-      ),
-    );
-    revision = Number(observed?.revision);
-  }
-  return {
-    revision,
-    reconciliation: {
-      thread_id: attempt.thread_id,
-      workspace_path: attempt.workspace_path,
-      initial_head: attempt.initial_head,
-      model: profile.model,
-      thinking: profile.thinking,
-      turn_completed: true,
-      initialization_turn_id: attempt.original_turn_id,
-      evidence_ref: `codex-initialization-recovery:${attempt.attempt_id}`,
-      created_at: new Date().toISOString(),
-      reconciliation_mode: "app-server",
-      diagnostics: [],
-      initialization_recovery: {
-        attempt_id: attempt.attempt_id,
-        original_turn_id: attempt.original_turn_id,
-        recovery_turn_id: turnId,
-        prompt_digest: attempt.prompt_digest,
-        transport: "codex-app-server-private-unix",
-        native_version: "0.169.0",
+    }
+    // Keep the native mutation fence through the synchronous ledger resolution, including reentry.
+    const history = await readRecoveryHistory(native, attempt.thread_id);
+    verifyRecoveryHistory(history, attempt, source, role, true, dependencies.verify);
+    const turnId = String(history.turns[1].id);
+    if (!attempt.recovery_turn_id) {
+      const observed = record(
+        store.update((raw) =>
+          apply(raw, "initialization-recovery-observe", {
+            ...request,
+            expected_revision: revision,
+            request_id: `recovery-turn-${recoveryDigest(request.request_id)}`,
+            payload: { operation_id: operationId, attempt_id: attempt.attempt_id, turn_id: turnId },
+          }),
+        ),
+      );
+      revision = Number(observed?.revision);
+    }
+    const result = {
+      revision,
+      reconciliation: {
+        thread_id: attempt.thread_id,
+        workspace_path: attempt.workspace_path,
+        initial_head: attempt.initial_head,
+        model: profile.model,
+        thinking: profile.thinking,
+        turn_completed: true,
+        initialization_turn_id: attempt.original_turn_id,
+        evidence_ref: `codex-initialization-recovery:${attempt.attempt_id}`,
+        created_at: new Date().toISOString(),
+        reconciliation_mode: "app-server",
+        diagnostics: [],
+        initialization_recovery: {
+          attempt_id: attempt.attempt_id,
+          original_turn_id: attempt.original_turn_id,
+          recovery_turn_id: turnId,
+          prompt_digest: attempt.prompt_digest,
+          transport: "codex-app-server-private-unix",
+          native_version: "0.169.0",
+        },
       },
-    },
-  };
+    };
+    commit?.(result);
+    return result;
+  });
 }

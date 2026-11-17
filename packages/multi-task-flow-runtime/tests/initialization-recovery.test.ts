@@ -172,10 +172,11 @@ test("durable intent precedes native start; a retry only reads the registered ch
   expect(replay.reconciliation.initialization_recovery).toEqual(
     recovered.reconciliation.initialization_recovery,
   );
-  expect(s.counts()).toEqual({ starts: 1, writerCalls: 1 });
+  expect(s.counts()).toEqual({ starts: 1, writerCalls: 2 });
 });
 test("a stopped claim before native send cannot silently retry", async () => {
   const s = setup();
+  const writer = s.dependencies.writer;
   s.dependencies.writer = async () => {
     throw new Error("process stopped");
   };
@@ -183,9 +184,7 @@ test("a stopped claim before native send cannot silently retry", async () => {
     recoverInitialization(s.store, request(s.ledger, "recover", {}), "op", true, s.dependencies),
   ).rejects.toThrow("stopped");
   expect(s.ledger.operations[0].request.initialization_recovery).toBeDefined();
-  s.dependencies.writer = async () => {
-    throw new Error("MUST NOT START");
-  };
+  s.dependencies.writer = writer;
   await expect(
     recoverInitialization(s.store, request(s.ledger, "retry", {}), "op", true, s.dependencies),
   ).rejects.toThrow("unexpected turn");
@@ -361,7 +360,7 @@ test("native completion lost before turn observation is reconciled by exact regi
     s.dependencies,
   );
   expect(recovered.reconciliation.initialization_recovery.recovery_turn_id).toBe("recovered-turn");
-  expect(s.counts()).toEqual({ starts: 1, writerCalls: 1 });
+  expect(s.counts()).toEqual({ starts: 1, writerCalls: 2 });
 });
 test("concurrent ledger writes after native start are not silently adopted into the caller revision", async () => {
   const s = setup();
@@ -379,4 +378,55 @@ test("concurrent ledger writes after native start are not silently adopted into 
     s.dependencies,
   );
   expect(recovered.revision).toBe(s.ledger.revision - 1);
+});
+
+test("native writer remains held through final verification and synchronous resolution on start and reentry", async () => {
+  for (const reentry of [false, true]) {
+    const s = setup();
+    if (reentry)
+      await recoverInitialization(
+        s.store,
+        request(s.ledger, "prime", {}),
+        "op",
+        true,
+        s.dependencies,
+      );
+    let held = false;
+    let committed = false;
+    const writer = s.dependencies.writer;
+    s.dependencies.writer = async (attempt, action) => {
+      held = true;
+      try {
+        return await writer(attempt, action);
+      } finally {
+        held = false;
+      }
+    };
+    const req = request(s.ledger, "resolve-locked", {});
+    await recoverInitialization(s.store, req, "op", !reentry, s.dependencies, (recovered) => {
+      expect(held).toBe(true);
+      apply(s.ledger, "dispatch-resolve", {
+        ...req,
+        expected_revision: recovered.revision,
+        payload: {
+          operation_id: "op",
+          outcome: "succeeded",
+          thread_id: "thread",
+          native_evidence: {
+            source: "multi-task-flow-reconcile",
+            native_tool_name: "codex exec",
+            operation_id: "op",
+            native_request_id: "native",
+            ...recovered.reconciliation,
+          },
+        },
+      });
+      committed = true;
+    });
+    expect(held).toBe(false);
+    expect(committed).toBe(true);
+    expect(s.ledger.operations[0].status).toBe("succeeded");
+    expect(s.ledger.notifications).toHaveLength(1);
+    expect(s.counts().starts).toBe(1);
+  }
 });

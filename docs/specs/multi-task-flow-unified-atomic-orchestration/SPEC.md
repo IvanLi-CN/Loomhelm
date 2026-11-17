@@ -315,4 +315,4 @@ Contract 3 的 Flow dispatch operation 在 `conversation-create` 超时、进程
 
 ### REQ-INITIALIZATION-RECOVERY-002
 
-恢复 MUST 在原生副作用前持久化唯一、不自动过期的 attempt；恢复 writer MUST 取得原生独占锁后复核完整历史再发送固定握手。超时、崩溃或冲突后的重入 MUST 仅对账已注册 attempt，不新建会话或重发。成功 MUST 复读并绑定 original interrupted turn 与 registered completed recovery turn，保留摘要、配置、owner、HEAD、清洁状态和一次性 handoff 证据。具体边界遵循 ADR 0038。
+恢复 MUST 在原生副作用前持久化唯一、不自动过期的 attempt；恢复 writer MUST 取得原生独占锁后复核完整历史再发送固定握手。超时、崩溃或冲突后的重入 MUST 仅对账已注册 attempt，不新建会话或重发。成功 MUST 复读并绑定 original interrupted turn 与 registered completed recovery turn，保留摘要、配置、owner、HEAD、清洁状态和一次性 handoff 证据。最终历史核验与 dispatch 成功写入 MUST 保持同一原生 writer 锁；已登记 attempt 的对账同样 MUST 在锁内只读核验，释放后才准备 handoff。具体边界遵循 ADR 0038。

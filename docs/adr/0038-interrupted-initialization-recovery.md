@@ -16,9 +16,9 @@ ADR 0034 的 `creation-reconcile` 只查询既有结果，不能使只有初始�
 
 单独的 `codex exec resume` 无法在读历史与发送之间持有写锁，因此恢复使用任务独占、仅临时私有 Unix socket 的临时 `codex app-server`。它在同一 thread 上取得原生 writer 锁后再次读取完整历史，确认仍只有原始 interrupted 初始化，再发送包含 attempt/original-turn 标识的固定 READY 握手。禁止新建 thread、fork、创建 worktree、正式派发或修改原执行配置；不操作共享 daemon。此路径是 ADR 0034 与 Contract 3 禁止直接 resume/start 的唯一受审计恢复例外，不是通用对话控制入口。
 
-当前仅启用已实测 writer 排斥的 `codex-cli 0.169.0`；其他版本报告 capability unavailable，禁止回退到无排斥的发送路径。恢复进程使用 read-only sandbox、全局截止时间、现有进程树监管及工作 item 检测；任何工具/审批请求或工作 item 均终止并拒绝绑定。
+当前仅启用已实测 writer 排斥的 `codex-cli 0.169.0`；其他版本报告 capability unavailable，禁止回退到无排斥的发送路径。恢复进程使用 read-only sandbox、全局截止时间、现有进程树监管及工作 item 检测；任何工具/审批请求或工作 item 均终止并拒绝绑定。父进程终止信号须先中断等待、监管并关闭私有进程、清理本次 socket 后再传播。
 
-原生返回 recovery turn identity 后立即追加观察；结束时复读原始 interrupted turn 和已登记的 completed recovery turn，核对精确提示、唯一 READY、配置、owner、HEAD 和清洁状态，才允许同一 dispatch 成功并生成一次 handoff notification。原始 turn 不改写为 completed，不以“最新 turn”替代注册链。新状态为 operation.request 的可选审计字段，不新增业务状态，不迁移或清理历史数据。
+原生返回 recovery turn identity 后立即追加观察；结束时复读原始 interrupted turn 和已登记的 completed recovery turn，核对精确提示、唯一 READY、配置、owner、HEAD 和清洁状态，最终核验和同一 dispatch 成功写入必须处于同一次原生 writer 锁持有期间；释放锁后才准备一次 handoff notification。已登记 attempt 的只读对账也必须取得同一 writer 排斥，但不得发送新 turn。原始 turn 不改写为 completed，不以“最新 turn”替代注册链。新状态为 operation.request 的可选审计字段，不新增业务状态，不迁移或清理历史数据。
 
 创建与恢复的外层预算必须覆盖原生初始化预算及200 秒有界历史读取、Git 身份核验和关闭余量；显式配置不足时在副作用前拒绝。普通读取命令继续使用原配置。
 

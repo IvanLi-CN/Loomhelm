@@ -24,7 +24,7 @@
 | `notification-prepare` / `notification-send` | external write | `notification_id` | 先领取唯一 attempt；pending/unknown 必须 reconcile |
 | `notification-reconcile` | read or write | status 查询，或标准 mutation envelope | 以 provider evidence 为准，不凭错误消息推断成功 |
 | `execution-profile-migrate`, `execution-profile-default-update`, `execution-profile-recommend` | write | 每个命令的字段见 `flow <command> --help` | 发现 profile conflict 时重新读取目标配置 |
-| 其余 runtime mutation commands | write | 每个命令在 JSON Schema registry 中有独立 request/response 定义；`dispatch-bind-request`、`dispatch-resolve`、`initialization-recovery-claim` 和 `initialization-recovery-observe` 标记为 `internal`/`cli-only`，只能由 `conversation-create` 编排内部调用 | 先检查返回 code、revision 和 operation 状态 |
+| 其余 runtime mutation commands | write | 每个命令在 JSON Schema registry 中有独立 request/response 定义；`dispatch-bind-request`、`dispatch-resolve`、`initialization-recovery-claim` 和 `initialization-recovery-observe` 标记为 `internal`/`cli-only`，只能由 `conversation-create`、`creation-reconcile` 或 `initialization-recover` 的相应创建、对账与恢复编排内部调用 | 先检查返回 code、revision 和 operation 状态 |
 
 ## Machine-readable surfaces
 

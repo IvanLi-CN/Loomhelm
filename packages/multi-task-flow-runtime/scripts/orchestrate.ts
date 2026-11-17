@@ -463,7 +463,28 @@ try {
     let reconciliation:
       | Awaited<ReturnType<typeof reconcileCliThread>>
       | Awaited<ReturnType<typeof recoverInitialization>>["reconciliation"];
-    let resolutionRevision = parsed.expected_revision;
+    const resolve = (resolutionRevision: number, reconciliation: Record<string, unknown>) =>
+      store.update((raw) =>
+        apply(raw, "dispatch-resolve", {
+          ...parsed,
+          expected_revision: resolutionRevision,
+          payload: {
+            operation_id: operation.id,
+            outcome: "succeeded",
+            thread_id: threadId,
+            native_evidence: {
+              source: "multi-task-flow-reconcile",
+              native_tool_name: "codex exec",
+              operation_id: operation.id,
+              native_request_id: operation.request.native_request_id,
+              model: profile.model,
+              thinking: profile.thinking,
+              ...reconciliation,
+            },
+          },
+        }),
+      );
+    let result: unknown;
     try {
       if (command === "initialization-recover" || operation.request.initialization_recovery) {
         const recovered = await recoverInitialization(
@@ -471,9 +492,12 @@ try {
           parsed,
           operation.id,
           command === "initialization-recover",
+          undefined,
+          (recovered) => {
+            result = resolve(recovered.revision, recovered.reconciliation);
+          },
         );
         reconciliation = recovered.reconciliation;
-        resolutionRevision = recovered.revision;
       } else
         reconciliation = await reconcileCliThread({
           thread_id: threadId,
@@ -505,26 +529,7 @@ try {
       );
       process.exit(0);
     }
-    const result = store.update((raw) =>
-      apply(raw, "dispatch-resolve", {
-        ...parsed,
-        expected_revision: resolutionRevision,
-        payload: {
-          operation_id: operation.id,
-          outcome: "succeeded",
-          thread_id: threadId,
-          native_evidence: {
-            source: "multi-task-flow-reconcile",
-            native_tool_name: "codex exec",
-            operation_id: operation.id,
-            native_request_id: operation.request.native_request_id,
-            model: profile.model,
-            thinking: profile.thinking,
-            ...reconciliation,
-          },
-        },
-      }),
-    );
+    if (result === undefined) result = resolve(parsed.expected_revision, reconciliation);
     const notification = notificationRequestOf(result);
     const delivery = notification
       ? record(await deliverNotification(store, parsed, input, notification))
@@ -807,7 +812,7 @@ try {
     )
       throw new ContractError(
         "CLI_ONLY_DISPATCH",
-        "Contract-3 dispatch binding and resolution must run inside conversation-create; direct native thread creation is not an accepted flow",
+        "Dispatch binding, resolution and recovery mutations are internal to conversation-create, creation-reconcile and initialization-recover; direct mutation is not an accepted flow",
         5,
       );
     const result = record(
