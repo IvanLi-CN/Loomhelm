@@ -2,6 +2,12 @@
 
 本文是主题 SPEC 的实现映射。设计边界以同目录的 [SPEC.md](./SPEC.md) 为长期合同，数据结构以 [DATA_MODEL.md](./DATA_MODEL.md) 为准，状态机和恢复规则以 [STATE_MACHINES.md](./STATE_MACHINES.md) 为准；这里记录代码入口、迁移边界和验证入口，不能重新定义领域语义。
 
+## CLI 人类与机器展示
+
+REQ-CLI-001 至 REQ-CLI-003 由客户端 CLI 的 output-options、help、query-options、json-stream 和 output 模块实现。公开入口统一选择风格；Flow JSON 保留背压直通，human 增量消费同一结果。service status/doctor 和 show/view 的普通参数只构造既有请求，不增加身份推断或变更权限。测试入口为 `clients/typescript/test/cli-output.test.ts`、`cli-output-integration.test.ts` 及既有 `cli-integration.test.ts`；transport fixture 不访问真实服务或 Codex。候选的最终 CI/review 结果仍须绑定当前 head。
+
+TTY 默认变更具有公开终端兼容性影响；显式 JSON 的业务合同及持久状态格式不变。未修改包版本、兼容线或全局安装，发布决策仍归仓库既有政策。
+
 ## Documentation map
 
 [SPEC.md](./SPEC.md) 记录长期需求、验收和兼容合同；[AGENT_INTERACTIONS.md](./AGENT_INTERACTIONS.md) 记录角色职责、交互顺序和时序图；[DATA_MODEL.md](./DATA_MODEL.md) 记录 canonical schema、投影和外部事实；[STATE_MACHINES.md](./STATE_MACHINES.md) 记录各对象的正常状态机、异常恢复状态机和范围修订；[CLI_CONTRACT.md](./CLI_CONTRACT.md) 记录命令接口；本文件记录实现入口、验证映射与已知偏差。

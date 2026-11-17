@@ -1,3 +1,5 @@
+import { output, HumanJsonStream, printDiagnostics, writeOutput } from './output.ts';
+import { queryInput } from './query-options.ts';
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { Writable } from "node:stream";
@@ -101,16 +103,17 @@ export async function runFlowCommand(
 		if (!socket) throw new Error("Missing socket path");
 		args = [...args.slice(0, index), ...args.slice(index + 2)];
 	}
-	if (args.length !== 3 || args[1] !== "--input" || args[2] !== "-")
+	const convenience = queryInput(args);
+	if (!convenience && (args.length !== 3 || args[1] !== "--input" || args[2] !== "-"))
 		throw new Error(
 			"FLOW_LEGACY_ARGUMENTS_UNSUPPORTED: use COMMAND --input - with the original JSON contract; existing state is unchanged",
 		);
 	const config = await loadConfig(configPath);
-	if (process.stdin.isTTY)
+	if (!convenience && process.stdin.isTTY)
 		throw new Error("Flow requires a JSON request on stdin");
 	const chunks: Buffer[] = [];
 	let size = 0;
-	for await (const chunk of process.stdin) {
+	for await (const chunk of (convenience ? [] : process.stdin)) {
 		const data = Buffer.from(chunk);
 		size += data.length;
 		if (size > 16 * 1024 * 1024) throw new Error("Flow input too large");
@@ -119,9 +122,30 @@ export async function runFlowCommand(
 	const selected = socket ?? config.codexAppServerSocket;
 	const sinks = { stdout: process.stdout, stderr: process.stderr };
 	let outputStarted = false;
-	const options = flowProcessOptions(config, Buffer.concat(chunks), selected, args[0]);
+	const input = convenience ? Buffer.from(JSON.stringify(convenience)) : Buffer.concat(chunks);
+  const runtimeArgs = convenience ? [args[0]!, '--input', '-'] : args;
+  const human = output.style === 'human' ? new HumanJsonStream(`flow ${args[0]}`) : undefined;
+  const diagnostics = new TextDecoder();
+  let diagnosticLine = '';
+  let diagnosticDropped = false;
+  const diagnosticChunk = async (text: string) => {
+    for (const char of text) {
+      if (char === '\n') {
+        if (diagnosticDropped) await writeOutput('stderr', '诊断过长，已省略；使用 --output json 查看原始诊断。\n');
+        else if (diagnosticLine) await printDiagnostics(diagnosticLine);
+        diagnosticLine = ''; diagnosticDropped = false;
+      } else if (diagnosticLine.length < 8192) diagnosticLine += char;
+      else diagnosticDropped = true;
+    }
+  };
+  const options = flowProcessOptions(config, input, selected, args[0]);
 	options.outputSink = async (stream, bytes) => {
 		if (stream === "stdout") outputStarted = true;
+    if (human) {
+      if (stream === 'stdout') await human.write(bytes);
+      else await diagnosticChunk(diagnostics.decode(bytes, { stream: true }));
+      return;
+    }
 		const target: Writable = sinks[stream];
 		// Serialize bounded writes and wait for each callback, including EPIPE.
 		for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024) {
@@ -137,15 +161,22 @@ export async function runFlowCommand(
 	try {
 	const result = await new SkillsRuntime().run(
 		"skills/multi-task-flow/scripts/orchestrate.ts",
-		args,
+		runtimeArgs,
 		options,
 	);
-	if (result.stdout) process.stdout.write(result.stdout);
-	if (result.stderr) process.stderr.write(result.stderr);
+	if (human) {
+    if (result.stdout) await human.write(Buffer.from(result.stdout));
+    if (result.stderr) await diagnosticChunk(result.stderr);
+    await diagnosticChunk(diagnostics.decode() + '\n');
+    await human.finish();
+  }
+  else if (result.stdout) process.stdout.write(result.stdout);
+	if (!human && result.stderr) process.stderr.write(result.stderr);
 	process.exitCode = result.code ?? 1;
 	} catch (error) {
 		if (!outputStarted) throw error;
-		await new Promise<void>(resolve => process.stderr.write(JSON.stringify({ ok: false, code: "FLOW_OUTPUT_FAILED", message: String(error) }) + "\n", () => resolve()));
+		if (human) await writeOutput('stderr', 'FLOW_OUTPUT_FAILED：输出交付未完成；先核验原操作结果及停止证据，不要重做业务。\n').catch(() => {});
+    else await new Promise<void>(resolve => process.stderr.write(JSON.stringify({ ok: false, code: "FLOW_OUTPUT_FAILED", message: String(error) }) + "\n", () => resolve()));
 		process.exitCode = 1;
 	} finally {
 		// Writable emits an error after its write callback; keep handlers through that turn.

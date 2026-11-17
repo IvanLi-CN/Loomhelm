@@ -593,3 +593,35 @@ Flow 正常结果 MUST 使用有背压的流式传输，默认不限制累计输
 - covers: `REQ-INVOCATION-006`
 - Method: 隔离历史源停止对账、独立机械迁移与迁移后新调用停止门禁的完整链路、格式兼容及旧 writer 拒绝路径、help/schema 与精确发布产物对照。
 - Pass condition: 无升级与恢复互锁，恢复前后绑定不变；普通版本门禁不放宽，未知格式拒绝；未取得相应授权时不操作正式运行或全局安装。
+
+## CLI 受众与展示合同
+
+### REQ-CLI-001
+
+公开 CLI MUST 提供 auto/human/json 全局输出选择，按 CLI Contract 定义的参数、环境变量、终端和显式环境信号确定风格；stdin 重定向 MUST NOT 单独改变受众判断。Agent 调用 MUST 显式选择 JSON。公开帮助 MUST 可发现且不执行业务；专用 Schema MUST 保持机器格式。
+
+### REQ-CLI-002
+
+常用只读参数 MUST 转换为现有 runtime 请求并要求显式 actor，保留权限、版本及 owner 校验；普通参数与 stdin JSON MUST NOT 混用。human MUST 保留业务结果、交付和静止的独立语义，JSON 业务字段、通道及退出码 MUST 保持现有合同。
+
+### REQ-CLI-003
+
+human Flow MUST 增量验证完整 JSON 并使用有界文本缓冲和背压，MUST NOT 为展示缓存完整响应或在结果未完成时宣称成功。展示失败 MUST 进入既有停止路径，MUST NOT 重执行业务；raw 透传不受展示风格改写。
+
+### VER-CLI-001
+
+- covers: `REQ-CLI-001`
+- Method: 注入 TTY/环境和真实 CLI 隔离子进程测试，遍历公开帮助并解析 Schema。
+- Pass condition: 优先级、CI/Agent/管道、颜色、重复非法参数和透传符合 CLI Contract，帮助不加载真实服务或账号。
+
+### VER-CLI-002
+
+- covers: `REQ-CLI-002`
+- Method: 假绑定及 transport 比较新旧请求，回归既有身份门禁和机器 fixture。
+- Pass condition: shorthand 与 JSON 共用请求和校验，身份缺失或冲突拒绝，退出码不变，unknown 与未静止展示准确。
+
+### VER-CLI-003
+
+- covers: `REQ-CLI-003`
+- Method: 分块 UTF-8/JSON、超长 token、大数组、慢 sink、无效 JSON 与 EPIPE 故障注入。
+- Pass condition: 缓冲不随累计字节增长，背压有效，失败不追加结果或重执行业务，既有停止与 raw 字节合同保持。

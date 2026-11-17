@@ -1,5 +1,9 @@
 # History
 
+## CLI 输出受众
+
+2026-11-18：确认 auto/human/json 输出选择、统一帮助、显式查询身份及人类摘要；以原 JSON 和持久状态合同为边界，引入增量人类展示及隔离回归。TTY 默认变化须在发布时评估兼容线，源码实现不代表全局安装或 npm 已更新。
+
 ## 历史副作用静止审计
 
 2026-11-17：将历史静止审计方案拆分为 proposed [ADR 0041](../../adr/0041-historical-side-effect-quiescence-audit.md) 与 SPEC 第 16 节。ADR 只记录静止证明随升级事务保存、避免独立恢复账本的持久化取舍；长期需求和可追溯验收归入 SPEC，诊断基线、覆盖及证据缺口归入 IMPLEMENTATION。没有程序、发布、全局安装或正式 run 变更。

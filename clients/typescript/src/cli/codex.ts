@@ -1,3 +1,4 @@
+import { printResult } from './output.ts';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -72,7 +73,7 @@ class AppServerDispatchAdapter implements DispatchAdapter {
       const params = notification.params as Completion & { threadId?: unknown };
       if (typeof params.threadId === 'string') this.active.get(params.threadId)?.resolve(params);
     });
-    server.on('serverRequest', call => { void this.handleServerRequest(call); });
+    server.on('serverRequest', call => { void this.handleServerRequest(call).catch(error => { for (const turn of this.active.values()) turn.resolve(error instanceof Error ? error : new Error(String(error))); }); });
   }
 
   private async handleServerRequest(call: ServerCall): Promise<void> {
@@ -80,13 +81,13 @@ class AppServerDispatchAdapter implements DispatchAdapter {
     const threadId = typeof params.threadId === 'string' ? params.threadId : undefined;
     if (!call.approval || !['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(call.method)) {
       if (threadId) this.active.get(threadId)?.resolve(new Error(`Explicit caller decision required for Codex request ${call.method}`));
-      process.stderr.write(`${JSON.stringify({ event: 'codex.request', method: call.method, approval: call.approval, params })}\n`);
+      await printResult({ event: 'codex.request', method: call.method, approval: call.approval, params }, 'stderr');
       return;
     }
     const decision = this.approvalDecision ?? 'decline';
     try {
       await call.respond({ decision });
-      if (!this.approvalDecision) process.stderr.write(`${JSON.stringify({ event: 'codex.approval', decision: 'decline', reason: 'No explicit caller approval decision was supplied', params })}\n`);
+      if (!this.approvalDecision) await printResult({ event: 'codex.approval', decision: 'decline', reason: 'No explicit caller approval decision was supplied', params }, 'stderr');
     }
     catch (error) { if (threadId) this.active.get(threadId)?.resolve(error instanceof Error ? error : new Error(String(error))); }
   }
@@ -156,10 +157,10 @@ const inactiveAdapter: DispatchAdapter = {
   async readThread() { throw new Error('Codex app-server is not active'); },
 };
 
-function report(record: DispatchRecord): void {
+async function report(record: DispatchRecord): Promise<void> {
   const state = record.state === 'created' ? 'unknown' : record.state;
   const detail = record.state === 'created' ? 'A prior process stopped while the external thread creation result was unresolved; automatic retry is disabled' : record.detail ?? null;
-  console.log(JSON.stringify({ requestId: record.requestId, dispatchId: record.id, state, threadId: record.threadId ?? null, turnId: record.turnId ?? null, attempts: record.attempts, detail }));
+  await printResult({ requestId: record.requestId, dispatchId: record.id, state, threadId: record.threadId ?? null, turnId: record.turnId ?? null, attempts: record.attempts, detail });
   if (state === 'failed') process.exitCode = 1;
   if (state === 'unknown') process.exitCode = 2;
 }
@@ -172,12 +173,12 @@ export async function runCodexCommand(args: string[], configPath?: string): Prom
   const config = await loadConfig(configPath);
   const dispatchDir = join(config.stateDir, 'codex-dispatch');
   const dispatcher = new ThreadDispatcher(inactiveAdapter, { stateDir: dispatchDir });
-  if (command === 'list' && rest.length === 0) { console.log(JSON.stringify(await dispatcher.snapshotAsync())); return; }
+  if (command === 'list' && rest.length === 0) { await printResult(await dispatcher.snapshotAsync()); return; }
   if (command === 'approve' && rest.length === 1) {
     const record = (await dispatcher.snapshotAsync()).find(item => item.id === rest[0]);
     if (!record) throw new Error('Dispatch request not found');
     if ((record.state === 'created' || record.state === 'unknown') && !record.threadId) throw new Error('Cannot approve a thread creation with no known thread ID; reconcile the external result first');
-    report(await dispatcher.approve(rest[0]!)); return;
+    await report(await dispatcher.approve(rest[0]!)); return;
   }
   if (command === 'dispatch' && rest.length === 2) {
     const request = parseRequest(JSON.parse(rest[1]!), rest[0]!);
@@ -185,9 +186,9 @@ export async function runCodexCommand(args: string[], configPath?: string): Prom
     await saveProfile(profileDir, request);
     const existing = (await dispatcher.snapshotAsync()).find(record => record.requestId === request.requestId);
     const input: DispatchInput = { requestId: request.requestId, title: request.title, prompt: request.prompt, ...(request.cwd ? { cwd: request.cwd } : {}) };
-    if (existing) { report(existing); return; }
+    if (existing) { await report(existing); return; }
     const server = await CodexAppServer.start({ shutdownGraceMs: 500 });
-    try { report(await new ThreadDispatcher(new AppServerDispatchAdapter(server, request, request.approvalDecision), { stateDir: dispatchDir }).dispatch(input)); }
+    try { await report(await new ThreadDispatcher(new AppServerDispatchAdapter(server, request, request.approvalDecision), { stateDir: dispatchDir }).dispatch(input)); }
     finally { await server.stop(); }
     return;
   }
@@ -195,11 +196,11 @@ export async function runCodexCommand(args: string[], configPath?: string): Prom
     const existing = (await dispatcher.snapshotAsync()).find(record => record.id === rest[0]);
     if (!existing) throw new Error('Dispatch request not found');
     if (existing.state === 'unknown' && !existing.threadId) throw new Error('Cannot retry an unknown thread creation without reconciling its thread ID');
-    if (!existing.threadId) { report(existing); return; }
-    if (existing.state !== 'unknown') { report(existing); return; }
+    if (!existing.threadId) { await report(existing); return; }
+    if (existing.state !== 'unknown') { await report(existing); return; }
     const profile = await readProfile(join(config.stateDir, 'codex-profiles'), existing.requestId);
     const server = await CodexAppServer.start();
-    try { report(await new ThreadDispatcher(new AppServerDispatchAdapter(server, profile), { stateDir: dispatchDir }).reconcile(existing.id)); }
+    try { await report(await new ThreadDispatcher(new AppServerDispatchAdapter(server, profile), { stateDir: dispatchDir }).reconcile(existing.id)); }
     finally { await server.stop(); }
     return;
   }
@@ -209,7 +210,7 @@ export async function runCodexCommand(args: string[], configPath?: string): Prom
     if (!existing) throw new Error('Dispatch request not found');
     const profile = await readProfile(join(config.stateDir, 'codex-profiles'), existing.requestId);
     const server = await CodexAppServer.start();
-    try { report(await new ThreadDispatcher(new AppServerDispatchAdapter(server, profile, rest[1] as ApprovalDecision | undefined), { stateDir: dispatchDir }).retry(existing.id)); }
+    try { await report(await new ThreadDispatcher(new AppServerDispatchAdapter(server, profile, rest[1] as ApprovalDecision | undefined), { stateDir: dispatchDir }).retry(existing.id)); }
     finally { await server.stop(); }
     return;
   }

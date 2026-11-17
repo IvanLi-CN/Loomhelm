@@ -4,7 +4,31 @@
 
 ## Invocation
 
-正式调用使用 `bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --input -`，stdin 必须是一个 JSON 对象；禁止使用 `latest`、裸缓存二进制或仓库源码路径替代精确版本。
+正式调用使用 `bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --output json --input -`，stdin 必须是一个 JSON 对象；禁止使用 `latest`、裸缓存二进制或仓库源码路径替代精确版本。
+
+## 人类与机器输出
+
+全局参数 `--output auto|human|json` 优先于 `MULTI_TASK_FLOW_OUTPUT`，缺省为 `auto`；显式 auto 覆盖环境变量的固定风格。stdout 非 TTY、非空 `CODEX_THREAD_ID`、`MULTI_TASK_FLOW_AGENT=1` 或真值 `CI` / `CONTINUOUS_INTEGRATION` 时自动选择 JSON，其他情况选择 human。CI 真值是去除空白后非空且忽略大小写不等于 `0` 或 `false`。stdin 是否重定向不参与判断；检测不代表身份认证，正式 Agent 调用必须显式指定 JSON。
+
+全局参数可放在子命令前后，支持 `--name=value`，重复、缺值或非法值在副作用前拒绝。`--` 后是透传参数；`skills run SCRIPT` 后的旧式脚本参数也归脚本所有。`--verbose` 增加人类细节；`--color auto|always|never` 独立选择颜色，显式 always/never 优先于 `NO_COLOR`，auto 在 `NO_COLOR` 存在、`TERM=dumb` 或目标流非 TTY 时关闭；JSON 永远无色。
+
+所有公开命令层级提供 `-h`、`--help`、`help` 和命令组帮助；JSON 帮助包含 `schema_version=1`、`command`、`summary`、`usage`、`options`、`examples`、`subcommands`。`schema --format json` 始终输出原机器 Schema。人类帮助按用途显示参数和示例，不直接倾倒 request/response Schema。
+
+human 默认展示关键身份、状态、revision、计数、阻塞及安全的下一步；列表最多显示 20 项，单字段最多 160 字符，省略明确提示；verbose 逐项显示展开路径，单字符串最多 4096 字符，完整结果使用 JSON。人类展示必须区分业务结果、输出交付和调用静止，unknown 不等于失败。JSON 业务字段、错误通道和退出码保留原合同；人类错误写 stderr。新增全局参数错误沿用顶层 stderr `{code: "CLI_ERROR", error: "..."}` 和退出码 1。
+
+Flow JSON 使用原有背压直通；human 使用增量 UTF-8/JSON 解析及有界展示缓冲，消费并验证全部语法，不缓存完整响应。接收中不宣布最终成功，输出或解析失败沿用停止路径，不重做业务、不追加第二份 JSON。`service daemon`、内部 worker 和 `skills run` 的 raw 输出不改变。
+
+### 常用只读参数
+
+`service status` / `service doctor` 可省略 JSON 输入，内部请求为 `{}`。`flow show/view` 支持 `--run-id`、`--actor-role main|group|task`、`--thread-id`，三项全部必填并经过原 runtime 身份与版本校验。show 另支持 `--section`、`--task-id`，普通参数形式默认 summary；view 支持 `--plan-id`。普通参数与 `--input -` 互斥；旧 JSON 请求的默认 section 仍为 full。
+
+```sh
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output human service status
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output human flow show --run-id RUN_ID --actor-role main --thread-id THREAD_ID --section summary
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json flow show --input - < request.json
+```
+
+TTY 默认由 JSON 改为 human 是可观察兼容性变化；机器消费者应显式选择 JSON。业务 JSON 和持久状态合同不变；发布时须按仓库兼容线政策评估该默认行为变化，不能仅凭原 JSON 字段未变宣称终端默认完全兼容。本变更不选择发布版本或更新全局安装。
 
 ## Common mutation envelope
 

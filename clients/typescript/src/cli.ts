@@ -1,4 +1,7 @@
 #!/usr/bin/env -S bun --no-install
+import { parseGlobalOptions, resolveOutput } from './cli/output-options.ts';
+import { output, printResult, printCaptured } from './cli/output.ts';
+import { requestedHelp, printHelp } from './cli/help.ts';
 import { LocalClient } from './client.ts';
 import { StateLock } from './runtime/lock.ts';
 import { loadConfig } from './config.ts';
@@ -15,14 +18,18 @@ import { SkillsRuntime } from './toolkit.ts';
 import { fileURLToPath } from 'node:url';
 import { runGatewayCommand, runOrchestrationCommand } from './cli/upgrade.ts';
 
+let optionsResolved = false;
 async function main(args: string[]): Promise<void> {
-  if (args.length === 1 && (args[0] === "--version" || args[0] === "version")) { console.log(JSON.stringify(buildInfoFromArtifact(await new SkillsRuntime().validate()))); return; }
-  let configPath: string | undefined;
-  if (args[0] === '--config') { args.shift(); configPath = args.shift(); if (!configPath) throw new Error('Missing config path'); }
+  try { output.style = resolveOutput(undefined, process.env, !!process.stdout.isTTY); } catch { output.style = 'json'; }
+  const parsed = parseGlobalOptions(args);
+  Object.assign(output, parsed.options);
+  optionsResolved = true;
+  args = parsed.args;
+  const configPath = parsed.configPath;
+  const help = requestedHelp(args);
+  if (help) { await printHelp(help); return; }
+  if (args.length === 1 && (args[0] === '--version' || args[0] === 'version')) { await printResult(buildInfoFromArtifact(await new SkillsRuntime().validate())); return; }
   const [command, ...rest] = args;
-  if (command === 'help' || !command) {
-    console.log('multi-task-flow [--config PATH] status|tasks|receipts|recover-lock TOKEN|apply OPERATION_ID JSON|run OPERATION_ID TASK_ID COMMAND_JSON|git-status PATH|worktree REPO ABS_PATH BRANCH [BASE]|codex COMMAND ...|flow COMMAND --input -|flow COMMAND --help|flow schema --format json|service COMMAND --input -|gateway upgrade [--dry-run|--rollback] VERSION_OR_TAG|orchestration upgrade --run-id RUN_ID [--dry-run] VERSION_OR_TAG|orchestration compatibility-check --run-id RUN_ID|orchestration upgrade-check --run-id RUN_ID|orchestration schema --format json|skills COMMAND ...|release COMMAND ...|workflow COMMAND ...'); return;
-  }
   if (command === 'skills') { await runSkillsCommand(rest); return; }
   if (command === 'codex') { await runCodexCommand(rest, configPath); return; }
   if (command === 'flow') { await runFlowCommand(rest, configPath); return; }
@@ -38,27 +45,26 @@ async function main(args: string[]): Promise<void> {
     if (rest[0] === 'verify') throw new Error('WORKFLOW_LEGACY_COMMAND_UNSUPPORTED: use local-verify for local validation only; follow the migrated engineering Skills for delivery gates');
     if (!rest.length) throw new Error('Usage: workflow skills PROJECT_SKILLS_DIR [USER_SKILLS_DIR] | local-verify MANIFEST_JSON_PATH');
     const result = await runProcess(process.execPath, ['--no-install', fileURLToPath(new URL('./workflow/cli.ts', import.meta.url)), ...rest]);
-    if (result.stdout) process.stdout.write(result.stdout);
-    if (result.stderr) process.stderr.write(result.stderr);
+    await printCaptured(result.stdout, result.stderr, 'workflow');
     if (result.code !== 0) process.exitCode = result.code ?? 1;
     return;
   }
-  if (command === 'recover-lock' && rest.length === 1) { await StateLock.recover((await loadConfig(configPath)).stateDir, rest[0]!); console.log(JSON.stringify({ recovered: true })); return; }
-  if (command === 'git-status' && rest.length === 1) { console.log(JSON.stringify(await new GitAdapter(rest[0]!).inspect())); return; }
+  if (command === 'recover-lock' && rest.length === 1) { await StateLock.recover((await loadConfig(configPath)).stateDir, rest[0]!); await printResult({ recovered: true }); return; }
+  if (command === 'git-status' && rest.length === 1) { await printResult(await new GitAdapter(rest[0]!).inspect()); return; }
   if (command === 'worktree' && (rest.length === 3 || rest.length === 4)) {
-    console.log(JSON.stringify(await new GitAdapter(rest[0]!).createWorktree(rest[1]!, rest[2]!, rest[3]))); return;
+    await printResult(await new GitAdapter(rest[0]!).createWorktree(rest[1]!, rest[2]!, rest[3])); return;
   }
-  if (!['status', 'tasks', 'receipts', 'apply', 'run'].includes(command) || (command === 'apply' ? rest.length !== 2 : command === 'run' ? rest.length !== 3 : rest.length !== 0)) throw new Error('Invalid command; see help');
+  if (!['status', 'tasks', 'receipts', 'apply', 'run'].includes(command ?? '') || (command === 'apply' ? rest.length !== 2 : command === 'run' ? rest.length !== 3 : rest.length !== 0)) throw new Error('Invalid command; see help');
   const client = await LocalClient.open(configPath);
   const controller = new AbortController();
   const interrupt = () => { controller.abort(); process.exitCode = 130; };
   process.once('SIGINT', interrupt); process.once('SIGTERM', interrupt);
   try {
-    let output: unknown;
+    let resultValue: unknown;
     switch (command) {
-      case 'status': output = { mode: client.config.mode, stateDir: client.config.stateDir, tasks: Object.keys(client.ledger.snapshot().tasks).length }; break;
-      case 'tasks': output = client.ledger.snapshot(); break;
-      case 'receipts': output = client.ledger.history(); break;
+      case 'status': resultValue = { mode: client.config.mode, stateDir: client.config.stateDir, tasks: Object.keys(client.ledger.snapshot().tasks).length }; break;
+      case 'tasks': resultValue = client.ledger.snapshot(); break;
+      case 'receipts': resultValue = client.ledger.history(); break;
       case 'run': {
         const [operationId, taskId, encoded] = rest as [string, string, string];
         if (operationId.length > 80) throw new Error('Run operation identity is too long');
@@ -71,7 +77,7 @@ async function main(args: string[]): Promise<void> {
         if (existing) {
           const finished = client.ledger.history().find(r => r.operationId === `${operationId}.finish`);
           if (!finished) throw new Error('Uncertain previous execution; inspect receipts before explicit retry with a new identity');
-          output = finished;
+          resultValue = finished;
           if (finished.operation.type === 'run.finish' && finished.operation.status !== 'succeeded') process.exitCode = 1;
           break;
         }
@@ -88,15 +94,23 @@ async function main(args: string[]): Promise<void> {
           status = controller.signal.aborted ? 'interrupted' : 'failed';
           detail = error instanceof Error ? error.message : String(error);
         }
-        output = await client.ledger.execute(`${operationId}.finish`, { type: 'run.finish', runId, status, detail });
+        resultValue = await client.ledger.execute(`${operationId}.finish`, { type: 'run.finish', runId, status, detail });
         if (status !== 'succeeded') process.exitCode = controller.signal.aborted ? 130 : 1;
         break;
       }
-      case 'apply': output = await client.ledger.execute(rest[0]!, JSON.parse(rest[1]!) as Operation); break;
+      case 'apply': resultValue = await client.ledger.execute(rest[0]!, JSON.parse(rest[1]!) as Operation); break;
     }
-    console.log(JSON.stringify(output));
+    await printResult(resultValue);
   } finally {
     await client.close(); process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
   }
 }
-main(process.argv.slice(2)).catch(error => { console.error(JSON.stringify({ code: 'CLI_ERROR', error: error instanceof Error ? error.message : String(error) })); process.exitCode = 1; });
+main(process.argv.slice(2)).catch(async error => {
+  process.exitCode = 1;
+  // On malformed arguments choose a safe fallback without executing any command.
+  if (!optionsResolved) {
+    const own = process.argv.slice(2, process.argv.indexOf('--') < 0 ? undefined : process.argv.indexOf('--'));
+    if (own.includes('--output=human') || own.some((v, i, a) => v === '--output' && a[i + 1] === 'human')) output.style = 'human';
+  }
+  await printResult({ code: 'CLI_ERROR', error: error instanceof Error ? error.message : String(error) }, 'stderr').catch(() => {});
+});

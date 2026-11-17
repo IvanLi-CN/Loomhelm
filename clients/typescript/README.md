@@ -12,6 +12,21 @@ bunx --bun @loomhelm/multi-task-flow@0.2.55 flow view --input - < view-request.j
 
 生产调用必须锁定 exact package version，并使用 `bunx --bun @loomhelm/multi-task-flow@<exact-version> ...`；不得改用 `npx`、`latest`、兼容线 tag、未锁版本的裸 CLI 或仓库内源码路径。package version、compatibility line、Skill version、source/merge SHA、合同版本、build ID 和 digest 在包内 artifact manifest 中分别记录，不能从另一字段或 npm cache 推断身份。破坏 CLI 输入输出、账本语义或 viewer/service 边界的变更必须建立新的兼容线，旧兼容线继续保留为可安装版本。
 
+## CLI 输出与常用查询
+
+终端默认显示人类摘要；CI、Agent 声明或 stdout 非终端时默认 JSON。使用 `--output human|json|auto` 显式选择，或设置 `MULTI_TASK_FLOW_OUTPUT`；机器脚本和 Agent 应始终指定 `--output json`。stdin 管道不会单独改变输出风格。`--verbose` 显示更多人类细节，完整字段使用 JSON；`--color auto|always|never` 控制颜色并支持 `NO_COLOR`。
+
+```sh
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output human --help
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output human service status
+bunx --bun @loomhelm/multi-task-flow@<exact-version> flow show --output human --run-id RUN_ID --actor-role main --thread-id THREAD_ID
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json flow show --input - < request.json
+```
+
+查询身份必须显式提供，不从当前对话猜测；权限和版本门禁与 JSON 请求相同。人类错误写 stderr，JSON 保留各命令现有通道与退出码；unknown 需要对账，不能盲目重试。Schema 始终是机器 JSON。`service daemon`、内部 worker 和 `skills run` 的脚本输出保持原样；脚本参数可用 `--` 分隔。
+
+完整合同见 [CLI Contract](../../docs/specs/multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md)。源码能力不代表 npm 已发布或用户全局安装已升级。
+
 ## 版本化安装与内部版本矩阵
 
 可重复的生产安装必须固定 package version；compatibility line 和 `latest` 不构成当前 CLI 身份或兼容性证明。运行前置条件是 `bun --version` 返回 `1.4.4`；Bun 由宿主提供，包不会替换或升级它。
