@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  unlinkSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
@@ -40,7 +41,7 @@ import {
 } from "../lib/service-lifecycle";
 import { requireSourceRelease, verifyRelease } from "../lib/service-release";
 import type { ServiceState } from "../lib/service-state";
-import { ensureDirectory, readRegular } from "../lib/store";
+import { ensureDirectory, readRegular, writeAtomic } from "../lib/store";
 
 export const PACKAGE_NAME = "@loomhelm/multi-task-flow";
 export interface PackageIdentity {
@@ -322,6 +323,7 @@ export async function upgradePackageRelease(state: ServiceState, version: string
 export interface PackageUpgradeControl {
   upgrade: typeof upgradePackageRelease;
   start: typeof startUserService;
+  unload?: typeof unloadUserService;
   status: typeof serviceStatus;
   waitForHealth: typeof waitForServiceHealth;
   startupTimeoutMs?: number;
@@ -427,7 +429,7 @@ function gatewayRollbackFailure(
   failure: ContractError,
   rollbackError: unknown,
   targetVersion: string,
-  previousVersion: string,
+  previousVersion: string | null,
 ): ContractError {
   const rollbackDetails =
     rollbackError instanceof ContractError &&
@@ -459,9 +461,47 @@ function gatewayRollbackFailure(
 export const packageUpgradeControl: PackageUpgradeControl = {
   upgrade: upgradePackageReleaseLocked,
   start: startUserService,
+  unload: unloadUserService,
   status: serviceStatus,
   waitForHealth: waitForServiceHealth,
 };
+
+type PreviousGatewayProfile = {
+  config: ServiceConfig;
+  plist: string | null;
+};
+
+function restorePreviousGatewayProfile(state: ServiceState, profile: PreviousGatewayProfile): void {
+  state.saveConfig(profile.config);
+  const plistPath = join(state.paths.config, "viewer.plist");
+  if (profile.plist === null) {
+    if (existsSync(plistPath)) unlinkSync(plistPath);
+  } else {
+    writeAtomic(plistPath, profile.plist);
+  }
+  state.transaction((runtime) => {
+    runtime.phase = "stopped";
+    runtime.pid = null;
+  });
+}
+
+async function rollbackSourceGateway(
+  state: ServiceState,
+  control: PackageUpgradeControl,
+  profile: PreviousGatewayProfile,
+  timeoutMs: number,
+  leaseHeld: boolean,
+  onLeaseEstablished: () => void,
+): Promise<void> {
+  if (leaseHeld) renewPackageMaintenanceLease(state, timeoutMs);
+  control.unload?.(state);
+  restorePreviousGatewayProfile(state, profile);
+  if (!leaseHeld) {
+    renewPackageMaintenanceLease(state, timeoutMs);
+    onLeaseEstablished();
+  }
+  await startAndWaitForPackageGateway(state, control, "source", null, timeoutMs);
+}
 
 export async function upgradePackageReleaseAndStart(
   state: ServiceState,
@@ -470,7 +510,14 @@ export async function upgradePackageReleaseAndStart(
 ) {
   state.initialize();
   return withExclusiveLockAsync(join(state.paths.state, "startup.lock"), async () => {
-    const oldVersion = state.config().package_version ?? null;
+    const previousProfile: PreviousGatewayProfile = {
+      config: state.config(),
+      plist: (() => {
+        const path = join(state.paths.config, "viewer.plist");
+        return existsSync(path) ? readFileSync(path, "utf8") : null;
+      })(),
+    };
+    const oldVersion = previousProfile.config.package_version ?? null;
     const timeoutMs = control.startupTimeoutMs ?? SERVICE_STARTUP_TIMEOUT_MS;
     requireCondition(
       Number.isFinite(timeoutMs) && timeoutMs > 0,
@@ -495,11 +542,16 @@ export async function upgradePackageReleaseAndStart(
             rollback_status: "not_attempted",
           },
         );
-        if (!oldVersion || oldVersion === version) throw failure;
         try {
-          await rollbackPackageGateway(state, control, oldVersion, timeoutMs, false, () => {
-            maintenanceLease = true;
-          });
+          if (oldVersion && oldVersion !== version) {
+            await rollbackPackageGateway(state, control, oldVersion, timeoutMs, false, () => {
+              maintenanceLease = true;
+            });
+          } else {
+            await rollbackSourceGateway(state, control, previousProfile, timeoutMs, false, () => {
+              maintenanceLease = true;
+            });
+          }
         } catch (rollbackError) {
           throw gatewayRollbackFailure(failure, rollbackError, version, oldVersion);
         }
@@ -529,9 +581,12 @@ export async function upgradePackageReleaseAndStart(
                 last_health_code: safeFailureCode(error),
                 rollback_status: "not_attempted",
               });
-        if (!oldVersion || oldVersion === version) throw failure;
         try {
-          await rollbackPackageGateway(state, control, oldVersion, timeoutMs, true, () => {});
+          if (oldVersion && oldVersion !== version) {
+            await rollbackPackageGateway(state, control, oldVersion, timeoutMs, true, () => {});
+          } else {
+            await rollbackSourceGateway(state, control, previousProfile, timeoutMs, true, () => {});
+          }
         } catch (rollbackError) {
           throw gatewayRollbackFailure(failure, rollbackError, version, oldVersion);
         }

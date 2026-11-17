@@ -919,6 +919,97 @@ test("package upgrade restores the previous build when its startup lease cannot 
   expect(state.runtime().leases).toHaveLength(0);
 });
 
+test("package upgrade restores a source profile when its startup lease cannot be established", async () => {
+  const { root, state } = fixture();
+  const oldBuild = "a".repeat(64);
+  const oldSource = "c".repeat(40);
+  const targetBuild = "b".repeat(64);
+  const targetSource = "d".repeat(40);
+  const previousConfig = {
+    schema_version: 1 as const,
+    port: 49158,
+    registry_dir: join(root, "registry"),
+    current_build: oldBuild,
+    previous_build: null,
+    agent_ttl_ms: 60_000,
+    source_sha: oldSource,
+  };
+  const plistPath = join(state.paths.config, "viewer.plist");
+  const previousPlist = "source-plist";
+  state.saveConfig(previousConfig);
+  writeFileSync(plistPath, previousPlist);
+  state.transaction((runtime) => {
+    runtime.phase = "stopping";
+  });
+  const upgradedVersions: string[] = [];
+  let unloads = 0;
+  let starts = 0;
+  const control = {
+    upgrade: async (_state: typeof state, version: string) => {
+      upgradedVersions.push(version);
+      state.saveConfig({
+        ...previousConfig,
+        current_build: targetBuild,
+        package_name: "@loomhelm/multi-task-flow",
+        package_version: version,
+        compatibility_line: "compat-v1",
+        skill_version: "0.0.0",
+        service_contract: "1",
+        source_sha: targetSource,
+        artifact_build_id: targetBuild,
+      });
+      writeFileSync(plistPath, "candidate-plist");
+      return {
+        package_name: "@loomhelm/multi-task-flow",
+        version,
+        build_id: targetBuild,
+        port: previousConfig.port,
+        root,
+        started: false,
+      };
+    },
+    unload: () => {
+      unloads++;
+    },
+    start: () => {
+      starts++;
+    },
+    status: async () => ({
+      ok: true,
+      build_id: oldBuild,
+      source_sha: oldSource,
+      compatibility: { api_versions: [1] },
+      generation: "source-generation",
+      pid: process.pid,
+      port: previousConfig.port,
+    }),
+    waitForHealth: async <T>(check: () => Promise<T>) => check(),
+    startupTimeoutMs: 25,
+  } as any;
+
+  let error: unknown;
+  try {
+    await (upgradePackageReleaseAndStart as any)(state, "2.0.0", control);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toMatchObject({
+    code: "GATEWAY_START_FAILED",
+    details: {
+      phase: "lease",
+      target_version: "2.0.0",
+      previous_version: null,
+      rollback_status: "restored",
+    },
+  });
+  expect(upgradedVersions).toEqual(["2.0.0"]);
+  expect(unloads).toBe(1);
+  expect(starts).toBe(1);
+  expect(state.config()).toEqual(previousConfig);
+  expect(readFileSync(plistPath, "utf8")).toBe(previousPlist);
+  expect(state.runtime().leases).toHaveLength(0);
+});
+
 test("package upgrade reports a safe timeout after restoring the previous build", async () => {
   const { root, state } = fixture();
   const oldBuild = "a".repeat(64);
