@@ -147,7 +147,7 @@ Gateway 不再为缺失历史绑定的账本使用当前安装或 fallback 身�
 
 ## 保留结果不确定的调用的机械迁移
 
-对应 ADR 0041 与 SPEC 第 16 节 REQ/VER-MIGRATION-001 至 011。`orchestration-migration.ts` 以 no-follow 双读快照统一 upgrade-check、dry-run 与提交时评估，检查目录身份、源绑定、支持范围及中断审计；`migration-audit.ts` 定义摘要和结果不确定的调用集合，`orchestration-upgrade.ts` 在原有原子目录发布事务中写入 contract 5 与冻结审计，不调用业务 provider。
+对应 ADR 0041 与 SPEC 第 16 节 REQ/VER-MIGRATION-001 至 011。`orchestration-migration.ts` 以 no-follow 双读快照统一 upgrade-check、dry-run 与提交时评估，检查目录身份、源绑定、支持范围及中断审计，并在消费字节前核对实际打开的文件描述符及父目录身份、所有权和链接数；`migration-audit.ts` 定义摘要和结果不确定的调用集合，兼容历史 notification status 字段；中断审计核对冻结源身份与保留源绑定及账本，机械迁移拒绝改变 API/frontend/viewer 合同；`orchestration-upgrade.ts` 在原有原子目录发布事务中写入 contract 5 与冻结审计，不调用业务 provider。
 
 `orchestration-migration.test.ts`、`orchestration-upgrade.test.ts` 覆盖 VER-MIGRATION-001、002、006、007、008 的只读安全、3/4/5 迁移、业务保真、崩溃续跑和旧目录等待者。`conversation-archive.test.ts` 覆盖 VER-MIGRATION-005 的身份与 attempt 时间保留、缺失身份拒绝和负向对账不重发；既有 notification 与 recovery 权限回归继续覆盖其禁止重发和历史拒绝路径。`orchestration-upgrade-compatibility.test.ts` 通过显式历史 CLI 路径消费实际 0.2.55 或 0.3.0，验证旧 reader、writer 与维护入口拒绝已发布屏障。`clients/typescript/test/orchestration-upgrade.test.ts` 验证公开 CLI 的检查、schema、dry-run、升级和幂等。
 

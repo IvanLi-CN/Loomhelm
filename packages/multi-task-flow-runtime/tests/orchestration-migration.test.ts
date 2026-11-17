@@ -2,8 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  fstatSync,
   linkSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   symlinkSync,
@@ -14,7 +16,11 @@ import { join } from "node:path";
 import { businessDigest } from "../lib/migration-audit";
 import { type RunIdentity, requireRunBinding } from "../lib/orchestration-identity";
 import { withRunCommand } from "../lib/orchestration-lifecycle";
-import { checkMigration, migrationReport } from "../lib/orchestration-migration";
+import {
+  checkMigration,
+  migrationReport,
+  readMigrationInput,
+} from "../lib/orchestration-migration";
 import { upgradeOrchestration } from "../lib/orchestration-upgrade";
 import { fixtureRun, serviceFixture } from "./service-fixture";
 
@@ -196,3 +202,86 @@ test("an exact carried invocation receipt is retained as uncertainty, not forged
   ).rejects.toThrow("safe-stop receipt");
   expect(actions).toBe(1);
 });
+
+test("legacy status-only unknown is listed in the report and frozen audit without backfill", () => {
+  const store = fixture();
+  const raw = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+  raw.notifications.push({
+    id: "legacy-unknown",
+    event_id: "legacy-event",
+    recipient_thread_id: "legacy-recipient",
+    status: "unknown",
+    attempts: 1,
+    updated_at: new Date().toISOString(),
+  });
+  writeFileSync(store.ledgerPath, JSON.stringify(raw));
+  const report = checkMigration(store, target);
+  expect(report.migration_ready).toBe(true);
+  expect(report.unresolved).toContainEqual({
+    kind: "notification",
+    object_id: "legacy-unknown",
+    attempt_id: null,
+    native_request_id: null,
+    thread_id: "legacy-recipient",
+  });
+  upgradeOrchestration(store, target, target);
+  const after = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+  expect(after.upgrade.migration_audit.unresolved).toEqual(report.unresolved);
+  expect(businessDigest(after)).toBe(businessDigest(raw));
+  expect(after.notifications[0].delivery_status).toBeUndefined();
+});
+test("a substituted opened descriptor is rejected and closed before reading its bytes", () => {
+  const store = fixture();
+  const other = join(store.rootPath, "unrelated-file");
+  writeFileSync(other, "unrelated bytes");
+  const before = tree(store.rootPath);
+  let descriptor = -1;
+  expect(() =>
+    readMigrationInput(store.ledgerPath, store.rootPath, undefined, () => {
+      descriptor = openSync(other, "r");
+      return descriptor;
+    }),
+  ).toThrow("Opened migration input identity changed");
+  expect(() => fstatSync(descriptor)).toThrow();
+  expect(tree(store.rootPath)).toEqual(before);
+});
+for (const contract of ["api_contract", "frontend_contract", "viewer_contract"] as const) {
+  test(`mechanical migration refuses a changed ${contract}`, () => {
+    const store = fixture();
+    const other = { ...target, [contract]: target[contract] + 1 };
+    const beforeLedger = readFileSync(store.ledgerPath, "utf8");
+    const before = tree(store.rootPath);
+    expect(checkMigration(store, other).migration_ready).toBe(false);
+    expect(() => upgradeOrchestration(store, other, other, {}, true)).toThrow(
+      "Mechanical migration checks failed",
+    );
+    expect(tree(store.rootPath)).toEqual(before);
+    expect(() => upgradeOrchestration(store, other, other)).toThrow(
+      "Mechanical migration checks failed",
+    );
+    expect(readFileSync(store.ledgerPath, "utf8")).toBe(beforeLedger);
+  });
+}
+for (const phase of ["migrated", "binding_switched"]) {
+  test(`pending ${phase} refuses source identity tampering after binding switch`, () => {
+    const store = fixture();
+    expect(() =>
+      upgradeOrchestration(store, target, target, {
+        afterStage: (stage) => {
+          if (stage === "binding_switched") throw new Error("interrupted");
+        },
+      }),
+    ).toThrow("interrupted");
+    const raw = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+    raw.upgrade.phase = phase;
+    raw.upgrade.source.build_id = "d".repeat(64);
+    writeFileSync(store.ledgerPath, JSON.stringify(raw));
+    expect(checkMigration(store, target).migration_ready).toBe(false);
+    expect(() => upgradeOrchestration(store, target, target, {}, true)).toThrow(
+      "Mechanical migration checks failed",
+    );
+    expect(() => upgradeOrchestration(store, target, target)).toThrow(
+      "Mechanical migration checks failed",
+    );
+  });
+}

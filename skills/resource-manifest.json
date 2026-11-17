@@ -8082,7 +8082,7 @@
     {
       "path": "skills/multi-task-flow/lib/orchestration-upgrade.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/orchestration-upgrade.ts",
-      "installedSha256": "15ef3c040f8d3ed599a615247d8d0c3a84a3b60f609405d90d1fc04c23ad4561"
+      "installedSha256": "1a53e146c13b544dbd4d50fa7a4a955bb41dd76831b468dbd0ae272fec8e2343"
     },
     {
       "path": "skills/multi-task-flow/lib/orchestration-lifecycle.ts",
@@ -9177,17 +9177,17 @@
     {
       "path": "skills/multi-task-flow/lib/migration-audit.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/migration-audit.ts",
-      "installedSha256": "0b348c97081ba2f0ab8357c9c541423174932e27c9432398a072a02f580698cc"
+      "installedSha256": "31cc20df65e4a18fdc3725f33eadc90a805da134bc8b9731aca6a9133fc7e604"
     },
     {
       "path": "skills/multi-task-flow/lib/orchestration-migration.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/orchestration-migration.ts",
-      "installedSha256": "7588a7019e90d0f39d4ab02ed69a420a6d5c0b223eb21291ac40be424d5b3e2d"
+      "installedSha256": "daf279592206a60147ce84d4f27eb568a66fe64ca5e6f36d5ca3adacfecfcb35"
     },
     {
       "path": "skills/multi-task-flow/tests/orchestration-migration.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/orchestration-migration.test.ts",
-      "installedSha256": "15a38a6ae84e629792fed8fc5e8820807bf9cb92924810c7118ed0b06ff9cfd7"
+      "installedSha256": "6871d9e7f42f5cb9d1af2d6e52589c50f189abc4fdd590f2bd5c666b125c87ee"
     }
   ]
 }

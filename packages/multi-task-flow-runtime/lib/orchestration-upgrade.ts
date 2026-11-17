@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   createDirectoryNoFollow,
-  readRegularNoFollow,
   syncDirectoryNoFollow,
   writeAtomicNoFollow,
   writeExclusiveNoFollow,
@@ -17,7 +16,12 @@ import {
   sameRunIdentity,
   upgradeState,
 } from "./orchestration-identity";
-import { assessMigration, checkMigration, readMigrationSnapshot } from "./orchestration-migration";
+import {
+  assessMigration,
+  checkMigration,
+  readMigrationInput,
+  readMigrationSnapshot,
+} from "./orchestration-migration";
 import { validateLedger } from "./schema";
 import { type LedgerStore, withExclusiveLock } from "./store";
 
@@ -92,13 +96,11 @@ export function upgradeOrchestration(
   return withExclusiveLock(join(store.runPath, "locks", "viewer-binding.lock"), () =>
     store.maintain((context) => {
       const read = (path: string) =>
-        readRegularNoFollow(
+        readMigrationInput(
           path,
           context.rootPath,
-          undefined,
-          256 * 1024 * 1024,
           path === context.ledgerPath ? context.runIdentity : undefined,
-        ).toString("utf8");
+        ).content;
       const write = (path: string, content: string) =>
         writeAtomicNoFollow(
           path,
@@ -107,13 +109,14 @@ export function upgradeOrchestration(
           undefined,
           path === context.ledgerPath ? context.runIdentity : undefined,
         );
-      const originalContent = read(context.ledgerPath);
+      const initialSnapshot = readMigrationSnapshot(store);
+      const originalContent = initialSnapshot.content;
       const raw = JSON.parse(originalContent);
       validateLedger(raw);
       const previous = raw.upgrade ? upgradeState.parse(raw.upgrade) : null;
       const pending = previous && previous.phase !== "completed" ? previous : null;
       const bindingPath = join(store.runPath, "runtime", "viewer-binding.json");
-      const bindingContent = existsSync(bindingPath) ? read(bindingPath) : null;
+      const bindingContent = initialSnapshot.bindingContent;
       const binding = bindingContent ? JSON.parse(bindingContent) : null;
       requireCondition(
         binding?.run_id === raw.orchestration_id,
@@ -170,7 +173,7 @@ export function upgradeOrchestration(
       {
         const snapshot = readMigrationSnapshot(store);
         requireCondition(
-          snapshot.content === originalContent,
+          snapshot.content === originalContent && snapshot.bindingContent === bindingContent,
           "OBSERVATION_STALE",
           "Locked source changed",
           4,

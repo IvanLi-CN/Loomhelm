@@ -41,7 +41,7 @@ export function unresolvedCalls(raw: any): z.infer<typeof unresolvedCall>[] {
   const calls: z.infer<typeof unresolvedCall>[] = [];
   const text = (value: unknown) => (typeof value === "string" ? value : null);
   for (const notice of raw.notifications ?? []) {
-    if (notice.delivery_status !== "unknown") continue;
+    if ((notice.delivery_status ?? notice.status) !== "unknown") continue;
     calls.push({
       kind: "notification",
       object_id: notice.id,
@@ -98,11 +98,20 @@ export function auditMatchesSource(raw: any, state: any, retained: RetainedSourc
     const audit = migrationAudit.parse(state.migration_audit);
     const backup = JSON.parse(retained.backup);
     const calls = unresolvedCalls(backup);
+    const binding = JSON.parse(retained.binding);
+    const matchesSource = (identity: any) =>
+      identity && Object.keys(state.source).every((key) => identity[key] === state.source[key]);
     return (
       migrationDigest(retained.backup) === state.source_digest &&
       migrationDigest(retained.ledger) === state.source_digest &&
       migrationDigest(JSON.stringify(JSON.parse(retained.binding))) ===
         state.source_binding_digest &&
+      matchesSource(binding) &&
+      (backup.runtime_identity === undefined || matchesSource(backup.runtime_identity)) &&
+      state.source.ledger_contract === backup.contract_version &&
+      binding.run_id === backup.orchestration_id &&
+      backup.orchestration_id === raw.orchestration_id &&
+      binding.revision === state.source_binding_revision &&
       audit.source_contract === backup.contract_version &&
       audit.source_revision === state.source_revision &&
       audit.source_revision === backup.revision &&

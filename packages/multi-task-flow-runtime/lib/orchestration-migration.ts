@@ -1,6 +1,15 @@
-import { lstatSync, realpathSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
-import { readRegularNoFollow } from "@loomhelm/runtime-core/modules/visual/secure_io";
+import { dlopen, FFIType } from "bun:ffi";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readSync,
+  realpathSync,
+} from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { linuxLibraries } from "@loomhelm/runtime-core/modules/visual/native_rename";
 import { z } from "zod";
 import { ContractError } from "./errors";
 import {
@@ -66,6 +75,136 @@ export type MigrationSnapshot = {
 const fingerprint = (stat: ReturnType<typeof lstatSync>) =>
   [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs, stat.uid, stat.nlink].join(":");
 
+type DirectoryIdentity = { dev: number; ino: number };
+let nativeOpen: ReturnType<typeof loadOpen> | undefined;
+function loadOpen() {
+  const libraries = process.platform === "darwin" ? ["libSystem.B.dylib"] : linuxLibraries();
+  for (const library of libraries) {
+    try {
+      return dlopen(library, {
+        openat: {
+          args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.i32],
+          returns: FFIType.i32,
+        },
+      });
+    } catch {
+      /* Try the next platform library. */
+    }
+  }
+  throw new ContractError("UNSUPPORTED_PLATFORM", "Migration requires native no-follow reads", 4);
+}
+function openMigrationFile(path: string, expectedParent: DirectoryIdentity): number {
+  if (!["darwin", "linux"].includes(process.platform) || path.includes("\0"))
+    throw new ContractError("UNSAFE_PATH", "Migration path is unsupported", 4);
+  const api = (nativeOpen ??= loadOpen());
+  const directoryFlags =
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+  let parent = openSync(sep, directoryFlags);
+  const parts = resolve(path).split(sep).filter(Boolean);
+  try {
+    for (const part of parts.slice(0, -1)) {
+      const next = api.symbols.openat(
+        parent,
+        new TextEncoder().encode(`${part}\0`),
+        directoryFlags,
+        0,
+      );
+      if (next < 0)
+        throw new ContractError(
+          "UNSAFE_PATH",
+          "Migration parent cannot be opened without following links",
+          4,
+        );
+      closeSync(parent);
+      parent = next;
+    }
+    const opened = fstatSync(parent);
+    if (opened.dev !== expectedParent.dev || opened.ino !== expectedParent.ino)
+      throw new ContractError("OBSERVATION_STALE", "Migration parent identity changed", 4);
+    const descriptor = api.symbols.openat(
+      parent,
+      new TextEncoder().encode(`${parts.at(-1)}\0`),
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      0,
+    );
+    if (descriptor < 0)
+      throw new ContractError(
+        "UNSAFE_PATH",
+        "Migration input cannot be opened without following links",
+        4,
+      );
+    return descriptor;
+  } finally {
+    closeSync(parent);
+  }
+}
+
+/** Pin the actual opened file, not only its pathname; never consume a replacement's bytes. */
+export function readMigrationInput(
+  path: string,
+  root: string,
+  expectedParent?: DirectoryIdentity,
+  openFile = openMigrationFile,
+): { content: string; stat: string } {
+  const delta = relative(resolve(root), resolve(path));
+  if (delta === ".." || delta.startsWith(`..${sep}`) || delta.startsWith(sep))
+    throw new ContractError("UNSAFE_PATH", "Migration input escapes its root", 4);
+  const parent = lstatSync(dirname(path)),
+    before = lstatSync(path);
+  if (
+    !parent.isDirectory() ||
+    parent.isSymbolicLink() ||
+    parent.uid !== process.getuid!() ||
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.nlink !== 1 ||
+    before.uid !== process.getuid!()
+  )
+    throw new ContractError(
+      "UNSAFE_PATH",
+      "Migration inputs must be private regular files owned by the current user",
+      4,
+    );
+  if (expectedParent && (parent.dev !== expectedParent.dev || parent.ino !== expectedParent.ino))
+    throw new ContractError("OBSERVATION_STALE", "Migration parent identity changed", 4);
+  const descriptor = openFile(path, parent);
+  try {
+    const opened = fstatSync(descriptor);
+    if (
+      !opened.isFile() ||
+      opened.uid !== process.getuid!() ||
+      opened.nlink !== 1 ||
+      fingerprint(opened) !== fingerprint(before)
+    )
+      throw new ContractError("OBSERVATION_STALE", "Opened migration input identity changed", 4);
+    const maxBytes = 256 * 1024 * 1024;
+    if (opened.size > maxBytes)
+      throw new ContractError("UNSAFE_PATH", "Migration input exceeds read limit", 4);
+    const chunks: Buffer[] = [],
+      chunk = Buffer.alloc(64 * 1024);
+    let total = 0,
+      length: number;
+    while ((length = readSync(descriptor, chunk, 0, chunk.length, null)) > 0) {
+      total += length;
+      if (total > maxBytes)
+        throw new ContractError("UNSAFE_PATH", "Migration input exceeds read limit", 4);
+      chunks.push(Buffer.from(chunk.subarray(0, length)));
+    }
+    const afterParent = lstatSync(dirname(path));
+    if (
+      fingerprint(opened) !== fingerprint(fstatSync(descriptor)) ||
+      fingerprint(before) !== fingerprint(lstatSync(path)) ||
+      parent.dev !== afterParent.dev ||
+      parent.ino !== afterParent.ino ||
+      afterParent.isSymbolicLink()
+    )
+      throw new ContractError("OBSERVATION_STALE", "Migration input changed while reading", 4);
+    return { content: Buffer.concat(chunks, total).toString("utf8"), stat: fingerprint(opened) };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 /** No store wrapper: even an absent lock file must remain absent on a read-only path. */
 export function readMigrationSnapshot(
   store: LedgerStore,
@@ -87,9 +226,12 @@ export function readMigrationSnapshot(
   const names = ["ledger.json", "runtime/viewer-binding.json", "runtime/call.json"];
   const read = (name: string): { content: string; stat: string } | null => {
     const path = join(store.runPath, name);
-    let before;
     try {
-      before = lstatSync(path);
+      return readMigrationInput(
+        path,
+        store.rootPath,
+        name === "ledger.json" ? directory : undefined,
+      );
     } catch (error: any) {
       if (
         error.code === "ENOENT" &&
@@ -98,27 +240,6 @@ export function readMigrationSnapshot(
         return null;
       throw error;
     }
-    if (
-      !before.isFile() ||
-      before.isSymbolicLink() ||
-      before.nlink !== 1 ||
-      before.uid !== process.getuid!()
-    )
-      throw new ContractError(
-        "UNSAFE_PATH",
-        "Migration inputs must be private regular files owned by the current user",
-        4,
-      );
-    const content = readRegularNoFollow(
-      path,
-      store.rootPath,
-      undefined,
-      256 * 1024 * 1024,
-      name === "ledger.json" ? directory : undefined,
-    ).toString("utf8");
-    if (fingerprint(before) !== fingerprint(lstatSync(path)))
-      throw new ContractError("OBSERVATION_STALE", "Migration input changed while reading", 4);
-    return { content, stat: fingerprint(before) };
   };
   const first = names.map(read);
   const initial = JSON.parse(first[0]!.content);
@@ -196,11 +317,15 @@ export function assessMigration(snapshot: MigrationSnapshot, caller: RunIdentity
     raw.schema_version === 2 &&
     [3, 4, 5].includes(raw.contract_version) &&
     target.ledger_contract === 5 &&
-    (!source || source.compatibility_line === target.compatibility_line);
+    (!source ||
+      (source.compatibility_line === target.compatibility_line &&
+        source.api_contract === target.api_contract &&
+        source.frontend_contract === target.frontend_contract &&
+        source.viewer_contract === target.viewer_contract));
   if (!migrationSupported)
     block(
       "migration_unsupported",
-      "Only schema 2 contract 3/4/5 to contract 5 on the same compatibility line has a mechanical migration",
+      "Only schema 2 contract 3/4/5 to contract 5 on the same compatibility line with unchanged API/frontend/viewer contracts has a mechanical migration",
     );
   if (source && !pending && source.ledger_contract !== raw.contract_version)
     block("identity_conflict", "Source identity and ledger contract disagree");
