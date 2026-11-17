@@ -281,6 +281,7 @@ try {
             purpose: atom.purpose,
             output: atom.output,
             lifecycle_stage: atom.lifecycle_stage,
+            ...(atom.lifecycle_role ? { lifecycle_role: atom.lifecycle_role } : {}),
             status: "planned" as const,
           }));
         return {

@@ -4,6 +4,86 @@ const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
 const text = z.string().trim().min(1);
 const timestamp = z.iso.datetime({ offset: false });
 
+/** Stable semantic identity for the four lifecycle atoms plus the shared PR step. */
+export const atomicLifecycleRole = z.enum([
+  "prepare-parent",
+  "prepare-branch",
+  "create-pr",
+  "merge-pr",
+  "closeout",
+]);
+export type AtomicLifecycleRole = z.infer<typeof atomicLifecycleRole>;
+
+export type LegacyLifecycleStage =
+  | "workspace_ready"
+  | "branch_ready"
+  | "pr_created"
+  | "pr_merged"
+  | "closed";
+
+export function lifecycleRoleFromStage(
+  stage: LegacyLifecycleStage | null | undefined,
+  _scope: "task" | "delivery_unit",
+): AtomicLifecycleRole | null {
+  if (stage === "workspace_ready") return "prepare-parent";
+  if (stage === "branch_ready") return "prepare-branch";
+  if (stage === "pr_created") return "create-pr";
+  if (stage === "pr_merged") return "merge-pr";
+  if (stage === "closed") return "closeout";
+  return null;
+}
+
+function legacyRoleFromId(
+  idValue: unknown,
+  ownerId: unknown,
+  scope: "task" | "delivery_unit",
+): AtomicLifecycleRole | null {
+  if (typeof idValue !== "string" || typeof ownerId !== "string") return null;
+  const prefixes =
+    scope === "task"
+      ? [`task-atom-${ownerId}-`, `${ownerId}-`]
+      : [`group-atom-${ownerId}-`, `${ownerId}-`];
+  const ownerPrefix = prefixes.find((prefix) => idValue.startsWith(prefix));
+  if (!ownerPrefix) return null;
+  const suffix = idValue.slice(ownerPrefix.length);
+  if (scope === "task" && suffix === "prepare-branch") return "prepare-branch";
+  if (scope === "delivery_unit" && suffix === "prepare-parent") return "prepare-parent";
+  if (suffix === "create-pr") return "create-pr";
+  if (suffix === "merge-pr") return "merge-pr";
+  if (suffix === "closeout") return "closeout";
+  return null;
+}
+
+export function lifecycleRoleOf(atom: {
+  id?: unknown;
+  lifecycle_role?: unknown;
+  lifecycle_stage?: unknown;
+  task_id?: unknown;
+  group_id?: unknown;
+  scope?: { kind?: unknown; task_id?: unknown; delivery_unit_id?: unknown };
+}): AtomicLifecycleRole | null {
+  const explicit = atomicLifecycleRole.safeParse(atom.lifecycle_role);
+  if (explicit.success) return explicit.data;
+  const scope =
+    atom.scope?.kind === "task" || typeof atom.task_id === "string" ? "task" : "delivery_unit";
+  const stage = lifecycleRoleFromStage(
+    typeof atom.lifecycle_stage === "string"
+      ? (atom.lifecycle_stage as LegacyLifecycleStage)
+      : null,
+    scope,
+  );
+  return (
+    stage ??
+    legacyRoleFromId(
+      atom.id,
+      scope === "task"
+        ? (atom.scope?.task_id ?? atom.task_id)
+        : (atom.scope?.delivery_unit_id ?? atom.group_id),
+      scope,
+    )
+  );
+}
+
 export const atomicExternalRef = z
   .object({ provider: text, repository: text, id: text, url: z.url().optional() })
   .strict();
@@ -45,6 +125,7 @@ const workDefinition = z
     purpose: text,
     output: text,
     acceptance: z.array(atomicCriterion),
+    lifecycle_role: atomicLifecycleRole.optional(),
   })
   .strict();
 const workLifecycle = <T extends z.ZodTypeAny>(scope: T) =>
@@ -367,7 +448,9 @@ export function canonicalizeContract3Plan(
   tasks: readonly { id: string; kind?: string; group_id: string }[] = [],
 ): any {
   const taskById = new Map(tasks.map((task) => [task.id, task]));
-  const currentNodes: any[] = Array.isArray(rawPlan.atomic_nodes) ? rawPlan.atomic_nodes : [];
+  const currentNodes: any[] = Array.isArray(rawPlan.atomic_nodes)
+    ? rawPlan.atomic_nodes.map((node: any) => ({ ...node }))
+    : [];
   const atomicNodes: any[] = currentNodes.length
     ? currentNodes
     : [
@@ -376,6 +459,7 @@ export function canonicalizeContract3Plan(
           const activityType = ["verification", "release", "deployment"].includes(task?.kind ?? "")
             ? task?.kind
             : "contribution";
+          const lifecycle_role = lifecycleRoleOf(atom);
           return {
             kind: "work",
             id: atom.id,
@@ -390,19 +474,24 @@ export function canonicalizeContract3Plan(
               task_id: atom.task_id,
               delivery_unit_id: task?.group_id ?? "unassigned",
             },
+            ...(lifecycle_role ? { lifecycle_role } : {}),
           };
         }),
-        ...(Array.isArray(rawPlan.group_atoms) ? rawPlan.group_atoms : []).map((atom: any) => ({
-          kind: "work",
-          id: atom.id,
-          title: atom.title,
-          purpose: atom.purpose,
-          output: atom.output,
-          acceptance: [],
-          activity_type: "verification",
-          state: "planned",
-          scope: { kind: "delivery_unit", delivery_unit_id: atom.group_id },
-        })),
+        ...(Array.isArray(rawPlan.group_atoms) ? rawPlan.group_atoms : []).map((atom: any) => {
+          const lifecycle_role = lifecycleRoleOf(atom);
+          return {
+            kind: "work",
+            id: atom.id,
+            title: atom.title,
+            purpose: atom.purpose,
+            output: atom.output,
+            acceptance: [],
+            activity_type: "verification",
+            state: "planned",
+            scope: { kind: "delivery_unit", delivery_unit_id: atom.group_id },
+            ...(lifecycle_role ? { lifecycle_role } : {}),
+          };
+        }),
       ];
   if (currentNodes.length) {
     const expected = new Set([
@@ -412,6 +501,14 @@ export function canonicalizeContract3Plan(
     const actual = new Set(atomicNodes.map((node: any) => node.id));
     for (const id of expected)
       if (!actual.has(id)) throw new Error(`Canonical atomic graph is missing node for atom ${id}`);
+  }
+  for (const node of atomicNodes) {
+    if (node.kind !== "work" || node.lifecycle_role) continue;
+    const legacy =
+      (rawPlan.atoms ?? []).find((atom: any) => atom.id === node.id) ??
+      (rawPlan.group_atoms ?? []).find((atom: any) => atom.id === node.id);
+    const lifecycle_role = legacy ? lifecycleRoleOf(legacy) : lifecycleRoleOf(node);
+    if (lifecycle_role) node.lifecycle_role = lifecycle_role;
   }
   const nodeIdForLegacyAtom = new Map<string, string>();
   for (const atom of rawPlan.atoms ?? []) {
@@ -495,10 +592,19 @@ function validatePresetLifecycleEdges(
 ): void {
   const owners = new Map<string, any[]>();
   for (const atom of atoms) {
-    const ownerId = atom[ownerKey];
+    const ownerId =
+      atom[ownerKey] ??
+      (ownerKey === "task_id" ? atom.scope?.task_id : atom.scope?.delivery_unit_id);
     if (typeof ownerId !== "string") continue;
+    const role = lifecycleRoleOf(atom);
+    if (
+      role &&
+      ((ownerKey === "task_id" && role === "prepare-parent") ||
+        (ownerKey === "group_id" && role === "prepare-branch"))
+    )
+      throw new Error(`${ownerLabel} ${ownerId} has a lifecycle role from the wrong scope`);
     const list = owners.get(ownerId) ?? [];
-    list.push(atom);
+    list.push({ ...atom, __lifecycle_role: role });
     owners.set(ownerId, list);
   }
   const outgoing = new Map<string, string[]>();
@@ -520,7 +626,13 @@ function validatePresetLifecycleEdges(
   };
   for (const [ownerId, ownerAtoms] of owners) {
     const bySuffix = new Map(
-      suffixes.map((suffix) => [suffix, ownerAtoms.find((atom) => atom.id.endsWith(`-${suffix}`))]),
+      suffixes.map((suffix) => [
+        suffix,
+        ownerAtoms.find((atom) => {
+          const role = atom.__lifecycle_role as AtomicLifecycleRole | null;
+          return role === suffix;
+        }),
+      ]),
     );
     if (!suffixes.some((suffix) => bySuffix.get(suffix))) continue;
     for (const suffix of suffixes)

@@ -22,8 +22,8 @@ test('packaged CLI fences old bindings, diagnoses without writes, and explicitly
     const bindingPath = join(runPath, 'runtime/viewer-binding.json');
     const ledger = JSON.parse(await readFile(ledgerPath, 'utf8'));
     const binding = JSON.parse(await readFile(bindingPath, 'utf8'));
-    assert.equal(ledger.contract_version, 5);
-    assert.equal(binding.schema_version, 3);
+    assert.equal(ledger.contract_version, 6);
+    assert.equal(binding.schema_version, 4);
     const version = binding.package_version;
     // Disposable historical source fixture; no live run or global package is modified.
     ledger.contract_version = 3; delete ledger.runtime_identity;

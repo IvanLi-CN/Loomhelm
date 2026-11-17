@@ -446,7 +446,7 @@ archive/unarchive 结果不确定的状态 MUST 保留 thread、方向、operati
 
 ### REQ-MIGRATION-010
 
-目标 ledger contract MUST 为 5，schema_version 保持 2；读源支持 contract 3/4/5，机械迁移支持 3/4 到 5 及 5 的前向版本切换，更早格式只维持诊断与明确拒绝。业务结构不变时保持 api/frontend/viewer 合同；旧 contract-4 writer MUST 拒绝 contract 5。来源身份、机械转换或 writer 排斥不能被验证时 MUST 阻断，不提供 force 或静止声明绕过。
+目标 ledger contract MUST 为 6，schema_version 保持 2；读源支持 contract 3/4/5/6，机械迁移支持 3/4/5 到 6 及 6 的同合同前向版本切换，更早格式只维持诊断与明确拒绝。生命周期预设 MUST 使用显式 `lifecycle_role`；历史读取 MAY 按 scope、owner 和完整后缀规则适配旧 ID，但 MUST NOT 从标题、任意 ID 或任务图推断角色或依赖边。业务结构不变时保持 api/frontend/viewer 合同；旧 contract-5 writer MUST 拒绝 contract 6。来源身份、机械转换或 writer 排斥不能被验证时 MUST 阻断，不提供 force 或静止声明绕过。
 
 ### REQ-MIGRATION-011
 

@@ -162,6 +162,7 @@ test("candidate reader failure uses an executed previous viewer read-only proof"
       "schema-2/contract-3",
       "schema-2/contract-4",
       "schema-2/contract-5",
+      "schema-2/contract-6",
     ],
   });
   const report = compatibilityReport(f.state, target.manifest, target.source);
@@ -206,6 +207,7 @@ test("unreadable, malformed, symlinked and incompatible custom runs cannot be ap
       "schema-2/contract-3",
       "schema-2/contract-4",
       "schema-2/contract-5",
+      "schema-2/contract-6",
     ],
   });
   expect(compatibilityReport(f.state, target.manifest).errors[0]?.capability).toBe("read");
@@ -545,6 +547,7 @@ test("the public CLI returns exact blocker details without stopping service cont
       "schema-2/contract-3",
       "schema-2/contract-4",
       "schema-2/contract-5",
+      "schema-2/contract-6",
     ],
   });
   const child = Bun.spawn(

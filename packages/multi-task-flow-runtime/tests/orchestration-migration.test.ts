@@ -43,10 +43,10 @@ const source: RunIdentity = {
 };
 const target: RunIdentity = {
   ...source,
-  package_version: "0.3.1",
+  package_version: "0.6.0",
   build_id: "b".repeat(64),
   source_sha: "b".repeat(40),
-  ledger_contract: 5,
+  ledger_contract: 6,
 };
 function fixture(contract = 3) {
   process.env.LOOMHELM_CALLER_IDENTITY = JSON.stringify(target);
@@ -63,7 +63,7 @@ function fixture(contract = 3) {
   writeFileSync(
     join(store.runPath, "runtime/viewer-binding.json"),
     JSON.stringify({
-      schema_version: contract >= 4 ? 2 : 1,
+      schema_version: contract >= 6 ? 4 : contract >= 5 ? 3 : contract >= 4 ? 2 : 1,
       run_id: "migration-run",
       ...identity,
       revision: 0,
@@ -98,12 +98,12 @@ test("upgrade-check and dry-run preserve all files, including absent lock files"
   expect(existsSync(join(store.runPath, "locks/lifecycle.lock"))).toBe(false);
 });
 for (const contract of [3, 4, 5]) {
-  test(`contract ${contract} migrates mechanically to 5 with its audit and unknown state preserved`, () => {
+  test(`contract ${contract} migrates mechanically to 6 with its audit and unknown state preserved`, () => {
     const store = fixture(contract);
     const before = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
     upgradeOrchestration(store, target, target);
     const after = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
-    expect(after.contract_version).toBe(5);
+    expect(after.contract_version).toBe(6);
     expect(after.upgrade.phase).toBe("completed");
     expect(after.upgrade.migration_audit.source_contract).toBe(contract);
     expect(after.upgrade.migration_audit.business_digest).toBe(businessDigest(before));
@@ -287,10 +287,10 @@ for (const phase of ["migrated", "binding_switched"]) {
   });
 }
 
-test("0.4 contract-5 source upgrades behind schema-3 barrier without proving old stop, while new calls remain fenced", async () => {
+test("0.4 contract-5 source upgrades behind schema-4 barrier without proving old stop, while new calls remain fenced", async () => {
   const store = fixture(5);
   const oldIdentity = { ...source, package_version: "0.4.0", ledger_contract: 5 };
-  const nextIdentity = { ...target, package_version: "0.5.0" };
+  const nextIdentity = { ...target, package_version: "0.6.0" };
   const raw = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
   raw.runtime_identity = oldIdentity;
   writeFileSync(store.ledgerPath, JSON.stringify(raw));
@@ -310,9 +310,9 @@ test("0.4 contract-5 source upgrades behind schema-3 barrier without proving old
   expect(report.migration_ready).toBe(true);
   expect(report.native_quiescence).toBe("not_asserted");
   upgradeOrchestration(store, nextIdentity, nextIdentity);
-  expect(JSON.parse(readFileSync(bindingPath, "utf8")).schema_version).toBe(3);
+  expect(JSON.parse(readFileSync(bindingPath, "utf8")).schema_version).toBe(4);
   expect(store.read().upgrade.migration_audit.writer_barrier).toBe(
-    "ledger-contract-5-and-binding-schema-3",
+    "ledger-contract-6-and-binding-schema-4",
   );
   expect(readFileSync(callPath, "utf8")).toBe(oldCall);
   expect(inspectInvocation(store)?.quiescent).toBe(false);

@@ -58,6 +58,7 @@ export function createAtomProjection(ledger: Ledger, plan: Plan) {
             purpose: atom.purpose,
             output: atom.output,
             lifecycle_stage: atom.lifecycle_stage,
+            lifecycle_role: atom.lifecycle_role,
             status: runtimeAtoms.get(atom.id)?.status ?? "planned",
           }))
         : [];
@@ -80,6 +81,7 @@ export function createAtomProjection(ledger: Ledger, plan: Plan) {
             title: atom.title,
             purpose: atom.purpose,
             output: atom.output,
+            lifecycle_role: atom.lifecycle_role,
             status: runtimeAtoms.get(atom.id)?.status ?? "planned",
             completed_at: atomTime(
               task.id,

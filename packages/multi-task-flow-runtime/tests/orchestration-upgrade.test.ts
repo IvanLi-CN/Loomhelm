@@ -22,10 +22,10 @@ const source: RunIdentity = {
 };
 const target: RunIdentity = {
   ...source,
-  package_version: "0.2.56",
+  package_version: "0.6.0",
   build_id: "b".repeat(64),
   source_sha: "b".repeat(40),
-  ledger_contract: 5,
+  ledger_contract: 6,
 };
 function fixture() {
   const { state } = serviceFixture();
@@ -48,7 +48,7 @@ function fixture() {
 const dependencies = {};
 
 test("unknown or malformed source binding is rejected before atomic publication", () => {
-  for (const invalid of [{ schema_version: 4 }, { unexpected: true }]) {
+  for (const invalid of [{ schema_version: 9 }, { unexpected: true }]) {
     const store = fixture();
     const path = join(store.runPath, "runtime", "viewer-binding.json");
     writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), ...invalid }));
@@ -77,7 +77,7 @@ test("explicit migration preserves business state and is idempotent", () => {
   expect(store.read().revision).toBe(before.revision);
   upgradeOrchestration(store, target, target, dependencies);
   const after = store.read();
-  expect(after.contract_version).toBe(5);
+  expect(after.contract_version).toBe(6);
   expect(after.upgrade.phase).toBe("completed");
   expect(after.operations).toEqual(before.operations);
   expect(after.tasks).toEqual(before.tasks);
@@ -272,13 +272,15 @@ test("upgrade waits for an actual native-call lifetime to exit without killing i
     if (Date.now() > deadline) throw new Error("Fixture invocation did not acquire lifecycle lock");
     await Bun.sleep(10);
   }
-  const newer = { ...target, package_version: "0.2.57", build_id: "c".repeat(64) };
+  const newer = { ...target, package_version: "0.6.1", build_id: "c".repeat(64) };
   const waiting = child(store, newer);
   await Bun.sleep(75);
   expect(store.read().runtime_identity.package_version).toBe(target.package_version);
   writeFileSync(release, "release");
   expect(await holder.exited).toBe(0);
-  expect(await waiting.exited).toBe(0);
+  const waitingExit = await waiting.exited;
+  const waitingError = await new Response(waiting.stderr).text();
+  expect(waitingExit, waitingError).toBe(0);
   expect(store.read().runtime_identity.package_version).toBe(newer.package_version);
 });
 

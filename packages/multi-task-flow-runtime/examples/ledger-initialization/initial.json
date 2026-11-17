@@ -17,7 +17,12 @@
         { "id": "group-atom-4", "title": "合并父 PR", "group_id": "group-1", "purpose": "合并已验收的父 PR", "output": "父 PR 已合并", "lifecycle_stage": "pr_merged" },
         { "id": "group-atom-5", "title": "收口", "group_id": "group-1", "purpose": "完成交付单元收口", "output": "交付单元已收口", "lifecycle_stage": "closed" }
       ],
-      "atomic_edges": [],
+      "atomic_edges": [
+        { "id": "group-lifecycle-1", "from_atom_id": "group-atom-1", "to_atom_id": "group-atom-2" },
+        { "id": "group-lifecycle-2", "from_atom_id": "group-atom-2", "to_atom_id": "group-atom-3" },
+        { "id": "group-lifecycle-3", "from_atom_id": "group-atom-3", "to_atom_id": "group-atom-4" },
+        { "id": "group-lifecycle-4", "from_atom_id": "group-atom-4", "to_atom_id": "group-atom-5" }
+      ],
       "nodes": [
         { "id": "start", "kind": "main_start", "ref_id": null, "group_id": null, "label": "Start", "estimate_minutes": 0, "estimate_basis": null, "estimate_confidence": null },
         { "id": "group-start", "kind": "group_start", "ref_id": "group-1", "group_id": "group-1", "label": "Group start", "estimate_minutes": 0, "estimate_basis": null, "estimate_confidence": null },

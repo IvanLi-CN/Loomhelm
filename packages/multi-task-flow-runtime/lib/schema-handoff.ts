@@ -599,12 +599,20 @@ export function validatePlan(candidate: Plan): void {
       `Contribution task ${task.id} must declare at least one atomic task`,
     );
   }
-  validateGrouping(
-    candidate.atoms,
-    candidate.atomic_edges.filter(
-      (edge): edge is z.infer<typeof atomEdge> => "from_atom_id" in edge,
-    ),
-  );
+  const taskAtomIds = new Set(candidate.atoms.map((atom) => atom.id));
+  const groupAtomIds = new Set(candidate.group_atoms.map((atom) => atom.id));
+  const groupingEdges = candidate.atomic_edges.filter((edge): edge is z.infer<typeof atomEdge> => {
+    if (!("from_atom_id" in edge)) return false;
+    const taskEdge = taskAtomIds.has(edge.from_atom_id) && taskAtomIds.has(edge.to_atom_id);
+    const groupEdge = groupAtomIds.has(edge.from_atom_id) && groupAtomIds.has(edge.to_atom_id);
+    requireCondition(
+      taskEdge || groupEdge,
+      "UNKNOWN_NODE",
+      "Atomic edge references an unknown atom",
+    );
+    return taskEdge;
+  });
+  validateGrouping(candidate.atoms, groupingEdges);
   topologicalOrder(
     candidate.nodes.map((item) => item.id),
     candidate.edges.map((item) => ({

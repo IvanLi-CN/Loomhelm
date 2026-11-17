@@ -145,6 +145,7 @@ describe("orchestrate init", () => {
     const root = temporaryRoot();
     const input = structuredClone(initialInput);
     input.payload.initial_plan.group_atoms = [];
+    input.payload.initial_plan.atomic_edges = [];
     input.payload.groups = input.payload.groups.map((group: any) => ({ ...group, atoms: [] }));
     const result = await runInit(root, input);
     expect(result.output).toMatchObject({ ok: false, code: "ATOMIC_GRAPH_INCOMPLETE" });
@@ -643,6 +644,7 @@ describe("orchestrate group-base-reconcile", () => {
     };
     const input = structuredClone(initialInput);
     input.run_id = "cli-reconcile-run";
+    input.payload.initial_plan.atomic_edges = [];
     input.payload.groups[0].atoms = input.payload.initial_plan.group_atoms
       .filter((atom: any) => atom.group_id === input.payload.groups[0].id)
       .map(({ group_id, ...atom }: any) => ({ ...atom, status: "planned" }));

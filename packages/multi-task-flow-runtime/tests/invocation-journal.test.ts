@@ -40,8 +40,8 @@ const source: RunIdentity = {
 };
 const target = {
   ...source,
-  package_version: "0.4.0",
-  ledger_contract: 5,
+  package_version: "0.6.0",
+  ledger_contract: 6,
   build_id: "b".repeat(64),
 };
 const previous = process.env.LOOMHELM_CALLER_IDENTITY;
@@ -350,10 +350,10 @@ for (const contract of [3, 4]) {
     const inspected = invoke("invocation-inspect", query);
     expect(inspected.code).toBe(0);
     expect(inspected.output.source.ledger_contract).toBe(contract);
-    expect(inspected.output.executor.ledger_contract).toBe(5);
+    expect(inspected.output.executor.ledger_contract).toBe(6);
     expect(invoke("invocation-reconcile", input).code).toBe(0);
     upgradeOrchestration(store, target, target);
-    expect(store.read().contract_version).toBe(5);
+    expect(store.read().contract_version).toBe(6);
     expect(inspectInvocation(store)?.quiescent).toBe(true);
   });
 }

@@ -20,6 +20,7 @@ import {
   unresolvedCalls,
 } from "./migration-audit";
 import {
+  bindingSchemaVersionForContract,
   identityOf,
   type RunIdentity,
   runIdentity,
@@ -315,8 +316,8 @@ export function assessMigration(snapshot: MigrationSnapshot, caller: RunIdentity
     block("identity_conflict", "Ledger and binding identities disagree");
   const migrationSupported =
     raw.schema_version === 2 &&
-    [3, 4, 5].includes(raw.contract_version) &&
-    target.ledger_contract === 5 &&
+    [3, 4, 5, 6].includes(raw.contract_version) &&
+    target.ledger_contract === 6 &&
     (!source ||
       (source.compatibility_line === target.compatibility_line &&
         source.api_contract === target.api_contract &&
@@ -325,13 +326,14 @@ export function assessMigration(snapshot: MigrationSnapshot, caller: RunIdentity
   if (!migrationSupported)
     block(
       "migration_unsupported",
-      "Only schema 2 contract 3/4/5 to contract 5 on the same compatibility line with unchanged API/frontend/viewer contracts has a mechanical migration",
+      "Only schema 2 contract 3/4/5 to contract 6 on the same compatibility line with unchanged API/frontend/viewer contracts has a mechanical migration",
     );
   if (source && !pending && source.ledger_contract !== raw.contract_version)
     block("identity_conflict", "Source identity and ledger contract disagree");
   if (
     (raw.contract_version === 4 && binding?.schema_version !== 2) ||
-    (raw.contract_version === 5 && ![2, 3].includes(binding?.schema_version))
+    (raw.contract_version >= 5 &&
+      binding?.schema_version !== bindingSchemaVersionForContract(raw.contract_version))
   )
     block("writer_unfenced", "Identity-bound ledgers require the fenced binding schema");
   if (

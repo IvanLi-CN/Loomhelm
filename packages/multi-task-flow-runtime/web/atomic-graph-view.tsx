@@ -205,8 +205,13 @@ function atomicEdgeLabel(value: string): string {
 function atomRole(
   nodeId: string,
   nodeKind: AtomicCardData["nodeKind"],
+  lifecycleRole?: string,
 ): AtomicCardData["atomRole"] {
   if (nodeKind === "milestone") return "verification";
+  if (lifecycleRole === "prepare-parent" || lifecycleRole === "prepare-branch") return "branch";
+  if (lifecycleRole === "create-pr") return "pr-create";
+  if (lifecycleRole === "merge-pr") return "pr-merge";
+  if (lifecycleRole === "closeout") return "closeout";
   const presetRole = nodeId.match(
     /(?:task|group)-atom-[^/]+-(prepare-branch|prepare-parent|create-pr|merge-pr|closeout)$/u,
   )?.[1];
@@ -296,6 +301,7 @@ function atomicProjection(
       evidence: node.evidence,
       blocker: node.blocker,
       acceptance_count: node.acceptance_count,
+      lifecycle_role: node.lifecycle_role,
       diagnostics:
         inspection.nodeDiagnostics
           .get(node.id)
@@ -456,6 +462,7 @@ export function createAtomicGraphController(context: GraphContext) {
                 : node.nodeKind === "group"
                   ? "group"
                   : "task",
+            node.lifecycle_role,
           ),
           displayMode,
           interaction: current ? "current" : related ? "related" : dim ? "dim" : "none",

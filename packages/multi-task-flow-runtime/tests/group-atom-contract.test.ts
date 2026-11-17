@@ -20,7 +20,7 @@ test("semantic projection preserves the actual ledger contract", () => {
   expect(localSemanticProjection(ledger).contract_version).toBe(2);
   ledger.contract_version = 1;
   expect(localSemanticProjection(ledger).contract_version).toBe(1);
-  expect(contractJsonSchema()["x-contract-version"]).toBe(5);
+  expect(contractJsonSchema()["x-contract-version"]).toBe(6);
 });
 
 test("an unconfigured historical plan does not borrow runtime atoms", () => {

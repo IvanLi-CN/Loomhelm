@@ -6,6 +6,7 @@ import {
   contract3MigrationCandidate,
   deriveBusinessStatus,
   evaluateMilestone,
+  lifecycleRoleOf,
   taskPrBinding,
   validateAtomicGraph,
   validateContributionStart,
@@ -419,6 +420,22 @@ test("requires an Agent-declared path across the four preset task lifecycle atom
     .slice(1)
     .map((atom, index) => ({ from_node_id: atoms[index]!.id, to_node_id: atom.id }));
   expect(() => validateTaskLifecycleEdges(atoms, edges)).not.toThrow();
+});
+
+test("uses explicit lifecycle roles for arbitrary atom IDs and bounds legacy inference", () => {
+  const atoms = [
+    { id: "node-a", task_id: "task-1", lifecycle_role: "prepare-branch" },
+    { id: "node-b", task_id: "task-1", lifecycle_role: "create-pr" },
+    { id: "node-c", task_id: "task-1", lifecycle_role: "merge-pr" },
+    { id: "node-d", task_id: "task-1", lifecycle_role: "closeout" },
+  ];
+  const edges = atoms.slice(1).map((atom, index) => ({
+    from_node_id: atoms[index]!.id,
+    to_node_id: atom.id,
+  }));
+  expect(() => validateTaskLifecycleEdges(atoms, edges)).not.toThrow();
+  expect(lifecycleRoleOf({ id: "task-1-closeout", task_id: "task-1" })).toBe("closeout");
+  expect(lifecycleRoleOf({ id: "unrelated-closeout", task_id: "task-1" })).toBeNull();
 });
 
 test("does not derive delivery-unit lifecycle order when legacy group atoms have no edges", () => {

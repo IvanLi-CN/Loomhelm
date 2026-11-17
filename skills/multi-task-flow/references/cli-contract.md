@@ -82,13 +82,13 @@ CLI 错误必须返回 `{ "ok": false, "code": "...", "revision": null|number, "
 
 `multi-task-flow orchestration compatibility-check --run-id <run-id>` 只报告兼容性；`multi-task-flow orchestration upgrade-check --run-id <run-id>` 只读评估机械迁移，输出 schema_version=1、源/调用者/目标身份、revision/digest、目录身份、业务与结果不确定的调用摘要、migration_supported、migration_ready、完整 blockers 和 next_action。迁移可行不代表原生静止；native_quiescence 始终为 not_asserted，既有调用可能继续完成，晚回执可能无法写回。只有 `orchestration upgrade --run-id <run-id> [--dry-run] <version|tag>` 执行目标解析或升级，目标必须匹配调用 artifact；不接受编排 rollback。
 
-普通 flow（包括 show/view）继续匹配完整 package/version/build/source 与合同集合，新初始化原子发布 contract 5 和 schema-3 绑定。显式机械迁移支持 schema-2/contract-3/4/5 到 contract 5，业务图、owner、thread/worktree、unknown/attempt/claim 和容量原样保留；只增加运行身份与升级审计并推进 revision。更早格式维持只读诊断，缺少支持的迁移返回 RUN_MIGRATION_UNSAFE，details 含全部 blocker。普通命令版本不符仍返回 RUN_VERSION_MISMATCH，不从 Gateway 或全局安装猜测来源。
+普通 flow（包括 show/view）继续匹配完整 package/version/build/source 与合同集合，新初始化原子发布 contract 6 和 schema-4 绑定。显式机械迁移支持 schema-2/contract-3/4/5 到 contract 6，业务图、owner、thread/worktree、unknown/attempt/claim 和容量原样保留；生命周期预设以显式 `lifecycle_role` 为准，旧 ID 仅按 owner scope 和完整后缀规则兼容读取，不从标题或任意 ID 猜测角色或依赖边。更早格式维持只读诊断，缺少支持的迁移返回 RUN_MIGRATION_UNSAFE，details 含全部 blocker。普通命令版本不符仍返回 RUN_VERSION_MISMATCH，不从 Gateway 或全局安装猜测来源。
 
 upgrade-check、compatibility-check 和 dry-run 不创建 ledger/lifecycle 锁或修改任何 run 文件，不开启原生 writer 或发送调用。读取检查 no-follow、所有权、硬链接、目录身份及前后内容；observation_stale 不返回 ready。dry-run 与正式 upgrade 共用评估器，不能提前把兼容当成升级成功。
 
-prepared 在既有 lifecycle、维护、账本和绑定排斥下原子交换 run 目录，一同发布 contract-5 账本、schema-3 绑定与 migration_audit；源目录保留为 runs/.upgrade-<uuid>/。审计包含源 revision/digest、绑定与旧 invocation receipt 摘要、业务及结果不确定的对象摘要、转换规则和 writer 屏障判定，不保存原始提示或会话。后续依次推进 migrated、binding_switched、completed，期间普通命令 UPGRADE_INCOMPLETE，只能向冻结目标续跑；源备份与审计不符拒绝。升级没有新建、恢复、通知、归档或结果对账副作用。
+prepared 在既有 lifecycle、维护、账本和绑定排斥下原子交换 run 目录，一同发布 contract-6 账本、schema-4 绑定与 migration_audit；源目录保留为 runs/.upgrade-<uuid>/。审计包含源 revision/digest、绑定与旧 invocation receipt 摘要、业务及结果不确定的对象摘要、转换规则和 writer 屏障判定，不保存原始提示或会话。后续依次推进 migrated、binding_switched、completed，期间普通命令 UPGRADE_INCOMPLETE，只能向冻结目标续跑；源备份与审计不符拒绝。升级没有新建、恢复、通知、归档或结果对账副作用。
 
-旧 flow 在 contract-5 屏障后拒绝，旧绑定维护入口因 schema-3 拒绝，旧目录等待者不能穿透。已登记但结果不确定的调用不因迁移被重发、清空或标成停止；旧 provider 晚回调不允许写回目标。源 snapshot 保存被携带的 invocation receipt，完成的迁移只在摘要精确匹配时允许新身份建立新 receipt，不把旧 receipt 改成 stopped；当前身份的新 running receipt 仍阻断重入。初始化 recovery 缺失 turn/权限快照的拒绝边界保持；归档负向查询保留原 operation_id 与 attempt 时间，缺失身份拒绝，不再归档或反归档。自定义静态视图不得改变编排绑定的可执行 Worker 身份。
+旧 flow 在 contract-6 屏障后拒绝，旧绑定维护入口因 schema-4 拒绝，旧目录等待者不能穿透。已登记但结果不确定的调用不因迁移被重发、清空或标成停止；旧 provider 晚回调不允许写回目标。源 snapshot 保存被携带的 invocation receipt，完成的迁移只在摘要精确匹配时允许新身份建立新 receipt，不把旧 receipt 改成 stopped；当前身份的新 running receipt 仍阻断重入。初始化 recovery 缺失 turn/权限快照的拒绝边界保持；归档负向查询保留原 operation_id 与 attempt 时间，缺失身份拒绝，不再归档或反归档。自定义静态视图不得改变编排绑定的可执行 Worker 身份。
 
 副作用调用的 stopped 投影必须有匹配不可变停止事实；机械迁移携带旧 receipt 不等价于停止。
 

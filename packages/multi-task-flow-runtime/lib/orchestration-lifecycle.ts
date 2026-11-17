@@ -93,7 +93,7 @@ export async function withRunCommand<T>(
       // The immutable source snapshot retains this receipt. Retiring it does not
       // assert termination: every unresolved business attempt remains unchanged.
       const carried =
-        ledger.contract_version === 5 &&
+        ledger.contract_version >= 5 &&
         ledger.upgrade?.phase === "completed" &&
         ledger.upgrade.migration_audit?.source_call_digest === migrationDigest(content);
       const previous = carried ? null : JSON.parse(content);

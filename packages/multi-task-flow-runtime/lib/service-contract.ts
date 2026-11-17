@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
+import { CONTRACT_VERSION, SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
 import { requireCondition } from "../lib/errors";
 import { taskExecutionPolicyDeclarationGaps, validateTaskExecutionPolicies } from "../lib/schema";
 
@@ -18,12 +18,14 @@ export const compatibility = {
     "schema-2/contract-3",
     "schema-2/contract-4",
     "schema-2/contract-5",
+    "schema-2/contract-6",
   ],
   writable: [
     "schema-2/contract-2",
     "schema-2/contract-3",
     "schema-2/contract-4",
     "schema-2/contract-5",
+    "schema-2/contract-6",
   ],
 };
 
@@ -131,7 +133,7 @@ export function packageReleaseManifest(
     source_sha: config.source_sha ?? "0".repeat(40),
     skill_id: SKILL_ID,
     skill_version: config.skill_version ?? SKILL_VERSION,
-    ledger_contract: config.ledger_contract ?? 3,
+    ledger_contract: config.ledger_contract ?? CONTRACT_VERSION,
     viewer_contract: config.viewer_contract ?? VIEWER_CONTRACT,
     service_version: config.service_contract ?? config.package_version ?? "0.0.0",
     platform: `${process.platform}-${process.arch}` as ReleaseManifest["platform"],

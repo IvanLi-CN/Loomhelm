@@ -1108,7 +1108,7 @@ export const FLOW_CONTRACT = Object.freeze({
 	$schema: "https://json-schema.org/draft/2020-12/schema",
 	$id: "https://loomhelm.dev/schemas/multi-task-flow/flow-contract.schema.json",
 	schema_version: 2,
-	contract_version: 5,
+	contract_version: 6,
 	content_type: "application/json",
 	invocation:
 		"bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --output json --input -",

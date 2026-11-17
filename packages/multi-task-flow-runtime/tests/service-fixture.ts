@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
-import { versionEnvelope } from "../lib/contract";
+import { CONTRACT_VERSION, versionEnvelope } from "../lib/contract";
 import { ServiceAuth } from "../lib/service-auth";
 import { compatibility } from "../lib/service-contract";
 import { servicePaths } from "../lib/service-paths";
@@ -50,6 +50,7 @@ export function fixtureRelease(
       | "darwin-x64"
       | "linux-arm64"
       | "linux-x64",
+    ledger_contract: CONTRACT_VERSION,
     ...versionEnvelope,
     ...compatibility,
     files: Object.fromEntries(

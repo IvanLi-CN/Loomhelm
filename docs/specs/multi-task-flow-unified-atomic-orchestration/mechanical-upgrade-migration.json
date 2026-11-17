@@ -8,13 +8,13 @@
   },
   "compatibility_impacts": {
     "public_api": "minor: additive upgrade-check; dry-run now rejects unsafe migration instead of returning early success",
-    "persistent_state": "minor: ledger contract 5 requires the candidate reader; prior contract-4 writers reject it"
+    "persistent_state": "minor: ledger contract 6 and binding schema 4 require the candidate reader; prior contract-5 writers reject it"
   },
   "durable_state": {
-    "description": "Ledger schema 2 contract 5 plus existing schema-2 viewer binding and retained source directory",
+    "description": "Ledger schema 2 contract 6 plus schema-2 viewer binding schema 4 and retained source directory",
     "storage_implementation": "LedgerStore atomic JSON files and same-parent atomic directory exchange",
     "source_compatibility_range": {
-      "from_program_versions": "Supported schema-2 contracts 3/4/5; older schemas remain diagnostic-only for this upgrade path",
+      "from_program_versions": "Supported schema-2 contracts 3/4/5; contract 6 is supported for same-contract forward identity upgrades; older schemas remain diagnostic-only for this upgrade path",
       "to_program_version": "Exact mainline-published artifact determined by release policy; no version preselected",
       "direct_major_skips_supported": false
     }
@@ -56,7 +56,7 @@
   "validation": {
     "minor": {
       "required_test_evidence": [
-        "Source contract 3/4/5 and audit compatibility matrix",
+        "Source contract 3/4/5, target contract 6 and audit compatibility matrix",
         "Unknown attempt/claim/capacity and business digest preservation",
         "Actual old package readers and writers reject atomic barrier",
         "Crash/resume and frozen target with audit validation",
