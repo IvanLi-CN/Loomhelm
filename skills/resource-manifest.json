@@ -6962,7 +6962,7 @@
     },
     {
       "path": "skills/multi-task-flow/SKILL.md",
-      "installedSha256": "07ed6561f305ad447a091682d3bf200d07ab2a1cf226725203dff1c08589e234"
+      "installedSha256": "970d74d660905529c8130ba035e2160ae3e85ab016f36e8b3a0a0747268266cf"
     },
     {
       "path": "skills/multi-task-flow/bun.lock",
@@ -7332,11 +7332,11 @@
     {
       "path": "skills/multi-task-flow/references/cli-contract.md",
       "sourcePath": "docs/specs/multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md",
-      "installedSha256": "9a2191686bb6f76c5e38481ba7060f902ea998c5ef91227d2beee2918a63ffee"
+      "installedSha256": "96e4e2b036865b2ac7ddc7fdde3036187555fa997d940e5fd13e8fbe0a1515a6"
     },
     {
       "path": "skills/multi-task-flow/references/shared-viewer.md",
-      "installedSha256": "f476fc6f61a5c3b2f8a6d22939d1de49355aeae70553d317a4bd8ef27dba39a1"
+      "installedSha256": "98528a572f4d835cd47b1d05ce784ac4c885942c69b0ca8e5a151baa86e861e2"
     },
     {
       "path": "skills/multi-task-flow/scripts/build-service.ts",
@@ -7431,7 +7431,7 @@
     {
       "path": "skills/multi-task-flow/tests/graph-projection.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/graph-projection.test.ts",
-      "installedSha256": "362f0348f9b1bd6b57a8e81a52e0aa5a15993e77e1255f434fe06ed9603202a9"
+      "installedSha256": "16184c02e841dc0539e70b4e4566e0c36725b394f5fea188bf92284fdc7cd49c"
     },
     {
       "path": "skills/multi-task-flow/tests/graph.test.ts",
@@ -7666,7 +7666,7 @@
     {
       "path": "skills/multi-task-flow/web/graph-projection.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/graph-projection.ts",
-      "installedSha256": "8df17238bab39bc78ca51751a1115bf97634bfdd0457fbe48bf9ed666391e201"
+      "installedSha256": "8b262294ec06ad23d7dd90523ff5fc958f7d793ffc03756d3f41a08523dbf63d"
     },
     {
       "path": "skills/multi-task-flow/web/graph.ts",

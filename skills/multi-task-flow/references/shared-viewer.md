@@ -24,30 +24,50 @@ Published-package commands use only `bunx --bun @loomhelm/multi-task-flow@<exact
 
 Run `bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json --version` and the read-only `service status` command with the same exact package version. The package version identifies the CLI process; it is not the bundle `service_version`.
 
-For the formal service root, read `config/service.json.current_build`, then read `releases/<current_build>/manifest.json`. The manifest's `build_id` must equal `current_build`; its `source_sha` and `service_version` identify the installed bundle. A healthy `service status` must report `installed: true`, `running: true`, `result.build_id == current_build`, and `result.source_sha` equal to the selected manifest. Ignore other release directories, candidates and npm cache entries when deciding which version is running.
+正式根目录为 `~/.local/share/multi-task-flow/`。先读取 `config/service.json`，按安装形态选择证据；不要从 npm cache 路径或残留 release 目录推断当前身份。
 
-The following is a read-only check for the formal macOS/Linux root and fails closed on a missing or mismatched build. It requires `jq`:
+- **npm package-backed**：配置包含 `package_name` 与 `package_version`。用配置中的 exact version 运行 `--version` 与只读 `service status`。配置、CLI artifact identity 和运行时必须匹配 package name/version、build ID、source SHA、compatibility line、Skill version 与 service/ledger/api/frontend/viewer contracts；`current_build` 与 `artifact_build_id` 必须相等。`installed`、`running` 和 runtime `ok` 必须为 true；status 还在运行时核验 generation、PID 和 port。此形态遵循 ADR 0032，不复制服务 bundle，因此缺少 `releases/<current_build>/manifest.json` 是正常布局，不是安装损坏或升级理由。
+- **legacy bundle**：配置没有 package identity。仅为诊断读取 `releases/<current_build>/manifest.json`，核对 build/source/platform/service version。缺失或不一致时报告准确证据；即使健康，也不能把残留 bundle 当成 package-backed 安装或自动回退。转为包式安装需要主人明确批准具体维护动作。
+- **partial/unknown**：包身份只声明了一部分、必需字段为空或 CLI/config/runtime 不一致时，报告身份阻塞，不猜测安装形态，不合成 manifest，也不以另一版本的 CLI 证明当前身份。
+
+以下是 npm package-backed 的只读核验。`<exact-version>` 必须替换为配置中的版本；不要打印完整配置或包含租约身份的 status。需要 `jq`，任一命令失败即停止，不执行修复：
 
 ```sh
+set -e
 service_root="$HOME/.local/share/multi-task-flow"
-current_build="$(jq -er '.current_build' "$service_root/config/service.json")"
-manifest="$service_root/releases/$current_build/manifest.json"
-source_sha="$(jq -er --arg build "$current_build" 'select(.build_id == $build) | .source_sha' "$manifest")"
+cli_json="$(bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json --version)"
 status_json="$(printf '{}\n' | bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json service status --input -)"
-printf '%s\n' "$status_json" | jq -e --arg build "$current_build" --arg source "$source_sha" \
-  '.result.installed == true and .result.running == true and .result.build_id == $build and .result.source_sha == $source'
+jq -e --argjson cli "$cli_json" --argjson status "$status_json" '
+  . as $cfg | $status.result as $runtime |
+  ($status.ok == true and $runtime.installed == true and
+   $runtime.running == true and $runtime.ok == true) and
+  ([.package_name, .package_version, .current_build, .artifact_build_id,
+    .source_sha, .compatibility_line, .skill_version, .service_contract,
+    .ledger_contract, .api_contract, .frontend_contract, .viewer_contract] |
+    all(. != null and . != "")) and
+  (.package_name == "@loomhelm/multi-task-flow") and
+  (.current_build == .artifact_build_id) and
+  (.package_name == $cli.package_name and .package_name == $runtime.package_name) and
+  (.package_version == $cli.version and .package_version == $runtime.package_version) and
+  (.current_build == $cli.build_id and .current_build == $runtime.build_id) and
+  (.source_sha == $cli.source_sha and .source_sha == $runtime.source_sha) and
+  (.compatibility_line == $cli.compatibility_line and .compatibility_line == $runtime.compatibility_line) and
+  (.skill_version == $cli.skill_version and .skill_version == $runtime.skill_version) and
+  (.service_contract == $cli.contracts.service and .service_contract == $runtime.service_contract) and
+  (.ledger_contract == $cli.contracts.ledger and .ledger_contract == $runtime.ledger_contract) and
+  (.api_contract == $cli.contracts.api and ($runtime.compatibility.api_versions | index($cfg.api_contract)) != null) and
+  (.frontend_contract == $cli.contracts.frontend and ($runtime.compatibility.frontend_contracts | index($cfg.frontend_contract)) != null) and
+  (.viewer_contract == $cli.contracts.viewer and .viewer_contract == $runtime.viewer_contract)
+' "$service_root/config/service.json"
 ```
 
-If this check fails, or `status` reports `installed: false`, stop after reporting the exact package version, `current_build`, manifest `service_version`/`source_sha`, and runtime `build_id`/`source_sha`. Do not call `install`, `upgrade`, `rollback`, credential maintenance, import, or `ensure` as a repair. An installed identity match is required before ordinary `ensure`; maintenance still requires the owner's explicit authorization.
+核验失败只报告包版本、配置/CLI/runtime 的 build/source 和缺失或冲突字段；不要调用 `ensure`、安装、升级、回滚、凭据维护或导入作为修复。核验通过允许正常 `ensure`，不构成服务维护授权。
 
 ## Explicit maintenance
 
-The protected Skill Runtime release workflow builds from clean committed source after `bun --no-install run build`: `bun --no-install scripts/build-service.ts --output /absolute/new-bundle --service-version <semver>`. User-side source builds are forbidden. The v2 bundle includes a shell launcher, TypeScript sources, prepared dependencies, browser assets and a manifest binding source SHA, platform, file digests and compatibility. A Skill release publishes a platform-matched verified bundle; the consumer selects that bundle or a verified candidate under `candidates/<build-id>/`. The next `ensure` verifies and stages it, runs compatibility preflight, and uses the normal live switch and health-check rollback path. Package-backed and source-to-package Gateway upgrades use the same bounded readiness window: launchd start is followed by repeated identity-checked health probes, and a timeout, identity mismatch or startup lease failure restores the complete previous package or source profile before returning a typed diagnostic error. The launcher requires the trusted Bun 1.4.4 executable at the absolute path and SHA-256 pinned when building; it validates and snapshots that runtime before use. It runs independently of the caller working directory but does not include Bun. The maintenance CLI runs with Bun or the shell `viewer` launcher. The viewer preserves the caller environment and Bun configuration; it does not strip runtime variables or replace PATH. The launchd definition records the installing or upgrading caller PATH so background PR queries can resolve gh from the same tool environment. After changing tool locations, regenerate the definition through explicit service maintenance. Before loading package TypeScript through its integrity bootstrap, the launcher verifies all listed resources and rejects unlisted files, links and unsafe package permissions. Legacy compiled v1 bundles remain diagnostic-only and are never a startup or rollback fallback.
+当前 package-backed 安装遵循 ADR 0032：CLI 与 daemon 来自同一个 exact npm package，服务根目录不复制生产代码。安装请求为 `service install` 的 `{ "version": "<exact-version>" }`；升级优先使用已批准的 `gateway upgrade <exact-version>` 路径，具体命令以该 exact CLI 的 help 为准。维护先展示当前/目标包身份、兼容性与数据影响，再由主人明确批准。不能通过从源码构建 bundle、复制 npm cache 或补写 release manifest 修复身份。Gateway 升级与单 run 的 orchestration 升级是不同操作，不能互相替代。
 
-- `install`: `bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json service install --input -` with `{"source":"/absolute/bundle"}`; optional `registry_dir` selects the registry once. Installation initializes credentials and fixed high port, writes a private plist, and does not bootstrap/start it. Formal label: `cc.ivanli.loomhelm.multi-task-flow.viewer`. Next `ensure` bootstraps into the current user's GUI domain, or user domain on headless macOS, and kickstarts it.
-- `upgrade`: `bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json service upgrade --input -` with `{"source":"/absolute/bundle"}`. Validate hashes, platform and existing ledger/custom-view compatibility before stopping the old build. Switch the configuration atomically, start and health-check; failed health or startup lease setup restores the old package or source profile and existing lease deadlines. Old releases remain.
-- `rollback`: `bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json service rollback --input -` with `{}`; the previous build must still support current data. This never restores an old data backup over new writes.
-- `credential-rotate`, `credential-revoke`: `{}`; replace the credential and revoke sessions, tickets and browser leases. Agent leases keep their deadlines.
+旧 bundle 的 `source` 输入、`releases/`、`candidates/` 和 `build-service.ts` 仅保留历史维护与受控发布用途；它们不适用于当前 npm package-backed 普通运行。保留旧文件，不自动迁移、清理或作为回退；针对旧 profile 的具体维护应按实际版本合同单独授权。凭据轮换、撤销和数据导入同样不属于普通 ensure。
 
 `ensure` performs none of these maintenance actions. No `sudo`, login autostart or unconditional KeepAlive is used. A crash is recovered on the next ensure. A lifetime instance lock, serialized startup and generation/PID guards prevent old processes from altering successor runtime/port ownership. Port conflict fails instead of changing the configured number or taking over another process. The registry directory is resolved at install and saved; no synthetic worktree or `agent_session` is recorded. Active lease registration covers actual runtime only. Logs contain fixed event identities, rotate at 5 MiB and retain three files.
 

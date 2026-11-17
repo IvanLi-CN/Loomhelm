@@ -1,9 +1,10 @@
 /** Incremental JSON validator/projector. Tokens are capped, syntax is always fully consumed. */
 export type JsonPath = (string | number)[];
-export interface JsonEvent { path: JsonPath; value?: string | number | boolean | null; kind: 'scalar' | 'object' | 'array'; count?: number; truncated?: boolean }
+export interface JsonEvent { path: JsonPath; value?: string | number | boolean | null; kind: 'scalar' | 'object' | 'array'; count?: number; truncated?: boolean; depthOmitted?: boolean }
 type Frame = { kind: 'object' | 'array'; state: 'key' | 'key-required' | 'colon' | 'value' | 'value-required' | 'comma'; key: string; index: number };
 export class JsonStream {
   private stack: Frame[] = [];
+  private omittedDepth = false;
   private root: 'value' | 'done' = 'value';
   private mode: 'none' | 'string' | 'number' | 'literal' = 'none';
   private token = '';
@@ -18,6 +19,12 @@ export class JsonStream {
   get bufferedCharacters(): number { return this.token.length + this.unicode.length + this.stack.reduce((n, f) => n + f.key.length, 0); }
   get bufferedStateSize(): number { return this.stack.length + this.bufferedCharacters; }
   private fail(): never { throw new Error('FLOW_OUTPUT_INVALID: incomplete or invalid JSON output'); }
+  private event(event: Omit<JsonEvent, 'path'>): void {
+    // Projection paths are capped; full grammar validation still consumes every byte.
+    if (this.stack.length > 64) { this.omittedDepth = true; return; }
+    this.emit({ ...event, path: this.path(), ...(this.omittedDepth ? { depthOmitted: true } : {}) });
+    this.omittedDepth = false;
+  }
   private path(): JsonPath {
     return this.stack.map(f => f.kind === 'array' ? f.index : f.key);
   }
@@ -33,7 +40,7 @@ export class JsonStream {
       f.key = this.length > this.cap ? '[oversized-key]' : this.token;
       f.state = 'colon';
     } else {
-      this.emit({ kind: 'scalar', path: this.path(), value: this.token, truncated: this.length > this.cap });
+      this.event({ kind: 'scalar', value: this.token, truncated: this.length > this.cap });
       this.complete();
     }
     this.mode = 'none'; this.token = ''; this.length = 0;
@@ -41,10 +48,10 @@ export class JsonStream {
   private primitiveEnd(): void {
     if (this.mode === 'number') {
       if (!['zero', 'int', 'frac', 'exp'].includes(this.numberState)) this.fail();
-      this.emit({ kind: 'scalar', path: this.path(), value: this.length > this.cap ? this.token : Number(this.token), truncated: this.length > this.cap });
+      this.event({ kind: 'scalar', value: this.length > this.cap ? this.token : Number(this.token), truncated: this.length > this.cap });
     } else {
       if (this.token !== this.literal) this.fail();
-      this.emit({ kind: 'scalar', path: this.path(), value: this.literal === 'null' ? null : this.literal === 'true' });
+      this.event({ kind: 'scalar', value: this.literal === 'null' ? null : this.literal === 'true' });
     }
     this.mode = 'none'; this.token = ''; this.length = 0; this.complete();
   }
@@ -99,7 +106,7 @@ export class JsonStream {
       }
       if (c === '}' || c === ']') {
         if (!f || c !== (f.kind === 'object' ? '}' : ']') || !['key', 'value', 'comma'].includes(f.state)) this.fail();
-        this.stack.pop(); this.emit({ kind: f.kind, path: this.path(), count: f.index }); this.complete(); continue;
+        this.stack.pop(); this.event({ kind: f.kind, count: f.index }); this.complete(); continue;
       }
       if (f && ['key', 'key-required'].includes(f.state)) {
         if (c !== '"') this.fail();

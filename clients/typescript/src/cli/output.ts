@@ -16,9 +16,9 @@ export async function writeOutput(stream: 'stdout' | 'stderr', text: string): Pr
 }
 const clean = (value: unknown) => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 const labels: Record<string, string> = { code: '结果码', revision: '版本', status: '状态', state: '状态', run_id: '运行', thread_id: '对话', task_id: '任务', group_id: '交付单元', operation_id: '操作', message: '原因', error: '错误', installed: '已安装', running: '运行中', quiescent: '已静止', missing_evidence: '缺失证据', warning: '警告', mode: '模式', tasks: '任务', root: '数据目录', source_sha: '源码 SHA', version: '版本', url: '链接' };
-const secret = /credential|token|secret|password|authorization|cookie|prompt|ticket|api[_-]?key|oversized-key/i;
+const secret = /credential|token|secret|password|authorization|cookie|prompt|ticket|api[ _-]?key|oversized-key/i;
 // Opaque diagnostic values are not safe just because their field is named message.
-const credentialText = /["']?(?:authorization|cookie|credentials?|password|secret|(?:access[_-]?)?token|api[_-]?key|ticket)["']?\s*[:=]|\b(?:Bearer|Basic)\s+\S+|https?:\/\/[^/\s]+:[^/\s]+@/i;
+const credentialText = /(?:authorization|cookies?|credentials?|passwords?|secrets?|(?:access[ _-]?)?tokens?|api[ _-]?keys?|tickets?)\b|\b(?:Bearer|Basic)\s+\S+|https?:\/\/[^/\s]+:[^/\s]+@/i;
 const safeText = (value: unknown, loginUrl = false) => !loginUrl && credentialText.test(String(value)) ? '[敏感诊断已隐藏]' : clean(value);
 const important = /^(ok|code|revision|status|state|.*_id|.*Id|id|name|title|message|error|detail|reason|blocked.*|blocking.*|.*count|installed|running|root|mode|version|.*sha|.*digest|quiescent|missing_evidence|warning|should_send|next_action|url|login_url)$/;
 export function recovery(code: string): string | undefined {
@@ -36,9 +36,11 @@ export class HumanProjection {
   private failed = false;
   private code = '';
   private started = false;
+  private depthOmitted = false;
   constructor(private command: string, private sink: Sink = writeOutput, private forced?: 'stderr') {}
   consume(event: JsonEvent): void {
     const { path, value } = event;
+    if (event.depthOmitted) this.depthOmitted = true;
     const key = String(path.at(-1) ?? 'result');
     if (path.length === 1 && key === 'ok' && value === false) this.failed = true;
     if (path.length === 1 && key === 'code') this.code = String(value);
@@ -55,7 +57,7 @@ export class HumanProjection {
     if ((key === 'url' || key === 'login_url') && this.command !== 'service login') return;
     const cap = output.verbose ? 4096 : 160;
     const status = typeof value === 'string' && ['state', 'status'].includes(key) ? ({ unknown: '未确认', blocked: '阻塞', running: '运行中', stopped: '已停止', failed: '失败', succeeded: '成功' } as Record<string, string>)[value] ?? value : value;
-    const text = safeText(status === true ? '是' : status === false ? '否' : status === null ? '无' : status, this.command === 'service login' && ['url', 'login_url'].includes(key));
+    const text = key === 'code' && typeof status === 'string' && /^[A-Z][A-Z0-9_]{0,159}$/.test(status) ? status : safeText(status === true ? '是' : status === false ? '否' : status === null ? '无' : status, this.command === 'service login' && ['url', 'login_url'].includes(key));
     const suffix = event.truncated || text.length > cap ? '…（已省略，完整内容见 --output json）' : '';
     this.lines.push(`${this.pathLabel(path)}：${text.slice(0, cap)}${suffix}`);
   }
@@ -76,6 +78,7 @@ export class HumanProjection {
     await this.flush();
     const stream = this.forced ?? (this.failed ? 'stderr' : 'stdout');
     const next = recovery(this.code);
+    if (this.depthOmitted) await this.sink(stream, '深层内容已省略（超过 64 层），完整结果使用 --output json。\n');
     const line = this.failed ? '命令返回错误' : this.code === 'UNKNOWN' ? '命令返回未确认结果' : '结果接收完成（不代表调用已静止）';
     const color = useColor(!!process[stream].isTTY);
     await this.sink(stream, `${color ? '\x1b[36m' : ''}${line}${color ? '\x1b[0m' : ''}\n${next ? `下一步：${next}\n` : ''}`);
@@ -92,6 +95,8 @@ export class HumanJsonStream {
     // Bound queued display lines even when an upstream caller supplies a huge chunk.
     for (let offset = 0; offset < bytes.length; offset += 1024) {
       this.parser.write(bytes.subarray(offset, offset + 1024)); await this.projection.flush();
+      // Yield to signals and the independent stop path even if no fields were displayed.
+      await new Promise<void>(resolve => setImmediate(resolve));
     }
   }
   async finish(): Promise<void> { this.parser.finish(); await this.projection.finish(); }
@@ -101,6 +106,7 @@ export async function printResult(value: unknown, stream: 'stdout' | 'stderr' = 
   const projection = new HumanProjection(command, writeOutput, stream === 'stderr' ? 'stderr' : undefined);
   let count = 0;
   async function visit(item: unknown, path: JsonPath): Promise<void> {
+    if (path.length > 64) { projection.consume({ kind: 'object', path: [], depthOmitted: true }); return; }
     if (item !== null && typeof item === 'object') {
       let index = 0;
       for (const key in item) {

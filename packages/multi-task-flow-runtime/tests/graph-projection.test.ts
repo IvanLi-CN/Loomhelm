@@ -255,6 +255,57 @@ describe("dashboard graph projection", () => {
     );
   });
 
+  test("only renders global boundaries while retaining unit dependency provenance", () => {
+    const view = minimalView(
+      [
+        node("start", "main_start"),
+        node("end", "main_end"),
+        node("a-start", "group_start", "a"),
+        node("a-end", "group_end", "a"),
+        node("b-start", "group_start", "b"),
+        node("b-end", "group_end", "b"),
+        node("a-task", "milestone", "a"),
+        node("b-task", "milestone", "b"),
+      ],
+      [
+        edge("entry", "start", "a-start", "completed"),
+        edge("a-entry", "a-start", "a-task", "completed"),
+        edge("a-closeout", "a-task", "a-end", "integrated"),
+        edge("handoff", "a-end", "b-start", "completed"),
+        edge("b-entry", "b-start", "b-task", "completed"),
+        edge("a-exit", "a-end", "end", "completed"),
+        edge("b-closeout", "b-task", "b-end", "integrated"),
+        edge("b-exit", "b-end", "end", "completed"),
+      ],
+      [group("a"), group("b")],
+    );
+    const projected = buildGraphProjection(view);
+    expect(projected.nodes.filter((item) => item.nodeKind === "boundary")).toEqual([
+      expect.objectContaining({ sourceNodeId: "end", boundary: "end", parentId: null }),
+      expect.objectContaining({ sourceNodeId: "start", boundary: "start", parentId: null }),
+    ]);
+    expect(projected.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: "boundary:start", target: "a-task" }),
+        expect.objectContaining({ source: "a-task", target: "boundary:end" }),
+        expect.objectContaining({ source: "b-task", target: "boundary:end" }),
+        expect.objectContaining({
+          source: "a-task",
+          target: "b-task",
+          crossGroup: "yes",
+          paths: [
+            {
+              requires: ["integrated", "completed", "completed"],
+              sourceEdgeIds: ["a-closeout", "handoff", "b-entry"],
+              boundaryNodeIds: ["a-end", "b-start"],
+            },
+          ],
+        }),
+      ]),
+    );
+    expect(projected.nodes.some((item) => item.sourceNodeId === "a-end")).toBe(false);
+  });
+
   test("uses collision-safe edge ids and bounds pathological hidden path expansion", () => {
     const collisionView = minimalView(
       [

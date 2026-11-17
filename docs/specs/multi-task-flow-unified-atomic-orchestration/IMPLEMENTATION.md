@@ -6,11 +6,13 @@
 
 REQ-CLI-001 至 REQ-CLI-003 由客户端 CLI 的 output-options、help、query-options、json-stream 和 output 模块实现。公开入口统一选择风格；Flow JSON 保留背压直通，human 增量消费同一结果。service status/doctor 和 show/view 的普通参数只构造既有请求，不增加身份推断或变更权限。测试入口为 `clients/typescript/test/cli-output.test.ts`、`cli-output-integration.test.ts` 及既有 `cli-integration.test.ts`；transport fixture 不访问真实服务或 Codex。候选的最终 CI/review 结果仍须绑定当前 head。
 
-输出回归覆盖显式风格在参数错误路径上的保留、4,096 层嵌套的线性解析状态与受限输出批次，以及结构化和非结构化诊断中的合成凭据隐藏；正式 Agent 示例显式指定 JSON。CLI 单元、隔离传输和既有集成测试共 28 项通过，既有 Flow 大输出、背压和独立停止通道 5 项通过。
+输出回归覆盖显式风格在参数错误路径上的保留、4,096 层嵌套的线性解析状态与受限输出批次，以及结构化和非结构化诊断中的合成凭据隐藏；正式 Agent 示例显式指定 JSON。额外覆盖 100,000 层嵌套的投影事件与路径处理上界、无展示输出时的事件循环让出，以及空格分隔的凭据标识。CLI 单元、隔离传输和既有集成测试共 29 项通过，既有 Flow 大输出、背压和独立停止通道 5 项通过。
 
 TTY 默认变更具有公开终端兼容性影响；显式 JSON 的业务合同及持久状态格式不变。未修改包版本、兼容线或全局安装，发布决策仍归仓库既有政策。
 
 ## Documentation map
+
+任务图的 `web/graph-projection.ts` 仅将全局 `main_start` / `main_end` 投影为起终点；交付单元边界仍参与隐藏路径折叠和来源追溯。`tests/graph-projection.test.ts` 覆盖多单元汇合、跨单元依赖以及全局起终点唯一性。`skills/resource-manifest.json` 同步登记投影与回归测试的源码摘要，独立源码包复制校验通过。
 
 [SPEC.md](./SPEC.md) 记录长期需求、验收和兼容合同；[AGENT_INTERACTIONS.md](./AGENT_INTERACTIONS.md) 记录角色职责、交互顺序和时序图；[DATA_MODEL.md](./DATA_MODEL.md) 记录 canonical schema、投影和外部事实；[STATE_MACHINES.md](./STATE_MACHINES.md) 记录各对象的正常状态机、异常恢复状态机和范围修订；[CLI_CONTRACT.md](./CLI_CONTRACT.md) 记录命令接口；本文件记录实现入口、验证映射与已知偏差。
 
@@ -237,3 +239,7 @@ ADR 0041 记录对 ADR 0039 静止前提的替代，需求和验收仍只由 SPE
 目录升级的旧锁等待者测试在断言失败时输出子进程结果，用于区分安全拒绝路径与意外读取；原断言与锁实现保持不变，同步维护测试资源摘要。
 
 已整合运行时发布工作流的冻结上传收尾、源内容绑定和 tag committer 身份修复；详情面板与诊断断言不受发布工作流变更影响，viewer 版本预期保持不变。
+
+## 派发前置核验
+
+Skill 将宿主工具可见性与实际调用证据分开：保留 CLI-only 创建、claim、native evidence、orphan 与 unknown 门禁，取消要求证明所有普通 Agent 原生工具均被撤权的不可执行前提。包式服务身份核验按 ADR 0032 对齐 config、CLI artifact identity 与 runtime status；旧 bundle manifest 不再是 package-backed 安装的前置证据。覆盖由 Skill 合同检查与 shared-service 运行时身份测试提供；本次不改变运行时权限模型或升级已安装服务。
