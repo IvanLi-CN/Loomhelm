@@ -246,4 +246,4 @@ Ledger
 - 运行时 schema：`packages/multi-task-flow-runtime/lib/schema.ts`
 - 语义字段元数据：`packages/multi-task-flow-runtime/lib/contract.ts`
 - 持久化实现：`packages/multi-task-flow-runtime/lib/store.ts`
-- 结构约束：[`SCHEMA-CONSTRAINTS.md`](./SCHEMA-CONSTRAINTS.md)
+- 结构约束：[`SCHEMA_CONSTRAINTS.md`](./SCHEMA_CONSTRAINTS.md)

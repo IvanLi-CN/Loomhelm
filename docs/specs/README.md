@@ -14,4 +14,4 @@
 
 `docs/specs/<topic>/` 的主题目录使用稳定的小写 kebab-case；主题固定入口 `SPEC.md`、`IMPLEMENTATION.md`、`HISTORY.md`、`README.md`、`DECISIONS.md`、`AGENTS.md` 和其他单一全大写词的固定文件名保持原名。项目自有规格层中由多个全大写词组成的补充文档使用下划线连接，例如 `CLI_CONTRACT.md`、`DATA_MODEL.md`、`STATE_MACHINES.md` 和 `CLIENT_CODEX_DAEMON.md`；普通描述性文档继续使用小写 kebab-case。
 
-本规则只适用于项目自有的 `docs/specs/**` 文档；`skills/docs/vendor/**` 是随 Skill 分发的 vendored 内容，保留其上游路径。未合并分支中的文件不属于当前基线，只有进入主线后才按本规则处理。
+本规则适用于当前基线中的项目自有 `docs/specs/**` 文档和随 Skill 分发的 `skills/docs/vendor/**` 规格快照；vendored 内容也必须同步其内部引用和资源清单。未合并分支中的文件不属于当前基线，只有进入主线后才按本规则处理。

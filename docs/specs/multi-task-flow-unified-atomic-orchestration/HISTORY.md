@@ -13,4 +13,4 @@
 - 2026-11-15: Split the review surface into SPEC.md, DATA_MODEL.md and STATE_MACHINES.md so the requirements contract, canonical data model and state/recovery diagrams can be reviewed independently.
 - 2026-11-15: Locked Flow-native creation reconciliation as a separate recovery path from the standalone Codex dispatch journal, including evidence requirements, fail-closed unknown handling, idempotency and explicit exact-version release.
 - 2026-11-16: Established the layered CLI contract boundary: repository documentation is the human-readable source, CLI help/schema are runtime surfaces, and the Skill references the packaged contract copy.
-- 2026-11-17: Renamed the project-owned compound specification documents to underscore-separated names and synchronized the CLI source path, packaged copy metadata and validation references without changing the CLI contract or runtime behavior.
+- 2026-11-17: Renamed the project-owned and vendored compound specification documents to underscore-separated names and synchronized their references, resource metadata and validation paths without changing the CLI contract or runtime behavior.
