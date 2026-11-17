@@ -99,7 +99,7 @@ Only existing authorization for that follow-up scope and external delivery permi
 
 ## Lane result and profile
 
-Each formal lane is a read-only sub-agent review in the current candidate worktree. The parent flow owns the lane's `requested_profile` and passes that pair to the native review tool. Its structured result names the candidate `repo_root`, lane, base SHA, head SHA, reviewed paths or invariants, and findings; it does not prove the provider's effective model. A receipt may retain an optional `reported_profile` for audit, but reviewer self-report never authorizes or rejects the review. New receipts record `profile_verification=request_recorded` and `effective_profile=null`. Child IDs, transcripts, runtime events, and provider metadata are neither required nor accepted as evidence.
+Each formal lane is a read-only sub-agent review in the current candidate worktree. The parent flow owns the lane's `requested_profile` and passes that pair to the native review tool. Its structured result names the candidate `repo_root`, lane, base SHA, head SHA, reviewed paths or invariants, and findings; it does not prove the provider's effective model. A receipt may retain an optional `reported_profile` for audit, but reviewer self-report never authorizes or rejects the review. New receipts record `profile_verification=request_recorded` and `effective_profile=null`; unavailable retry receipts also bind a parent-supplied `review-attempt-id`, so same-id replay is idempotent and a new id remains a separate attempt. Child IDs, transcripts, runtime events, and provider metadata are neither required nor accepted as evidence.
 
 ### Autonomous direct-review profiles
 

@@ -1,4 +1,10 @@
-import { FlowError, isoNow, isRecord, stableHash } from "./common";
+import {
+  FlowError,
+  canonicalJson,
+  isoNow,
+  isRecord,
+  stableHash,
+} from "./common";
 import { SUBAGENT_STARTUP_UNAVAILABLE } from "./review";
 import {
   parseReviewResultJson,
@@ -10,6 +16,7 @@ export interface SubagentReviewOptions {
   baseRef: string;
   reviewModel?: string | undefined;
   reviewEffort?: string | undefined;
+  reviewAttemptId?: string | undefined;
   reviewResultJson: string;
   terminalState?: "completed" | "unavailable" | undefined;
   unavailabilityClassification?: string | undefined;
@@ -116,6 +123,7 @@ export function recordSubagentReviewState(
     head_sha: headSha,
     base_sha: baseSha,
     review_profile: options.reviewProfile,
+    attempt_key: reviewAttemptKey(options),
     requested_profile: requestedProfile,
     profile_verification: "request_recorded",
     effective_profile: null,
@@ -168,11 +176,13 @@ function recordUnavailable(
     throw new FlowError(
       "unavailable sub-agent review requires explicit startup-unavailable classification",
     );
+  const attemptKey = reviewAttemptKey(options, true);
   const identity = stableHash([
     "sub-agent-review-unavailable",
     waveProofKey,
     requestedProfile.model,
     requestedProfile.effort,
+    attemptKey,
   ]);
   const receiptId = stableHash([
     ledger.run_id,
@@ -190,6 +200,7 @@ function recordUnavailable(
     head_sha: headSha,
     base_sha: baseSha,
     review_profile: options.reviewProfile,
+    attempt_key: attemptKey,
     requested_profile: requestedProfile,
     profile_verification: "request_recorded",
     effective_profile: null,
@@ -231,16 +242,39 @@ function laneRequestedProfile(
     requested.model.trim() &&
     typeof requested.effort === "string" &&
     requested.effort.trim()
-  )
+  ) {
+    const legacy = {
+      model: laneState.model,
+      effort: laneState.effort,
+    };
+    if (
+      typeof legacy.model !== "string" ||
+      typeof legacy.effort !== "string" ||
+      canonicalJson({ model: requested.model, effort: requested.effort }) !==
+        canonicalJson(legacy)
+    )
+      throw new FlowError("review lane requested profile is inconsistent");
     return { model: requested.model, effort: requested.effort };
-  if (
-    typeof laneState.model === "string" &&
-    laneState.model.trim() &&
-    typeof laneState.effort === "string" &&
-    laneState.effort.trim()
-  )
-    return { model: laneState.model, effort: laneState.effort };
-  throw new FlowError("review lane requested profile is invalid");
+  }
+  throw new FlowError(
+    "review lane requested profile is missing; open a fresh review wave",
+  );
+}
+
+function reviewAttemptKey(
+  options: SubagentReviewOptions,
+  required = false,
+): string {
+  if (options.reviewAttemptId === undefined) {
+    if (required)
+      throw new FlowError(
+        "unavailable sub-agent review requires a parent-supplied review attempt id",
+      );
+    return "default";
+  }
+  const value = options.reviewAttemptId.trim();
+  if (!value) throw new FlowError("review attempt id must be non-empty");
+  return value;
 }
 
 function reportedProfile(

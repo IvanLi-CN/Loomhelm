@@ -31,6 +31,8 @@ export function assertReviewReceiptIntegrity(
     receipt.evidence_valid !== true ||
     receipt.post_execution_clean !== true ||
     receipt.exit_code !== 0 ||
+    typeof receipt.attempt_key !== "string" ||
+    !receipt.attempt_key.trim() ||
     receipt.profile_verification !== "request_recorded" ||
     receipt.effective_profile !== null ||
     receipt.review_execution_source !== "parent-flow-request" ||
@@ -120,16 +122,20 @@ function laneRequestedProfile(
     requested.model.trim() &&
     typeof requested.effort === "string" &&
     requested.effort.trim()
-  )
+  ) {
+    const legacy = { model: laneState.model, effort: laneState.effort };
+    if (
+      typeof legacy.model !== "string" ||
+      typeof legacy.effort !== "string" ||
+      canonicalJson({ model: requested.model, effort: requested.effort }) !==
+        canonicalJson(legacy)
+    )
+      throw new FlowError("review lane requested profile is inconsistent");
     return { model: requested.model, effort: requested.effort };
-  if (
-    typeof laneState.model === "string" &&
-    laneState.model.trim() &&
-    typeof laneState.effort === "string" &&
-    laneState.effort.trim()
-  )
-    return { model: laneState.model, effort: laneState.effort };
-  throw new FlowError("review lane requested profile is invalid");
+  }
+  throw new FlowError(
+    "review lane requested profile is missing; open a fresh review wave",
+  );
 }
 
 function validReportedProfile(value: unknown): boolean {

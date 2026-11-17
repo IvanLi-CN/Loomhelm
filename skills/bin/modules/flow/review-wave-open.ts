@@ -50,8 +50,19 @@ export function openReviewWaveState(
     "arbitration blocker fingerprints",
   );
   const review = reviewState(ledger);
-  if (review.active_wave_id)
-    throw new FlowError("another review wave is already active");
+  if (review.active_wave_id) {
+    const waves = isRecord(review.waves) ? review.waves : {};
+    const active = isRecord(waves[review.active_wave_id])
+      ? waves[review.active_wave_id]
+      : undefined;
+    if (!active || !isLegacyReviewWave(ledger, active))
+      throw new FlowError("another review wave is already active");
+    active.state = "retired";
+    active.retirement_reason = "legacy-review-receipt-schema";
+    active.retired_at = isoNow();
+    review.active_wave_id = null;
+    review.active_epoch_id = null;
+  }
   const scopeClass = options.scopeClass ?? "code";
   if (!REVIEW_SCOPE_CLASSES.has(scopeClass))
     throw new FlowError("unsupported review scope class");
@@ -158,4 +169,23 @@ export function openReviewWaveState(
     state: options.stage === "repair" ? "repair" : "initial",
   };
   return { wave, epoch, next: "record-review" };
+}
+
+function isLegacyReviewWave(
+  ledger: Record<string, unknown>,
+  wave: Record<string, unknown>,
+): boolean {
+  if (!isRecord(wave.lanes)) return false;
+  const receipts = Array.isArray(ledger.receipts)
+    ? (ledger.receipts as unknown[])
+    : [];
+  return Object.values(wave.lanes).some((rawLane) => {
+    if (!isRecord(rawLane) || !isRecord(rawLane.requested_profile)) return true;
+    if (typeof rawLane.receipt_id !== "string") return false;
+    const receipt = receipts.find(
+      (candidate) =>
+        isRecord(candidate) && candidate.receipt_id === rawLane.receipt_id,
+    );
+    return isRecord(receipt) && receipt.review_receipt_schema === 6;
+  });
 }

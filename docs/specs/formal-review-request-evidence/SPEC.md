@@ -28,7 +28,7 @@ Review 结果 MUST NOT 授权、否决或覆盖父流程的 requested profile；
 
 ### REQ-FRPE-005：历史 schema 兼容不升级事实
 
-Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 self-reported profile MUST NOT 转换为 schema 7 的启动事实，也 MUST NOT 满足新候选 clear gate。新候选 MUST 通过 fresh review wave 恢复；失败重试 MUST 使用同一 requested pair、保留独立 attempt，且不得重复启动活动 lane。
+Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 self-reported profile MUST NOT 转换为 schema 7 的启动事实，也 MUST NOT 满足新候选 clear gate。新候选 MUST 通过 fresh review wave 恢复，旧 active wave 只能由运行时标记 retired 后保留历史；失败重试 MUST 使用同一 requested pair 和父流程 `review-attempt-id`，保留独立 attempt，且不得重复启动活动 lane。
 
 ## Verification
 
@@ -48,7 +48,7 @@ Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 self-repo
 
 - covers: `REQ-FRPE-005`
 - Method: schema 6/7 fixture、历史读取、fresh-wave 恢复和 unavailable retry 测试。
-- Pass condition: schema 6 receipt 原样可读但不能 clear；schema 7 写读完整；同一 pair 重试形成独立 attempt，活动 lane 不重复启动，历史候选不被重写。
+- Pass condition: schema 6 receipt 原样可读但不能 clear；schema 7 写读完整；同一 pair 使用不同 attempt id 重试形成独立 attempt、相同 id 回放幂等，活动 lane 不重复启动，旧 active wave 可受控退休且历史候选不被重写。
 
 ## Related ADRs
 

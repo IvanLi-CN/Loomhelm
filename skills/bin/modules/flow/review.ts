@@ -30,6 +30,10 @@ export const DIRECT_REVIEW_LANE_PROFILES: Record<string, [string, string]> = {
     FORMAL_REVIEW_REQUEST_PROFILE.model,
     FORMAL_REVIEW_REQUEST_PROFILE.effort,
   ],
+  "risk-arbitration": [
+    FORMAL_REVIEW_REQUEST_PROFILE.model,
+    FORMAL_REVIEW_REQUEST_PROFILE.effort,
+  ],
 };
 export const DIRECT_REVIEW_PROFILES = new Set(
   DIRECT_REVIEW_POLICY_PROFILES.map(({ model, effort }) => `${model}:${effort}`),
@@ -67,9 +71,13 @@ export function validateLaneSpecs(
   if (new Set(lanes.map((lane) => lane.lane)).size !== lanes.length)
     throw new FlowError("review wave contains duplicate lanes");
   for (const lane of lanes)
-    if (!DIRECT_REVIEW_PROFILES.has(`${lane.model}:${lane.effort}`))
+    if (
+      !DIRECT_REVIEW_PROFILES.has(`${lane.model}:${lane.effort}`) ||
+      lane.model !== FORMAL_REVIEW_REQUEST_PROFILE.model ||
+      lane.effort !== FORMAL_REVIEW_REQUEST_PROFILE.effort
+    )
       throw new FlowError(
-        "direct review wave lanes must use the supported Luna/Sol model ladder",
+        "formal review wave lanes must use the requested gpt-6-luna + max profile",
       );
   for (const lane of lanes) {
     const assigned = DIRECT_REVIEW_LANE_PROFILES[lane.lane];

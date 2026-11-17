@@ -433,6 +433,7 @@ describe("acceptance and review state", () => {
           baseRef: sha,
           reviewModel: "reported-model-does-not-authorize",
           reviewEffort: "reported-effort",
+          reviewAttemptId: "attempt-1",
           reviewResultJson: "",
           terminalState: "unavailable",
           unavailabilityClassification: "startup-unavailable",
@@ -440,6 +441,45 @@ describe("acceptance and review state", () => {
           lane: lane.lane,
         });
         expect(unavailable.reused).toBe(false);
+        expect(() =>
+          recordSubagentReviewState(ledger, {
+            reviewProfile: "pr-convergence",
+            baseRef: sha,
+            reviewResultJson: "",
+            terminalState: "unavailable",
+            unavailabilityClassification: "startup-unavailable",
+            waveId: String(wave.wave_id),
+            lane: lane.lane,
+          }),
+        ).toThrow("parent-supplied review attempt id");
+        expect(
+          recordSubagentReviewState(ledger, {
+            reviewProfile: "pr-convergence",
+            baseRef: sha,
+            reviewModel: "another-reported-model",
+            reviewEffort: "another-reported-effort",
+            reviewAttemptId: "attempt-1",
+            reviewResultJson: "",
+            terminalState: "unavailable",
+            unavailabilityClassification: "startup-unavailable",
+            waveId: String(wave.wave_id),
+            lane: lane.lane,
+          }).reused,
+        ).toBe(true);
+        expect(
+          recordSubagentReviewState(ledger, {
+            reviewProfile: "pr-convergence",
+            baseRef: sha,
+            reviewModel: "another-reported-model",
+            reviewEffort: "another-reported-effort",
+            reviewAttemptId: "attempt-2",
+            reviewResultJson: "",
+            terminalState: "unavailable",
+            unavailabilityClassification: "startup-unavailable",
+            waveId: String(wave.wave_id),
+            lane: lane.lane,
+          }).reused,
+        ).toBe(false);
       }
       const result = recordSubagentReviewState(ledger, {
         reviewProfile: "pr-convergence",
@@ -447,6 +487,7 @@ describe("acceptance and review state", () => {
         reviewModel:
           lane.lane === "contract" ? "reported-model-does-not-authorize" : undefined,
         reviewEffort: lane.lane === "contract" ? "reported-effort" : undefined,
+        reviewAttemptId: lane.lane === "contract" ? "attempt-3" : undefined,
         reviewResultJson: JSON.stringify({
           findings: [],
           overall_correctness: "patch is correct",
@@ -460,11 +501,12 @@ describe("acceptance and review state", () => {
       expect(result.reused).toBe(false);
     }
     const contractReceipt = (ledger.receipts as Record<string, unknown>[]).find(
-      (receipt) => receipt.lane === "contract",
+      (receipt) => receipt.kind === "review" && receipt.lane === "contract",
     );
     expect(contractReceipt).toMatchObject({
       review_receipt_schema: 7,
       requested_profile: { model: "gpt-6-luna", effort: "max" },
+      attempt_key: "attempt-3",
       profile_verification: "request_recorded",
       effective_profile: null,
       reported_profile: {
@@ -485,7 +527,12 @@ describe("acceptance and review state", () => {
       (ledger.receipts as Record<string, unknown>[]).filter(
         (receipt) => receipt.kind === "review_attempt",
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
+    expect(
+      (ledger.receipts as Record<string, unknown>[])
+        .filter((receipt) => receipt.kind === "review_attempt")
+        .map((receipt) => receipt.attempt_key),
+    ).toEqual(["attempt-1", "attempt-2"]);
   });
 
   test("keeps schema 6 review receipts historical and blocks fresh clear", () => {
@@ -577,9 +624,6 @@ describe("acceptance and review state", () => {
       }),
     ).toThrow("review receipt integrity is invalid");
 
-    const historicalReview = normalized.review as Record<string, unknown>;
-    historicalReview.active_wave_id = null;
-    historicalReview.active_epoch_id = null;
     const freshHead = "b".repeat(40);
     const fresh = openReviewWaveState(normalized, {
       stage: "initial",
@@ -590,6 +634,17 @@ describe("acceptance and review state", () => {
     const freshWave = fresh.wave as Record<string, unknown>;
     expect(freshWave.wave_id).not.toBe(wave.wave_id);
     expect(freshWave.head_sha).toBe(freshHead);
+    expect(
+      (normalized.review as Record<string, unknown>).active_wave_id,
+    ).toBe(freshWave.wave_id);
+    expect(
+      (normalized.review as Record<string, unknown>).waves,
+    ).toMatchObject({
+      [String(wave.wave_id)]: {
+        state: "retired",
+        retirement_reason: "legacy-review-receipt-schema",
+      },
+    });
     expect(
       Object.values(freshWave.lanes as Record<string, Record<string, unknown>>).every(
         (lane) =>
@@ -620,7 +675,36 @@ describe("acceptance and review state", () => {
           { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
         ],
       }),
-    ).toThrow("supported Luna/Sol model ladder");
+    ).toThrow("requested gpt-6-luna + max profile");
+
+    const tierFour = initialLedger(
+      "dynamic-profile-run",
+      "fast-track",
+      sha,
+      sha,
+      null,
+    );
+    tierFour.review_assessment = {
+      tier: 4,
+      reason: "dynamic lane profile request",
+      assessed_at: "2026-10-27T00:00:00.000Z",
+      assessed_head_sha: sha,
+      source: "agent-assessment",
+    };
+    expect(() =>
+      openReviewWaveState(tierFour, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: [
+          { lane: "contract", model: "gpt-6-luna", effort: "max" },
+          { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
+          { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
+          { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
+          { lane: "security", model: "gpt-6-luna", effort: "high" },
+        ],
+      }),
+    ).toThrow("requested gpt-6-luna + max profile");
   });
 });
 
