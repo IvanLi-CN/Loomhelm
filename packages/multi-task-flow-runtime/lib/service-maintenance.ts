@@ -406,6 +406,56 @@ async function startAndWaitForPackageGateway(
   }
 }
 
+async function rollbackPackageGateway(
+  state: ServiceState,
+  control: PackageUpgradeControl,
+  previousVersion: string,
+  timeoutMs: number,
+  leaseHeld: boolean,
+  onLeaseEstablished: () => void,
+): Promise<void> {
+  if (leaseHeld) renewPackageMaintenanceLease(state, timeoutMs);
+  await control.upgrade(state, previousVersion);
+  if (!leaseHeld) {
+    renewPackageMaintenanceLease(state, timeoutMs);
+    onLeaseEstablished();
+  }
+  await startAndWaitForPackageGateway(state, control, previousVersion, null, timeoutMs);
+}
+
+function gatewayRollbackFailure(
+  failure: ContractError,
+  rollbackError: unknown,
+  targetVersion: string,
+  previousVersion: string,
+): ContractError {
+  const rollbackDetails =
+    rollbackError instanceof ContractError &&
+    typeof rollbackError.details === "object" &&
+    rollbackError.details !== null
+      ? (rollbackError.details as Partial<GatewayFailureDetails>)
+      : {};
+  const failureDetails =
+    typeof failure.details === "object" && failure.details !== null
+      ? (failure.details as Partial<GatewayFailureDetails>)
+      : {};
+  return gatewayFailure(
+    "GATEWAY_ROLLBACK_FAILED",
+    "Gateway upgrade failed and the previous build could not be restored",
+    {
+      phase: "rollback",
+      target_version: targetVersion,
+      previous_version: previousVersion,
+      last_health_code: failureDetails.last_health_code ?? null,
+      rollback_status: "failed",
+      upgrade_code: failure.code,
+      upgrade_health_code: failureDetails.last_health_code,
+      rollback_code: safeFailureCode(rollbackError),
+      rollback_health_code: rollbackDetails.last_health_code,
+    },
+  );
+}
+
 export const packageUpgradeControl: PackageUpgradeControl = {
   upgrade: upgradePackageReleaseLocked,
   start: startUserService,
@@ -434,7 +484,7 @@ export async function upgradePackageReleaseAndStart(
         renewPackageMaintenanceLease(state, timeoutMs);
         maintenanceLease = true;
       } catch (error) {
-        throw gatewayFailure(
+        const failure = gatewayFailure(
           "GATEWAY_START_FAILED",
           "Gateway startup lease could not be established",
           {
@@ -445,6 +495,18 @@ export async function upgradePackageReleaseAndStart(
             rollback_status: "not_attempted",
           },
         );
+        if (!oldVersion || oldVersion === version) throw failure;
+        try {
+          await rollbackPackageGateway(state, control, oldVersion, timeoutMs, false, () => {
+            maintenanceLease = true;
+          });
+        } catch (rollbackError) {
+          throw gatewayRollbackFailure(failure, rollbackError, version, oldVersion);
+        }
+        throw new ContractError(failure.code, failure.message, failure.exitCode, {
+          ...(failure.details as GatewayFailureDetails),
+          rollback_status: "restored",
+        });
       }
       try {
         const health = await startAndWaitForPackageGateway(
@@ -469,35 +531,9 @@ export async function upgradePackageReleaseAndStart(
               });
         if (!oldVersion || oldVersion === version) throw failure;
         try {
-          renewPackageMaintenanceLease(state, timeoutMs);
-          await control.upgrade(state, oldVersion);
-          await startAndWaitForPackageGateway(state, control, oldVersion, null, timeoutMs);
+          await rollbackPackageGateway(state, control, oldVersion, timeoutMs, true, () => {});
         } catch (rollbackError) {
-          const rollbackDetails =
-            rollbackError instanceof ContractError &&
-            typeof rollbackError.details === "object" &&
-            rollbackError.details !== null
-              ? (rollbackError.details as Partial<GatewayFailureDetails>)
-              : {};
-          const failureDetails =
-            typeof failure.details === "object" && failure.details !== null
-              ? (failure.details as Partial<GatewayFailureDetails>)
-              : {};
-          throw gatewayFailure(
-            "GATEWAY_ROLLBACK_FAILED",
-            "Gateway upgrade failed and the previous build could not be restored",
-            {
-              phase: "rollback",
-              target_version: version,
-              previous_version: oldVersion,
-              last_health_code: failureDetails.last_health_code ?? null,
-              rollback_status: "failed",
-              upgrade_code: failure.code,
-              upgrade_health_code: failureDetails.last_health_code,
-              rollback_code: safeFailureCode(rollbackError),
-              rollback_health_code: rollbackDetails.last_health_code,
-            },
-          );
+          throw gatewayRollbackFailure(failure, rollbackError, version, oldVersion);
         }
         throw new ContractError(failure.code, failure.message, failure.exitCode, {
           ...(failure.details as GatewayFailureDetails),

@@ -7257,7 +7257,7 @@
     {
       "path": "skills/multi-task-flow/lib/service-maintenance.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/service-maintenance.ts",
-      "installedSha256": "7250bfd25ebde089eb6844d7beae09850837e98d8dd578732ec2f77e7c7d426b"
+      "installedSha256": "2039859f9d90f0ea5714804875964fb66bfda6ee62979ea7a681e32d6ebf6ec3"
     },
     {
       "path": "skills/multi-task-flow/lib/service-update.ts",
@@ -7511,7 +7511,7 @@
     {
       "path": "skills/multi-task-flow/tests/shared-service.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/shared-service.test.ts",
-      "installedSha256": "c1450aa3abaebf47eb90ba2de05f450354358f3ebd8a4bc63d01f5626cca98c3"
+      "installedSha256": "1b979e3e3daf0758639a224eca8cfcf5c4a7eeb2a01ad16f4e44409e23ef8f91"
     },
     {
       "path": "skills/multi-task-flow/tests/source-preview.test.ts",

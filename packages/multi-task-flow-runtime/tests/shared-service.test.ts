@@ -832,6 +832,86 @@ test("package upgrades serialize readiness and rollback under the startup lock",
   expect(state.config().package_version).toBe("3.0.0");
 });
 
+test("package upgrade restores the previous build when its startup lease cannot be established", async () => {
+  const { root, state } = fixture();
+  const oldBuild = "a".repeat(64);
+  const targetBuild = "b".repeat(64);
+  const oldSource = "c".repeat(40);
+  const targetSource = "d".repeat(40);
+  const writePackageConfig = (version: string) => {
+    const target = version === "2.0.0";
+    state.saveConfig({
+      schema_version: 1,
+      port: 49157,
+      registry_dir: join(root, "registry"),
+      current_build: target ? targetBuild : oldBuild,
+      previous_build: null,
+      agent_ttl_ms: 60_000,
+      package_name: "@loomhelm/multi-task-flow",
+      package_version: version,
+      compatibility_line: "compat-v1",
+      skill_version: "0.0.0",
+      service_contract: "1",
+      source_sha: target ? targetSource : oldSource,
+      artifact_build_id: target ? targetBuild : oldBuild,
+    });
+  };
+  writePackageConfig("1.0.0");
+  state.transaction((runtime) => {
+    runtime.phase = "stopping";
+  });
+  const control = {
+    upgrade: async (_state: typeof state, version: string) => {
+      writePackageConfig(version);
+      if (version === "1.0.0")
+        state.transaction((runtime) => {
+          runtime.phase = "stopped";
+          runtime.pid = null;
+        });
+      return {
+        package_name: "@loomhelm/multi-task-flow",
+        version,
+        build_id: version === "2.0.0" ? targetBuild : oldBuild,
+        port: 49157,
+        root,
+        started: false,
+      };
+    },
+    start: () => {},
+    status: async () => ({
+      ok: true,
+      build_id: oldBuild,
+      source_sha: oldSource,
+      compatibility: { api_versions: [1] },
+      generation: "old-generation",
+      pid: process.pid,
+      port: 49157,
+      package_name: "@loomhelm/multi-task-flow",
+      package_version: "1.0.0",
+    }),
+    waitForHealth: async <T>(check: () => Promise<T>) => check(),
+    startupTimeoutMs: 25,
+  } as any;
+
+  let error: unknown;
+  try {
+    await (upgradePackageReleaseAndStart as any)(state, "2.0.0", control);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toMatchObject({
+    code: "GATEWAY_START_FAILED",
+    details: {
+      phase: "lease",
+      target_version: "2.0.0",
+      previous_version: "1.0.0",
+      rollback_status: "restored",
+    },
+  });
+  expect(state.config().package_version).toBe("1.0.0");
+  expect(state.runtime().leases).toHaveLength(0);
+});
+
 test("package upgrade reports a safe timeout after restoring the previous build", async () => {
   const { root, state } = fixture();
   const oldBuild = "a".repeat(64);
