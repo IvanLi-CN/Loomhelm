@@ -147,5 +147,6 @@
   "skills/multi-task-flow/tests/recovery-pipeline.test.ts",
   "skills/multi-task-flow/tests/fixtures/recovery-native.ts",
   "skills/multi-task-flow/tests/fixtures/recovery-pipeline.ts",
-  "skills/multi-task-flow/tests/fixtures/native-permissions.py"
+  "skills/multi-task-flow/tests/fixtures/native-permissions.py",
+  "skills/bin/tests/core/runtime_core_process.test.ts"
 ]
