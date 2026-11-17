@@ -235,6 +235,8 @@ jobs:
           test "$(npm view @loomhelm/runtime-core@latest version)" = "$VERSION"
       - name: Create immutable runtime-core tag
         env:
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
           SOURCE_SHA: ${{ inputs.source_sha }}
           VERSION: ${{ inputs.version }}
         run: |
