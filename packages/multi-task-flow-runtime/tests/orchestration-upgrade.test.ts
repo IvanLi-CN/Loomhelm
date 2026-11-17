@@ -291,7 +291,8 @@ test("an old lock waiter cannot read through the replaced directory boundary", a
   });
   expect(await reader!.exited).toBe(0);
   const result = JSON.parse(await new Response(reader!.stdout).text());
-  expect(result.code === "UNSAFE_PATH" || result.message === "secure_lock_parent_rejected").toBe(
-    true,
-  );
+  expect(
+    result.code === "UNSAFE_PATH" || result.message === "secure_lock_parent_rejected",
+    `Stale-reader outcome: ${JSON.stringify(result)}`,
+  ).toBe(true);
 });

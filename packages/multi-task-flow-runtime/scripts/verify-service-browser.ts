@@ -321,10 +321,40 @@ try {
     await demo.locator("#close-plan-info").click();
     await demo.getByRole("tab", { name: "任务与交付单元依赖", exact: true }).click();
     await demo.locator('#graph [data-context-task="model"]').click();
-    const relations = demo.locator(".detail-relations");
+    if (viewport.width <= 1444 && viewport.height <= 960) {
+      const drawer = await demo.locator(".details").evaluate((element) => {
+        const style = getComputedStyle(element);
+        const backdrop = document.querySelector(".details-backdrop")!;
+        return {
+          open: element.classList.contains("open"),
+          background: style.backgroundColor,
+          aboveBackdrop: Number(style.zIndex) > Number(getComputedStyle(backdrop).zIndex),
+        };
+      });
+      if (!drawer.open || !drawer.aboveBackdrop || drawer.background === "rgba(0, 0, 0, 0)")
+        throw new Error(
+          `Detail drawer must be opaque and above its backdrop: ${JSON.stringify(drawer)}`,
+        );
+    }
+    await demo.locator('.detail-pane-atoms [data-context-id="atom-model"]').click();
+    const relations = demo.locator(".detail-pane-atom .atom-relations-disclosure");
     await relations.waitFor();
     if ((await relations.getAttribute("open")) !== null)
       throw new Error("Relationships should be collapsed by default");
+    if (await demo.locator(".detail-pane-owner .detail-relations").count())
+      throw new Error("Owner details must not duplicate atomic relationships");
+    await relations.locator("summary").click();
+    await relations.getByRole("group", { name: "原子任务关系图", exact: true }).waitFor();
+    await relations.locator('[data-atom-id="atom-model"][data-current="true"]').waitFor();
+    await relations
+      .getByRole("list", { name: "前驱", exact: true })
+      .locator('[data-atom-id="atomic-start"]')
+      .waitFor();
+    await relations
+      .getByRole("list", { name: "后继", exact: true })
+      .locator('[data-atom-id="atom-scheduler"]')
+      .waitFor();
+    await relations.locator("summary").click();
     if (await demo.locator(".detail-relations-trigger, .detail-relations-tooltip").count())
       throw new Error("Relationship details must not use the version tooltip surface");
     await context.clearCookies();

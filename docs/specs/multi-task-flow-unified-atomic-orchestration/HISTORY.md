@@ -24,6 +24,9 @@
 - 2026-11-15: Locked Flow-native creation reconciliation as a separate recovery path from the standalone Codex dispatch journal, including evidence requirements, fail-closed unknown handling, idempotency and explicit exact-version release.
 - 2026-11-16: Established the layered CLI contract boundary: repository documentation is the human-readable source, CLI help/schema are runtime surfaces, and the Skill references the packaged contract copy.
 - 2026-11-17: Renamed the project-owned and vendored compound specification documents to underscore-separated names and synchronized their references, resource metadata and validation paths without changing the CLI contract or runtime behavior.
+
+- 2026-11-17: Locked the compact two-column detail inspector, selected-atom relations, Agent controls and diagnostics, combined status/policy projections, explicit empty states and bound-PR detail fallback.
+
 - 2026-11-17: Consolidated Agent roles and interaction design with thirteen sequence diagrams into AGENT_INTERACTIONS.md; moved mock completion-flow coverage and MTF-AUDIT-001 through MTF-AUDIT-005 into IMPLEMENTATION.md. CLI_CONTRACT.md retains its canonical location under ADR 0036; this documentation reorganization does not change runtime semantics. Related change: [PR #306](https://github.com/IvanLi-CN/Loomhelm/pull/306).
 
 - 2026-11-17: 修复 MTF-AUDIT-001/004/005 的 closeout uncertainty、ready notification acknowledgement 和 provider PR identity 门禁；补齐 MTF-AUDIT-002/003 的公开 CLI mock 创建、对账及多 Task 完成流。保持持久化 schema 和状态集合不变。
@@ -49,3 +52,5 @@
 主人确认以机械迁移保留尚未证明静止的结果不确定的调用，取代全部原生调用终止的升级前提；ADR 0041 记录这项决定并替代 ADR 0039 对该前提的决定，ADR 0039 其余前向事务与版本绑定决定保持。此前尚未实现的 REQ/VER-QUIESCENCE-001 至 011 由 SPEC 第 16 节 REQ/VER-MIGRATION-001 至 011 替换，原生静止不再是纯表示迁移的成功声明或验收目标。初始化恢复权限事务及 ADR 0040 保持。
 
 经验验收改为当前 Candidate 的真实旧包屏障与 LIMS 受控私有副本的机械迁移保真，正式同一 run 升级仍是合并发布后独立授权的验收。研究发现归档负向查询轮换 operation_id 的反例；通知晚回调、原子发布及私有副本的原型结果只支持新实现方向，不替代候选验证、正式审查或发布回执。
+
+- 2026-11-17: 为目录升级的旧锁等待者测试增加失败结果诊断，保持既有安全拒绝条件与锁实现不变，并同步资源摘要。
