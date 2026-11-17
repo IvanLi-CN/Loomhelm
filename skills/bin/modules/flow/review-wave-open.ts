@@ -197,7 +197,7 @@ function isLegacyReviewWave(
   });
   const legacyLaneShape = lanes.every(
     ([, rawLane]) =>
-      isRecord(rawLane) && !isRecord(rawLane.requested_profile),
+      isRecord(rawLane) && !Object.hasOwn(rawLane, "requested_profile"),
   );
   for (const [laneName, rawLane] of lanes) {
     if (

@@ -696,6 +696,35 @@ describe("acceptance and review state", () => {
       }),
     ).toThrow("another review wave is already active");
 
+    const malformedMigrated = structuredClone(normalized) as Record<
+      string,
+      unknown
+    >;
+    const malformedMigratedReview = malformedMigrated.review as Record<
+      string,
+      unknown
+    >;
+    const malformedMigratedWave = (
+      malformedMigratedReview.waves as Record<
+        string,
+        Record<string, unknown>
+      >
+    )[String(wave.wave_id)];
+    for (const lane of Object.values(
+      malformedMigratedWave.lanes as Record<string, Record<string, unknown>>,
+    )) {
+      lane.requested_profile = null;
+      lane.receipt_id = null;
+    }
+    expect(() =>
+      openReviewWaveState(malformedMigrated, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "h".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+
     const budgetLedger = structuredClone(normalized) as Record<string, unknown>;
     const budgetReview = budgetLedger.review as Record<string, unknown>;
     const budgetEpochId = String(budgetReview.active_epoch_id);
