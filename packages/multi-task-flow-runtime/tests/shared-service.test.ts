@@ -688,6 +688,7 @@ test("package upgrade waits for delayed target readiness before declaring succes
   const existingDeadline = state.runtime().leases[0]!.expires_at;
   let healthChecks = 0;
   let startChecksMaintenanceLease = false;
+  let maintenanceDeadline = 0;
   const control = {
     upgrade: async (_state: typeof state, version: string) => {
       const target = version === "2.0.0";
@@ -706,9 +707,9 @@ test("package upgrade waits for delayed target readiness before declaring succes
       };
     },
     start: () => {
-      startChecksMaintenanceLease = state
-        .runtime()
-        .leases.some((lease) => lease.id === "maintenance");
+      const lease = state.runtime().leases.find((item) => item.id === "maintenance");
+      startChecksMaintenanceLease = Boolean(lease);
+      maintenanceDeadline = lease?.expires_at ?? 0;
     },
     status: async () => {
       healthChecks++;
@@ -739,8 +740,96 @@ test("package upgrade waits for delayed target readiness before declaring succes
   expect(result.started).toBe(true);
   expect(healthChecks).toBe(2);
   expect(startChecksMaintenanceLease).toBe(true);
+  expect(maintenanceDeadline).toBeGreaterThan(Date.now() + 25);
   expect(state.runtime().leases).toHaveLength(1);
   expect(state.runtime().leases[0]!.expires_at).toBe(existingDeadline);
+});
+
+test("package upgrades serialize readiness and rollback under the startup lock", async () => {
+  const { root, state } = fixture();
+  const builds = new Map([
+    ["1.0.0", "a".repeat(64)],
+    ["2.0.0", "b".repeat(64)],
+    ["3.0.0", "c".repeat(64)],
+  ]);
+  const sources = new Map([
+    ["1.0.0", "a".repeat(40)],
+    ["2.0.0", "b".repeat(40)],
+    ["3.0.0", "c".repeat(40)],
+  ]);
+  const writePackageConfig = (version: string) => {
+    state.saveConfig({
+      schema_version: 1,
+      port: 49156,
+      registry_dir: join(root, "registry"),
+      current_build: builds.get(version)!,
+      previous_build: null,
+      agent_ttl_ms: 60_000,
+      package_name: "@loomhelm/multi-task-flow",
+      package_version: version,
+      compatibility_line: "compat-v1",
+      skill_version: "0.0.0",
+      service_contract: "1",
+      source_sha: sources.get(version)!,
+      artifact_build_id: builds.get(version)!,
+    });
+  };
+  writePackageConfig("1.0.0");
+  let active = 0;
+  let maxActive = 0;
+  const track = async <T>(work: () => Promise<T>): Promise<T> => {
+    active++;
+    maxActive = Math.max(maxActive, active);
+    try {
+      return await work();
+    } finally {
+      active--;
+    }
+  };
+  const control = {
+    upgrade: async (_state: typeof state, version: string) =>
+      track(async () => {
+        await Bun.sleep(15);
+        writePackageConfig(version);
+        return {
+          package_name: "@loomhelm/multi-task-flow",
+          version,
+          build_id: builds.get(version)!,
+          port: 49156,
+          root,
+          started: false,
+        };
+      }),
+    start: () => {},
+    status: async () => ({
+      ok: true,
+      build_id: state.config().current_build,
+      source_sha: state.config().source_sha!,
+      compatibility: { api_versions: [1] },
+      generation: "generation",
+      pid: process.pid,
+      port: 49156,
+      package_name: "@loomhelm/multi-task-flow",
+      package_version: state.config().package_version,
+    }),
+    waitForHealth: async <T>(check: () => Promise<T>) =>
+      track(async () => {
+        await Bun.sleep(15);
+        return check();
+      }),
+    startupTimeoutMs: 100,
+  } as any;
+
+  const results = await Promise.all([
+    (upgradePackageReleaseAndStart as any)(state, "2.0.0", control),
+    (upgradePackageReleaseAndStart as any)(state, "3.0.0", control),
+  ]);
+  expect(maxActive).toBe(1);
+  expect(results.map((result: { version: string }) => result.version).sort()).toEqual([
+    "2.0.0",
+    "3.0.0",
+  ]);
+  expect(state.config().package_version).toBe("3.0.0");
 });
 
 test("package upgrade reports a safe timeout after restoring the previous build", async () => {
@@ -858,11 +947,11 @@ test("package upgrade reports rollback failure without leaking native errors", a
         started: false,
       };
     },
-    start: () => {
-      throw new Error("secret native failure");
-    },
+    start: () => {},
     status: async () => {
-      throw new ContractError("SERVICE_UNAVAILABLE", "secret health detail");
+      if (state.config().package_version === "2.0.0")
+        throw new ContractError("SERVICE_IDENTITY_MISMATCH", "secret target identity detail");
+      throw new ContractError("SERVICE_UNAVAILABLE", "secret rollback health detail");
     },
     waitForHealth: async <T>(check: () => Promise<T>) => check(),
     startupTimeoutMs: 25,
@@ -878,12 +967,16 @@ test("package upgrade reports rollback failure without leaking native errors", a
     code: "GATEWAY_ROLLBACK_FAILED",
     details: {
       phase: "rollback",
-      upgrade_code: "GATEWAY_START_FAILED",
-      rollback_code: "GATEWAY_START_FAILED",
+      upgrade_code: "GATEWAY_HEALTH_TIMEOUT",
+      rollback_code: "GATEWAY_HEALTH_TIMEOUT",
+      last_health_code: "SERVICE_IDENTITY_MISMATCH",
+      upgrade_health_code: "SERVICE_IDENTITY_MISMATCH",
+      rollback_health_code: "SERVICE_UNAVAILABLE",
       rollback_status: "failed",
     },
   });
-  expect(JSON.stringify(error)).not.toContain("secret native failure");
+  expect(JSON.stringify(error)).not.toContain("secret target identity detail");
+  expect(JSON.stringify(error)).not.toContain("secret rollback health detail");
 });
 
 test("service status rejects a mismatched source identity", async () => {

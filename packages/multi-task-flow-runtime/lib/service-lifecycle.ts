@@ -66,7 +66,12 @@ export async function waitForServiceHealth<T>(
   let failure: unknown;
   do {
     try {
-      return await check();
+      const result = await check();
+      if (performance.now() <= deadline) return result;
+      failure = new ContractError(
+        "SERVICE_STARTUP_TIMEOUT",
+        "Service health check completed after the startup deadline",
+      );
     } catch (error) {
       failure = error;
     }

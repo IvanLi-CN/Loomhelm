@@ -269,50 +269,54 @@ export async function installPackageRelease(
   });
 }
 
+async function upgradePackageReleaseLocked(state: ServiceState, version: string) {
+  const old = state.config();
+  const identity = resolvePackageIdentity(version);
+  requireCondition(
+    old.package_version !== version || old.package_name !== PACKAGE_NAME,
+    "ALREADY_CURRENT",
+    "The requested package version is already installed",
+  );
+  assertPackageUpgradeCompatible(old, identity);
+  const oldPlistPath = join(state.paths.config, "viewer.plist");
+  const oldPlist = existsSync(oldPlistPath) ? readFileSync(oldPlistPath, "utf8") : null;
+  const wasRunning = state.runtime().phase === "running";
+  const nextConfig = { ...packageConfig(old, identity, old.registry_dir), port: old.port };
+  try {
+    state.saveConfig(nextConfig);
+    writeLaunchdDefinition(state);
+    unloadUserService(state);
+    state.transaction((runtime) => {
+      runtime.phase = "stopped";
+      runtime.pid = null;
+    });
+    return {
+      package_name: PACKAGE_NAME,
+      version: identity.version,
+      build_id: identity.build_id,
+      port: old.port,
+      root: state.paths.root,
+      started: false,
+    };
+  } catch (error) {
+    state.saveConfig(old);
+    if (oldPlist !== null) writeAtomic(oldPlistPath, oldPlist);
+    if (wasRunning) {
+      try {
+        startUserService(state);
+      } catch {
+        /* Preserve the original failure and runtime evidence. */
+      }
+    }
+    throw error;
+  }
+}
+
 export async function upgradePackageRelease(state: ServiceState, version: string) {
   state.initialize();
-  return withExclusiveLockAsync(join(state.paths.state, "startup.lock"), async () => {
-    const old = state.config();
-    const identity = resolvePackageIdentity(version);
-    requireCondition(
-      old.package_version !== version || old.package_name !== PACKAGE_NAME,
-      "ALREADY_CURRENT",
-      "The requested package version is already installed",
-    );
-    assertPackageUpgradeCompatible(old, identity);
-    const oldPlistPath = join(state.paths.config, "viewer.plist");
-    const oldPlist = existsSync(oldPlistPath) ? readFileSync(oldPlistPath, "utf8") : null;
-    const wasRunning = state.runtime().phase === "running";
-    const nextConfig = { ...packageConfig(old, identity, old.registry_dir), port: old.port };
-    try {
-      state.saveConfig(nextConfig);
-      writeLaunchdDefinition(state);
-      unloadUserService(state);
-      state.transaction((runtime) => {
-        runtime.phase = "stopped";
-        runtime.pid = null;
-      });
-      return {
-        package_name: PACKAGE_NAME,
-        version: identity.version,
-        build_id: identity.build_id,
-        port: old.port,
-        root: state.paths.root,
-        started: false,
-      };
-    } catch (error) {
-      state.saveConfig(old);
-      if (oldPlist !== null) writeAtomic(oldPlistPath, oldPlist);
-      if (wasRunning) {
-        try {
-          startUserService(state);
-        } catch {
-          /* Preserve the original failure and runtime evidence. */
-        }
-      }
-      throw error;
-    }
-  });
+  return withExclusiveLockAsync(join(state.paths.state, "startup.lock"), () =>
+    upgradePackageReleaseLocked(state, version),
+  );
 }
 
 export interface PackageUpgradeControl {
@@ -334,7 +338,9 @@ type GatewayFailureDetails = {
   last_health_code: string | null;
   rollback_status: "not_attempted" | "restored" | "failed";
   upgrade_code?: string;
+  upgrade_health_code?: string;
   rollback_code?: string;
+  rollback_health_code?: string;
 };
 
 const PACKAGE_MAINTENANCE_LEASE_ID = "maintenance";
@@ -401,7 +407,7 @@ async function startAndWaitForPackageGateway(
 }
 
 export const packageUpgradeControl: PackageUpgradeControl = {
-  upgrade: upgradePackageRelease,
+  upgrade: upgradePackageReleaseLocked,
   start: startUserService,
   status: serviceStatus,
   waitForHealth: waitForServiceHealth,
@@ -412,81 +418,96 @@ export async function upgradePackageReleaseAndStart(
   version: string,
   control: PackageUpgradeControl = packageUpgradeControl,
 ) {
-  const oldVersion = state.config().package_version ?? null;
-  const timeoutMs = control.startupTimeoutMs ?? SERVICE_STARTUP_TIMEOUT_MS;
-  requireCondition(
-    Number.isFinite(timeoutMs) && timeoutMs > 0,
-    "INVALID_TIMEOUT",
-    "Startup timeout must be finite and positive",
-  );
-  const result = await control.upgrade(state, version);
-  let maintenanceLease = false;
-  try {
+  state.initialize();
+  return withExclusiveLockAsync(join(state.paths.state, "startup.lock"), async () => {
+    const oldVersion = state.config().package_version ?? null;
+    const timeoutMs = control.startupTimeoutMs ?? SERVICE_STARTUP_TIMEOUT_MS;
+    requireCondition(
+      Number.isFinite(timeoutMs) && timeoutMs > 0,
+      "INVALID_TIMEOUT",
+      "Startup timeout must be finite and positive",
+    );
+    const result = await control.upgrade(state, version);
+    let maintenanceLease = false;
     try {
-      renewPackageMaintenanceLease(state, timeoutMs);
-      maintenanceLease = true;
-    } catch (error) {
-      throw gatewayFailure(
-        "GATEWAY_START_FAILED",
-        "Gateway startup lease could not be established",
-        {
-          phase: "lease",
-          target_version: version,
-          previous_version: oldVersion,
-          last_health_code: safeFailureCode(error),
-          rollback_status: "not_attempted",
-        },
-      );
-    }
-    try {
-      const health = await startAndWaitForPackageGateway(
-        state,
-        control,
-        version,
-        oldVersion,
-        timeoutMs,
-      );
-      return { ...result, started: true, health };
-    } catch (error) {
-      const failure =
-        error instanceof ContractError &&
-        (error.code === "GATEWAY_START_FAILED" || error.code === "GATEWAY_HEALTH_TIMEOUT")
-          ? error
-          : gatewayFailure("GATEWAY_START_FAILED", "Gateway startup failed", {
-              phase: "start",
-              target_version: version,
-              previous_version: oldVersion,
-              last_health_code: safeFailureCode(error),
-              rollback_status: "not_attempted",
-            });
-      if (!oldVersion || oldVersion === version) throw failure;
       try {
         renewPackageMaintenanceLease(state, timeoutMs);
-        await control.upgrade(state, oldVersion);
-        await startAndWaitForPackageGateway(state, control, oldVersion, null, timeoutMs);
-      } catch (rollbackError) {
+        maintenanceLease = true;
+      } catch (error) {
         throw gatewayFailure(
-          "GATEWAY_ROLLBACK_FAILED",
-          "Gateway upgrade failed and the previous build could not be restored",
+          "GATEWAY_START_FAILED",
+          "Gateway startup lease could not be established",
           {
-            phase: "rollback",
+            phase: "lease",
             target_version: version,
             previous_version: oldVersion,
-            last_health_code: safeFailureCode(rollbackError),
-            rollback_status: "failed",
-            upgrade_code: failure.code,
-            rollback_code: safeFailureCode(rollbackError),
+            last_health_code: safeFailureCode(error),
+            rollback_status: "not_attempted",
           },
         );
       }
-      throw new ContractError(failure.code, failure.message, failure.exitCode, {
-        ...(failure.details as GatewayFailureDetails),
-        rollback_status: "restored",
-      });
+      try {
+        const health = await startAndWaitForPackageGateway(
+          state,
+          control,
+          version,
+          oldVersion,
+          timeoutMs,
+        );
+        return { ...result, started: true, health };
+      } catch (error) {
+        const failure =
+          error instanceof ContractError &&
+          (error.code === "GATEWAY_START_FAILED" || error.code === "GATEWAY_HEALTH_TIMEOUT")
+            ? error
+            : gatewayFailure("GATEWAY_START_FAILED", "Gateway startup failed", {
+                phase: "start",
+                target_version: version,
+                previous_version: oldVersion,
+                last_health_code: safeFailureCode(error),
+                rollback_status: "not_attempted",
+              });
+        if (!oldVersion || oldVersion === version) throw failure;
+        try {
+          renewPackageMaintenanceLease(state, timeoutMs);
+          await control.upgrade(state, oldVersion);
+          await startAndWaitForPackageGateway(state, control, oldVersion, null, timeoutMs);
+        } catch (rollbackError) {
+          const rollbackDetails =
+            rollbackError instanceof ContractError &&
+            typeof rollbackError.details === "object" &&
+            rollbackError.details !== null
+              ? (rollbackError.details as Partial<GatewayFailureDetails>)
+              : {};
+          const failureDetails =
+            typeof failure.details === "object" && failure.details !== null
+              ? (failure.details as Partial<GatewayFailureDetails>)
+              : {};
+          throw gatewayFailure(
+            "GATEWAY_ROLLBACK_FAILED",
+            "Gateway upgrade failed and the previous build could not be restored",
+            {
+              phase: "rollback",
+              target_version: version,
+              previous_version: oldVersion,
+              last_health_code: failureDetails.last_health_code ?? null,
+              rollback_status: "failed",
+              upgrade_code: failure.code,
+              upgrade_health_code: failureDetails.last_health_code,
+              rollback_code: safeFailureCode(rollbackError),
+              rollback_health_code: rollbackDetails.last_health_code,
+            },
+          );
+        }
+        throw new ContractError(failure.code, failure.message, failure.exitCode, {
+          ...(failure.details as GatewayFailureDetails),
+          rollback_status: "restored",
+        });
+      }
+    } finally {
+      if (maintenanceLease) state.release(PACKAGE_MAINTENANCE_LEASE_ID);
     }
-  } finally {
-    if (maintenanceLease) state.release(PACKAGE_MAINTENANCE_LEASE_ID);
-  }
+  });
 }
 
 export function stageRelease(state: ServiceState, source: string): ReleaseManifest {
