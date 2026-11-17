@@ -141,6 +141,8 @@ describe("dashboard details content", () => {
       true,
     );
     expect(document.querySelector(".detail-atom-title")?.textContent).toBe("合并");
+    document.querySelector<HTMLElement>('[data-context-id="prepare"]')!.click();
+    expect(document.querySelector(".detail-atom-title")?.textContent).toBe("准备");
     details.showGroup(group, "merge");
     expect(document.querySelector(".detail-atom-title")?.textContent).toBe("合并");
     document

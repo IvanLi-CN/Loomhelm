@@ -333,11 +333,11 @@ try {
     await relations.locator('[data-atom-id="atom-model"][data-current="true"]').waitFor();
     await relations
       .getByRole("list", { name: "前驱", exact: true })
-      .getByText("无前驱", { exact: true })
+      .locator('[data-atom-id="atomic-start"]')
       .waitFor();
     await relations
       .getByRole("list", { name: "后继", exact: true })
-      .getByText("无后继", { exact: true })
+      .locator('[data-atom-id="atom-scheduler"]')
       .waitFor();
     await relations.locator("summary").click();
     if (await demo.locator(".detail-relations-trigger, .detail-relations-tooltip").count())

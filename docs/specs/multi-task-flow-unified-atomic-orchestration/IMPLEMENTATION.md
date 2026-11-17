@@ -157,4 +157,4 @@ Gateway 不再为缺失历史绑定的账本使用当前安装或 fallback 身�
 
 详情面板新增的渲染、组合投影及回归测试模块通过 `scripts/check-client-skills.ts` 注册到 `skills/resource-manifest.json` 的运行时源码映射，确保打包安装包含同一套模块和摘要；更新源码不自动更新用户级已安装版本。
 
-详情回归补齐带图节点焦点的快照刷新、Bootstrap owner thread 与输出绑定、配置保存后的焦点归还及浮层卸载。无 Popover API 时将浮层临时挂载到 body，避开移动抽屉的 transform 和 overflow；关闭或原详情卸载时回收浮层与事件监听。服务浏览器回归直接选择 `atom-model`，验证原子关系默认折叠、展开后的当前节点与空前驱/后继，不再等待已移除的聚合关系区域。
+详情回归补齐带图节点焦点的快照刷新、Bootstrap owner thread 与输出绑定、配置保存和详情快照替换后的焦点归还及浮层卸载。无 Popover API 时将浮层临时挂载到 body，避开移动抽屉的 transform 和 overflow；关闭或原详情卸载时回收浮层与事件监听。服务浏览器回归直接选择 `atom-model`，验证原子关系默认折叠、展开后的当前节点与 canonical 前驱/后继，不再等待已移除的聚合关系区域。

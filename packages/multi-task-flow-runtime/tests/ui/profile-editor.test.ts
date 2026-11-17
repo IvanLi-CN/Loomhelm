@@ -69,6 +69,50 @@ test("saving the compact editor closes the panel and restores trigger focus", as
   editor.remove();
 });
 
+test("compact save restores the replacement trigger after a snapshot refresh", async () => {
+  let replacement: HTMLElement | null = null;
+  const editor = createProfileEditor(
+    {
+      capabilities,
+      update: async () => {
+        replacement = createProfileEditor(
+          { capabilities, update: async () => {} },
+          "task",
+          "refresh-target",
+          profile,
+          profile,
+          null,
+          null,
+          true,
+        );
+        editor.replaceWith(replacement);
+      },
+    },
+    "task",
+    "refresh-target",
+    profile,
+    profile,
+    null,
+    null,
+    true,
+  );
+  document.body.append(editor);
+  const dropdown = editor.querySelector("details")!;
+  const oldTrigger = editor.querySelector<HTMLElement>("summary")!;
+  const save = editor.querySelector<HTMLButtonElement>(".profile-save")!;
+  dropdown.open = true;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  save.focus();
+  save.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(oldTrigger.isConnected).toBe(false);
+  expect(replacement).not.toBeNull();
+  expect(document.activeElement).toBe(replacement!.querySelector("summary"));
+  expect(replacement!.querySelector("details")?.open).toBe(false);
+  expect(document.querySelector("body > .profile-panel-floating")).toBeNull();
+  replacement!.remove();
+});
+
 test("compact profile popover closes on outside interaction and Escape without saving", async () => {
   let updates = 0;
   const editor = createProfileEditor(

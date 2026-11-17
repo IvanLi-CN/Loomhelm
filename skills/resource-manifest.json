@@ -7371,7 +7371,7 @@
     {
       "path": "skills/multi-task-flow/scripts/verify-service-browser.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/verify-service-browser.ts",
-      "installedSha256": "3f3893a6ed895035555a90f19c3cc6856942e65db9ff7dfd5323cef12cac5b66"
+      "installedSha256": "3dfc5a92c255ad5d8822a1641ebfb52d199ab27ab79cfec44a20cc8f82c11e16"
     },
     {
       "path": "skills/multi-task-flow/scripts/verify-service-native.ts",
@@ -7551,7 +7551,7 @@
     {
       "path": "skills/multi-task-flow/tests/ui/details-content.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/ui/details-content.test.ts",
-      "installedSha256": "5b422aaa54b04f831e8996f9426e15954a9b4459d0adb310718384a709cfc901"
+      "installedSha256": "19e19477a83bffc478d899d0968f4bea8d02752f58f4126c85e12a8e8ca4e286"
     },
     {
       "path": "skills/multi-task-flow/tests/ui/group-progress.test.ts",
@@ -7576,7 +7576,7 @@
     {
       "path": "skills/multi-task-flow/tests/ui/profile-editor.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/ui/profile-editor.test.ts",
-      "installedSha256": "6ddea697ca1c9a1694fcd72bf8855c9bebd53d85dfdd4a13a2b676baf26ae4ae"
+      "installedSha256": "8cc9d6ef407f6ad5d1cfbe6eefcd33a7095d58ce59f069b2d9971b78c9920bad"
     },
     {
       "path": "skills/multi-task-flow/tests/ui/responsive-width-contract.test.ts",
@@ -7731,7 +7731,7 @@
     {
       "path": "skills/multi-task-flow/web/profile-editor.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/profile-editor.ts",
-      "installedSha256": "1355bdcacb6011a6877c0c362f13d4eb49e9b350cdc50760e67dbd009df7a5eb"
+      "installedSha256": "b27baade6960ec8b0b789d13c17431a9f98b0ce4b849a4b2f12558dc6d04f72e"
     },
     {
       "path": "skills/multi-task-flow/web/profile-model-menu.ts",

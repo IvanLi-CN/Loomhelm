@@ -171,6 +171,7 @@ export function createProfileEditor(
   dropdown.className = "profile-dropdown";
   const trigger = document.createElement("summary");
   trigger.className = "profile-trigger";
+  if (compact) trigger.id = `profile-trigger-${target}-${encodeURIComponent(id)}`;
   if (target === "run") {
     const label = "默认执行配置";
     trigger.dataset.tooltip = label;
@@ -309,7 +310,10 @@ export function createProfileEditor(
         reapply,
       );
       dropdown.open = false;
-      if (compact && trigger.isConnected) trigger.focus({ preventScroll: true });
+      if (compact) {
+        const currentTrigger = trigger.isConnected ? trigger : document.getElementById(trigger.id);
+        currentTrigger?.focus({ preventScroll: true });
+      }
     } catch (cause) {
       error.textContent = cause instanceof Error ? cause.message : String(cause);
     } finally {
