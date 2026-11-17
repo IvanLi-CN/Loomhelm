@@ -17,3 +17,5 @@
 - 2026-11-17: Consolidated Agent roles and interaction design with thirteen sequence diagrams into AGENT_INTERACTIONS.md; moved mock completion-flow coverage and MTF-AUDIT-001 through MTF-AUDIT-005 into IMPLEMENTATION.md. CLI_CONTRACT.md retains its canonical location under ADR 0036; this documentation reorganization does not change runtime semantics. Related change: [PR #306](https://github.com/IvanLi-CN/Loomhelm/pull/306).
 
 - 2026-11-17: 修复 MTF-AUDIT-001/004/005 的 closeout uncertainty、ready notification acknowledgement 和 provider PR identity 门禁；补齐 MTF-AUDIT-002/003 的公开 CLI mock 创建、对账及多 Task 完成流。保持持久化 schema 和状态集合不变。
+
+- 2026-11-17: 统一 `merge_capability` 汇总、`pr_merged_availability` 与实际派发门禁的账本判定；closeout 对账 unknown 时汇总保持 unknown，valid 后恢复。补充缺失或不匹配 provider receipt 与恢复路径的双字段一致性回归。
