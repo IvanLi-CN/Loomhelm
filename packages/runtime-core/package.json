@@ -2,6 +2,11 @@
   "name": "@loomhelm/runtime-core",
   "version": "0.2.0",
   "description": "Shared Loomhelm runtime primitives for Skill packages",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IvanLi-CN/Loomhelm.git",
+    "directory": "packages/runtime-core"
+  },
   "files": ["src", "README.md", "package.json"],
   "type": "module",
   "exports": {
