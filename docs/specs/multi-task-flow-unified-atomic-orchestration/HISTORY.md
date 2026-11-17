@@ -1,5 +1,7 @@
 # History
 
+- 2026-11-17: 增加 Gateway 独立 HTML 故障恢复合同与源码实现，覆盖 Worker 完全不可用、限流倒计时、保留完整 URL 的手动重试与可指定 URL 场景的纯 Web Demo、独立静态构建；不改变 Ledger、诊断持久化格式或业务派发语义。
+
 - 2026-11-11: Locked the unified atomic orchestration contract and implementation scope.
 - 2026-11-12: Promoted the complete design into the topic SPEC and documented the implementation mapping, compatibility boundary and viewer entry points.
 - 2026-11-13: Clarified the main-owned bootstrap start exception and fail-closed handling for uncertain or retained parent PR facts.

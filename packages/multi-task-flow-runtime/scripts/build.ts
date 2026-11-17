@@ -1,5 +1,6 @@
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import "./build-gateway-ui";
 import { SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
 import {
   ARTIFACT_BUILD_ID_PLACEHOLDER,
