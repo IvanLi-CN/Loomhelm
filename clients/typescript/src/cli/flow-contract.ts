@@ -1111,7 +1111,7 @@ export const FLOW_CONTRACT = Object.freeze({
 	contract_version: 5,
 	content_type: "application/json",
 	invocation:
-		"bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --input -",
+		"bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --output json --input -",
 	commands: entries,
 	error_codes: [
     "CALLER_IDENTITY_UNAVAILABLE",

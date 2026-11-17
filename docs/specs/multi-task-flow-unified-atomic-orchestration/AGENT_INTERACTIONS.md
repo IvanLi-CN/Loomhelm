@@ -14,7 +14,7 @@ Bootstrap DeliveryUnit 是唯一由主 Agent 持有的交付单元：其 `owner_
 
 ## CLI 与 Codex 对话边界
 
-正式调用使用固定版本的 `bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --input -`。每次写操作都携带 `run_id`、`actor`、唯一 `request_id` 和 `expected_revision`；revision 冲突必须先读取账本，不能盲目重试。`show`/`view` 是只读入口，`show` 的 `task-context` 只向绑定的任务 Agent 投影自身任务、依赖、原子、验收、工作区和阻塞事实。
+正式调用使用固定版本的 `bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --output json --input -`。每次写操作都携带 `run_id`、`actor`、唯一 `request_id` 和 `expected_revision`；revision 冲突必须先读取账本，不能盲目重试。`show`/`view` 是只读入口，`show` 的 `task-context` 只向绑定的任务 Agent 投影自身任务、依赖、原子、验收、工作区和阻塞事实。
 
 对话创建只有一条路径：先由主 Agent 使用 `dispatch-group-claim` 或 `dispatch-claim` 领取账本 operation，再调用 `conversation-create`。该命令通过 `codex exec --worktree --json` 创建独立工作区，核对真实 thread、初始化 turn、model/thinking、工作区归属、初始 HEAD 和清洁状态；完成后才绑定对话。超时、断线、证据不完整或已观察到 thread 时保持 `unknown`，只能进入 `creation-reconcile`，不能再次创建。
 

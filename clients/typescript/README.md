@@ -5,21 +5,36 @@
 安装包不依赖父仓库 checkout、`~/.agents` 或全局 Skill 源包。`playwright`、`sharp`、`zod` 由 npm 根 package 声明并在消费者 `bun install` 时解析；React、ELK、vis 等只用于 workspace viewer build，Bun 是包外部前置条件，不由包自动安装或升级。
 
 ```sh
-bunx --bun @loomhelm/multi-task-flow@0.2.55 skills list
-bunx --bun @loomhelm/multi-task-flow@0.2.55 skills check multi-task-flow
-bunx --bun @loomhelm/multi-task-flow@0.2.55 flow view --input - < view-request.json
+bunx --bun @loomhelm/multi-task-flow@0.2.55 --output json skills list
+bunx --bun @loomhelm/multi-task-flow@0.2.55 --output json skills check multi-task-flow
+bunx --bun @loomhelm/multi-task-flow@0.2.55 --output json flow view --input - < view-request.json
 ```
 
-生产调用必须锁定 exact package version，并使用 `bunx --bun @loomhelm/multi-task-flow@<exact-version> ...`；不得改用 `npx`、`latest`、兼容线 tag、未锁版本的裸 CLI 或仓库内源码路径。package version、compatibility line、Skill version、source/merge SHA、合同版本、build ID 和 digest 在包内 artifact manifest 中分别记录，不能从另一字段或 npm cache 推断身份。破坏 CLI 输入输出、账本语义或 viewer/service 边界的变更必须建立新的兼容线，旧兼容线继续保留为可安装版本。
+生产调用必须锁定 exact package version，并使用 `bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json ...`；不得改用 `npx`、`latest`、兼容线 tag、未锁版本的裸 CLI 或仓库内源码路径。package version、compatibility line、Skill version、source/merge SHA、合同版本、build ID 和 digest 在包内 artifact manifest 中分别记录，不能从另一字段或 npm cache 推断身份。破坏 CLI 输入输出、账本语义或 viewer/service 边界的变更必须建立新的兼容线，旧兼容线继续保留为可安装版本。
+
+## CLI 输出与常用查询
+
+终端默认显示人类摘要；CI、Agent 声明或 stdout 非终端时默认 JSON。使用 `--output human|json|auto` 显式选择，或设置 `MULTI_TASK_FLOW_OUTPUT`；机器脚本和 Agent 应始终指定 `--output json`。stdin 管道不会单独改变输出风格。`--verbose` 显示更多人类细节，完整字段使用 JSON；`--color auto|always|never` 控制颜色并支持 `NO_COLOR`。
+
+```sh
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output human --help
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output human service status
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output human flow show --run-id RUN_ID --actor-role main --thread-id THREAD_ID
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json flow show --input - < request.json
+```
+
+查询身份必须显式提供，不从当前对话猜测；权限和版本门禁与 JSON 请求相同。人类错误写 stderr，JSON 保留各命令现有通道与退出码；unknown 需要对账，不能盲目重试。Schema 始终是机器 JSON。`service daemon`、内部 worker 和 `skills run` 的脚本输出保持原样；脚本参数可用 `--` 分隔。
+
+完整合同见 [CLI Contract](../../docs/specs/multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md)。源码能力不代表 npm 已发布或用户全局安装已升级。
 
 ## 版本化安装与内部版本矩阵
 
 可重复的生产安装必须固定 package version；compatibility line 和 `latest` 不构成当前 CLI 身份或兼容性证明。运行前置条件是 `bun --version` 返回 `1.4.4`；Bun 由宿主提供，包不会替换或升级它。
 
 ```sh
-bunx --bun @loomhelm/multi-task-flow@0.2.55 skills list
-bunx --bun @loomhelm/multi-task-flow@0.2.55 --version
-bunx --bun @loomhelm/multi-task-flow@0.2.55 flow view --input - < view-request.json
+bunx --bun @loomhelm/multi-task-flow@0.2.55 --output json skills list
+bunx --bun @loomhelm/multi-task-flow@0.2.55 --output json --version
+bunx --bun @loomhelm/multi-task-flow@0.2.55 --output json flow view --input - < view-request.json
 ```
 
 当前源码投影的内部合同矩阵如下；`source_sha`、`merge_sha`、`build_id`、`canonicalDigestAlgorithm=path-byte-v2`、canonical digest 和 raw npm integrity 是每个候选构建的独立身份字段，不能由这张静态表推断。
@@ -116,12 +131,12 @@ bun --no-install src/cli.ts --config config.example.json codex retry DISPATCH_ID
 bun --no-install src/cli.ts skills list
 bun --no-install src/cli.ts skills check project-engineering-workflow
 bun --no-install src/cli.ts skills run skills/multi-task-flow/scripts/orchestrate.ts show --input - < view-request.json
-bun --no-install src/cli.ts flow view --input - < view-request.json
+bun --no-install src/cli.ts --output json flow view --input - < view-request.json
 ```
 
-`flow COMMAND --input -` 原样承接 Multi-task Flow 请求、JSON 输出和退出码，账本仍为 schema_version=2 / contract_version=2。生产 socket 优先级为 `--socket` / 配置 `codexAppServerSocket`、`LOOMHELM_CODEX_APP_SERVER_SOCKET`、`CODEX_APP_SERVER_SOCKET`、原 Codex 默认路径。普通 fresh dispatch 与活跃运行的 conversation-create 具有不同授权和回执合同，不能互相冒充。
+`--output json flow COMMAND --input -` 原样承接 Multi-task Flow 请求、JSON 输出和退出码，账本仍为 schema_version=2 / contract_version=2。生产 socket 优先级为 `--socket` / 配置 `codexAppServerSocket`、`LOOMHELM_CODEX_APP_SERVER_SOCKET`、`CODEX_APP_SERVER_SOCKET`、原 Codex 默认路径。普通 fresh dispatch 与活跃运行的 conversation-create 具有不同授权和回执合同，不能互相冒充。
 
-Contract 3 的创建结果如果因为超时、进程终止或连接中断进入 `unknown`，必须使用 `flow creation-reconcile --input -` 对同一个 Flow Ledger operation 进行显式恢复。该命令查询已知 Codex thread 和初始化证据，成功后原子写回 operation；它不创建新 thread，也不使用独立 `codex reconcile` 的 stateDir。
+Contract 3 的创建结果如果因为超时、进程终止或连接中断进入 `unknown`，必须使用 `--output json flow creation-reconcile --input -` 对同一个 Flow Ledger operation 进行显式恢复。该命令查询已知 Codex thread 和初始化证据，成功后原子写回 operation；它不创建新 thread，也不使用独立 `codex reconcile` 的 stateDir。
 
 `skills check` 的 `readinessScope=all-declared-scenarios` 表示保守检查该 Skill 声明的全部条件性场景，不代表每项依赖对每次操作都适用；每项报告保留适用条件。报告覆盖外部 Skill、PATH 中的专项命令、原生宿主能力和已验证的平台组合。命令存在不证明登录、授权或操作成功；原生能力只能由调用方的真实宿主工具清单通过 SDK 的第三参数声明，CLI 不猜测，缺少声明返回 `HOST_CAPABILITY_UNVERIFIED` 和退出码 3。实际专项操作仍须执行源合同的场景门禁与授权检查；该报告不安装工具、不探测外部业务或执行副作用。
 
@@ -147,12 +162,12 @@ viewer 新包采用 v2 清单，覆盖启动 shell、TS、依赖及网页的逐�
 
 ## Viewer service 运维
 
-viewer service 由单一 loopback gateway 管理，实际 worker 通过 owner-only Unix socket 受控；直接 ledger CLI 不经过 viewer HTTP，也不能借 viewer 路由绕过 ledger owner、revision 或 command identity。以下命令均使用已发布 npm 包的 exact-version 入口，输入必须是一个 JSON 对象并通过 stdin 传入：`bunx --bun @loomhelm/multi-task-flow@<exact-version> service <command> --input -`。不要使用 `npx`、兼容线 tag、裸 CLI 或仓库内源码路径。
+viewer service 由单一 loopback gateway 管理，实际 worker 通过 owner-only Unix socket 受控；直接 ledger CLI 不经过 viewer HTTP，也不能借 viewer 路由绕过 ledger owner、revision 或 command identity。以下命令均使用已发布 npm 包的 exact-version 入口，输入必须是一个 JSON 对象并通过 stdin 传入：`bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json service <command> --input -`。不要使用 `npx`、兼容线 tag、裸 CLI 或仓库内源码路径。
 
 ```sh
-bunx --bun @loomhelm/multi-task-flow@0.2.55 service status --input - < status.json
-bunx --bun @loomhelm/multi-task-flow@0.2.55 service doctor --input - < empty.json
-bunx --bun @loomhelm/multi-task-flow@0.2.55 service ensure --input - < ensure.json
+bunx --bun @loomhelm/multi-task-flow@0.2.55 --output json service status --input - < status.json
+bunx --bun @loomhelm/multi-task-flow@0.2.55 --output json service doctor --input - < empty.json
+bunx --bun @loomhelm/multi-task-flow@0.2.55 --output json service ensure --input - < ensure.json
 ```
 
 运行前读取 `config/service.json`，用配置中的 exact package version 执行 `--version` 与 `service status`。npm package-backed 安装交叉核验配置、CLI artifact identity 与运行时的 package name/version、`current_build`、`artifact_build_id`、source SHA 和合同集合，不要求 `releases/<current_build>/manifest.json`；残留 bundle 仅用于历史安装诊断，不作为当前包式安装的证据或回退。详细核验见 `skills/multi-task-flow/references/shared-viewer.md` 的 Version and runtime diagnosis。身份缺失、不一致或服务未运行时报告准确事实，不以 `ensure` 修复，不私自安装、升级、回滚、维护凭据或导入。身份一致且运行健康后，`ensure` 使用 `{ "run_id": "<run-id>", "thread_id": "<thread-id>", "api_version": 1 }` 登记本运行租约；服务维护仍须主人明确批准具体动作。
@@ -167,4 +182,4 @@ agent lease 默认 60 分钟，browser lease 默认 5 分钟；浏览器页面�
 
 最新 reader 对受支持历史格式执行双读；旧 reader 仅在最新 reader 无法安全解释时进入隔离只读 fallback。fallback 不得取得 lease、修改 revision、写入 ledger 或伪装成当前 service；损坏或无法证明安全读取的 run 单独标记并 fail closed。恢复时先按 `run_id`、build/source/merge identity、generation、PID、ledger SHA-256 和 provider receipt 对账，再决定重试或回退。
 
-Flow 输出使用背压流式转发，默认不限制累计输出字节。显式 `maxOutputBytes` 配置仍限制 stdout/stderr 合计输出，范围为 1 字节至 64 MiB；未配置时，仅通用捕获型调用使用 1 MiB 默认值。输出中断不会自动重做业务；使用 `flow invocation-inspect --input -` 检查停止凭据，证据齐全时才使用 `flow invocation-reconcile --input -` 补写停止事实。
+Flow 输出使用背压流式转发，默认不限制累计输出字节。显式 `maxOutputBytes` 配置仍限制 stdout/stderr 合计输出，范围为 1 字节至 64 MiB；未配置时，仅通用捕获型调用使用 1 MiB 默认值。输出中断不会自动重做业务；使用 `--output json flow invocation-inspect --input -` 检查停止凭据，证据齐全时才使用 `--output json flow invocation-reconcile --input -` 补写停止事实。

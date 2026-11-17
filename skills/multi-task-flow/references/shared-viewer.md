@@ -14,15 +14,15 @@ The public command surface is exactly `multi-task-flow gateway upgrade <version|
 
 The formal root is `~/.local/share/multi-task-flow/`: `config/`, `data/runs/`, `releases/`, `state/`, `logs/`. `CODEX_HOME` and the invoking worktree do not select a formal instance. `MULTI_TASK_FLOW_PROFILE=test|development` requires an absolute `MULTI_TASK_FLOW_ROOT`, distinct from the formal root. Isolated profiles derive separate launchd labels, port scopes and registry roots. `TASK_ORCHESTRATION_DATA_ROOT` is an explicit ledger-only fixture override; never use it to create a second formal authority.
 
-Published-package commands use only `bunx --bun @loomhelm/multi-task-flow@<exact-version> service <command> --input -`, consuming one JSON object. Do not replace this form with `npx`, `latest`, a compatibility-line tag, a bare cached binary, or a repository-local source path. Normal usage:
+Published-package commands use only `bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json service <command> --input -`, consuming one JSON object. Do not replace this form with `npx`, `latest`, a compatibility-line tag, a bare cached binary, or a repository-local source path. Normal usage:
 
-- `status`, `doctor`: `printf '{}\n' | bunx --bun @loomhelm/multi-task-flow@<exact-version> service status --input -` and the equivalent `doctor` command. Inspect configured identity and runtime before remediation.
-- `ensure`, `renew`, `release`: `bunx --bun @loomhelm/multi-task-flow@<exact-version> service <command> --input -` with `{"run_id":"example","thread_id":"main-thread","api_version":1}` on stdin.
+- `status`, `doctor`: `printf '{}\n' | bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json service status --input -` and the equivalent `doctor` command. Inspect configured identity and runtime before remediation.
+- `ensure`, `renew`, `release`: `bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json service <command> --input -` with `{"run_id":"example","thread_id":"main-thread","api_version":1}` on stdin.
 - `login`: the same exact-version prefix with `{}` or `{"run_id":"example"}`. Its returned target URL contains a sensitive one-time query ticket.
 
 ## Version and runtime diagnosis
 
-Run `bunx --bun @loomhelm/multi-task-flow@<exact-version> --version` and the read-only `service status` command with the same exact package version. The package version identifies the CLI process; it is not the bundle `service_version`.
+Run `bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json --version` and the read-only `service status` command with the same exact package version. The package version identifies the CLI process; it is not the bundle `service_version`.
 
 正式根目录为 `~/.local/share/multi-task-flow/`。先读取 `config/service.json`，按安装形态选择证据；不要从 npm cache 路径或残留 release 目录推断当前身份。
 
@@ -35,8 +35,8 @@ Run `bunx --bun @loomhelm/multi-task-flow@<exact-version> --version` and the rea
 ```sh
 set -e
 service_root="$HOME/.local/share/multi-task-flow"
-cli_json="$(bunx --bun @loomhelm/multi-task-flow@<exact-version> --version)"
-status_json="$(printf '{}\n' | bunx --bun @loomhelm/multi-task-flow@<exact-version> service status --input -)"
+cli_json="$(bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json --version)"
+status_json="$(printf '{}\n' | bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json service status --input -)"
 jq -e --argjson cli "$cli_json" --argjson status "$status_json" '
   . as $cfg | $status.result as $runtime |
   ($status.ok == true and $runtime.installed == true and

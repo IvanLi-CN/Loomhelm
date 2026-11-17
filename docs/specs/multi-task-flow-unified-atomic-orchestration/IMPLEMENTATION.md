@@ -2,6 +2,16 @@
 
 本文是主题 SPEC 的实现映射。设计边界以同目录的 [SPEC.md](./SPEC.md) 为长期合同，数据结构以 [DATA_MODEL.md](./DATA_MODEL.md) 为准，状态机和恢复规则以 [STATE_MACHINES.md](./STATE_MACHINES.md) 为准；这里记录代码入口、迁移边界和验证入口，不能重新定义领域语义。
 
+## CLI 人类与机器展示
+
+REQ-CLI-001 至 REQ-CLI-003 由客户端 CLI 的 output-options、help、query-options、json-stream 和 output 模块实现。公开入口统一选择风格；Flow JSON 保留背压直通，human 增量消费同一结果。service status/doctor 和 show/view 的普通参数只构造既有请求，不增加身份推断或变更权限。测试入口为 `clients/typescript/test/cli-output.test.ts`、`cli-output-integration.test.ts` 及既有 `cli-integration.test.ts`；transport fixture 不访问真实服务或 Codex。候选的最终 CI/review 结果仍须绑定当前 head。
+
+输出回归覆盖显式风格在参数错误路径上的保留、4,096 层嵌套的线性解析状态与受限输出批次，以及结构化和非结构化诊断中的合成凭据隐藏；正式 Agent 示例显式指定 JSON。额外覆盖 100,000 层嵌套的投影事件与路径处理上界、无展示输出时的事件循环让出，以及空格分隔的凭据标识。CLI 单元、隔离传输和既有集成测试共 31 项通过，既有 Flow 大输出、背压和独立停止通道 5 项通过。错误 envelope 字段重排、结果判定缓冲上界及无顶层 code 的 unknown 对账提示均有回归；解析器保留 O(嵌套深度) 的活动语法帧，不缓存完整响应。
+
+客户端与运行时均从同一包身份加载；post-merge 验证任务使用主线的 `merge_sha` 作为 task-base，CLI 输出适配不改写这一运行时规则。`post-merge-baseline.test.ts` 的四项基线回归通过，覆盖 verification、release、deployment 与 contribution 的来源约束。
+
+TTY 默认变更具有公开终端兼容性影响；显式 JSON 的业务合同及持久状态格式不变。未修改包版本、兼容线或全局安装，发布决策仍归仓库既有政策。
+
 ## Documentation map
 
 任务图的 `web/graph-projection.ts` 仅将全局 `main_start` / `main_end` 投影为起终点；交付单元边界仍参与隐藏路径折叠和来源追溯。`tests/graph-projection.test.ts` 覆盖多单元汇合、跨单元依赖以及全局起终点唯一性。`skills/resource-manifest.json` 同步登记投影与回归测试的源码摘要，独立源码包复制校验通过。

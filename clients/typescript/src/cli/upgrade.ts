@@ -1,11 +1,11 @@
+import { printCaptured } from './output.ts';
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { SkillsRuntime } from '../toolkit.ts';
 
 async function invoke(command: string, input: unknown): Promise<void> {
   const result = await new SkillsRuntime().run('skills/multi-task-flow/scripts/service.ts', [command, '--input', '-'], { input: JSON.stringify(input) });
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
+  await printCaptured(result.stdout, result.stderr, command);
   if ((result.code ?? 1) !== 0) process.exitCode = result.code ?? 1;
 }
 

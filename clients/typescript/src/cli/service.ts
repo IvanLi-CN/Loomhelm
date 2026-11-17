@@ -1,3 +1,4 @@
+import { printCaptured } from './output.ts';
 import { SkillsRuntime } from '../toolkit.ts';
 
 export async function runServiceCommand(args: string[]): Promise<void> {
@@ -15,22 +16,22 @@ export async function runServiceCommand(args: string[]): Promise<void> {
     console.log('service COMMAND --input -');
     return;
   }
-  if (args.length !== 3 || args[1] !== '--input' || args[2] !== '-') {
+  const convenience = args.length === 1 && ['status', 'doctor'].includes(args[0]!);
+  if (!convenience && (args.length !== 3 || args[1] !== '--input' || args[2] !== '-')) {
     throw new Error('SERVICE_INVALID_ARGUMENTS: use COMMAND --input - with one JSON object on stdin');
   }
-  if (process.stdin.isTTY) throw new Error('Service requires a JSON request on stdin');
+  if (!convenience && process.stdin.isTTY) throw new Error('Service requires a JSON request on stdin');
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of process.stdin) {
+  for await (const chunk of (convenience ? [] : process.stdin)) {
     const data = Buffer.from(chunk);
     size += data.length;
     if (size > 256 * 1024 * 1024) throw new Error('Service input too large');
     chunks.push(data);
   }
   const result = await new SkillsRuntime().run('skills/multi-task-flow/scripts/service.ts', [args[0]!, '--input', '-'], {
-    input: Buffer.concat(chunks),
+    input: convenience ? '{}' : Buffer.concat(chunks),
   });
-  process.stdout.write(result.stdout);
-  process.stderr.write(result.stderr);
+  await printCaptured(result.stdout, result.stderr, `service ${args[0]}`);
   process.exitCode = result.code ?? 1;
 }
