@@ -16,4 +16,5 @@ SkillsRuntime.prototype.run = async function (script, args = [], options = {}) {
   }
   return { code: 0, signal: null, stdout: text, stderr: '' };
 };
+if (process.env.CLI_OUTPUT_TTY === '1') Object.defineProperty(process.stdout, 'isTTY', { value: true });
 await import('../../src/cli.ts');

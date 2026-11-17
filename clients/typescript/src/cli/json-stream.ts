@@ -1,7 +1,7 @@
 /** Incremental JSON validator/projector. Tokens are capped, syntax is always fully consumed. */
 export type JsonPath = (string | number)[];
 export interface JsonEvent { path: JsonPath; value?: string | number | boolean | null; kind: 'scalar' | 'object' | 'array'; count?: number; truncated?: boolean }
-type Frame = { kind: 'object' | 'array'; state: 'key' | 'key-required' | 'colon' | 'value' | 'value-required' | 'comma'; key: string; index: number; path: JsonPath };
+type Frame = { kind: 'object' | 'array'; state: 'key' | 'key-required' | 'colon' | 'value' | 'value-required' | 'comma'; key: string; index: number };
 export class JsonStream {
   private stack: Frame[] = [];
   private root: 'value' | 'done' = 'value';
@@ -16,10 +16,10 @@ export class JsonStream {
   private decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
   constructor(private emit: (event: JsonEvent) => void, private cap = 4096) {}
   get bufferedCharacters(): number { return this.token.length + this.unicode.length + this.stack.reduce((n, f) => n + f.key.length, 0); }
+  get bufferedStateSize(): number { return this.stack.length + this.bufferedCharacters; }
   private fail(): never { throw new Error('FLOW_OUTPUT_INVALID: incomplete or invalid JSON output'); }
   private path(): JsonPath {
-    const f = this.stack.at(-1);
-    return f ? [...f.path, f.kind === 'array' ? f.index : f.key] : [];
+    return this.stack.map(f => f.kind === 'array' ? f.index : f.key);
   }
   private complete(): void {
     const f = this.stack.at(-1);
@@ -99,14 +99,14 @@ export class JsonStream {
       }
       if (c === '}' || c === ']') {
         if (!f || c !== (f.kind === 'object' ? '}' : ']') || !['key', 'value', 'comma'].includes(f.state)) this.fail();
-        this.stack.pop(); this.emit({ kind: f.kind, path: f.path, count: f.index }); this.complete(); continue;
+        this.stack.pop(); this.emit({ kind: f.kind, path: this.path(), count: f.index }); this.complete(); continue;
       }
       if (f && ['key', 'key-required'].includes(f.state)) {
         if (c !== '"') this.fail();
         this.mode = 'string'; this.stringKey = true; continue;
       }
       if (c === '{' || c === '[') {
-        this.stack.push({ kind: c === '{' ? 'object' : 'array', state: c === '{' ? 'key' : 'value', key: '', index: 0, path: this.path() }); continue;
+        this.stack.push({ kind: c === '{' ? 'object' : 'array', state: c === '{' ? 'key' : 'value', key: '', index: 0 }); continue;
       }
       if (c === '"') { this.mode = 'string'; this.stringKey = false; continue; }
       if (c === '-' || /[0-9]/.test(c)) {

@@ -50,3 +50,13 @@ test('invalid or ambiguous input fails before any runtime invocation', async () 
   ]) { const r = await invoke(config, log, args); expect(r.code).toBe(1); }
   await expect(readFile(log)).rejects.toThrow();
 }));
+
+test('real CLI preserves explicit JSON on simulated terminal parse errors', async () => isolated(async (config, log) => {
+  for (const args of [['--output=json', '--color=invalid'], ['--color=invalid', '--output', 'json']]) {
+    const r = await runProcess(process.execPath, [fixture, '--config', config, ...args, 'service', 'ensure'], {
+      env: { ...process.env, CLI_OUTPUT_CALL_LOG: log, CLI_OUTPUT_TTY: '1', MULTI_TASK_FLOW_OUTPUT: 'human', CI: 'false', CONTINUOUS_INTEGRATION: 'false', CODEX_THREAD_ID: '', MULTI_TASK_FLOW_AGENT: '0' },
+    });
+    expect(r.code).toBe(1); expect(r.stdout).toBe(''); expect(JSON.parse(r.stderr).code).toBe('CLI_ERROR');
+  }
+  await expect(readFile(log)).rejects.toThrow();
+}));

@@ -1,6 +1,6 @@
 import { test, expect, afterEach } from 'bun:test';
 import { JsonStream, type JsonEvent } from '../src/cli/json-stream.ts';
-import { parseGlobalOptions, resolveOutput, useColor, output } from '../src/cli/output-options.ts';
+import { GlobalOptionsError, parseGlobalOptions, resolveOutput, useColor, output } from '../src/cli/output-options.ts';
 import { HumanJsonStream, recovery } from '../src/cli/output.ts';
 import { queryInput } from '../src/cli/query-options.ts';
 import { helpDocument, requestedHelp } from '../src/cli/help.ts';
@@ -109,4 +109,44 @@ test('real CLI help and argument failures do not require artifact or state', asy
   const human = await runProcess(process.execPath, [cli, '--output', 'human', 'service', '--help']); expect(human.stdout).toContain('用法：');
   const failure = await runProcess(process.execPath, [cli, '--output', 'json', '--color=invalid', 'service', 'ensure']);
   expect(failure.code).toBe(1); expect(failure.stdout).toBe(''); expect(JSON.parse(failure.stderr).code).toBe('CLI_ERROR');
+});
+
+test('global parse errors retain explicit selectors before and after other invalid options', () => {
+  for (const tty of [true, false]) {
+    for (const args of [['--output', 'json', '--color=invalid'], ['--color=invalid', '--output=json'], ['--config', '--output=json']]) {
+      try { parseGlobalOptions(args, { MULTI_TASK_FLOW_OUTPUT: 'human' }, tty); throw new Error('expected parse failure'); }
+      catch (error) { expect(error).toBeInstanceOf(GlobalOptionsError); expect((error as GlobalOptionsError).style).toBe('json'); }
+    }
+  }
+  expect(parseGlobalOptions(['--output=json'], { MULTI_TASK_FLOW_OUTPUT: 'invalid' }, true).options.style).toBe('json');
+  try { parseGlobalOptions(['--color=invalid', '--output=human'], {}, false); }
+  catch (error) { expect((error as GlobalOptionsError).style).toBe('human'); }
+});
+test('deep JSON retains linear state and bounded human output batches', async () => {
+  const depth = 4096;
+  let events = 0;
+  const parser = new JsonStream(() => { events++; });
+  parser.write(Buffer.from('['.repeat(depth)));
+  expect(parser.bufferedStateSize).toBe(depth);
+  parser.write(Buffer.from(']'.repeat(depth))); parser.finish();
+  expect(parser.bufferedStateSize).toBe(0); expect(events).toBe(depth);
+  output.style = 'human'; let largest = 0, completed = false;
+  const human = new HumanJsonStream('flow show', async (_, text) => {
+    largest = Math.max(largest, Buffer.byteLength(text)); completed ||= text.includes('结果接收完成');
+  });
+  await human.write(Buffer.from('['.repeat(depth) + ']'.repeat(depth))); await human.finish();
+  expect(largest).toBeLessThan(256 * 1024); expect(completed).toBe(true);
+});
+test('human diagnostic values redact credentials even outside sensitive field names', async () => {
+  output.style = 'human';
+  const samples = ['authorization: Bearer SYNTHETIC-CREDENTIAL', 'Bearer SYNTHETIC-CREDENTIAL', 'password=SYNTHETIC-CREDENTIAL', '{"token":"SYNTHETIC-CREDENTIAL"}', 'https://example.test/?ticket=SYNTHETIC-CREDENTIAL', 'https://user:SYNTHETIC-CREDENTIAL@example.test/'];
+  for (const message of samples) {
+    const lines: string[] = [];
+    const stream = new HumanJsonStream('flow show', async (_, text) => { lines.push(text); });
+    await stream.write(Buffer.from(JSON.stringify({ ok: false, code: 'ACTOR_MISMATCH', message }))); await stream.finish();
+    expect(lines.join('')).not.toContain('SYNTHETIC-CREDENTIAL'); expect(lines.join('')).toContain('ACTOR_MISMATCH');
+  }
+  const modulePath = resolve('src/cli/output.ts');
+  const probe = await runProcess(process.execPath, ['-e', `import { printDiagnostics, output } from ${JSON.stringify(modulePath)}; output.style='human'; await printDiagnostics(${JSON.stringify(samples.join('\n'))});`]);
+  expect(probe.code).toBe(0); expect(probe.stderr).not.toContain('SYNTHETIC-CREDENTIAL'); expect(probe.stderr).toContain('敏感诊断已隐藏');
 });

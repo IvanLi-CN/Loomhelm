@@ -1,5 +1,5 @@
 #!/usr/bin/env -S bun --no-install
-import { parseGlobalOptions, resolveOutput } from './cli/output-options.ts';
+import { parseGlobalOptions, GlobalOptionsError } from './cli/output-options.ts';
 import { output, printResult, printCaptured } from './cli/output.ts';
 import { requestedHelp, printHelp } from './cli/help.ts';
 import { LocalClient } from './client.ts';
@@ -18,12 +18,9 @@ import { SkillsRuntime } from './toolkit.ts';
 import { fileURLToPath } from 'node:url';
 import { runGatewayCommand, runOrchestrationCommand } from './cli/upgrade.ts';
 
-let optionsResolved = false;
 async function main(args: string[]): Promise<void> {
-  try { output.style = resolveOutput(undefined, process.env, !!process.stdout.isTTY); } catch { output.style = 'json'; }
   const parsed = parseGlobalOptions(args);
   Object.assign(output, parsed.options);
-  optionsResolved = true;
   args = parsed.args;
   const configPath = parsed.configPath;
   const help = requestedHelp(args);
@@ -107,10 +104,6 @@ async function main(args: string[]): Promise<void> {
 }
 main(process.argv.slice(2)).catch(async error => {
   process.exitCode = 1;
-  // On malformed arguments choose a safe fallback without executing any command.
-  if (!optionsResolved) {
-    const own = process.argv.slice(2, process.argv.indexOf('--') < 0 ? undefined : process.argv.indexOf('--'));
-    if (own.includes('--output=human') || own.some((v, i, a) => v === '--output' && a[i + 1] === 'human')) output.style = 'human';
-  }
+  if (error instanceof GlobalOptionsError) output.style = error.style;
   await printResult({ code: 'CLI_ERROR', error: error instanceof Error ? error.message : String(error) }, 'stderr').catch(() => {});
 });

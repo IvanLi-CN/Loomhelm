@@ -16,7 +16,10 @@ export async function writeOutput(stream: 'stdout' | 'stderr', text: string): Pr
 }
 const clean = (value: unknown) => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 const labels: Record<string, string> = { code: '结果码', revision: '版本', status: '状态', state: '状态', run_id: '运行', thread_id: '对话', task_id: '任务', group_id: '交付单元', operation_id: '操作', message: '原因', error: '错误', installed: '已安装', running: '运行中', quiescent: '已静止', missing_evidence: '缺失证据', warning: '警告', mode: '模式', tasks: '任务', root: '数据目录', source_sha: '源码 SHA', version: '版本', url: '链接' };
-const secret = /credential|token|secret|password|authorization|cookie|prompt|oversized-key/i;
+const secret = /credential|token|secret|password|authorization|cookie|prompt|ticket|api[_-]?key|oversized-key/i;
+// Opaque diagnostic values are not safe just because their field is named message.
+const credentialText = /["']?(?:authorization|cookie|credentials?|password|secret|(?:access[_-]?)?token|api[_-]?key|ticket)["']?\s*[:=]|\b(?:Bearer|Basic)\s+\S+|https?:\/\/[^/\s]+:[^/\s]+@/i;
+const safeText = (value: unknown, loginUrl = false) => !loginUrl && credentialText.test(String(value)) ? '[敏感诊断已隐藏]' : clean(value);
 const important = /^(ok|code|revision|status|state|.*_id|.*Id|id|name|title|message|error|detail|reason|blocked.*|blocking.*|.*count|installed|running|root|mode|version|.*sha|.*digest|quiescent|missing_evidence|warning|should_send|next_action|url|login_url)$/;
 export function recovery(code: string): string | undefined {
   if (/REVISION_CONFLICT/.test(code)) return '先重新读取当前 revision，再决定下一步；不要盲目重放写入。';
@@ -52,12 +55,14 @@ export class HumanProjection {
     if ((key === 'url' || key === 'login_url') && this.command !== 'service login') return;
     const cap = output.verbose ? 4096 : 160;
     const status = typeof value === 'string' && ['state', 'status'].includes(key) ? ({ unknown: '未确认', blocked: '阻塞', running: '运行中', stopped: '已停止', failed: '失败', succeeded: '成功' } as Record<string, string>)[value] ?? value : value;
-    const text = clean(status === true ? '是' : status === false ? '否' : status === null ? '无' : status);
+    const text = safeText(status === true ? '是' : status === false ? '否' : status === null ? '无' : status, this.command === 'service login' && ['url', 'login_url'].includes(key));
     const suffix = event.truncated || text.length > cap ? '…（已省略，完整内容见 --output json）' : '';
     this.lines.push(`${this.pathLabel(path)}：${text.slice(0, cap)}${suffix}`);
   }
   private pathLabel(path: JsonPath): string {
-    return path.filter(p => p !== 'result').map(p => typeof p === 'number' ? `[${p + 1}]` : (labels[p] ?? clean(p))).join(' · ') || '结果';
+    const tail = path.slice(-6).filter(p => p !== 'result');
+    const label = tail.map(p => typeof p === 'number' ? `[${p + 1}]` : (labels[p] ?? safeText(p).slice(0, 80))).join(' · ');
+    return `${path.length > 6 ? '… · ' : ''}${label}`.slice(-160) || '结果';
   }
   async flush(): Promise<void> {
     if (!this.lines.length) return;
@@ -85,8 +90,8 @@ export class HumanJsonStream {
   }
   async write(bytes: Uint8Array): Promise<void> {
     // Bound queued display lines even when an upstream caller supplies a huge chunk.
-    for (let offset = 0; offset < bytes.length; offset += 16 * 1024) {
-      this.parser.write(bytes.subarray(offset, offset + 16 * 1024)); await this.projection.flush();
+    for (let offset = 0; offset < bytes.length; offset += 1024) {
+      this.parser.write(bytes.subarray(offset, offset + 1024)); await this.projection.flush();
     }
   }
   async finish(): Promise<void> { this.parser.finish(); await this.projection.finish(); }
@@ -119,7 +124,7 @@ export async function printDiagnostics(text: string): Promise<void> {
   for (const line of text.split('\n').filter(Boolean)) {
     let value: unknown;
     try { value = JSON.parse(line); }
-    catch { await writeOutput('stderr', `诊断：${clean(line).slice(0, 4096)}\n`); continue; }
+    catch { await writeOutput('stderr', `诊断：${safeText(line).slice(0, 4096)}\n`); continue; }
     await printResult(value, 'stderr');
   }
 }
