@@ -529,7 +529,11 @@ export function deliveryUnitPrMergedFromLedger(
           item.status === "succeeded" &&
           item.receipt_fact_id === latest.id,
       ) &&
-      (!canonicalPr || stable(canonicalPr) === stable(canonicalPr)),
+      canonicalPr &&
+      latest.receipt?.resource_type === "pr" &&
+      latest.receipt.resource_id === canonicalPr.id &&
+      latest.receipt.pr &&
+      stable(canonicalPr) === stable(latest.receipt.pr),
   );
 }
 

@@ -15,3 +15,5 @@
 - 2026-11-16: Established the layered CLI contract boundary: repository documentation is the human-readable source, CLI help/schema are runtime surfaces, and the Skill references the packaged contract copy.
 - 2026-11-17: Renamed the project-owned and vendored compound specification documents to underscore-separated names and synchronized their references, resource metadata and validation paths without changing the CLI contract or runtime behavior.
 - 2026-11-17: Consolidated Agent roles and interaction design with thirteen sequence diagrams into AGENT_INTERACTIONS.md; moved mock completion-flow coverage and MTF-AUDIT-001 through MTF-AUDIT-005 into IMPLEMENTATION.md. CLI_CONTRACT.md retains its canonical location under ADR 0036; this documentation reorganization does not change runtime semantics. Related change: [PR #306](https://github.com/IvanLi-CN/Loomhelm/pull/306).
+
+- 2026-11-17: 修复 MTF-AUDIT-001/004/005 的 closeout uncertainty、ready notification acknowledgement 和 provider PR identity 门禁；补齐 MTF-AUDIT-002/003 的公开 CLI mock 创建、对账及多 Task 完成流。保持持久化 schema 和状态集合不变。

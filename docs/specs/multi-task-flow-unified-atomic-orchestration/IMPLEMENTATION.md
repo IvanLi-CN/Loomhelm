@@ -88,34 +88,34 @@ Schema、迁移、评估、图投影和网页交互分别由 `packages/multi-tas
 
 ## Agent 角色交互的实现与验证
 
-测试入口为 `packages/multi-task-flow-runtime/tests/agent-role-completion-flow.test.ts`，使用隔离的合成账本与 mock Codex adapter 验证已有 CLI/runtime 行为，不创建真实对话、PR、release 或 deployment。该文件包含初始化角色握手、revision/request/actor 拒绝与创建对账、contract-3 基线及原子执行和收口、拓扑校验、bootstrap ownership 五类测试；它不构成三种拓扑全部外部副作用的端到端证明。
+测试使用隔离的临时账本和独立 CLI 子进程，仅 mock Codex 平台的创建、初始化观察、工作区核验及对账结果；不创建真实 Codex 对话、PR、release 或 deployment。公开 CLI、账本存储、权限、revision fencing、通知 attempt/receipt/recipient acknowledgement 与生命周期均执行真实实现。
 
-验证入口：在 `packages/multi-task-flow-runtime/` 执行 `bun test tests/agent-role-completion-flow.test.ts`；完整 runtime、UI 与构建验证分别使用 `bun run test`、`bun run test:ui` 和 `bun run build`。验证结果与具体候选 SHA 绑定，不能用历史结果证明后续候选。
+验证入口为 `agent-role-completion-flow.test.ts`、`agent-role-cli.test.ts`、`dispatch-readiness-ack.test.ts` 和 `engine-core.test.ts`。在 `packages/multi-task-flow-runtime/` 执行 `bun run test`、`bun run test:ui` 和 `bun run build`。结果必须绑定实际候选，不能用历史结果证明后续候选。
 
 ### 时序图与 mock 测试的对应范围
 
-下表对应 [角色与交互设计](./AGENT_INTERACTIONS.md) 中的 S1–S13，用于区分设计要求与现有测试实际证明的行为，不是新的验收清单。测试入口为 [agent-role-completion-flow.test.ts](../../../packages/multi-task-flow-runtime/tests/agent-role-completion-flow.test.ts)。
-
-| 图 | 当前 mock 已覆盖的部分 | 尚不能据此宣称的覆盖 |
+| 图 | mock 已覆盖的部分 | 尚不能据此宣称的覆盖 |
 | - | - | - |
-| S1、S12 | 使用已批准计划 fixture；拒绝旧 revision | 完整 proposal/批准/修订、migration、cut 外部完成流 |
-| S2、S6 | mock Codex 初始化输入、角色与证据；unknown 后使用 reconcile 证据绑定 | 公开 conversation-create CLI 全链；见 MTF-AUDIT-002 |
-| S3、S4 | bootstrap main-owned / foreign owner 拒绝；shared_delivery 拓扑投影与冲突拒绝 | bootstrap、shared-delivery 的真实 publication、合并和全生命周期逐步完成 |
-| S5、S8、S10 | contract-3 Task dispatch、资源/基线、顺序原子、等价集成及 Task/DeliveryUnit closeout | 所有 child PR 都经完整 provider receipt；canonical 原子根图同步；见 MTF-AUDIT-003 |
-| S7、S13 | pending handoff、request 重放与冲突、foreign actor、旧 revision 拒绝 | 不能证明 pending 通知阻止 dispatch；见 MTF-AUDIT-004 |
-| S9、S11 | 使用 fixture merge / CI 事实走 closeout 门禁 | release/deployment/verification 外部流程、unknown closeout 下游冻结、PR identity 完整拒绝；见 MTF-AUDIT-001/003/005 |
+| S1、S12 | revision/request/actor 拒绝 | proposal、init 与所有 plan revision 路径的完整完成流 |
+| S2、S6 | 公开 conversation-create/creation-reconcile、初始化角色证据、unknown 身份保留与禁止重建 | 真实 Codex 外部平台可用性 |
+| S3、S4 | bootstrap ownership、shared-delivery 拓扑及权限边界 | bootstrap/shared-delivery 全部外部副作用的完成流 |
+| S5、S8、S10 | 三个 Task 分别经 CLI 完成基线、原子、发布、quality、merge receipt、Task closeout，再合并父 PR 并关闭 DeliveryUnit | 所有 TaskKind、所有拓扑与 canonical 原子根图同步的端到端证明 |
+| S7、S13 | 通知 intent/attempt/receipt/recipient ack、ready 代次门禁、重放、foreign actor、旧 revision | 真实消息平台投递 |
+| S9、S11 | receipt 驱动 merge、CI 门禁、unknown closeout 下游冻结与 valid 恢复、PR identity 拒绝 | release/deployment/verification 外部流程 |
 
-### 已知实现偏差与验证缺口
+### 审计问题与修复证据
 
-以下证据记录 Agent 完成流审计发现的实现偏差和验证缺口，对照 [SPEC](./SPEC.md)、[交互设计](./AGENT_INTERACTIONS.md)、[状态机](./STATE_MACHINES.md) 与 [CLI 契约](./CLI_CONTRACT.md) 阅读。证据本身不改变设计或 runtime 语义；这些缺口未消除前，不能用局部 mock 测试通过来证明完整完成流符合设计，也不能据此宣称 `merge-ready / Step 5C Ready`。
+以下记录对照 [SPEC](./SPEC.md)、[交互设计](./AGENT_INTERACTIONS.md)、[状态机](./STATE_MACHINES.md) 与 [CLI 契约](./CLI_CONTRACT.md)，保留问题身份与修复后的验证入口。五项审计问题已补充针对性修复或测试；实际候选的 CI/review 仍需独立收敛，不能仅据此宣称 `merge-ready / Step 5C Ready`。
 
-| 证据 ID | 类型 | 可复现事实 | 影响 | 处理 |
-| - | - | - | - | - |
-| MTF-AUDIT-001 | Runtime 偏差 | `group-closeout-reconcile` 的 `outcome: "unknown"` 保留 `closed`，后续 `deliveryUnitPrMergedFromLedger`/dispatch gate 不读取该不确定结果。 | closeout 证据不足时仍可能满足后续交付门禁，与设计中的 unknown/reconcile 要求冲突。 | 本轮不修改 runtime 语义；Step 5C 阻塞，需单独修复与回归测试。 |
-| MTF-AUDIT-002 | 验证缺口 | contract-3 mock 流直接调用 runtime `apply` 的 dispatch bind/resolve，未通过公开 `conversation-create` CLI 路径。 | 未证明 CLI-only native creation 边界在完整 mock 流中不可绕过。 | 保留为 follow-up 验证项；不以现有测试通过替代 CLI 边界证据。 |
-| MTF-AUDIT-003 | 验证缺口 | closeout 测试为其他任务和部分 merge facts 构造 fixture 事实，未覆盖 provider `closed`/缺失 receipt/unknown closeout 的拒绝路径。 | 未证明每个 child PR 都经 Task Agent merge receipt 后才允许 DeliveryUnit closeout。 | 保留为 follow-up 验证项；本轮不伪造 readiness。 |
-| MTF-AUDIT-004 | Runtime 偏差 | `dispatch-claim` 未检查 ready notification 是否已由收件方确认，pending/failed task-ready notification 仍可进入 claim。 | 两阶段通知确认与派发并发门禁未被 runtime 强制执行。 | 本轮不修改 runtime 语义；Step 5C 继续阻塞，需单独修复与回归测试。 |
-| MTF-AUDIT-005 | Runtime 偏差 | `deliveryUnitPrMergedFromLedger` 对 canonical PR 的比较为恒真表达式，未实际核对最新 merge receipt 的 PR identity。 | provider PR identity 不匹配时仍可能被视为可合并，破坏交付单元 merge gate。 | 本轮不修改 runtime 语义；Step 5C 继续阻塞，需单独修复与回归测试。 |
+| 证据 ID | 原问题 | 修复与回归证据 |
+| - | - | - |
+| MTF-AUDIT-001 | unknown closeout 后仍满足下游 merge gate | `engine-core.test.ts` 验证业务状态保留 closed，最新 unknown 冻结下游 dispatch，仅匹配 provider merged 状态和原 merge SHA 的 valid 对账恢复 capability；矛盾证据拒绝且账本不变。 |
+| MTF-AUDIT-002 | 完成流绕过公开 conversation-create CLI | `agent-role-cli.test.ts` 与完成流通过隔离进程执行公开 CLI；验证正常创建、unknown/reconcile、重复 request、foreign actor、旧 revision 和 CLI_ONLY_DISPATCH。 |
+| MTF-AUDIT-003 | 直接构造 Task/DeliveryUnit merge facts 和完成状态 | 每个 child PR 都经 publish、quality、merge claim/resolve 与 Task closeout，再合并父 PR 并关闭 DeliveryUnit；无 receipt、closed receipt 均拒绝且账本不变，unknown merge 阻止提前 closeout。 |
+| MTF-AUDIT-004 | 未确认的 task-ready 通知允许 claim | `dispatch-readiness-ack.test.ts` 验证 pending/failed/sent/unknown 未确认时拒绝；只接受最新 ready 代次和当前 owner 的确认。初始 ready 直接发现路径不要求补建通知；一旦产生 ready 事件，其通知必须确认。同一命令的普通通知和 ready 通知分别持久化 intent。 |
+| MTF-AUDIT-005 | canonical PR 与自身比较 | `engine-core.test.ts` 验证缺失 receipt、resource ID、PR identity 或仓库不匹配时 merge capability 与下游 dispatch 均拒绝；viewer availability 复用同一账本判定。 |
+
+修复保持账本 schema、角色、TaskKind 和状态集合不变；更严格的派发/证据门禁落实已有设计。全局安装资源未在源码修复中更新。
 
 ### 通知投递职责的来源差异
 

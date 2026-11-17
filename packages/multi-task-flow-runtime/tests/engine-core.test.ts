@@ -1447,8 +1447,7 @@ test("contract-3 regular dispatch uses the repository target branch and current 
   }
 });
 
-// MTF-AUDIT-001: business closeout survives uncertainty; dispatch capability does not.
-test("unknown closeout freezes downstream dispatch until a valid reconciliation", () => {
+function mergedUpstreamFixture() {
   const ledger = fixture();
   approve(ledger);
   ledger.contract_version = 3;
@@ -1527,6 +1526,12 @@ test("unknown closeout freezes downstream dispatch until a valid reconciliation"
     to_node_id: "node-a",
     requires: "completed",
   });
+  return { ledger, upstream, pr };
+}
+
+// MTF-AUDIT-001: business closeout survives uncertainty; dispatch capability does not.
+test("unknown closeout freezes downstream dispatch until a valid reconciliation", () => {
+  const { ledger, upstream, pr } = mergedUpstreamFixture();
   expect(deliveryUnitPrMergedFromLedger(ledger, upstream)).toBe(true);
   for (const outcome of ["unknown", "valid"] as const) {
     if (outcome === "valid") {
@@ -1594,7 +1599,7 @@ test("unknown closeout freezes downstream dispatch until a valid reconciliation"
         main,
       ),
     );
-    expect(ledger.groups.find((g) => g.id === upstream.id)!.state).toBe("closed");
+    expect(ledger.groups.find((g) => g.id === upstream.id)?.state).toBe("closed");
     expect(
       deliveryUnitPrMergedFromLedger(ledger, ledger.groups.find((g) => g.id === upstream.id)!),
     ).toBe(outcome === "valid");
@@ -1603,5 +1608,31 @@ test("unknown closeout freezes downstream dispatch until a valid reconciliation"
         "upstream delivery-unit PRs",
       );
     else expect(() => requireGroupDispatchGate(ledger, ledger.groups[0]!)).not.toThrow();
+  }
+});
+
+// MTF-AUDIT-005: compare canonical identity against the provider receipt, not itself.
+test("delivery merge capability rejects a receipt for another PR", () => {
+  const { ledger, upstream, pr } = mergedUpstreamFixture();
+  const fact = ledger.facts.find((f) => f.id === "upstream-merge")!;
+  expect(deliveryUnitPrMergedFromLedger(ledger, upstream)).toBe(true);
+  for (const receipt of [
+    null,
+    { ...fact.receipt!, resource_id: "999" },
+    { ...fact.receipt!, pr: { ...pr, id: "999" } },
+    { ...fact.receipt!, pr: { ...pr, repository: "other/repo" } },
+  ]) {
+    const candidate = structuredClone(ledger);
+    candidate.facts.find((f) => f.id === fact.id)!.receipt = receipt;
+    validateLedger(candidate);
+    expect(
+      deliveryUnitPrMergedFromLedger(
+        candidate,
+        candidate.groups.find((g) => g.id === upstream.id)!,
+      ),
+    ).toBe(false);
+    expect(() => requireGroupDispatchGate(candidate, candidate.groups[0]!)).toThrow(
+      "upstream delivery-unit PRs",
+    );
   }
 });
