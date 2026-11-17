@@ -5,6 +5,7 @@ import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { z } from "zod";
 import type { ConnectObserver } from "../lib/conversation-output";
 import { ContractError } from "../lib/errors";
+import { workerFailureResponse } from "../lib/gateway-recovery-page";
 import {
   type RuntimeMetadata,
   runtimeMetadata,
@@ -926,6 +927,12 @@ export async function startSharedViewer(
                 : code === "INVALID_INPUT"
                   ? 400
                   : 503;
+          if (code === "SERVICE_ERROR" && diagnosticResponse)
+            return workerFailureResponse(
+              request,
+              diagnosticResponse,
+              workerPool.retryAfterMs(diagnosticResponse.worker_key),
+            );
           return json(
             {
               code:

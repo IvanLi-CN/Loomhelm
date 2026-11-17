@@ -68,6 +68,10 @@ Gateway 更新就是 daemon/Gateway package 更新：候选 staging、停止并�
 
 Viewer worker 诊断遵循 [ADR 0033](../../adr/0033-viewer-worker-diagnostics-and-reconnect.md)：worker 生命周期失败写入独立 runtime 诊断状态，不写 Ledger，不推进业务 revision；gateway、HTTP 响应、daemon 日志和浏览器诊断卡片共享 `diagnostic_id`、run、worker generation、阶段、稳定错误码和恢复状态。`observed`、`retrying`、`degraded`、`recovered` 状态沿用 worker pool 的三次/六十秒重启窗口；浏览器在 `RUN_WORKER_UNAVAILABLE` 后停止无限刷新，保留 run/tab 定位并通过新登录会话受控重连。
 
+Worker 页面尚未加载时由 `packages/multi-task-flow-runtime/lib/gateway-recovery-page.ts` 独立提供 HTML 故障页；`service-http.ts` 区分浏览器编排入口与 JSON 请求，`viewer-runtime.ts` 从已有失败窗口计算剩余等待时间。页面仅刷新当前完整 URL，保留计划、标签页与 fragment，不依赖 Worker 资产、不修改 Ledger 或诊断持久化格式。HTTP 故障注入、限流和页面交互覆盖位于 `tests/gateway-recovery.test.ts`、`tests/viewer-runtime.test.ts` 与 `tests/ui/gateway-recovery.test.ts`；隔离视觉入口为 `dev:demo`（兼容 `preview:gateway-recovery`），`build:demo` 生成独立静态产物；浏览器控制区和 `demo` / `d_*` URL 参数可指定场景、主题、编排 ID 与等待时间，模拟状态仅在浏览器内运行。
+
+故障页复用 Viewer 的 Tailwind/DaisyUI 按钮、文本框与 Lucide 图标；`web/viewer-theme.css` 为正常 Viewer 与 Gateway 共享主题变量，`web/gateway-ui.css` 只包含故障页所需组件和布局。`scripts/build-gateway-ui.ts` 编译为受资源清单保护的 `lib/gateway-ui.generated.ts`，由 Gateway 内嵌到 HTML；运行时不需要 Worker 资源、CDN 或开发依赖。`check:gateway-ui` 验证生成产物与源码一致。编排 ID 提供独立复制入口与权限受限时的选中文本兜底；重试数字使用等宽字体和固定数字槽，折叠诊断区保持紧凑。编排 ID 与复制按钮保留独立的原生键盘导航，键盘操作时统一在组合容器显示焦点，指针操作时不显示焦点框，文字选区仍保留。
+
 ## Verification
 
 Schema、迁移、评估、图投影和网页交互分别由 `packages/multi-task-flow-runtime/tests/` 下对应测试覆盖。任何新增字段或状态必须同时更新主题 SPEC、schema/domain 测试、viewer projection 测试和兼容迁移测试；不得只修改临时设计文件或网页文案。
