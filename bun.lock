@@ -54,7 +54,7 @@
     },
     "packages/runtime-core": {
       "name": "@loomhelm/runtime-core",
-      "version": "0.1.0",
+      "version": "0.2.0",
     },
     "web": {
       "name": "@loomhelm/web",

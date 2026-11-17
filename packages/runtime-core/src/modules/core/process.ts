@@ -16,8 +16,17 @@ export interface ProcessRequest {
   propagateParentSignal?: boolean;
   signal?: AbortSignal;
   outputSink?:
-    ((stream: "stdout" | "stderr", chunk: Uint8Array) => void) | undefined;
+    | ((stream: "stdout" | "stderr", chunk: Uint8Array) => unknown)
+    | undefined;
   maxCapturedOutputBytes?: number | undefined;
+  /** Optional private control plane; never multiplex control into stdout. */
+  onControlMessage?: (message: unknown) => void;
+  onSpawn?: (control: {
+    pid: number;
+    send: (message: unknown) => void;
+  }) => void;
+  cooperativeStop?: () => Promise<void>;
+  cooperativeStopTimeoutMs?: number;
 }
 
 export interface ProcessResult {
@@ -158,6 +167,13 @@ export async function runProcess(
   request: ProcessRequest,
 ): Promise<ProcessResult> {
   if (request.signal?.aborted) throw new Error("process aborted");
+  const cooperativeStopTimeoutMs = request.cooperativeStopTimeoutMs ?? 200_000;
+  if (
+    !Number.isInteger(cooperativeStopTimeoutMs) ||
+    cooperativeStopTimeoutMs < 1 ||
+    cooperativeStopTimeoutMs > 200_000
+  )
+    throw new Error("invalid_cooperative_stop_timeout");
   if (request.timeoutMs !== undefined && process.platform === "win32") {
     throw new Error("process_tree_timeout_unavailable");
   }
@@ -166,7 +182,12 @@ export async function runProcess(
       ? ("ignore" as const)
       : new Blob([request.stdin]);
   const managesProcessTree =
-    (request.timeoutMs !== undefined || request.signal !== undefined) &&
+    (request.timeoutMs !== undefined ||
+      request.signal !== undefined ||
+      request.cooperativeStop !== undefined ||
+      request.outputSink !== undefined ||
+      request.onSpawn !== undefined ||
+      request.onControlMessage !== undefined) &&
     process.platform !== "win32";
   const supervisionToken = managesProcessTree ? randomUUID() : undefined;
   const environment =
@@ -189,12 +210,26 @@ export async function runProcess(
       ? { stdio }
       : { stdin, stdout: "pipe" as const, stderr: "pipe" as const }),
   };
+  let rejectControlFailure!: (error: unknown) => void;
+  const controlFailure = new Promise<never>((_, reject) => {
+    rejectControlFailure = reject;
+  });
+  // onSpawn can throw before the main race attaches its rejection observer.
+  void controlFailure.catch(() => {});
   const child = Runtime.spawn([request.command, ...(request.args ?? [])], {
     ...options,
-    ...((request.timeoutMs !== undefined || request.signal !== undefined) &&
-    process.platform !== "win32"
-      ? { detached: true }
+    ...(request.onControlMessage
+      ? {
+          ipc: (message: unknown) => {
+            try {
+              request.onControlMessage!(message);
+            } catch (error) {
+              rejectControlFailure(error);
+            }
+          },
+        }
       : {}),
+    ...(managesProcessTree ? { detached: true } : {}),
   });
   const captureLimit =
     request.maxCapturedOutputBytes ?? Number.POSITIVE_INFINITY;
@@ -267,19 +302,37 @@ export async function runProcess(
     if (managesProcessTree && processGroupIdentity !== undefined)
       processGroupMembers = readProcessGroupMembers(processGroupIdentity);
     captureProcessTree(true);
-    signalTree("SIGTERM", allowLeaderExit);
-    termination = new Promise((resolve) => {
-      escalationTimer = setTimeout(() => {
-        signalTree("SIGKILL", true);
-        // Keep the leader from holding the stdout/stderr pipes open when the
-        // platform process-group lookup races with child exit.
+    termination = Promise.resolve().then(async () => {
+      if (request.cooperativeStop && !allowLeaderExit) {
+        let deadline: ReturnType<typeof setTimeout> | undefined;
         try {
-          child.kill("SIGKILL");
+          await Promise.race([
+            request.cooperativeStop(),
+            new Promise<void>((resolve) => {
+              deadline = setTimeout(resolve, cooperativeStopTimeoutMs);
+            }),
+            child.exited.then(() => {}),
+          ]);
         } catch {
-          // The leader may already have exited.
+          // Failure to cooperate does not turn process termination into proof.
+        } finally {
+          if (deadline !== undefined) clearTimeout(deadline);
         }
-        resolve();
-      }, terminationGraceMs);
+      }
+      signalTree("SIGTERM", allowLeaderExit);
+      await new Promise<void>((resolve) => {
+        escalationTimer = setTimeout(() => {
+          signalTree("SIGKILL", true);
+          // Keep the leader from holding the stdout/stderr pipes open when the
+          // platform process-group lookup races with child exit.
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // The leader may already have exited.
+          }
+          resolve();
+        }, terminationGraceMs);
+      });
     });
   };
   const handleParentSignal = (signal: ParentSignal) => {
@@ -302,7 +355,7 @@ export async function runProcess(
     descendantPoller = setInterval(captureProcessTree, 10);
   }
   if (request.signal) {
-    abortHandler = terminateTree;
+    abortHandler = () => terminateTree();
     request.signal.addEventListener("abort", abortHandler, { once: true });
     if (request.signal.aborted) terminateTree();
   }
@@ -311,6 +364,11 @@ export async function runProcess(
     let stdout: string;
     let stderr: string;
     try {
+      // Hooks run only after cleanup handlers and process ownership are installed.
+      request.onSpawn?.({
+        pid: child.pid,
+        send: (message) => child.send(message),
+      });
       const childExit = child.exited.then((code) => {
         captureProcessTree(true);
         if (processGroupIdentity !== undefined) {
@@ -320,14 +378,28 @@ export async function runProcess(
           terminateTree(true);
         return code;
       });
-      [exitCode, stdout, stderr] = await Promise.all([
-        childExit,
-        consumeOutput(child.stdout, "stdout", request.outputSink, captureLimit),
-        consumeOutput(child.stderr, "stderr", request.outputSink, captureLimit),
+      [exitCode, stdout, stderr] = await Promise.race([
+        Promise.all([
+          childExit,
+          consumeOutput(
+            child.stdout,
+            "stdout",
+            request.outputSink,
+            captureLimit,
+          ),
+          consumeOutput(
+            child.stderr,
+            "stderr",
+            request.outputSink,
+            captureLimit,
+          ),
+        ]),
+        controlFailure,
       ]);
     } catch (error) {
       terminateTree();
       await termination;
+      await child.exited;
       throw error;
     }
     if (
@@ -372,7 +444,7 @@ async function consumeOutput(
       if (item.done) break;
       const chunk = item.value;
       if (!chunk) continue;
-      sink?.(name, chunk);
+      await sink?.(name, chunk);
       if (captured >= captureLimit) continue;
       const remaining = Math.max(0, captureLimit - captured);
       const part =
