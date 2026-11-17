@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { ZodError, z } from "zod";
-import { canonicalizeContract3Plan, lifecycleStageOf } from "../lib/atomic-orchestration";
+import {
+  canonicalizeContract3Plan,
+  explicitLifecycleRoleOf,
+  lifecycleStageFromRole,
+  lifecycleStageOf,
+} from "../lib/atomic-orchestration";
 import { readCodexCapabilities } from "../lib/codex-agent-api";
 import {
   createCliThread,
@@ -70,6 +75,16 @@ const initialRequest = z
       .strict(),
   })
   .strict();
+
+function materializeExplicitLifecycleMetadata(atom: any, scope: "task" | "delivery_unit"): any {
+  const lifecycle_role = explicitLifecycleRoleOf(atom);
+  const lifecycle_stage = atom.lifecycle_stage ?? lifecycleStageFromRole(lifecycle_role, scope);
+  return {
+    ...atom,
+    ...(lifecycle_role ? { lifecycle_role } : {}),
+    ...(lifecycle_stage !== undefined ? { lifecycle_stage } : {}),
+  };
+}
 const migrationRequest = z
   .object({
     run_id: id,
@@ -256,7 +271,18 @@ try {
                   ),
               ],
             };
-      const initialPlan = canonicalizeContract3Plan(initialPlanDraft, parsed.payload.tasks);
+      const initialPlan = canonicalizeContract3Plan(
+        {
+          ...initialPlanDraft,
+          atoms: initialPlanDraft.atoms.map((atom: any) =>
+            materializeExplicitLifecycleMetadata(atom, "task"),
+          ),
+          group_atoms: initialPlanDraft.group_atoms.map((atom: any) =>
+            materializeExplicitLifecycleMetadata(atom, "delivery_unit"),
+          ),
+        },
+        parsed.payload.tasks,
+      );
       validatePlan(initialPlan);
       validateSchedulablePlan(initialPlan);
       validateInitialRuntimeState(parsed.payload.groups, parsed.payload.tasks);
@@ -290,11 +316,26 @@ try {
           ...(group.atoms.length === 0 && plannedAtoms.length > 0 ? { atoms: plannedAtoms } : {}),
         };
       });
-      const tasks = parsed.payload.tasks.map((task) =>
-        isContributionKind(task.kind) && (!task.pr || !("state" in task.pr))
-          ? { ...task, pr: { state: "unbound" as const } }
-          : task,
-      );
+      const plannedTaskAtoms = new Map(initialPlan.atoms.map((atom: any) => [atom.id, atom]));
+      const tasks = parsed.payload.tasks.map((task) => {
+        const atoms = task.atoms.map((atom: any) => {
+          const planned = plannedTaskAtoms.get(atom.id);
+          const source = planned ?? atom;
+          const metadata = materializeExplicitLifecycleMetadata(source, "task");
+          const { lifecycle_role: _role, lifecycle_stage: _stage, ...runtimeAtom } = atom;
+          return {
+            ...runtimeAtom,
+            ...(metadata.lifecycle_role ? { lifecycle_role: metadata.lifecycle_role } : {}),
+            ...(metadata.lifecycle_stage !== undefined
+              ? { lifecycle_stage: metadata.lifecycle_stage }
+              : {}),
+          };
+        });
+        const normalized = { ...task, atoms };
+        return isContributionKind(task.kind) && (!task.pr || !("state" in task.pr))
+          ? { ...normalized, pr: { state: "unbound" as const } }
+          : normalized;
+      });
       const timestamp = new Date().toISOString();
       const ledger = validateLedger({
         schema_version: 2,
