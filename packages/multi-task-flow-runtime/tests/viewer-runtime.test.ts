@@ -126,7 +126,7 @@ test("worker restart failures are bounded within a recovery window", async () =>
     now: () => now,
     maxRestarts: 2,
     restartWindowMs: 1_000,
-    restartBackoffMs: 0,
+    restartBackoffMs: 250,
     workerFactory: (workerKey) => {
       attempts += 1;
       if (attempts <= 2) throw new Error("worker boot failed");
@@ -134,10 +134,17 @@ test("worker restart failures are bounded within a recovery window", async () =>
     },
   });
   await expect(pool.acquire(key)).rejects.toThrow("worker boot failed");
+  expect(pool.retryAfterMs(key)).toBe(250);
+  now = 250;
   await expect(pool.acquire(key)).rejects.toThrow("worker boot failed");
   await expect(pool.acquire(key)).rejects.toThrow("restart limit reached");
   expect(pool.failureCount(key)).toBe(2);
+  expect(pool.retryAfterMs(key)).toBe(750);
+  now = 700;
+  expect(pool.retryAfterMs(key)).toBe(300);
+  expect(pool.failureCount(key)).toBe(2);
   now = 1_000;
+  expect(pool.retryAfterMs(key)).toBe(0);
   const lease = await pool.acquire(key);
   expect(attempts).toBe(3);
   lease.release();

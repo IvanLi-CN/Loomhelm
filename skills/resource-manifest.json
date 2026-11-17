@@ -7227,7 +7227,7 @@
     {
       "path": "skills/multi-task-flow/lib/service-http.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/service-http.ts",
-      "installedSha256": "ad7d12419c716b933b0274eb1c29a1c71c5a802ebc3cd4d033f724a1e441c0d2"
+      "installedSha256": "f4f0a5e82e47f13ad2f3f93b15094495bbd799e24d222c9ba52bc58cb7f07efb"
     },
     {
       "path": "skills/multi-task-flow/lib/service-import-recovery.ts",
@@ -7327,7 +7327,7 @@
     {
       "path": "skills/multi-task-flow/package.json",
       "sourcePath": "packages/multi-task-flow-runtime/package.json",
-      "installedSha256": "345fd7a25311c79dae256f8f0b48fcc451382d96819fd03ed4777240ca44fc33"
+      "installedSha256": "c279a25b6964448c6fb09b2fdb84c30cfb9cfac6fff72e079b45d9d42aeca6d7"
     },
     {
       "path": "skills/multi-task-flow/references/cli-contract.md",
@@ -7346,7 +7346,7 @@
     {
       "path": "skills/multi-task-flow/scripts/build.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/build.ts",
-      "installedSha256": "4605e269cea434506a56349fa01f73cf9ed7c8546061da19753f532d3283c0ce"
+      "installedSha256": "ad6c0acb54d6c9fef8bb533684dfe62e76a7b0107e8c17db6aba4ad50a56fe23"
     },
     {
       "path": "skills/multi-task-flow/scripts/demo-static.ts",
@@ -7626,7 +7626,7 @@
     {
       "path": "skills/multi-task-flow/web/app.css",
       "sourcePath": "packages/multi-task-flow-runtime/web/app.css",
-      "installedSha256": "ad3fce52dd5204dc70d705737829ce9fcf7053a2cfefa31a9a27b568253d240f"
+      "installedSha256": "5c42c02469fd9b48ddc4a235f8ec662cced11637b536ddf0dacaadd81cc35e55"
     },
     {
       "path": "skills/multi-task-flow/web/app.ts",
@@ -8252,7 +8252,7 @@
     {
       "path": "skills/multi-task-flow/scripts/check-client-skills.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/check-client-skills.ts",
-      "installedSha256": "7d508fb7649468f0ffdeac32e686c14b219704b69b5b5cc70207a3fce46e9a92"
+      "installedSha256": "493f3ad8248d489b00fab2f41bf85a8155afa2639ef8002c099d72060a701529"
     },
     {
       "path": "skills/multi-task-flow/tests/check-skills-installation.test.ts",
@@ -8267,7 +8267,7 @@
     {
       "path": "skills/multi-task-flow/scripts/package-client-skills.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/package-client-skills.ts",
-      "installedSha256": "4c362935ea5b2d788b336e90b8f350592efbda2b4ac92d9ac58a01abd4663902"
+      "installedSha256": "7d372ca591ac6a528e589fbb2572c77c9f86414ec7f252d061b43f1c7abf1287"
     },
     {
       "path": "skills/multi-task-flow/lib/package-source.ts",
@@ -8297,7 +8297,7 @@
     {
       "path": "skills/multi-task-flow/scripts/viewer-runtime.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/viewer-runtime.ts",
-      "installedSha256": "25f3e3f1ba34caa353428d2589882a68da976b19e07d512734596745dba2f3c5"
+      "installedSha256": "52037b093d8c7ee159a87b62acd8bfc6c333eac6c3700cebdbc0e55730867613"
     },
     {
       "path": "skills/multi-task-flow/scripts/viewer-socket.ts",
@@ -8347,7 +8347,7 @@
     {
       "path": "skills/multi-task-flow/tests/viewer-runtime.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/viewer-runtime.test.ts",
-      "installedSha256": "03ce76ce521642916a8380448a506a7b4d9f6919d6a34e81e251230ff41d43c4"
+      "installedSha256": "e0be940bf23b63b9db4499fd5712ac8b20d8c81e54e9a5f435262ca87b151e1a"
     },
     {
       "path": "skills/multi-task-flow/tests/viewer-socket.test.ts",
@@ -8813,6 +8813,51 @@
       "path": "skills/multi-task-flow/tests/worker-diagnostics.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/worker-diagnostics.test.ts",
       "installedSha256": "a2a1d359588b1fd5e0ab5ee9abf19534d601d720eedb6d652d5fa01dc207cf6a"
+    },
+    {
+      "path": "skills/multi-task-flow/lib/gateway-recovery-page.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/lib/gateway-recovery-page.ts",
+      "installedSha256": "955e5265549a979d8b3d03389181bb0ce5996a2536403df4876a461db81ea422"
+    },
+    {
+      "path": "skills/multi-task-flow/lib/gateway-ui.generated.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/lib/gateway-ui.generated.ts",
+      "installedSha256": "808b48eef7a046cc855a309f2c36f53397410be165ea50287481742af90b9310"
+    },
+    {
+      "path": "skills/multi-task-flow/scripts/build-gateway-ui.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/scripts/build-gateway-ui.ts",
+      "installedSha256": "7249f71a41d7481c2eb098f032cad85a03b7cd42110323c6f7f55dbd1553c345"
+    },
+    {
+      "path": "skills/multi-task-flow/web/gateway-ui.css",
+      "sourcePath": "packages/multi-task-flow-runtime/web/gateway-ui.css",
+      "installedSha256": "704f32f5c58a3c6923ddee0762f2cbeb0ca578a014d1fbcec00c3e213b7bbb43"
+    },
+    {
+      "path": "skills/multi-task-flow/web/viewer-theme.css",
+      "sourcePath": "packages/multi-task-flow-runtime/web/viewer-theme.css",
+      "installedSha256": "d91da96ba2d944a1c65ec8363a0f0e01b7f39db5f2a9dee7c346db6419660dd9"
+    },
+    {
+      "path": "skills/multi-task-flow/scripts/preview-gateway-recovery.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/scripts/preview-gateway-recovery.ts",
+      "installedSha256": "a6a40657d79602d251224d94faabee83e0f0bbb4418bc42605ff612cbe364c18"
+    },
+    {
+      "path": "skills/multi-task-flow/scripts/export-gateway-recovery.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/scripts/export-gateway-recovery.ts",
+      "installedSha256": "1f5e32db7d6a1923590cd19a594a1adc5e56d1c04116db154d7be6422edcacfd"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/gateway-recovery.test.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/tests/gateway-recovery.test.ts",
+      "installedSha256": "3020a28f1025fc44066b31446bc550427d6ea5e1da56dae2eeab36e6d26dfcd5"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/ui/gateway-recovery.test.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/tests/ui/gateway-recovery.test.ts",
+      "installedSha256": "8f8c2b4cb3f20b771be50867908a648f32d742ba92789d6f6dc0405f7aff9f93"
     },
     {
       "path": "skills/multi-task-flow/lib/viewer-binding.ts",

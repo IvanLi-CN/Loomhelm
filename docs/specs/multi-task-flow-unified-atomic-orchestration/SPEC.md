@@ -38,6 +38,10 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 
 原子任务状态 MUST 仅由状态图标表达；用户聚焦的节点使用聚焦样式；viewer MUST NOT 因节点是第一项或第一个 `planned` 节点而自动添加“当前待推进项”样式。
 
+### REQ-VIEWER-RECOVERY-001
+
+Gateway MUST 在 Worker 完全不可用时独立提供编排入口的 HTML 故障页，清楚区分页面连接失败与任务失败，提供手动重试、返回列表、复制诊断和可展开技术详情。重试 MUST 尊重实际剩余重启窗口并保留当前完整 URL，不得重新派发任务或重复业务副作用；非页面请求 MUST 保持 JSON 错误合同。
+
 ### REQ-SCHEDULE-001
 
 计划在批准前 MUST 通过完整理论排期校验；任一可执行节点缺少可计算的正确定时、存在悬空依赖、循环依赖、未批准计划或其他导致开始/结束偏移不可确定的情况时，批准和 scheduled 状态转换 MUST 被拒绝。
@@ -91,6 +95,12 @@ DeliveryUnit 的 `closed` 业务状态 MUST 保留已经验证的 `pr_merged` �
 - covers: `REQ-VIEWER-ATOMIC-001`, `REQ-VIEWER-ATOMIC-002`, `REQ-VIEWER-ATOMIC-003`
 - Method: viewer projection、原子图和详情内容测试，覆盖合法 DAG、并列节点、环、孤儿节点、缺失依赖、开始/结束节点、里程碑、选中节点和状态图标。
 - Pass condition: 所有 canonical 节点与边始终可见；合法 DAG 的详情顺序与依赖一致；非法图显示完整事实和异常原因；不产生第二顺序字段；列表不再自动高亮第一个 planned 节点。
+
+### VER-VIEWER-RECOVERY-001
+
+- covers: `REQ-VIEWER-RECOVERY-001`
+- Method: Gateway HTTP 故障注入、Worker pool 限流和页面交互测试，以及独立 `ui_demo` 的桌面和移动布局核验。
+- Pass condition: Worker 不可用时 HTML 页面无需 Worker 资源即可显示，倒计时结束前不能重试，结束后不自动刷新；手动重试保留 URL，API 保持 JSON，Ledger 内容与业务 revision 不变。
 
 ### VER-SCHEDULE-001
 
@@ -308,3 +318,11 @@ Contract 3 的 Flow dispatch operation 在 `conversation-create` 超时、进程
 - Pass condition: unknown operation 可由已知 thread 的完整证据安全恢复；证据不足继续 unknown；明确 pre-creation failure 才能 failed；任何重放不会产生第二个 thread、第二个 operation 或第二条 handoff notification。
 
 创建对账是 Flow Ledger 的恢复动作，不是普通 Codex dispatch 的别名。`codex reconcile` 继续服务独立的 Codex dispatch journal；Flow runtime 必须通过 `flow creation-reconcile` 查询并更新正式运行账本。没有已知 thread identity 时，系统不得按标题、cwd、时间或相似度猜测资源；只有额外的、可验证的 native request 查询证据才能解除该限制。
+
+## Visual Evidence
+
+Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，由 owner 确认。
+
+![指针选择文字，无焦点框](assets/gateway-focus-pointer.png)
+
+![键盘导航，组合容器统一焦点](assets/gateway-focus-keyboard.png)

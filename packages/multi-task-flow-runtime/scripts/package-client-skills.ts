@@ -62,6 +62,7 @@ const packagedSkill = "multi-task-flow";
 const developmentDirectories = ["/tests/", "/examples/"];
 const developmentScripts = new Set([
   "build.ts",
+  "build-gateway-ui.ts",
   "build-service.ts",
   "catalog-client-skills.ts",
   "check-client-skills.ts",
@@ -69,6 +70,8 @@ const developmentScripts = new Set([
   "diagnose-candidate-sandbox.ts",
   "package-client-skills.ts",
   "preview-source.ts",
+  "preview-gateway-recovery.ts",
+  "export-gateway-recovery.ts",
   "test-skills-artifact.ts",
   "test-skills-native.ts",
   "test-viewer-source.ts",

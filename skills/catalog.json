@@ -465,8 +465,11 @@
       "platform": "macOS launchd for installed viewer; POSIX ledger/HTTP on macOS/Linux",
       "scripts": [
         "skills/multi-task-flow/scripts/preview-source.ts",
+        "skills/multi-task-flow/scripts/preview-gateway-recovery.ts",
+        "skills/multi-task-flow/scripts/export-gateway-recovery.ts",
         "skills/multi-task-flow/scripts/build-service.ts",
         "skills/multi-task-flow/scripts/build.ts",
+        "skills/multi-task-flow/scripts/build-gateway-ui.ts",
         "skills/multi-task-flow/scripts/demo-static.ts",
         "skills/multi-task-flow/scripts/diagnose-candidate-sandbox.ts",
         "skills/multi-task-flow/scripts/orchestrate.ts",

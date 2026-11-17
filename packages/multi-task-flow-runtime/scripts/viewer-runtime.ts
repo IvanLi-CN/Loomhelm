@@ -134,6 +134,16 @@ export class ViewerWorkerPool {
     return this.failures.get(key)?.count ?? 0;
   }
 
+  retryAfterMs(key: ViewerWorkerKey): number {
+    const failure = this.failures.get(key);
+    if (!failure || this.now() - failure.firstFailedAt >= this.restartWindowMs) return 0;
+    const deadline =
+      failure.count >= this.maxRestarts
+        ? failure.firstFailedAt + this.restartWindowMs
+        : failure.lastFailedAt + this.restartBackoffMs;
+    return Math.max(0, deadline - this.now());
+  }
+
   private noteFailure(key: ViewerWorkerKey): void {
     const now = this.now();
     const previous = this.failures.get(key);
