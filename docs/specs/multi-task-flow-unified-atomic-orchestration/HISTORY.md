@@ -16,6 +16,9 @@
 - 2026-11-15: Locked Flow-native creation reconciliation as a separate recovery path from the standalone Codex dispatch journal, including evidence requirements, fail-closed unknown handling, idempotency and explicit exact-version release.
 - 2026-11-16: Established the layered CLI contract boundary: repository documentation is the human-readable source, CLI help/schema are runtime surfaces, and the Skill references the packaged contract copy.
 - 2026-11-17: Renamed the project-owned and vendored compound specification documents to underscore-separated names and synchronized their references, resource metadata and validation paths without changing the CLI contract or runtime behavior.
+
+- 2026-11-17: Locked the compact two-column detail inspector, selected-atom relations, Agent controls and diagnostics, combined status/policy projections, explicit empty states and bound-PR detail fallback.
+
 - 2026-11-17: Consolidated Agent roles and interaction design with thirteen sequence diagrams into AGENT_INTERACTIONS.md; moved mock completion-flow coverage and MTF-AUDIT-001 through MTF-AUDIT-005 into IMPLEMENTATION.md. CLI_CONTRACT.md retains its canonical location under ADR 0036; this documentation reorganization does not change runtime semantics. Related change: [PR #306](https://github.com/IvanLi-CN/Loomhelm/pull/306).
 
 - 2026-11-17: 修复 MTF-AUDIT-001/004/005 的 closeout uncertainty、ready notification acknowledgement 和 provider PR identity 门禁；补齐 MTF-AUDIT-002/003 的公开 CLI mock 创建、对账及多 Task 完成流。保持持久化 schema 和状态集合不变。
@@ -35,3 +38,5 @@
 ## 编排前向升级的原子发布屏障
 
 候选复现表明旧版维护入口可以绕过单独的 ledger contract 屏障改写 schema-1 绑定；采用主人确认的整个 run 目录原子发布，同时切换账本拒绝合同与绑定格式。保留隐藏源目录快照，旧目录锁等待者按身份拒绝，新生命周期等待者重新取得当前锁；不提供编排回滚或自动清理。初始化恢复和创建预算继续复用 PR #310。
+
+- 2026-11-17: 为目录升级的旧锁等待者测试增加失败结果诊断，保持既有安全拒绝条件与锁实现不变，并同步资源摘要。

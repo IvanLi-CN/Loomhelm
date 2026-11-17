@@ -37,7 +37,8 @@ export function supportsHoverInput(capabilities: {
 
 export function resolveDetailSurface(context: DetailSurfaceContext): DetailSurface {
   const detailVisible = context.selected && context.detailOpen;
-  if (context.detailPanelViewport) return detailVisible ? "desktop-inspector" : "none";
+  if (context.detailPanelViewport && !context.drawerViewport)
+    return detailVisible ? "desktop-inspector" : "none";
   if (context.keyboardSelection) {
     return detailVisible ? (context.drawerViewport ? "drawer" : "overlay-inspector") : "none";
   }

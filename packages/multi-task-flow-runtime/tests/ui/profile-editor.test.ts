@@ -4,6 +4,152 @@ import { createProfileEditor } from "../../web/profile-editor";
 const profile = { model: "gpt-6.1-sol", thinking: "medium" };
 const capabilities = [{ model: "gpt-6.1-sol", thinking: ["medium", "high"] }];
 
+test("compact fallback escapes its drawer and releases listeners when removed", async () => {
+  const drawer = document.createElement("aside");
+  drawer.style.transform = "translateY(0)";
+  drawer.style.overflow = "hidden";
+  const editor = createProfileEditor(
+    { capabilities, update: async () => {} },
+    "task",
+    "a",
+    profile,
+    profile,
+    null,
+    null,
+    true,
+  );
+  drawer.append(editor);
+  document.body.append(drawer);
+  const dropdown = editor.querySelector("details")!;
+  const panel = editor.querySelector<HTMLElement>(".profile-panel")!;
+  const trigger = editor.querySelector<HTMLElement>("summary")!;
+  dropdown.open = true;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(panel.parentElement).toBe(document.body);
+  expect(panel.classList.contains("profile-panel-floating")).toBe(true);
+  panel.dispatchEvent(new window.PointerEvent("pointerdown", { bubbles: true }));
+  expect(dropdown.open).toBe(true);
+  drawer.remove();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(panel.isConnected).toBe(false);
+  expect(dropdown.open).toBe(false);
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  const escape = new window.KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
+  document.dispatchEvent(escape);
+  expect(escape.defaultPrevented).toBe(false);
+});
+
+test("saving the compact editor closes the panel and restores trigger focus", async () => {
+  const editor = createProfileEditor(
+    { capabilities, update: async () => {} },
+    "task",
+    "a",
+    profile,
+    profile,
+    null,
+    null,
+    true,
+  );
+  document.body.append(editor);
+  const dropdown = editor.querySelector("details")!;
+  const trigger = editor.querySelector<HTMLElement>("summary")!;
+  const save = editor.querySelector<HTMLButtonElement>(".profile-save")!;
+  dropdown.open = true;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  save.focus();
+  save.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(dropdown.open).toBe(false);
+  expect(document.activeElement).toBe(trigger);
+  expect(editor.querySelector(".profile-panel")).not.toBeNull();
+  editor.remove();
+});
+
+test("compact save restores the replacement trigger after a snapshot refresh", async () => {
+  let replacement: HTMLElement | null = null;
+  const editor = createProfileEditor(
+    {
+      capabilities,
+      update: async () => {
+        replacement = createProfileEditor(
+          { capabilities, update: async () => {} },
+          "task",
+          "refresh-target",
+          profile,
+          profile,
+          null,
+          null,
+          true,
+        );
+        editor.replaceWith(replacement);
+      },
+    },
+    "task",
+    "refresh-target",
+    profile,
+    profile,
+    null,
+    null,
+    true,
+  );
+  document.body.append(editor);
+  const dropdown = editor.querySelector("details")!;
+  const oldTrigger = editor.querySelector<HTMLElement>("summary")!;
+  const save = editor.querySelector<HTMLButtonElement>(".profile-save")!;
+  dropdown.open = true;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  save.focus();
+  save.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(oldTrigger.isConnected).toBe(false);
+  expect(replacement).not.toBeNull();
+  expect(document.activeElement).toBe(replacement!.querySelector("summary"));
+  expect(replacement!.querySelector("details")?.open).toBe(false);
+  expect(document.querySelector("body > .profile-panel-floating")).toBeNull();
+  replacement!.remove();
+});
+
+test("compact profile popover closes on outside interaction and Escape without saving", async () => {
+  let updates = 0;
+  const editor = createProfileEditor(
+    {
+      capabilities,
+      update: async () => {
+        updates++;
+      },
+    },
+    "task",
+    "a",
+    profile,
+    profile,
+    null,
+    null,
+    true,
+  );
+  document.body.append(editor);
+  const dropdown = editor.querySelector("details")!;
+  const trigger = editor.querySelector<HTMLElement>("summary")!;
+  const panel = editor.querySelector<HTMLElement>('.profile-panel[role="dialog"]')!;
+  expect(trigger.getAttribute("aria-controls")).toBe(panel.id);
+  dropdown.open = true;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  document.body.dispatchEvent(new window.PointerEvent("pointerdown", { bubbles: true }));
+  expect(dropdown.open).toBe(false);
+  dropdown.open = true;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(dropdown.open).toBe(false);
+  expect(document.activeElement).toBe(trigger);
+  expect(updates).toBe(0);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  editor.remove();
+});
+
 test("editor submits a full pair and keeps server failures visible", async () => {
   let received: unknown;
   const editor = createProfileEditor(

@@ -39,6 +39,12 @@ export function outputLabel(output: AgentOutput): string {
       : "尚无 Agent 输出";
 }
 export function paintOutput(node: HTMLElement, output: AgentOutput, full = false): void {
+  const heading = node
+    .closest(".detail-pane-agent")
+    ?.querySelector<HTMLElement>(".detail-pane-heading");
+  if (heading?.dataset.agentThreadId && heading.dataset.agentThreadId === output.thread_id) {
+    heading.textContent = `Agent：${output.thread_title?.trim() || "对话标题暂不可用"}`;
+  }
   const signature = JSON.stringify([output.text, output.state, output.stale, full]);
   if (node.dataset.outputSignature === signature) return;
   node.dataset.outputSignature = signature;

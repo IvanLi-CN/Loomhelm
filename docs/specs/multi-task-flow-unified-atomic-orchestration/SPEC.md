@@ -38,6 +38,18 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 
 原子任务状态 MUST 仅由状态图标表达；用户聚焦的节点使用聚焦样式；viewer MUST NOT 因节点是第一项或第一个 `planned` 节点而自动添加“当前待推进项”样式。
 
+### REQ-VIEWER-ATOMIC-004
+
+详情 MUST 使用两栏布局，每栏独立上下堆叠：左栏为任务或交付单元信息及原子任务列表，右栏为当前选中原子任务信息及 Agent 信息和输出。原子任务选择只改变右上原子信息，不得混淆所属任务或交付单元的 Agent 上下文。列表标题 MUST 显示已完成数与总数；原子关系默认折叠，同一行显示摘要与右端展开图标，展开后用紧凑图表展示 canonical 前驱和后继。已完成原子摘要显示后继，其余显示前驱。
+
+### REQ-VIEWER-ATOMIC-005
+
+任务或交付单元标题左侧 MUST 使用单个无边框状态图标概览业务、运行就绪和调度状态，tooltip 保留三个来源状态；原子状态图标显示在原子标题右侧。组合状态只允许按生产者不变量剪枝，未知枚举、缺失字段和不可能组合 MUST 使用未知状态兜底且保留原值。执行归属和对话策略 MUST 合成为一个图标加文本 chip，悬浮或聚焦显示两个原始字段，交付方式使用独立图标加文本 chip；原始状态机、组合边界和异常兜底见 [STATE_MACHINES.md](STATE_MACHINES.md)。
+
+### REQ-VIEWER-ATOMIC-006
+
+Agent 信息 MUST 集中在右栏 Agent 区域：标题显示对话标题或未关联，打开对话与复制对话 ID 使用标题右端图标按钮，执行配置编辑器使用浮层且不得撑开信息行，运行时观察与诊断默认折叠。所有详情字段 MUST 提供明确空状态。PR 绑定事实与详情查询结果 MUST 区分：已有绑定但暂未获取详情时保留 PR identity、链接及刷新能力，不得误显示尚未关联。
+
 ### REQ-VIEWER-RECOVERY-001
 
 Gateway MUST 在 Worker 完全不可用时独立提供编排入口的 HTML 故障页，清楚区分页面连接失败与任务失败，提供手动重试、返回列表、复制诊断和可展开技术详情。重试 MUST 尊重实际剩余重启窗口并保留当前完整 URL，不得重新派发任务或重复业务副作用；非页面请求 MUST 保持 JSON 错误合同。
@@ -95,6 +107,12 @@ DeliveryUnit 的 `closed` 业务状态 MUST 保留已经验证的 `pr_merged` �
 - covers: `REQ-VIEWER-ATOMIC-001`, `REQ-VIEWER-ATOMIC-002`, `REQ-VIEWER-ATOMIC-003`
 - Method: viewer projection、原子图和详情内容测试，覆盖合法 DAG、并列节点、环、孤儿节点、缺失依赖、开始/结束节点、里程碑、选中节点和状态图标。
 - Pass condition: 所有 canonical 节点与边始终可见；合法 DAG 的详情顺序与依赖一致；非法图显示完整事实和异常原因；不产生第二顺序字段；列表不再自动高亮第一个 planned 节点。
+
+### VER-VIEWER-ATOMIC-002
+
+- covers: `REQ-VIEWER-ATOMIC-004`, `REQ-VIEWER-ATOMIC-005`, `REQ-VIEWER-ATOMIC-006`
+- Method: 详情内容、原子关系、Agent 操作、配置浮层、PR 提示及空状态 UI 测试；组合状态穷举测试与领域校验交叉验证；源码预览人工视觉验收。回归同时覆盖快照刷新后的原子选择保持、Bootstrap 主对话绑定、配置保存及快照替换后的焦点恢复和不支持 Popover API 时的浮层卸载。浏览器服务回归以实际投影的 canonical 原子边为断言依据，并覆盖短中等视口的抽屉打开行为；同时符合桌面宽度与抽屉断点时，抽屉策略优先，鼠标和键盘选择均必须打开可见详情；整合主线（包括 Gateway 升级恢复路径）后重新执行相同断点与交互回归；发布元数据整合不得改变已确认的 viewer 版本预期。
+- Pass condition: 两栏上下堆叠，原子选择与 Agent 上下文边界正确；所有 chip 和图标与值匹配并可聚焦查看原始值；异常组合明确兜底；折叠、浮层与空状态不导致布局空白或误报未关联 PR。
 
 ### VER-VIEWER-RECOVERY-001
 
@@ -370,5 +388,15 @@ Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，�
 ### VER-UPGRADE-001
 
 - covers: `REQ-UPGRADE-001`, `REQ-UPGRADE-002`, `REQ-UPGRADE-003`, `REQ-UPGRADE-004`, `REQ-UPGRADE-005`, `REQ-UPGRADE-006`
-- Method: 隔离历史 ledger 与绑定 fixture、已验证 artifact 身份 fixture、CLI/Worker 并发写入、原生副作用调用观察、升级各落盘边界的崩溃注入及重入测试。
+- Method: 隔离历史 ledger 与绑定 fixture、已验证 artifact 身份 fixture、CLI/Worker 并发写入、原生副作用调用观察、升级各落盘边界的崩溃注入及重入测试。目录升级安全测试的失败消息保留子进程实际结果，诊断不得放宽既有拒绝断言或更改锁实现。
 - Pass condition: 普通命令跨版本或同版本不同 build 均拒绝；专用诊断及 dry-run 不改变业务数据或绑定；目标 CLI 完成迁移和绑定一致切换；中断只续跑冻结目标、不降级；在途副作用未退出时阻断，静止 unknown/claim/容量不丢失；缺失绑定有唯一证据才补齐；旧 writer 不能绕过门禁；Gateway 和其他编排不受影响。
+
+## Visual Evidence
+
+详情面板在当前工作区源码预览中验收；图中归属 chip 将两个原始字段合并展示，悬浮提示保留各自原值，交付方式使用独立图标加文本 chip。
+
+![详情面板与归属 chip](assets/detail-inspector-policy-chips.png)
+
+短视口（1440×900）的详情使用不透明底部抽屉，位于遮罩上方；内部保持两栏及各栏上下堆叠。
+
+![短视口详情抽屉](assets/detail-inspector-short-viewport.png)

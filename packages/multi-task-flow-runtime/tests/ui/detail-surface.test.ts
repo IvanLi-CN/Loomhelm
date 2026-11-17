@@ -38,6 +38,24 @@ beforeEach(() => {
 });
 
 describe("dashboard detail surface DOM", () => {
+  test("short medium viewports open the drawer even when a desktop panel fits", () => {
+    for (const keyboardSelection of [false, true]) {
+      const surface = resolveDetailSurface({
+        selected: true,
+        detailOpen: true,
+        hoverCapable: true,
+        detailPanelViewport: true,
+        drawerViewport: true,
+        keyboardSelection,
+      });
+      applyDetailSurface(elements, surface, true);
+      expect(surface).toBe("drawer");
+      expect(elements.details.classList.contains("open")).toBe(true);
+      expect(elements.detailsBackdrop.hidden).toBe(false);
+      expect(elements.workspace.classList.contains("has-details")).toBe(false);
+    }
+  });
+
   test("does not reserve a detail column before an object is selected", () => {
     const surface = resolveDetailSurface({
       selected: false,

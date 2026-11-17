@@ -380,8 +380,8 @@ export function attachResourcePopover(
     const bound = initialBoundPR;
     if (!bound) {
       panel.setAttribute("aria-busy", "false");
-      identity.replaceChildren();
-      body.replaceChildren(node("span", "尚未关联 PR", "resource-empty-label"));
+      panel.className = "unbound-pr-tooltip";
+      panel.replaceChildren(unboundPRHint());
       position();
       return;
     }
@@ -483,21 +483,27 @@ export function attachResourcePopover(
         if (next.error) body.append(node("p", next.error, "resource-error"));
       } else {
         const heading = node("div", "", "resource-section-heading");
-        const empty = !next.error;
-        if (empty) {
+        if (!next.error) {
+          const hint = node("div", "", "unbound-pr-hint");
+          const link = document.createElement("a");
+          link.href = bound.url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.textContent = `PR #${bound.number}`;
+          link.setAttribute("aria-label", `打开 PR #${bound.number}`);
+          const refresh = document.createElement("button");
+          refresh.type = "button";
+          refresh.setAttribute("aria-label", "刷新 PR 信息");
+          refresh.append(icon("refresh"));
+          refresh.addEventListener("click", () => void loadPR(true));
+          hint.append(link, node("span", "· 暂未获取到详情"), refresh);
           panel.className = "unbound-pr-tooltip";
-          panel.replaceChildren(unboundPRHint(() => void loadPR(true), icon("refresh")));
+          panel.replaceChildren(hint);
           position();
           return;
         }
-        heading.append(
-          node(
-            empty ? "span" : "h3",
-            empty ? "尚未关联 PR" : "PR 信息",
-            empty ? "resource-empty-label" : "resource-pr-title",
-          ),
-        );
-        const label = empty ? "刷新 PR 信息" : "重试 PR 查询";
+        heading.append(node("h3", "PR 信息", "resource-pr-title"));
+        const label = "重试 PR 查询";
         const retry = document.createElement("button");
         retry.type = "button";
         retry.className = "resource-icon-button resource-refresh-button";

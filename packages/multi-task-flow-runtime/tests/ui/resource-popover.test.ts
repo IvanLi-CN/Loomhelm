@@ -252,8 +252,47 @@ test("unbound PR shows an immediate empty state without fetching", async () => {
     attachResourcePopover(trigger, "pr", unbound);
     trigger.focus();
     await new Promise((r) => setTimeout(r, 0));
-    expect(document.querySelector(".resource-body")?.textContent).toContain("尚未关联 PR");
+    expect(document.querySelector(".unbound-pr-tooltip .unbound-pr-hint")?.textContent).toBe(
+      "尚未关联 PR",
+    );
+    expect(document.querySelector(".resource-popover")).toBeNull();
+    expect(document.querySelector(".unbound-pr-hint button")).toBeNull();
     expect(calls).toBe(0);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("an empty PR query preserves the bound PR link and offers refresh without claiming it is unbound", async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return new Response(
+      JSON.stringify({ data: null, error: null, loading: false, stale: false, observed_at: null }),
+    );
+  }) as typeof fetch;
+  try {
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    attachResourcePopover(trigger, "pr", source());
+    trigger.focus();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.querySelector(".unbound-pr-tooltip .unbound-pr-hint")?.textContent).toBe(
+      "PR #42· 暂未获取到详情",
+    );
+    const link = document.querySelector<HTMLAnchorElement>(".unbound-pr-hint a");
+    expect(link?.href).toBe("https://github.com/example/repo/pull/42");
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toBe("noopener noreferrer");
+    expect(document.querySelector(".unbound-pr-hint")?.textContent).not.toContain("尚未关联");
+    expect(document.querySelector(".resource-popover")).toBeNull();
+    document
+      .querySelector<HTMLButtonElement>('.unbound-pr-hint button[aria-label="刷新 PR 信息"]')!
+      .click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toBe(2);
+    expect(document.querySelector(".unbound-pr-tooltip")).not.toBeNull();
   } finally {
     globalThis.fetch = original;
   }

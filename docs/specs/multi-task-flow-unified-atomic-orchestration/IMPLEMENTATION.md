@@ -90,6 +90,16 @@ Viewer 需要分别投影 Run phase、TaskStatus、DeliveryUnitStatus、provider
 
 Schema、迁移、评估、图投影和网页交互分别由 `packages/multi-task-flow-runtime/tests/` 下对应测试覆盖。恢复设计需要新增或补齐以下验证：closed bootstrap 作为上游允许 regular dispatch；provider closed 但无 merge receipt 时拒绝；closed DeliveryUnit 自身仍拒绝 dispatch 和 atom update；closeout reconcile 的有效、无效、未知、权限、幂等和 revision conflict 路径；protected recovery 的 plan/workspace/base/owner 门禁；上游 capability 失效后的新下游阻塞和既有 operation 保留；多对象状态在 viewer 中不互相污染；旧 ledger、旧 viewer 和新 audit event 的兼容读取。任何新增字段、命令、事件或状态语义必须同时更新主题 SPEC、schema/domain 测试、viewer projection 测试和兼容迁移测试；不得只修改临时设计文件或网页文案。
 
+## 详情组合状态展示
+
+详情标题旁使用 `web/detail-status-model.ts` 的只读组合投影，经 `web/detail-status.ts` 渲染为一个图标和两行状态说明。三项输入的状态机、生产者约束、45→15 的 group 候选剪枝、Task 的保守允许集合和未知兜底合同见 [STATE_MACHINES.md 第 5 节](./STATE_MACHINES.md#5-详情面板的三状态组合投影)。该投影不写 Ledger、不改变业务状态与派发门禁；生产者不变量测试和 DOM 交互测试分别位于 `tests/detail-status.test.ts`、`tests/ui/detail-status.test.ts`，路径均相对 `packages/multi-task-flow-runtime/`。
+
+详情中的依赖入口位于当前原子任务面板：`web/detail-atom-relations.ts` 以“前驱 → 当前原子任务 → 后继”的有向局部图展示直接关联，随原子选择同步更新，任务和交付单元信息面板不再重复展示聚合关系。优先使用 `canonical_atomic_edges`，只有字段缺失时才读取旧 `atomic_edges`；显式空数组表示没有 canonical 边。相同邻居去重，跨 scope 的名称从 canonical 节点和旧原子定义解析，未找到名称时保留 ID，无关联时分别显示“无前驱”“无后继”。该图只读取既有依赖，不创建或改写边；`tests/ui/detail-atom-relations.test.ts` 覆盖方向、去重、跨 scope、选择变化和兼容/空态。
+
+原子任务关系默认折叠为文本摘要：未完成状态显示直接前驱，完成状态显示直接后继，无关联时显示“无前驱”或“无后继”。展开后显示完整的前驱、当前任务和后继图；同一页面内按原子任务保留展开状态，切换选择与数据刷新不重置用户选择。
+
+Agent 归属展示由 `web/execution-policy-model.ts` 将 `execution_owner` 与 `conversation_policy` 合成为一个配置状态，`web/execution-policy-chip.ts` 以图标加文本展示并保留两个原始字段的 tooltip；交付策略独立显示图标加文本。三张状态机图、20 对组合的剪枝矩阵和异常兜底见 [STATE_MACHINES.md](STATE_MACHINES.md) 第 6 节。`tests/execution-policy.test.ts` 与领域校验器交叉验证全部组合，`tests/ui/execution-policy-chip.test.ts` 覆盖键盘聚焦与原值展示。
+
 ## Interrupted initialization recovery
 
 `initialization-recovery.ts` 实现只限绑定 main 的单次恢复与注册链对账；`engine-initialization-recovery.ts` 追加冻结 intent 和原生 turn 观察；`codex-recovery-writer.ts` 用受监管的独占私有 server 封住历史检查与发送间的竞态。初始化验证器精确识别历史文本并允许 prompt-only interruption。回归覆盖重入不重发、异常历史、revision fencing、证据绑定和 handoff 幂等；原生验收仅使用隔离测试资源。兼容和停止发布修复路径见 `initialization-recovery-migration.json`。
@@ -144,3 +154,19 @@ ADR 0039 与 REQ-UPGRADE-001 至 REQ-UPGRADE-006 的候选实现位于 `orchestr
 Gateway 不再为缺失历史绑定的账本使用当前安装或 fallback 身份补建来源；隔离源码预览只为本次新建的临时副本显式登记预览身份，不能作为历史编排来源证据。
 
 回归覆盖自定义视图下 Worker 的真实执行身份、CLI 外桌面通知的静止证据、原子交换期间原生锁获取拒绝后的安全重试，以及空 init 输入的既有错误码。历史 schema-1/contract-1 与 contract-2 的公开只读诊断保持源文件字节不变，并拒绝缺少已验证迁移链的升级。
+
+详情面板新增的渲染、组合投影及回归测试模块通过 `scripts/check-client-skills.ts` 注册到 `skills/resource-manifest.json` 的运行时源码映射，确保打包安装包含同一套模块和摘要；更新源码不自动更新用户级已安装版本。
+
+详情回归补齐带图节点焦点的快照刷新、Bootstrap owner thread 与输出绑定、配置保存和详情快照替换后的焦点归还及浮层卸载。无 Popover API 时将浮层临时挂载到 body，避开移动抽屉的 transform 和 overflow；关闭或原详情卸载时回收浮层与事件监听。服务浏览器回归直接选择 `atom-model`，验证原子关系默认折叠、展开后的当前节点与 canonical 前驱/后继，不再等待已移除的聚合关系区域。
+
+短中等视口同时满足桌面宽度与抽屉高度条件时，详情策略优先使用抽屉，避免 CSS 已将详情移出视口而交互层未设置 open。短视口样式恢复不透明背景、遮罩上方层级和受限高度的 flex 滚动容器。DOM 回归覆盖鼠标与键盘选择，并断言抽屉打开、遮罩可见和桌面栏位不保留；服务浏览器继续覆盖四组视口的实际点击与关系展开。
+
+已整合主线的运行时流式进程处理；详情修复继续使用相同浏览器断点和原子关系断言，不以进程实现变化替代页面验证。
+
+合并前再次整合主线的 Gateway 升级恢复改动，viewer 的断点、布局、状态和版本预期保持已验收合同；最终候选重新执行 CI 和正式复审。
+
+主线运行时 npm provenance 元数据已整合，未改变 viewer 源码或包版本；release:skip 的版本不变断言仍由发布门禁核验。
+
+目录升级的旧锁等待者测试在断言失败时输出子进程结果，用于区分安全拒绝路径与意外读取；原断言与锁实现保持不变，同步维护测试资源摘要。
+
+已整合运行时发布工作流的冻结上传收尾、源内容绑定和 tag committer 身份修复；详情面板与诊断断言不受发布工作流变更影响，viewer 版本预期保持不变。
