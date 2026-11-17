@@ -7431,7 +7431,7 @@
     {
       "path": "skills/multi-task-flow/tests/graph-projection.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/graph-projection.test.ts",
-      "installedSha256": "362f0348f9b1bd6b57a8e81a52e0aa5a15993e77e1255f434fe06ed9603202a9"
+      "installedSha256": "16184c02e841dc0539e70b4e4566e0c36725b394f5fea188bf92284fdc7cd49c"
     },
     {
       "path": "skills/multi-task-flow/tests/graph.test.ts",
@@ -7666,7 +7666,7 @@
     {
       "path": "skills/multi-task-flow/web/graph-projection.ts",
       "sourcePath": "packages/multi-task-flow-runtime/web/graph-projection.ts",
-      "installedSha256": "8df17238bab39bc78ca51751a1115bf97634bfdd0457fbe48bf9ed666391e201"
+      "installedSha256": "8b262294ec06ad23d7dd90523ff5fc958f7d793ffc03756d3f41a08523dbf63d"
     },
     {
       "path": "skills/multi-task-flow/web/graph.ts",
