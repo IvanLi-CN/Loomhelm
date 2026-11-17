@@ -61,7 +61,6 @@ export function openReviewWaveState(
     active.retirement_reason = "legacy-review-receipt-schema";
     active.retired_at = isoNow();
     review.active_wave_id = null;
-    review.active_epoch_id = null;
   }
   const scopeClass = options.scopeClass ?? "code";
   if (!REVIEW_SCOPE_CLASSES.has(scopeClass))

@@ -696,6 +696,27 @@ describe("acceptance and review state", () => {
       }),
     ).toThrow("another review wave is already active");
 
+    const budgetLedger = structuredClone(normalized) as Record<string, unknown>;
+    const budgetReview = budgetLedger.review as Record<string, unknown>;
+    const budgetEpochId = String(budgetReview.active_epoch_id);
+    const budgetEpoch = (
+      budgetReview.epochs as Record<string, unknown>[]
+    ).find((epoch) => epoch.epoch_id === budgetEpochId);
+    if (!budgetEpoch) throw new Error("test fixture is missing its active epoch");
+    budgetEpoch.repair_rounds_used = 2;
+    const budgetFresh = openReviewWaveState(budgetLedger, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: "g".repeat(40),
+      laneSpecs: lanes,
+    });
+    expect((budgetFresh.epoch as Record<string, unknown>).epoch_id).toBe(
+      budgetEpochId,
+    );
+    expect(
+      (budgetFresh.epoch as Record<string, unknown>).repair_rounds_used,
+    ).toBe(2);
+
     const freshHead = "b".repeat(40);
     const fresh = openReviewWaveState(normalized, {
       stage: "initial",
