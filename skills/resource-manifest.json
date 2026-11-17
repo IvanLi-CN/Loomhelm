@@ -8082,7 +8082,7 @@
     {
       "path": "skills/multi-task-flow/tests/initialize-rpc.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/initialize-rpc.test.ts",
-      "installedSha256": "498a68639699b8a5a49b9a0c1be9511b76f6881a162f13e03b3941c73ef45e89"
+      "installedSha256": "0981d6d75b3b66fddfed2506fdc8c9f329f51c157a557e1b3676f17164c07536"
     },
     {
       "path": "skills/multi-task-flow/tests/detail-status.test.ts",
