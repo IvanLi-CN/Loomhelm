@@ -150,7 +150,7 @@ The explicitly installed shared user service uses the system-service exception f
 
 普通 flow（包括只读）必须使用与该编排账本及运行绑定完全一致的包版本、build、source 和合同集合。版本不匹配时先用 `multi-task-flow orchestration compatibility-check --run-id <run-id>` 诊断；只有主人明确授权升级该正式编排后，才使用目标版本 CLI 执行 `orchestration upgrade --run-id <run-id> --dry-run <version|tag>` 和不带 dry-run 的相同命令。安装新 CLI 或阅读本 Skill 不授权迁移已有正式运行。
 
-新初始化原子发布 contract 4 和 schema-2 版本绑定，保留 Contract 3 的原子编排及初始化恢复语义。显式升级通过整个 run 目录的原子发布迁移受支持账本并切换绑定，保留源目录恢复快照，CLI 侧不可逆，不提供编排 rollback。升级中断只续跑登记的冻结目标；普通 flow 不得修复或跳过升级阶段。缺少可信历史身份、没有机械迁移链或无法证明原生调用已停止时保持阻断；不要改账本、释放 claim、强杀进程或按全局 Gateway 版本猜测。专用诊断与 dry-run 不产生业务写入或绑定切换。完整阶段及错误码见 canonical CLI 合同。
+新初始化原子发布 contract 5 和 schema-2 版本绑定，保留原子编排及初始化恢复语义。显式升级通过整个 run 目录的原子发布执行已验证的机械迁移并切换绑定，原样保留结果不确定的调用、attempt、claim 和容量，不发送任何补偿调用，不提供编排 rollback。upgrade-check 与 dry-run 共用评估器，只读且不创建锁文件；迁移就绪不表示原生调用已停止。旧调用可能继续完成，晚回执不能写回目标，相关业务仍 unknown。升级中断只续跑冻结目标；普通 flow 不得修复或跳过阶段。缺少可信源身份、机械转换或旧 writer 排斥时阻断，不改业务状态、强杀或猜测来源；初始化恢复的权限事务保持。完整阶段、报告及错误码见 canonical CLI 合同。
 
 ## Contract 3 强制边界
 

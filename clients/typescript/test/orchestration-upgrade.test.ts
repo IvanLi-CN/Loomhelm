@@ -22,7 +22,7 @@ test('packaged CLI fences old bindings, diagnoses without writes, and explicitly
     const bindingPath = join(runPath, 'runtime/viewer-binding.json');
     const ledger = JSON.parse(await readFile(ledgerPath, 'utf8'));
     const binding = JSON.parse(await readFile(bindingPath, 'utf8'));
-    assert.equal(ledger.contract_version, 4);
+    assert.equal(ledger.contract_version, 5);
     assert.equal(binding.schema_version, 2);
     const version = binding.package_version;
     // Disposable historical source fixture; no live run or global package is modified.
@@ -42,7 +42,7 @@ test('packaged CLI fences old bindings, diagnoses without writes, and explicitly
       assert.equal(diagnosis.code, 0, diagnosis.text);
       assert.equal(JSON.parse(diagnosis.stdout).result.contract, contract);
       const migration = await invoke(['orchestration', 'upgrade', '--run-id', 'example-run', '--dry-run', version]);
-      assert.notEqual(migration.code, 0); assert.match(migration.text, /MIGRATION_REQUIRED/);
+      assert.notEqual(migration.code, 0); assert.match(migration.text, /RUN_MIGRATION_UNSAFE/);
       assert.deepEqual([await readFile(ledgerPath, 'utf8'), await readFile(bindingPath, 'utf8')], legacyBytes);
     }
     await writeFile(ledgerPath, before[0]!); await writeFile(bindingPath, before[1]!);
@@ -52,11 +52,24 @@ test('packaged CLI fences old bindings, diagnoses without writes, and explicitly
     assert.equal(checked.code, 0, checked.text); assert.equal(JSON.parse(checked.stdout).result.compatible, false);
     const dry = await invoke(['orchestration', 'upgrade', '--run-id', 'example-run', '--dry-run', version]);
     assert.equal(dry.code, 0, dry.text);
+    const migrationCheck = await invoke(['orchestration', 'upgrade-check', '--run-id', 'example-run']);
+    assert.equal(migrationCheck.code, 0, migrationCheck.text);
+    const report = JSON.parse(migrationCheck.stdout).result;
+    assert.equal(report.schema_version, 1);
+    assert.equal(report.migration_supported, true);
+    assert.equal(report.migration_ready, true);
+    assert.equal(report.native_quiescence, 'not_asserted');
+    const schema = await invoke(['orchestration', 'schema', '--format', 'json']);
+    assert.equal(schema.code, 0, schema.text);
+    assert.equal(JSON.parse(schema.stdout).properties.schema_version.const, 1);
+    assert.equal(JSON.parse(schema.stdout).properties.native_quiescence.const, 'not_asserted');
     assert.deepEqual([await readFile(ledgerPath, 'utf8'), await readFile(bindingPath, 'utf8')], before);
     const upgraded = await invoke(['orchestration', 'upgrade', '--run-id', 'example-run', version]);
     assert.equal(upgraded.code, 0, upgraded.text);
     const migrated = JSON.parse(await readFile(ledgerPath, 'utf8'));
     assert.equal(migrated.upgrade.phase, 'completed'); assert.equal(migrated.runtime_identity.package_version, version);
+    assert.equal(migrated.upgrade.migration_audit.policy, 'preserve-unresolved-v1');
+    assert.equal(migrated.upgrade.migration_audit.native_quiescence, 'not_asserted');
     assert.equal((await readdir(join(root, 'data/runs'))).filter(name => name.startsWith('.upgrade-')).length, 1);
     const shown = await invoke(['flow', 'show', '--input', '-'], query); assert.equal(shown.code, 0, shown.text);
     const replay = await invoke(['orchestration', 'upgrade', '--run-id', 'example-run', version]);

@@ -34,13 +34,15 @@ export function normalizeLegacyLedger(value: unknown): unknown {
     contract_version:
       raw.schema_version === undefined || raw.schema_version === 1
         ? 1
-        : raw.contract_version === 4
-          ? 4
-          : raw.contract_version === 3
-            ? 3
-            : raw.contract_version === 2
-              ? 2
-              : 1,
+        : raw.contract_version === 5
+          ? 5
+          : raw.contract_version === 4
+            ? 4
+            : raw.contract_version === 3
+              ? 3
+              : raw.contract_version === 2
+                ? 2
+                : 1,
     execution_plan_id: raw.execution_plan_id ?? raw.active_plan_id,
     milestones: Array.isArray(raw.milestones) ? raw.milestones : [],
     atomic_nodes: Array.isArray(raw.atomic_nodes) ? raw.atomic_nodes : [],

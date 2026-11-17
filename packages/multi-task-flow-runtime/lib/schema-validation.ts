@@ -73,14 +73,20 @@ function validateDeliveryUnits(ledger: Ledger): void {
 
 export function validateLedger(value: unknown): Ledger {
   const parsed = parseLedger(value);
-  if (parsed.contract_version === 4) {
+  if (parsed.contract_version >= 4) {
     requireCondition(
       Boolean(parsed.runtime_identity),
       "RUN_IDENTITY_REQUIRED",
-      "Contract 4 requires an immutable run identity",
+      "Identity-bound contracts require an immutable run identity",
       4,
     );
     const upgrade = parsed.upgrade;
+    requireCondition(
+      parsed.contract_version !== 5 || !upgrade || Boolean(upgrade.migration_audit),
+      "MIGRATION_AUDIT_REQUIRED",
+      "Contract 5 upgrades require a persisted mechanical migration audit",
+      4,
+    );
     const expected = upgrade?.phase === "prepared" ? upgrade.source : upgrade?.target;
     requireCondition(
       !expected || sameRunIdentity(parsed.runtime_identity, expected),
@@ -89,7 +95,8 @@ export function validateLedger(value: unknown): Ledger {
       4,
     );
     requireCondition(
-      upgrade?.phase === "prepared" || parsed.runtime_identity?.ledger_contract === 4,
+      upgrade?.phase === "prepared" ||
+        parsed.runtime_identity?.ledger_contract === parsed.contract_version,
       "INCOMPATIBLE_LEDGER",
       "Runtime identity must implement the ledger contract",
       4,
@@ -98,7 +105,7 @@ export function validateLedger(value: unknown): Ledger {
     requireCondition(
       !parsed.runtime_identity && !parsed.upgrade,
       "INCOMPATIBLE_LEDGER",
-      "Lifecycle fields require contract 4",
+      "Lifecycle fields require contract 4 or later",
       4,
     );
   }

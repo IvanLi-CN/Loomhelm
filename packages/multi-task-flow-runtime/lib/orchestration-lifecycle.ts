@@ -9,6 +9,7 @@ import {
   writeExclusiveNoFollow,
 } from "@loomhelm/runtime-core/modules/visual/secure_io";
 import { ContractError, requireCondition } from "./errors";
+import { migrationDigest } from "./migration-audit";
 import { callerIdentity, requireRunBinding } from "./orchestration-identity";
 import type { LedgerStore } from "./store";
 
@@ -83,9 +84,16 @@ export async function withRunCommand<T>(store: LedgerStore, action: () => Promis
     requireRunBinding(store.rootPath, ledger.orchestration_id, ledger, identity);
     const path = join(store.runPath, "runtime", "call.json");
     if (existsSync(path)) {
-      const previous = JSON.parse(readRegularNoFollow(path, store.rootPath).toString("utf8"));
+      const content = readRegularNoFollow(path, store.rootPath).toString("utf8");
+      // The immutable source snapshot retains this receipt. Retiring it does not
+      // assert termination: every unresolved business attempt remains unchanged.
+      const carried =
+        ledger.contract_version === 5 &&
+        ledger.upgrade?.phase === "completed" &&
+        ledger.upgrade.migration_audit?.source_call_digest === migrationDigest(content);
+      const previous = carried ? null : JSON.parse(content);
       requireCondition(
-        previous.state === "stopped",
+        carried || previous.state === "stopped",
         "RUN_QUIESCENCE_UNPROVEN",
         "An earlier invocation has no safe-stop receipt; inspect its native calls",
         4,
@@ -100,48 +108,4 @@ export async function withRunCommand<T>(store: LedgerStore, action: () => Promis
       writeAtomicNoFollow(path, JSON.stringify({ ...receipt, state: "stopped" }), store.rootPath);
     }
   });
-}
-export function requireQuiescentRun<T>(store: LedgerStore, ledger: any, action: () => T): T {
-  const path = join(store.runPath, "runtime", "call.json");
-  const receipt = existsSync(path)
-    ? JSON.parse(readRegularNoFollow(path, store.rootPath).toString("utf8"))
-    : null;
-  requireCondition(
-    !receipt || receipt.state === "stopped",
-    "RUN_QUIESCENCE_UNPROVEN",
-    "A registered invocation has no safe-stop receipt; no process will be killed",
-    4,
-  );
-  const unjoinedNotification = ledger.notifications.some((notification: any) => {
-    if (notification.delivery_status !== "unknown") return false;
-    const intent = ledger.events.find(
-      (event: any) =>
-        event.type === "notification_delivery_resolved" &&
-        event.data?.notification_id === notification.id &&
-        event.data?.delivery_attempt_id === notification.last_attempt_id,
-    );
-    // Desktop tools execute after the CLI returns. Only the joined app-server
-    // path is covered by the CLI stop receipt; absent provenance also fails closed.
-    return intent?.data?.provider !== "codex-app-server";
-  });
-  requireCondition(
-    !unjoinedNotification,
-    "RUN_QUIESCENCE_UNPROVEN",
-    "An external notification attempt has no safe-stop proof; reconcile its exact provider receipt first",
-    4,
-  );
-  // Old releases did not register native invocation lifetimes. Preserve uncertainty, never infer a stop from status or PID.
-  const ambiguous =
-    ledger.operations.some((operation: any) => ["claimed", "unknown"].includes(operation.status)) ||
-    ledger.notifications.some((notification: any) => notification.delivery_status === "unknown") ||
-    ledger.resources.some((resource: any) =>
-      ["archive_unknown", "unarchive_unknown"].includes(resource.status),
-    );
-  requireCondition(
-    !ambiguous || Boolean(receipt),
-    "RUN_QUIESCENCE_UNPROVEN",
-    "Historical pending operations have no verified native-call stop receipt",
-    4,
-  );
-  return action();
 }

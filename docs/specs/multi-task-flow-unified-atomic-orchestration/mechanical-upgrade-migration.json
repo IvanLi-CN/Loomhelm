@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "kind": "persistent-state-migration-record",
+  "migration": {
+    "description": "Preserve unresolved calls in a mechanical forward upgrade; persist the migration audit atomically with the target writer barrier",
+    "release_unit_description": "@loomhelm/multi-task-flow",
+    "version_impact": "minor"
+  },
+  "compatibility_impacts": {
+    "public_api": "minor: additive upgrade-check; dry-run now rejects unsafe migration instead of returning early success",
+    "persistent_state": "minor: ledger contract 5 requires the candidate reader; prior contract-4 writers reject it"
+  },
+  "durable_state": {
+    "description": "Ledger schema 2 contract 5 plus existing schema-2 viewer binding and retained source directory",
+    "storage_implementation": "LedgerStore atomic JSON files and same-parent atomic directory exchange",
+    "source_compatibility_range": {
+      "from_program_versions": "Supported schema-2 contracts 3/4/5; older schemas remain diagnostic-only for this upgrade path",
+      "to_program_version": "Exact mainline-published artifact determined by release policy; no version preselected",
+      "direct_major_skips_supported": false
+    }
+  },
+  "database_migration": {
+    "applicable": false,
+    "ddl_structural_changes": [],
+    "dml_changes": [],
+    "historical_data_backfill_or_transformation": []
+  },
+  "rollout_observability": {
+    "operations_must_remain_separate": true,
+    "operation_sequence": [
+      "read-only-assessment",
+      "lock-and-reassess",
+      "retain-source",
+      "atomic-prepared-publication",
+      "migrated",
+      "binding_switched",
+      "completed"
+    ],
+    "progress_signals": [
+      "migration_supported/migration_ready/blockers",
+      "upgrade.phase",
+      "upgrade.migration_audit",
+      "ledger/binding identity agreement"
+    ],
+    "pause_points": [
+      "before publication leaves source authoritative",
+      "after publication resumes only frozen target"
+    ]
+  },
+  "recovery": {
+    "deployed_migrations_immutable": true,
+    "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
+    "faulty_release_recovery": "forward-repair-by-a-new-program-version",
+    "backup_restore_role": "separate-disaster-recovery"
+  },
+  "validation": {
+    "minor": {
+      "required_test_evidence": [
+        "Source contract 3/4/5 and audit compatibility matrix",
+        "Unknown attempt/claim/capacity and business digest preservation",
+        "Actual old package readers and writers reject atomic barrier",
+        "Crash/resume and frozen target with audit validation",
+        "Actual tarball and temporary consumer CLI",
+        "Candidate-bound private LIMS-copy empirical evidence; real run requires later release and authorization"
+      ]
+    }
+  }
+}

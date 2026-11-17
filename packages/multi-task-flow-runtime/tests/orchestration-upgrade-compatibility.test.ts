@@ -7,13 +7,13 @@ import { fixtureRun, serviceFixture } from "./service-fixture";
 // Supply an unpacked, dependency-installed published CLI. No registry access or production paths are used by this test.
 const oldCli = process.env.MULTI_TASK_FLOW_HISTORICAL_CLI;
 test.skipIf(!oldCli)(
-  "actual 0.2.53 reader, flow writer and binding-only maintenance writer reject the atomic barrier",
+  "actual published reader, flow writer and binding-only maintenance writer reject the atomic barrier",
   async () => {
     const cli = resolve(oldCli!);
     const version = Bun.spawnSync([process.execPath, cli, "--version"]);
     expect(version.exitCode).toBe(0);
     const info = JSON.parse(version.stdout.toString());
-    expect(info.version).toBe("0.2.53");
+    expect(["0.2.53", "0.2.55", "0.3.0"]).toContain(info.version);
     const source = {
       package_name: info.package_name,
       package_version: info.version,
@@ -27,9 +27,9 @@ test.skipIf(!oldCli)(
     };
     const target = {
       ...source,
-      package_version: "0.2.56",
+      package_version: "0.4.0",
       build_id: "b".repeat(64),
-      ledger_contract: 4,
+      ledger_contract: 5,
     };
     const { state } = serviceFixture();
     state.saveConfig({
@@ -41,12 +41,18 @@ test.skipIf(!oldCli)(
       agent_ttl_ms: 3600000,
     });
     const { store } = fixtureRun(state.paths.data, "old-cli-run", 3);
+    if (source.ledger_contract >= 4) {
+      const raw = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+      raw.contract_version = source.ledger_contract;
+      raw.runtime_identity = source;
+      writeFileSync(store.ledgerPath, JSON.stringify(raw));
+    }
     mkdirSync(join(store.runPath, "runtime"));
     const bindingPath = join(store.runPath, "runtime", "viewer-binding.json");
     writeFileSync(
       bindingPath,
       JSON.stringify({
-        schema_version: 1,
+        schema_version: source.ledger_contract >= 4 ? 2 : 1,
         run_id: "old-cli-run",
         ...source,
         revision: 0,
@@ -69,7 +75,6 @@ test.skipIf(!oldCli)(
     // Stop at the first authoritative published state, rather than testing only the completed upgrade.
     expect(() =>
       upgradeOrchestration(store, target, target, {
-        withQuiescentRun: (_ledger, action) => action(),
         afterStage(phase) {
           if (phase === "prepared") throw new Error("published barrier");
         },
@@ -96,7 +101,7 @@ test.skipIf(!oldCli)(
       ...original,
       resolvePackageTarget: () => ({
         package_name: source.package_name,
-        version: "0.2.57",
+        version: "0.4.1",
         build_id: "c".repeat(64),
         source_sha: source.source_sha,
         compatibility_line: source.compatibility_line,
@@ -106,13 +111,26 @@ test.skipIf(!oldCli)(
       }),
     }));
     const { serviceCommand } = await import(resolve(resourceRoot, "scripts/service.ts"));
-    await expect(
-      serviceCommand(
-        "orchestration-upgrade",
-        { run_id: "old-cli-run", target: "0.2.57", mode: "normal" },
-        state,
-      ),
-    ).rejects.toMatchObject({ code: "VIEWER_BINDING_INVALID" });
+    const previousCaller = process.env.LOOMHELM_CALLER_IDENTITY;
+    process.env.LOOMHELM_CALLER_IDENTITY = JSON.stringify(source);
+    try {
+      await expect(
+        serviceCommand(
+          "orchestration-upgrade",
+          {
+            run_id: "old-cli-run",
+            target: source.ledger_contract >= 4 ? target.package_version : "0.4.1",
+            mode: "normal",
+          },
+          state,
+        ),
+      ).rejects.toMatchObject({
+        code: source.ledger_contract >= 4 ? "UPGRADE_EXECUTOR_MISMATCH" : "VIEWER_BINDING_INVALID",
+      });
+    } finally {
+      if (previousCaller === undefined) delete process.env.LOOMHELM_CALLER_IDENTITY;
+      else process.env.LOOMHELM_CALLER_IDENTITY = previousCaller;
+    }
     expect(store.readRaw()).toBe(ledgerBefore);
     expect(readFileSync(bindingPath, "utf8")).toBe(bindingBefore);
   },

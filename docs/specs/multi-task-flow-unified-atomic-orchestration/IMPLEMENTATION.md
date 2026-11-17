@@ -155,6 +155,44 @@ Gateway 不再为缺失历史绑定的账本使用当前安装或 fallback 身�
 
 回归覆盖自定义视图下 Worker 的真实执行身份、CLI 外桌面通知的静止证据、原子交换期间原生锁获取拒绝后的安全重试，以及空 init 输入的既有错误码。历史 schema-1/contract-1 与 contract-2 的公开只读诊断保持源文件字节不变，并拒绝缺少已验证迁移链的升级。
 
+## 保留结果不确定的调用的机械迁移
+
+对应 ADR 0041 与 SPEC 第 16 节 REQ/VER-MIGRATION-001 至 011。`orchestration-migration.ts` 以 no-follow 双读快照统一 upgrade-check、dry-run 与提交时评估，检查目录身份、源绑定、支持范围及中断审计，并在消费字节前核对实际打开的文件描述符及父目录身份、所有权和链接数；`migration-audit.ts` 定义摘要和结果不确定的调用集合，兼容历史 notification status 字段；中断审计核对冻结源身份与保留源绑定及账本，机械迁移拒绝改变 API/frontend/viewer 合同；`orchestration-upgrade.ts` 在原有原子目录发布事务中写入 contract 5 与冻结审计，不调用业务 provider。
+
+`orchestration-migration.test.ts`、`orchestration-upgrade.test.ts` 覆盖 VER-MIGRATION-001、002、006、007、008 的只读安全、3/4/5 迁移、业务保真、崩溃续跑和旧目录等待者。`conversation-archive.test.ts` 覆盖 VER-MIGRATION-005 的身份与 attempt 时间保留、缺失身份拒绝和负向对账不重发；既有 notification 与 recovery 权限回归继续覆盖其禁止重发和历史拒绝路径。`orchestration-upgrade-compatibility.test.ts` 通过显式历史 CLI 路径消费实际 0.2.55 或 0.3.0，验证旧 reader、writer 与维护入口拒绝已发布屏障。`clients/typescript/test/orchestration-upgrade.test.ts` 验证公开 CLI 的检查、schema、dry-run、升级和幂等。
+
+VER-MIGRATION-003、004、009、010 的完整经验验收需另绑定最终 Candidate、实际安装包与 LIMS 受控私有副本；证据不提交原始业务材料。VER-MIGRATION-011 仍等待 main 合入、受保护正式发布和正式写入授权；真实 run、全局安装与服务均保持原状，不以副本验证声明正式问题已经解决。
+
+### 来源与替代路径
+
+当前 LIMS run 观测 revision 2686，绑定 0.2.55、contract 3，包含六个 notification unknown、一个 dispatch/recovery unknown 和一个 archive_unknown，缺少 runtime/call.json。历史静止证据研究无法对这些调用形成完整终止证明；原生 writer 文件锁亦不能阻止持久队列入队，Worker/Dashboard stop 不等于全部异步调用 join。这些研究否定了将既有接口直接用作完整静止凭证的假设，不代表原生资源已停止；新机械迁移准入不再以补造这类证明为目的。
+
+### 机械迁移保留结果不确定的调用的研究结果
+
+原始问题是同一 LIMS run 的版本绑定与数据合同无法安全前移。主人已确认的路径是只迁移表示和运行身份，原样保留结果不确定的调用，禁止迁移发起外部调用，并验证旧 writer 无法提交到发布后的账本或绑定。这条路径不推断历史调用已停止，也不解决 c4 握手或业务继续执行；ADR 0041 与 SPEC 第 16 节已记录新的准入前提；现有程序尚未实现。
+
+研究使用校验 npm integrity 的真实 `@loomhelm/multi-task-flow@0.2.55` 包，以及当前仓库的原子目录发布和升级事务。目标是合成的 contract-4 身份；仅在任务自有临时账本中替换 `withQuiescentRun` 研究接缝，正式入口没有新增绕过开关。此实验不代表 contract 5 已实现、公开升级命令已通过、静止证据已充分或 PR 已就绪。
+
+| 场景 | 已观测结果 | 证明范围 |
+| - | - | - |
+| 已发布 0.2.55 通知发送器等待返回时发布目标目录 | 完成升级后及 prepared 中断后，旧发送器提交均被 `INCOMPATIBLE_LEDGER` 拒绝；发布后账本摘要不变 | 使用真实旧包与可控 provider 返回，证明晚回调写入屏障，不证明原生调用终止 |
+| 新版本重入同一通知发送或以新 request 请求发送 | 原 request 返回待对账，新 request 因 unknown 拒绝；provider 调用总数仍为一次，attempt 身份保留 | 证明这些重入路径没有补发 |
+| 已发布 0.2.55 归档发送器在升级后返回 | 晚回调拒绝，迁移保留原 operation 和 unknown；负向查询没有再次调用归档 | provider 为可控返回，不能作为真实归档完成证据 |
+| 归档 unknown 的后续负向查询 | 现有实现会生成新 operation_id；临时修复原型保留 operation_id 与 last_attempt_at 后，同一反例通过 | 暴露需要修复的身份保留问题；原型未写入生产源码 |
+| 已发布 0.2.55 的 reader、普通 flow writer 和只修改绑定的维护 writer | 从原子发布的 prepared 状态起均拒绝，账本与绑定字节保持不变；一项隔离回归、11 个断言通过 | 证明真实旧包的两种持久写入入口遇到屏障；没有修改全局安装 |
+| 当前 LIMS 账本和绑定的私有副本 | 原静止门禁拒绝；研究接缝下迁移完成且可幂等识别，业务数据摘要一致，目标源码 CLI 可读取同一 run | 使用实际历史数据形状，目标仍为合成身份，不能作为正式升级回执 |
+| LIMS 副本中的六个 unknown 通知和历史 recovery | 六项准备发送均拒绝；历史 recovery 进入原生 writer 前拒绝，新 recovery claim 亦拒绝，原 attempt 和业务图保留 | 未调用真实通知、创建、恢复或归档；正式账本和绑定的前后摘要一致 |
+
+这组结果支持继续验证“机械迁移可以保留结果不确定的调用”的假设，尚未形成完整安全证明。取舍是旧调用可能继续完成其既有副作用，旧 writer 的晚回执会被拒绝，目标只能继续保留 unknown；不保证该回执日后仍能取回，不保证外部资源静止或相关业务恢复。新准入必须明确记录这些事实，不能把未证明静止标为 proven、把结果不确定的状态转成失败，或自动释放 claim、容量。
+
+方案范围收敛到既有升级事务、共享迁移评估、旧 writer 屏障与结果不确定的身份保留：只接受已验证的机械转换，不改写业务含义；沿用既有维护、账本、绑定和 lifecycle 排斥，不把它们扩称为所有原生调用已停止；在事务中保存源身份、源 revision/digest、业务数据与结果不确定的对象集合摘要、转换规则及 writer 屏障判定。目标 contract 5 仍需独立实现并验证；原生静止若未证明必须如实记录，不要求为迁移新增 Host 会话解析器、全局排空协议或新的恢复账本。无法确认副作用前先提交 intent 的来源、转换保真或旧 writer 排斥时，拒绝该转换。
+
+ADR 0041 记录对 ADR 0039 静止前提的替代，需求和验收仍只由 SPEC 持有。验收至少覆盖：迁移调用原生变更接口次数为零；全部业务数据及 unknown/attempt/claim/容量摘要保持；真实旧包及旧目录等待者无法晚写；同一和新 request 均不能重发结果不确定的通知、创建、recovery 或归档；全部崩溃阶段仅向冻结目标续跑；实际 contract-5 tarball 的公开 CLI 在历史副本上完成升级并可读取。真实 LIMS run 最后仍须由 main 发布的精确 artifact 经独立授权执行，不能由副本实验替代。
+
+### 实现与验收边界
+
+仅实现共享机械迁移评估、无锁只读 upgrade-check/dry-run、contract-5 升级审计及旧 writer 屏障，并修复结果不确定的归档身份保留。经验性证据须在最终 Candidate 上重跑实际旧包与受控私有副本；原型结果不能转写为候选通过。VER-MIGRATION-011 必须在真实 Merge Receipt、正式 artifact 和独立运行写入授权后执行。
+
 详情面板新增的渲染、组合投影及回归测试模块通过 `scripts/check-client-skills.ts` 注册到 `skills/resource-manifest.json` 的运行时源码映射，确保打包安装包含同一套模块和摘要；更新源码不自动更新用户级已安装版本。
 
 详情回归补齐带图节点焦点的快照刷新、Bootstrap owner thread 与输出绑定、配置保存和详情快照替换后的焦点归还及浮层卸载。无 Popover API 时将浮层临时挂载到 body，避开移动抽屉的 transform 和 overflow；关闭或原详情卸载时回收浮层与事件监听。服务浏览器回归直接选择 `atom-model`，验证原子关系默认折叠、展开后的当前节点与 canonical 前驱/后继，不再等待已移除的聚合关系区域。

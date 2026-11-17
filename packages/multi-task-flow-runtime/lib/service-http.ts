@@ -783,14 +783,14 @@ export async function startSharedViewer(
             frontend_contract: manifest.frontend_contracts[0] ?? 1,
             viewer_contract: manifest.viewer_contract,
           });
-          if (ledger.contract_version === 4) requireRunIdentity(ledger, identityOf(binding) as any);
+          if (ledger.contract_version >= 4) requireRunIdentity(ledger, identityOf(binding) as any);
           getRun(id); // Gateway owns lifecycle observation; the selected Worker owns response rendering.
           const assets = selectAssets(state.paths.data, id, assetsDir);
           const verifiedRelease = verifyBindingIdentity(binding);
           const usesCurrentAssets = Boolean(assets.source || sharedSource);
           // Static assets do not select executable identity for a bound contract-4 run.
           const workerBuildId =
-            ledger.contract_version === 4
+            ledger.contract_version >= 4
               ? binding.build_id
               : usesCurrentAssets
                 ? manifest.build_id

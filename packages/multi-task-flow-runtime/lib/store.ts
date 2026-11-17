@@ -152,7 +152,7 @@ export class LedgerStore {
             undefined,
             stagingIdentity,
           );
-          if ((initial as any)?.contract_version === 4) {
+          if ((initial as any)?.contract_version >= 4) {
             const runtimePath = join(stagingPath, "runtime");
             createDirectoryNoFollow(runtimePath, this.rootPath, 0o700, stagingIdentity);
             writeExclusiveNoFollow(
@@ -294,7 +294,7 @@ export class LedgerStore {
           4,
         );
         if (ledger?.schema_version !== undefined) requireLedgerCompatibility(ledger, "write");
-        if (ledger?.contract_version === 4) requireRunIdentity(ledger, callerIdentity());
+        if (ledger?.contract_version >= 4) requireRunIdentity(ledger, callerIdentity());
         const isDomainLedger =
           typeof ledger.orchestration_id === "string" &&
           Array.isArray(ledger.plans) &&

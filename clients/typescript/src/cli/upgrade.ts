@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { SkillsRuntime } from '../toolkit.ts';
 
 async function invoke(command: string, input: unknown): Promise<void> {
@@ -32,17 +34,24 @@ export async function runGatewayCommand(args: string[]): Promise<void> {
 
 export async function runOrchestrationCommand(args: string[]): Promise<void> {
   if (args.includes('--help')) {
-    console.log('orchestration compatibility-check --run-id RUN_ID | orchestration upgrade --run-id RUN_ID [--dry-run] VERSION_OR_TAG\nUse the verified target CLI. Upgrades migrate supported ledgers and switch binding forward only; incomplete upgrades resume their frozen target.');
+    console.log('orchestration schema --format json | orchestration compatibility-check --run-id RUN_ID | orchestration upgrade-check --run-id RUN_ID | orchestration upgrade --run-id RUN_ID [--dry-run] VERSION_OR_TAG\nUse the verified target CLI. Read-only checks create no locks. Migration readiness does not assert native quiescence; unresolved calls are preserved without retry. Upgrades migrate supported ledgers and switch binding forward only; incomplete upgrades resume their frozen target.');
     return;
   }
-  if (!['upgrade', 'compatibility-check'].includes(args[0] ?? '')) throw new Error('ORCHESTRATION_INVALID_ARGUMENTS: use orchestration upgrade --run-id <run-id> [--dry-run] <version|tag> or orchestration compatibility-check --run-id <run-id>');
+  if (args[0] === 'schema') {
+    if (args.length !== 3 || args[1] !== '--format' || args[2] !== 'json') throw new Error('Usage: orchestration schema --format json');
+    const domain = JSON.parse(await readFile(resolve(new SkillsRuntime().root, 'skills/multi-task-flow/lib/flow-domain-schemas.json'), 'utf8'));
+    if (!domain.migration_report?.properties?.migration_ready) throw new Error('ORCHESTRATION_SCHEMA_UNAVAILABLE: packaged migration report schema is missing');
+    console.log(JSON.stringify(domain.migration_report));
+    return;
+  }
+  if (!['upgrade', 'compatibility-check', 'upgrade-check'].includes(args[0] ?? '')) throw new Error('ORCHESTRATION_INVALID_ARGUMENTS: use orchestration upgrade --run-id <run-id> [--dry-run] <version|tag> or orchestration compatibility-check --run-id <run-id>');
   const runIndex = args.indexOf('--run-id');
   if (runIndex < 0 || !args[runIndex + 1]) throw new Error('ORCHESTRATION_INVALID_ARGUMENTS: --run-id is required');
   const runId = args[runIndex + 1]!;
   const remaining = args.slice(1).filter((_, index) => index !== runIndex - 1 && index !== runIndex);
-  if (args[0] === 'compatibility-check') {
-    if (remaining.length) throw new Error('ORCHESTRATION_INVALID_ARGUMENTS: compatibility-check only accepts --run-id');
-    return invoke('orchestration-compatibility-check', { run_id: runId });
+  if (args[0] === 'compatibility-check' || args[0] === 'upgrade-check') {
+    if (remaining.length) throw new Error('ORCHESTRATION_INVALID_ARGUMENTS: checks only accept --run-id');
+    return invoke(`orchestration-${args[0]}`, { run_id: runId });
   }
   const selected = target(remaining, 0);
   if (selected.mode === 'rollback') throw new Error('DOWNGRADE_FORBIDDEN: orchestration upgrades are forward-only');

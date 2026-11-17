@@ -5,7 +5,8 @@ import { z } from "zod";
 import { ContractError, requireCondition } from "../lib/errors";
 import { maintenanceApply, maintenanceCheck } from "../lib/ledger-maintenance";
 import { callerIdentity, runIdentity } from "../lib/orchestration-identity";
-import { requireQuiescentRun, withRunLifecycle } from "../lib/orchestration-lifecycle";
+import { withRunLifecycle } from "../lib/orchestration-lifecycle";
+import { checkMigration, readMigrationSnapshot } from "../lib/orchestration-migration";
 import { inspectOrchestration, upgradeOrchestration } from "../lib/orchestration-upgrade";
 import { validateLedger } from "../lib/schema";
 import { ServiceAuth } from "../lib/service-auth";
@@ -125,6 +126,13 @@ export async function serviceCommand(
       callerIdentity(),
     );
   }
+  if (command === "orchestration-upgrade-check") {
+    const parsed = z.object({ run_id: z.string() }).strict().parse(input);
+    return checkMigration(
+      new LedgerStore(state.paths.data, safeId(parsed.run_id)),
+      callerIdentity(),
+    );
+  }
   if (command === "orchestration-upgrade") {
     const parsed = z
       .object({
@@ -142,8 +150,8 @@ export async function serviceCommand(
     );
     const caller = callerIdentity();
     const store = new LedgerStore(state.paths.data, safeId(parsed.run_id));
-    return withRunLifecycle(store, async () => {
-      const raw = JSON.parse(store.readRaw());
+    const execute = async () => {
+      const { raw } = readMigrationSnapshot(store);
       const pending = raw.upgrade && raw.upgrade.phase !== "completed" ? raw.upgrade : null;
       // A registered attempt never re-resolves mutable tags, even on explicit resume.
       const self = parsed.target === caller.package_version;
@@ -174,13 +182,12 @@ export async function serviceCommand(
         store,
         caller,
         target,
-        {
-          withQuiescentRun: (ledger, action) => requireQuiescentRun(store, ledger, action),
-        },
+        {},
         parsed.mode === "dry-run",
         parsed.target,
       );
-    });
+    };
+    return parsed.mode === "dry-run" ? execute() : withRunLifecycle(store, execute);
   }
   if (command === "compatibility-check") {
     const parsed = z.union([source, z.object({ rollback: z.literal(true) }).strict()]).parse(input);

@@ -292,7 +292,7 @@ try {
       const ledger = validateLedger({
         schema_version: 2,
         source_schema_version: null,
-        contract_version: 4,
+        contract_version: 5,
         runtime_identity: caller,
         version: versionEnvelope,
         orchestration_id: parsed.run_id,

@@ -32,7 +32,7 @@ function fixture(current = false) {
   });
   const store = new LedgerStore(root, ledger.orchestration_id);
   if (current) {
-    ledger.contract_version = 4;
+    ledger.contract_version = fixtureIdentity.ledger_contract;
     ledger.runtime_identity = fixtureIdentity;
   }
   store.create(ledger);
