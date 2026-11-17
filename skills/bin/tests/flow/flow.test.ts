@@ -418,6 +418,23 @@ describe("acceptance and review state", () => {
       laneSpecs: lanes,
     });
     const wave = opened.wave as Record<string, unknown>;
+    const malformed = structuredClone(ledger) as Record<string, unknown>;
+    const malformedReview = malformed.review as Record<string, unknown>;
+    const malformedWave = (
+      malformedReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    delete (
+      malformedWave.lanes as Record<string, Record<string, unknown>>
+    ).contract.requested_profile;
+    expect(() =>
+      openReviewWaveState(malformed, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "c".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(malformedReview.active_wave_id).toBe(wave.wave_id);
     expect(() =>
       openReviewWaveState(ledger, {
         stage: "initial",
@@ -610,6 +627,14 @@ describe("acceptance and review state", () => {
       return legacy;
     });
     historical.receipts = historicalReceipts;
+    const historicalReview = historical.review as Record<string, unknown>;
+    const historicalWave = (
+      historicalReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    for (const lane of Object.values(
+      historicalWave.lanes as Record<string, Record<string, unknown>>,
+    ))
+      delete lane.requested_profile;
     const historicalSnapshot = structuredClone(historicalReceipts);
     const normalized = normalizeLedger(historical);
     expect(normalized.receipts).toEqual(historicalSnapshot);

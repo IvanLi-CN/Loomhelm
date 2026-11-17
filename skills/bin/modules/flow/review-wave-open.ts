@@ -179,13 +179,34 @@ function isLegacyReviewWave(
   const receipts = Array.isArray(ledger.receipts)
     ? (ledger.receipts as unknown[])
     : [];
-  return Object.values(wave.lanes).some((rawLane) => {
-    if (!isRecord(rawLane) || !isRecord(rawLane.requested_profile)) return true;
-    if (typeof rawLane.receipt_id !== "string") return false;
-    const receipt = receipts.find(
-      (candidate) =>
-        isRecord(candidate) && candidate.receipt_id === rawLane.receipt_id,
-    );
-    return isRecord(receipt) && receipt.review_receipt_schema === 6;
-  });
+  const migratedSchemaSix =
+    ledger.legacy_compatibility === true && ledger.legacy_schema_version === 6;
+  let hasSchemaSixReceipt = false;
+  const lanes = Object.values(wave.lanes);
+  if (!lanes.length) return false;
+  for (const rawLane of lanes) {
+    if (
+      !isRecord(rawLane) ||
+      typeof rawLane.model !== "string" ||
+      !rawLane.model.trim() ||
+      typeof rawLane.effort !== "string" ||
+      !rawLane.effort.trim()
+    )
+      return false;
+    if (rawLane.receipt_id !== null && typeof rawLane.receipt_id !== "string")
+      return false;
+    if (typeof rawLane.receipt_id === "string") {
+      const receipt = receipts.find(
+        (candidate) =>
+          isRecord(candidate) && candidate.receipt_id === rawLane.receipt_id,
+      );
+      if (!isRecord(receipt)) return false;
+      if (receipt.review_receipt_schema === 6) hasSchemaSixReceipt = true;
+      else if (receipt.review_receipt_schema !== 7) return false;
+    }
+    if (isRecord(rawLane.requested_profile)) continue;
+    if (migratedSchemaSix || hasSchemaSixReceipt) continue;
+    return false;
+  }
+  return migratedSchemaSix || hasSchemaSixReceipt;
 }
