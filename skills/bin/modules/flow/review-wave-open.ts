@@ -181,9 +181,17 @@ function isLegacyReviewWave(
     : [];
   const migratedSchemaSix =
     ledger.legacy_compatibility === true && ledger.legacy_schema_version === 6;
-  let hasSchemaSixReceipt = false;
   const lanes = Object.values(wave.lanes);
   if (!lanes.length) return false;
+  const hasSchemaSixReceipt = lanes.some((rawLane) => {
+    if (!isRecord(rawLane) || typeof rawLane.receipt_id !== "string")
+      return false;
+    const receipt = receipts.find(
+      (candidate) =>
+        isRecord(candidate) && candidate.receipt_id === rawLane.receipt_id,
+    );
+    return isRecord(receipt) && receipt.review_receipt_schema === 6;
+  });
   for (const rawLane of lanes) {
     if (
       !isRecord(rawLane) ||
@@ -201,8 +209,7 @@ function isLegacyReviewWave(
           isRecord(candidate) && candidate.receipt_id === rawLane.receipt_id,
       );
       if (!isRecord(receipt)) return false;
-      if (receipt.review_receipt_schema === 6) hasSchemaSixReceipt = true;
-      else if (receipt.review_receipt_schema !== 7) return false;
+      if (![6, 7].includes(Number(receipt.review_receipt_schema))) return false;
     }
     if (isRecord(rawLane.requested_profile)) continue;
     if (migratedSchemaSix || hasSchemaSixReceipt) continue;

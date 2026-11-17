@@ -649,6 +649,34 @@ describe("acceptance and review state", () => {
       }),
     ).toThrow("review receipt integrity is invalid");
 
+    const schemaSevenLegacy = structuredClone(normalized) as Record<
+      string,
+      unknown
+    >;
+    delete schemaSevenLegacy.legacy_compatibility;
+    delete schemaSevenLegacy.legacy_schema_version;
+    const schemaSevenLegacyReview = schemaSevenLegacy.review as Record<
+      string,
+      unknown
+    >;
+    const schemaSevenLegacyWave = (
+      schemaSevenLegacyReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    const pendingLegacyLane = (
+      schemaSevenLegacyWave.lanes as Record<string, Record<string, unknown>>
+    ).contract;
+    pendingLegacyLane.receipt_id = null;
+    pendingLegacyLane.state = "pending";
+    const schemaSevenFresh = openReviewWaveState(schemaSevenLegacy, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: "d".repeat(40),
+      laneSpecs: lanes,
+    });
+    expect((schemaSevenFresh.wave as Record<string, unknown>).head_sha).toBe(
+      "d".repeat(40),
+    );
+
     const freshHead = "b".repeat(40);
     const fresh = openReviewWaveState(normalized, {
       stage: "initial",
