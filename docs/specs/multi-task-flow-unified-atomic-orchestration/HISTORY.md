@@ -1,5 +1,13 @@
 # History
 
+## 历史副作用静止审计
+
+2026-11-17：将历史静止审计方案拆分为 proposed [ADR 0041](../../adr/0041-historical-side-effect-quiescence-audit.md) 与 SPEC 第 16 节。ADR 只记录静止证明随升级事务保存、避免独立恢复账本的持久化取舍；长期需求和可追溯验收归入 SPEC，诊断基线、覆盖及证据缺口归入 IMPLEMENTATION。没有程序、发布、全局安装或正式 run 变更。
+
+主人已确认最终目标可采用后续正式版本，并以同一 LIMS run 的安全升级为边界；静止 unknown、claim 和容量允许保留，c4 初始化恢复及业务继续执行独立处理。该边界延续 ADR 0039，不要求先把所有业务 unknown 清成终态；初始化恢复仍遵循 ADR 0038，不重发既有 attempt。审计摘要的目标持久合同尚需兼容评估，不能将提案误认为已发布 contract 4 能力。
+
+## 既有主题记录
+
 - 2026-11-17: 增加 Gateway 独立 HTML 故障恢复合同与源码实现，覆盖 Worker 完全不可用、限流倒计时、保留完整 URL 的手动重试与可指定 URL 场景的纯 Web Demo、独立静态构建；不改变 Ledger、诊断持久化格式或业务派发语义。
 
 - 2026-11-11: Locked the unified atomic orchestration contract and implementation scope.

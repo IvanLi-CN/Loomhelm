@@ -2,6 +2,8 @@
 
 状态：已锁定的长期主题合同。
 
+第 16 节规定历史副作用静止审计的实施合同，不表示已实现、已发布或已获得正式运行写入授权；当前证据缺口与覆盖状态见 IMPLEMENTATION.md。
+
 本文是仓库内多任务编排的 canonical 领域、持久化、状态推导、迁移和网页展示合同。实现、测试和后续设计修订必须以本文为基线；`/tmp` 中的设计草稿不属于项目事实源。
 
 ## Context and Scope
@@ -280,6 +282,7 @@ AtomicNode + AtomicEdge
 - [Multi-task Flow CLI contract ownership](../../adr/0036-multi-task-flow-cli-contract-ownership.md)
 - [编排版本绑定与前向升级](../../adr/0039-orchestration-version-binding-and-forward-upgrade.md)
 - [初始化恢复的权限事务与原生写锁](../../adr/0040-initialization-recovery-permission-transaction.md)
+- [历史静止证明随升级事务保存](../../adr/0041-historical-side-effect-quiescence-audit.md)
 
 ## 9. 可行性与风险
 
@@ -372,3 +375,130 @@ Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，�
 - covers: `REQ-UPGRADE-001`, `REQ-UPGRADE-002`, `REQ-UPGRADE-003`, `REQ-UPGRADE-004`, `REQ-UPGRADE-005`, `REQ-UPGRADE-006`
 - Method: 隔离历史 ledger 与绑定 fixture、已验证 artifact 身份 fixture、CLI/Worker 并发写入、原生副作用调用观察、升级各落盘边界的崩溃注入及重入测试。
 - Pass condition: 普通命令跨版本或同版本不同 build 均拒绝；专用诊断及 dry-run 不改变业务数据或绑定；目标 CLI 完成迁移和绑定一致切换；中断只续跑冻结目标、不降级；在途副作用未退出时阻断，静止 unknown/claim/容量不丢失；缺失绑定有唯一证据才补齐；旧 writer 不能绕过门禁；Gateway 和其他编排不受影响。
+
+## 16. 历史副作用静止审计
+
+### 范围与术语
+
+本节规定历史 run 的副作用静止证明与前向升级，覆盖 notification、dispatch 及其 recovery、archive/unarchive 和相关旧生产者。业务结果与编排静止是独立事实；领域术语以 [项目术语表](../../../GLOSSARY.md#编排升级) 为准；本节的静止证据覆盖指可信证据对应的精确调用、attempt 或受排斥 writer 范围，一个范围的退出不能证明范围外调用停止。c4 握手恢复、业务继续执行、新建替代 run、通用 provider 插件、新守护进程、数据库、后台轮询及更早 schema 的新增迁移链不在本节范围。
+
+```mermaid
+flowchart LR
+    A[读取一致的 run 与来源证据] --> B[共享静止审计]
+    B --> C{覆盖充分且无在途调用?}
+    C -->|否| D[列出全部缺口并阻断]
+    C -->|是| E[只读报告本次观察就绪]
+    E --> F[显式升级排斥生产者并重新验证]
+    F -->|验证失败| D
+    F -->|验证通过| G[原子发布并保留静止 unknown]
+```
+
+### REQ-QUIESCENCE-001
+
+系统 MUST 分别表达业务结果与副作用静止。静止证据充分时，unknown operation、notification、resource 及既有 claim、容量 MUST 可原样保留并满足升级静止门禁；结果成功但调用仍在途 MUST 阻断。系统 MUST NOT 因静止证明而自动确认 READY、任务完成、投递成功、归档成功、释放 claim 或恢复调度。
+
+### REQ-QUIESCENCE-002
+
+系统 MUST 提供专用只读入口 `orchestration quiescence-check --run-id <run-id>`，允许目标版本读取支持范围内的 contract-3/4 历史 run；MUST 输出源与调用者完整身份、观察 revision、业务数据摘要、逐项证据覆盖、全部已识别 blockers、缺失来源及已有处理入口。证据项 MUST 绑定 run、对象类型/ID、attempt/native request（存在时）、provider、来源及稳定引用、采集时间、验证器版本和原因；MUST 区分缺失身份、证据不可访问、冲突、在途调用及过期观察。普通 flow 的严格版本绑定和未知历史格式的拒绝路径 MUST 保留。
+
+### REQ-QUIESCENCE-003
+
+审计、upgrade dry-run 和正式 upgrade MUST 共用静止判定。compatibility-check MUST 保持兼容性语义，不把 compatible 等同于可升级；dry-run MUST 分别报告 `migration_supported` 与 `quiescence_ready`，静止阻塞时返回 `RUN_QUIESCENCE_UNPROVEN` 并在 details 提供完整报告。命令 schema 和发布说明 MUST 明示 dry-run 成功条件的变化，不能继续在静止检查前返回成功。
+
+### REQ-QUIESCENCE-004
+
+审计与 dry-run MUST NOT 修改 ledger、binding、upgrade、runtime receipt、run 目录或相关执行资源，包括为了读取而新建锁文件。读取 MUST 校验前后目录身份、revision 与内容一致性，不稳定快照 MUST NOT 返回可升级。provider 读取 MUST 不启动 turn、thread/resume、writer 或新会话；审计 MUST NOT 自动发送、恢复、对账或修正账本。
+
+### REQ-QUIESCENCE-005
+
+通知证据 MUST 将精确 prepare intent/attempt 与真实平台调用及返回结果或可信终止证据关联，并核验 provider、recipient、prompt digest 和覆盖范围。intent、任意 evidence_ref、相似文本、时间接近、查询不到消息或 CLI stopped MUST NOT 替代独立桌面调用证据。已有精确结果回执 MAY 经 notification-reconcile 对账；仅有调用终止证据时 MUST 保留业务 unknown。
+
+### REQ-QUIESCENCE-006
+
+dispatch 静止证明 MUST 覆盖绑定的 native request、实际 thread 和持久 recovery attempt。持久 claim 后、turn identity 落盘前崩溃的状态 MUST 单独验证；缺失 recovery_turn_id 时 MUST NOT 按时间猜测空回合身份，或仅凭 interrupted turn 推断结果未知的提交已停止。可信执行边界证据可覆盖该提交时 MAY 保留 unknown 升级；无法覆盖时 MUST 阻断。初始化恢复不可重发合同 MUST 保持，不得补造 READY、重发握手、清除 attempt 或创建替代 thread。
+
+### REQ-QUIESCENCE-007
+
+archive/unarchive MUST 按精确 thread、操作方向和已知调用身份核验证据。provider 正向结果可走既有结果对账；仅有可信生命周期终止证据时 MUST 保留 unknown。负向查询 MUST NOT 证明失败或终止，unknown 路径 MUST NOT 再次发起 archive/unarchive；一个方向的证据 MUST NOT 覆盖相反方向。
+
+### REQ-QUIESCENCE-008
+
+所有来源 MUST 可独立验证真实性及精确覆盖，不能仅校验调用者输入字段匹配。现有 receipt MUST 验证来源、身份与范围，不能只检查文件存在、state 字符串或 PID 不存在；最新一次 stopped receipt MUST NOT 覆盖其他历史或独立桌面调用。首版 MUST 限于已验证的现有 Codex/桌面来源；无精确关联能力时 MUST 返回具体证据缺口，不假定某个 receipt API 存在，不接受人工 stopped 声明或 force。
+
+### REQ-QUIESCENCE-009
+
+正式升级 MUST 在提交边界排斥相关新写入并重新验证源目录身份、ledger/binding 摘要、attempt 集合、provider 状态和 writer 覆盖。旧 CLI、Worker、桌面调用方、后台归档等生产者的实际排斥机制 MUST 被验证；仅持有新版 lifecycle 锁或人工声明无人操作 MUST NOT 证明旧生产者已冻结。revision、attempt、身份或证据变化时 MUST 重新审计或拒绝；无法排斥生产者或排除在途请求时 MUST 阻断，不强杀后宣称安全。只读报告或其摘要 MUST NOT 作为提交授权。
+
+### REQ-QUIESCENCE-010
+
+系统 MUST 复用既有显式升级、原子发布、冻结目标和前向续跑，MUST NOT 新增独立 legacy-reconcile 状态机或伪造历史 runtime/call.json。被接受升级中的审计摘要 MUST 追溯源 revision/digest、源绑定、对象/attempt 集合、验证器和证据引用；原始私有提示、凭据和完整会话 MUST NOT 进入公开文档或包。目标 ledger contract MUST 为 5，schema_version 保持 2；读取支持 contract 3/4/5，显式迁移支持 3/4 到 5 及 contract 5 的前向版本切换，更早格式只保留诊断和明确拒绝。公开 API、frontend 和 viewer 的结构未变化时保持原合同。持久化 schema、reader/writer、快照及旧 writer 拒绝 contract 5 的路径 MUST 经兼容验证，不得暗改严格 schema。恢复材料 MUST 保留，不反向迁移或自动清理。
+
+### REQ-QUIESCENCE-011
+
+当前问题 MUST 以同一 `lims-poc02-04-r10` 的实际安全升级验收，允许采用承载本方案的后续正式精确版本。证据可行性 MUST 覆盖当前全部通知、dispatch/recovery、资源及生产者；实际升级前 MUST 重新盘点，不硬编码历史数量。证据不足时 MUST 报告精确缺口并阻断，此结果 MUST NOT 视为问题已解决。正式升级须另获运行写入授权，不得以方案批准、离线快照或单测结果替代。
+
+### VER-QUIESCENCE-001
+
+- covers: `REQ-QUIESCENCE-002`, `REQ-QUIESCENCE-003`
+- Method: 精确 npm 0.3.0 基线与隔离历史 fixture 的公开 CLI 对照。
+- Pass condition: 基线可复现通知首关及历史无 stop receipt 的后续关；候选一次列出全部对象及 producer 缺口，三种调用面不发生门禁漂移；fixture 不接触正式 root。
+
+### VER-QUIESCENCE-002
+
+- covers: `REQ-QUIESCENCE-001`
+- Method: 业务结果与静止状态的组合矩阵及前后业务事实差异。
+- Pass condition: unknown 且静止证明充分可通过，结果成功但调用在途拒绝；unknown、claim、容量及业务图不被静止审计改写。
+
+### VER-QUIESCENCE-003
+
+- covers: `REQ-QUIESCENCE-005`, `REQ-QUIESCENCE-008`
+- Method: 精确通知证据、字段冲突、伪造引用及缺失 provider 记录的反例。
+- Pass condition: provider、attempt、recipient、prompt digest 或来源任一不匹配均拒绝；intent、相似文本、负向查询及 CLI receipt 不得放行桌面调用。
+
+### VER-QUIESCENCE-004
+
+- covers: `REQ-QUIESCENCE-006`, `REQ-QUIESCENCE-008`
+- Method: recovery claim 后、turn identity 落盘前的崩溃注入，以及空 interrupted、额外未知回合和历史不完整 fixture。
+- Pass condition: 结果未知的提交未被精确覆盖时保持阻断，不猜 turn、不 resend、不清 attempt、不补 READY；覆盖充分时只确认静止，不伪造握手成功。
+
+### VER-QUIESCENCE-005
+
+- covers: `REQ-QUIESCENCE-007`
+- Method: archive/unarchive 正向、负向、方向冲突及调用未知 fixture，记录 provider 调用集合。
+- Pass condition: 仅匹配方向的可信证据可通过；负向查询仍 unknown；unknown 处理不发送新归档或反归档请求。
+
+### VER-QUIESCENCE-006
+
+- covers: `REQ-QUIESCENCE-002`, `REQ-QUIESCENCE-004`
+- Method: 审计与 dry-run 前后文件、目录、绑定、receipt、执行资源对比，以及 provider 方法审计和快照竞争注入。
+- Pass condition: 无持久或执行资源变化，不创建锁文件，不启动 turn/resume/writer；不稳定读取不返回 ready。
+
+### VER-QUIESCENCE-007
+
+- covers: `REQ-QUIESCENCE-008`, `REQ-QUIESCENCE-009`
+- Method: 审计后新增 attempt、旧 writer、后台归档、目录交换、provider 状态变化和 receipt 范围冲突并发测试。
+- Pass condition: 覆盖过窄或排斥失败均拒绝；状态变化触发重新审计或拒绝；旧报告和任意 stopped 文件不能绕过门禁。
+
+### VER-QUIESCENCE-008
+
+- covers: `REQ-QUIESCENCE-009`, `REQ-QUIESCENCE-010`
+- Method: 升级各发布阶段崩溃注入与重入，核对快照、冻结身份及审计摘要。
+- Pass condition: 只向冻结目标前向续跑；无混合版本可写窗口；源材料保留；摘要可追溯且无私有原文泄漏。
+
+### VER-QUIESCENCE-009
+
+- covers: `REQ-QUIESCENCE-002`, `REQ-QUIESCENCE-010`
+- Method: contract 3 到候选目标迁移、历史诊断及拒绝、目标 reader/writer 和旧 CLI/Worker 兼容矩阵。
+- Pass condition: 普通 flow 绑定不放宽；旧 writer 不能写目标；历史格式/拒绝路径保留；目标持久合同与 artifact 一致，无隐式 schema 扩展。
+
+### VER-QUIESCENCE-010
+
+- covers: `REQ-QUIESCENCE-011`
+- Method: 授权范围内的当前 run 只读证据盘点和受控私有快照演练。
+- Pass condition: 当前每项 attempt、recovery、资源及 producer 均有可验证证明路径；无法取得证据时明确未通过。离线或脱敏 fixture 不冒充正式在线 provider 状态或放行凭证。
+
+### VER-QUIESCENCE-011
+
+- covers: `REQ-QUIESCENCE-001`, `REQ-QUIESCENCE-010`, `REQ-QUIESCENCE-011`
+- Method: 独立运行写入授权后，使用已发布的精确 version/build/source/contracts 完成同一正式 run 升级，保存受控证据清单及前后差异。
+- Pass condition: upgrade completed，ledger、binding、runtime identity 与目标一致，目标 CLI 可读；业务图、owner、thread/worktree、unknown、claim 和容量按批准的结果对账差异保留；无重复创建、消息发送、恢复回合或归档请求；其他 run、Gateway/daemon 和全局安装不变。只有此项及证据覆盖通过才能宣布当前升级问题解决。

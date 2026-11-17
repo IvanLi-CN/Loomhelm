@@ -144,3 +144,34 @@ ADR 0039 与 REQ-UPGRADE-001 至 REQ-UPGRADE-006 的候选实现位于 `orchestr
 Gateway 不再为缺失历史绑定的账本使用当前安装或 fallback 身份补建来源；隔离源码预览只为本次新建的临时副本显式登记预览身份，不能作为历史编排来源证据。
 
 回归覆盖自定义视图下 Worker 的真实执行身份、CLI 外桌面通知的静止证据、原子交换期间原生锁获取拒绝后的安全重试，以及空 init 输入的既有错误码。历史 schema-1/contract-1 与 contract-2 的公开只读诊断保持源文件字节不变，并拒绝缺少已验证迁移链的升级。
+
+## 历史副作用静止审计
+
+对应 [ADR 0041](../../adr/0041-historical-side-effect-quiescence-audit.md) 与 [SPEC 第 16 节](./SPEC.md#16-历史副作用静止审计)。尚无新增审计入口、共享静止验证器或历史静止摘要实现；既有升级及通知/创建/归档对账不能视作已覆盖新增需求。静止证据可行性是实现前置门；未通过时保持现有升级拒绝路径，不能以实现批准替代正式 run 写入授权。
+
+### 诊断与验证基线
+
+已核验基线是 npm `@loomhelm/multi-task-flow@0.3.0`，source SHA `9bb7a5dd753fe4be42c21aa7e075250806a0f346`。`lims-poc02-04-r10` 观测 revision 2686，绑定 0.2.55、ledger contract 3；包含 6 个桌面 notification unknown、1 个 dispatch unknown、1 个 conversation archive_unknown，缺少 runtime/call.json。0.3.0 升级先在通知关阻断；隔离 fixture 移除通知阻塞后仍在历史无 stop receipt 关阻断。0.3.0 dry-run 在该检查前返回，不能证明升级就绪。实际执行前必须重新盘点，不硬编码这些数量。
+
+已运行的源码回归为 orchestration-upgrade 19 项、notification-delivery 24 项、initialization-recovery 12 项、notification-reconcile 1 项通过；发布包 source SHA 与源码基线一致。这些结果只证明诊断基线，不能证明候选新增能力或正式升级完成。
+
+### 证据可行性缺口
+
+必须先只读核实当前 run 的每项可信证据和实际排斥机制，才能锁定可实施边界。账本 intent 或历史诊断报告存在，不等于 provider 原始结果可取回；尚未证明以下清单全部可满足。
+
+| 对象 | 需要核实的证据 | 当前不得作出的推断 |
+| - | - | - |
+| 6 个 notification unknown | 每个 last_attempt_id 对应的真实平台调用及结果或可信终止证据，排除延迟发送 | 没有消息即失败；意图就是投递回执 |
+| op-dispatch-c4-r10-20261117-01 | 原创建和持久 recovery attempt 的精确关联及终止证明；覆盖缺失 recovery_turn_id 的未决提交 | 按时间把空 interrupted 回合绑定为 recovery；非零退出即无副作用 |
+| conversation archive_unknown | 精确方向的正向 provider 结果或调用终止证据 | 负向查询即失败；重新归档即可修复 |
+| 旧 CLI、Worker、桌面调用方、后台归档 | 实际 writer 排斥范围与在途请求证明 | 新版 lifecycle 锁或人工声明覆盖所有旧 producer |
+
+受限 Host 原始记录核查已能配对当前六个 unknown 通知的 prepare 调用与返回，但尚无与这些 attempt 精确匹配的真实桌面发送终止记录。来源中可找到其他通知的结构化发送完成记录，不能用它们覆盖未匹配的 attempt；未执行的动态表达式亦不计作已验证覆盖。缺失 recovery turn identity 的提交与后台归档仍无完整终止证明。隔离原生文件锁实验验证了 thread writer 的双向排斥、共享协调锁防止删除重建、无关 thread 可写和释放后恢复；这些结果只证明该锁协议的排斥能力，不证明历史调用已停止或所有 producer 已冻结。
+
+若证据不可取得，必须保留未解决状态和精确缺口，返回证据边界设计；不能用弱化门禁替代。目标持久合同为 ledger contract 5、schema_version 2；该结构转换尚未实现。实施仍须完成命令 JSON Schema、证据源验证方式、旧生产者排斥和迁移兼容验证，不假定有现成 receipt API。
+
+### 实现边界与验证对应
+
+预期边界为 orchestration lifecycle/upgrade、service CLI、现有 Codex 只读证据读取、upgrade 审计 schema 和隔离回归；CLI_CONTRACT 及 Skill 引用合同在实现时同步，不预先声明候选命令已可用。初始化恢复发送语义和 UI 不变。SPEC 的 VER-QUIESCENCE-001 至 VER-QUIESCENCE-009 是运行时回归要求，010 是当前私有状态的证据可行性和演练，011 是独立授权后的正式成功证明；目前均不能以既有测试结果标记通过。
+
+正式验收清单必须记录精确 artifact 身份、源 revision/digest、审计报告、每项证明来源、升级结果及业务事实差异。原始证据保留在受控位置，只提交脱敏 fixture 和验证方法。方案审核、源码实施、发布和正式升级分别办理，当前文档不替代这些授权。
