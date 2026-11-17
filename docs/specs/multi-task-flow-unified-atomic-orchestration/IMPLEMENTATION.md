@@ -145,50 +145,17 @@ Gateway 不再为缺失历史绑定的账本使用当前安装或 fallback 身�
 
 回归覆盖自定义视图下 Worker 的真实执行身份、CLI 外桌面通知的静止证据、原子交换期间原生锁获取拒绝后的安全重试，以及空 init 输入的既有错误码。历史 schema-1/contract-1 与 contract-2 的公开只读诊断保持源文件字节不变，并拒绝缺少已验证迁移链的升级。
 
-## 历史副作用静止审计
+## 保留未决调用的机械迁移
 
-对应 [ADR 0041](../../adr/0041-historical-side-effect-quiescence-audit.md) 与 [SPEC 第 16 节](./SPEC.md#16-历史副作用静止审计)。尚无新增审计入口、共享静止验证器或历史静止摘要实现；既有升级及通知/创建/归档对账不能视作已覆盖新增需求。静止证据可行性是实现前置门；未通过时保持现有升级拒绝路径，不能以实现批准替代正式 run 写入授权。
+对应 ADR 0041 与 SPEC 第 16 节 REQ/VER-MIGRATION-001 至 011；当前处于合同收敛与程序实现阶段，尚无 contract-5 升级或公开 upgrade-check 的完成证据。真实 LIMS run 保持只读，发布、全局安装和正式运行写入均未执行。
 
-### 诊断与验证基线
+### 来源与替代路径
 
-已核验基线是 npm `@loomhelm/multi-task-flow@0.3.0`，source SHA `9bb7a5dd753fe4be42c21aa7e075250806a0f346`。`lims-poc02-04-r10` 观测 revision 2686，绑定 0.2.55、ledger contract 3；包含 6 个桌面 notification unknown、1 个 dispatch unknown、1 个 conversation archive_unknown，缺少 runtime/call.json。0.3.0 升级先在通知关阻断；隔离 fixture 移除通知阻塞后仍在历史无 stop receipt 关阻断。0.3.0 dry-run 在该检查前返回，不能证明升级就绪。实际执行前必须重新盘点，不硬编码这些数量。
-
-已运行的源码回归为 orchestration-upgrade 19 项、notification-delivery 24 项、initialization-recovery 12 项、notification-reconcile 1 项通过；发布包 source SHA 与源码基线一致。这些结果只证明诊断基线，不能证明候选新增能力或正式升级完成。
-
-### 证据可行性缺口
-
-必须先只读核实当前 run 的每项可信证据和实际排斥机制，才能锁定可实施边界。账本 intent 或历史诊断报告存在，不等于 provider 原始结果可取回；尚未证明以下清单全部可满足。
-
-| 对象 | 需要核实的证据 | 当前不得作出的推断 |
-| - | - | - |
-| 6 个 notification unknown | 每个 last_attempt_id 对应的真实平台调用及结果或可信终止证据，排除延迟发送 | 没有消息即失败；意图就是投递回执 |
-| op-dispatch-c4-r10-20261117-01 | 原创建和持久 recovery attempt 的精确关联及终止证明；覆盖缺失 recovery_turn_id 的未决提交 | 按时间把空 interrupted 回合绑定为 recovery；非零退出即无副作用 |
-| conversation archive_unknown | 精确方向的正向 provider 结果或调用终止证据 | 负向查询即失败；重新归档即可修复 |
-| 旧 CLI、Worker、桌面调用方、后台归档 | 实际 writer 排斥范围与在途请求证明 | 新版 lifecycle 锁或人工声明覆盖所有旧 producer |
-
-受限 Host 原始记录核查已能配对当前六个 unknown 通知的 prepare 调用与返回，但尚无与这些 attempt 精确匹配的真实桌面发送终止记录。来源中可找到其他通知的结构化发送完成记录，不能用它们覆盖未匹配的 attempt；未执行的动态表达式亦不计作已验证覆盖。缺失 recovery turn identity 的提交与后台归档仍无完整终止证明。隔离原生文件锁实验验证了 thread writer 的双向排斥、共享协调锁防止删除重建、无关 thread 可写和释放后恢复；这些结果只证明该锁协议的排斥能力，不证明历史调用已停止或所有 producer 已冻结。
-
-若证据不可取得，必须保留未解决状态和精确缺口，返回证据边界设计；不能用弱化门禁替代。目标持久合同为 ledger contract 5、schema_version 2；该结构转换尚未实现。实施仍须完成命令 JSON Schema、证据源验证方式、旧生产者排斥和迁移兼容验证，不假定有现成 receipt API。
-
-### 受控维护边界的验证结果
-
-原生 `codex-cli 0.169.0` 的隔离实验扩展验证了 thread 文件锁对 `thread/resume`、`thread/archive` 和 `thread/unarchive` 的排斥；持锁期间目标 rollout 的路径和摘要保持不变。这个排斥范围仍不足以作为完整维护回执：同一目标在持锁期间可通过 `thread/queue/add` 接收持久消息，关闭并重启私有 app-server 后，`thread/queue/list` 仍可读取该消息。未启动该消息对应的 turn，未使用正式 thread 或正式 Host 写入。
-
-| 维护假设 | 隔离验证结果 | 对静止证明的影响 |
-| - | - | - |
-| thread writer 文件锁能排斥 resume、archive 和 unarchive | 三种原生请求均拒绝，rollout 路径及摘要不变 | 可作为这些临界区的排斥机制，仍须独立覆盖接收队列 |
-| thread writer 文件锁能禁止新消息入队 | `thread/queue/add` 成功，队列新增一项 | 持锁或一次空队列查询不能证明生产者已禁入 |
-| 私有 app-server 退出即可排空队列 | 重启后仍能读取先前入队项 | 进程退出不能替代持久队列终止证明 |
-| `ViewerWorkerPool.stop()` 返回即所有 Worker 已结束 | 延迟 Worker 未完成时，stop 在约 500ms 后返回 | 该接口的有界返回不能充当维护排空回执 |
-| Dashboard stop 返回即归档调用已结束 | 注入等待中的 provider 后调用 stop，释放 provider 仍触发后续账本提交 | 关闭监听和 observer 不能替代原生调用 join |
-
-Worker 和 Dashboard 实验使用仓库实际生命周期入口与任务自有 fixture；provider 为可控等待桩，结论限定为 stop/join 语义，不冒充真实 provider 终止证据。原生锁与队列实验使用独立 CODEX_HOME、私有 app-server 和 disposable thread；仅在这些自有资源执行创建、归档和入队，未发送业务任务。
-
-正式 run 四个相关 thread 的受限只读 `thread/queue/list` 观察均为空，ledger revision 和摘要保持不变；该观察仅说明查询时没有可见队列项，不能覆盖并发入队或证明全部生产者被排斥。现有公开原生请求面尚未提供经验证的、同时覆盖新请求禁入、既有调用终止及持久队列的维护接口。在这些能力成立前，历史证据路线与维护边界路线均不足以满足 VER-QUIESCENCE-010，不能发布成功审计结论或放行当前 run 升级。
+当前 LIMS run 观测 revision 2686，绑定 0.2.55、contract 3，包含六个 notification unknown、一个 dispatch/recovery unknown 和一个 archive_unknown，缺少 runtime/call.json。历史静止证据研究无法对这些调用形成完整终止证明；原生 writer 文件锁亦不能阻止持久队列入队，Worker/Dashboard stop 不等于全部异步调用 join。这些研究否定了将既有接口直接用作完整静止凭证的假设，不代表原生资源已停止；新机械迁移准入不再以补造这类证明为目的。
 
 ### 机械迁移保留未决调用的研究结果
 
-原始问题是同一 LIMS run 的版本绑定与数据合同无法安全前移。另一条待确认路径是只迁移表示和运行身份，原样保留未决调用，禁止迁移发起外部调用，并验证旧 writer 无法提交到发布后的账本或绑定。这条路径不推断历史调用已停止，也不解决 c4 握手或业务继续执行；它与 REQ-UPGRADE-005、REQ-QUIESCENCE-001 所要求的静止前提不同，尚未获得采用该替代前提的确认。现有准入代码、ADR 和 SPEC 要求保持不变。
+原始问题是同一 LIMS run 的版本绑定与数据合同无法安全前移。主人已确认的路径是只迁移表示和运行身份，原样保留未决调用，禁止迁移发起外部调用，并验证旧 writer 无法提交到发布后的账本或绑定。这条路径不推断历史调用已停止，也不解决 c4 握手或业务继续执行；ADR 0041 与 SPEC 第 16 节已记录新的准入前提；现有程序尚未实现。
 
 研究使用校验 npm integrity 的真实 `@loomhelm/multi-task-flow@0.2.55` 包，以及当前仓库的原子目录发布和升级事务。目标是合成的 contract-4 身份；仅在任务自有临时账本中替换 `withQuiescentRun` 研究接缝，正式入口没有新增绕过开关。此实验不代表 contract 5 已实现、公开升级命令已通过、静止证据已充分或 PR 已就绪。
 
@@ -202,14 +169,12 @@ Worker 和 Dashboard 实验使用仓库实际生命周期入口与任务自有 f
 | 当前 LIMS 账本和绑定的私有副本 | 原静止门禁拒绝；研究接缝下迁移完成且可幂等识别，业务数据摘要一致，目标源码 CLI 可读取同一 run | 使用实际历史数据形状，目标仍为合成身份，不能作为正式升级回执 |
 | LIMS 副本中的六个 unknown 通知和历史 recovery | 六项准备发送均拒绝；历史 recovery 进入原生 writer 前拒绝，新 recovery claim 亦拒绝，原 attempt 和业务图保留 | 未调用真实通知、创建、恢复或归档；正式账本和绑定的前后摘要一致 |
 
-这组结果支持继续验证“机械迁移可以保留未决调用”的假设，尚未形成完整安全证明。取舍是旧调用可能继续完成其既有副作用，旧 writer 的晚回执会被拒绝，目标只能继续保留 unknown；不保证该回执日后仍能取回，不保证外部资源静止或相关业务恢复。新准入若获确认，必须明确记录这些事实，不能把未证明静止标为 proven、把未决状态转成失败，或自动释放 claim、容量。
+这组结果支持继续验证“机械迁移可以保留未决调用”的假设，尚未形成完整安全证明。取舍是旧调用可能继续完成其既有副作用，旧 writer 的晚回执会被拒绝，目标只能继续保留 unknown；不保证该回执日后仍能取回，不保证外部资源静止或相关业务恢复。新准入必须明确记录这些事实，不能把未证明静止标为 proven、把未决状态转成失败，或自动释放 claim、容量。
 
-待确认方案将范围收敛到既有升级事务、共享迁移评估、旧 writer 屏障与未决身份保留：只接受已验证的机械转换，不改写业务含义；沿用既有维护、账本、绑定和 lifecycle 排斥，不把它们扩称为所有原生调用已停止；在事务中保存源身份、源 revision/digest、业务数据与未决对象集合摘要、转换规则及 writer 屏障判定。目标 contract 5 仍需独立实现并验证；原生静止若未证明必须如实记录，不要求为迁移新增 Host 会话解析器、全局排空协议或新的恢复账本。无法确认副作用前先提交 intent 的来源、转换保真或旧 writer 排斥时，拒绝该转换。
+方案范围收敛到既有升级事务、共享迁移评估、旧 writer 屏障与未决身份保留：只接受已验证的机械转换，不改写业务含义；沿用既有维护、账本、绑定和 lifecycle 排斥，不把它们扩称为所有原生调用已停止；在事务中保存源身份、源 revision/digest、业务数据与未决对象集合摘要、转换规则及 writer 屏障判定。目标 contract 5 仍需独立实现并验证；原生静止若未证明必须如实记录，不要求为迁移新增 Host 会话解析器、全局排空协议或新的恢复账本。无法确认副作用前先提交 intent 的来源、转换保真或旧 writer 排斥时，拒绝该转换。
 
-采用这条路径前需要明确修改 ADR 0039 的静止准入决定，并以符合 ADR 格式的新决定表达取舍，需求和验收仍只由 SPEC 持有。验收至少覆盖：迁移调用原生变更接口次数为零；全部业务数据及 unknown/attempt/claim/容量摘要保持；真实旧包及旧目录等待者无法晚写；同一和新 request 均不能重发未决通知、创建、recovery 或归档；全部崩溃阶段仅向冻结目标续跑；实际 contract-5 tarball 的公开 CLI 在历史副本上完成升级并可读取。真实 LIMS run 最后仍须由 main 发布的精确 artifact 经独立授权执行，不能由副本实验替代。
+ADR 0041 记录对 ADR 0039 静止前提的替代，需求和验收仍只由 SPEC 持有。验收至少覆盖：迁移调用原生变更接口次数为零；全部业务数据及 unknown/attempt/claim/容量摘要保持；真实旧包及旧目录等待者无法晚写；同一和新 request 均不能重发未决通知、创建、recovery 或归档；全部崩溃阶段仅向冻结目标续跑；实际 contract-5 tarball 的公开 CLI 在历史副本上完成升级并可读取。真实 LIMS run 最后仍须由 main 发布的精确 artifact 经独立授权执行，不能由副本实验替代。
 
-### 实现边界与验证对应
+### 实现与验收边界
 
-预期边界为 orchestration lifecycle/upgrade、service CLI、现有 Codex 只读证据读取、upgrade 审计 schema 和隔离回归；CLI_CONTRACT 及 Skill 引用合同在实现时同步，不预先声明候选命令已可用。初始化恢复发送语义和 UI 不变。SPEC 的 VER-QUIESCENCE-001 至 VER-QUIESCENCE-009 是运行时回归要求，010 是当前私有状态的证据可行性和演练，011 是独立授权后的正式成功证明；目前均不能以既有测试结果标记通过。
-
-正式验收清单必须记录精确 artifact 身份、源 revision/digest、审计报告、每项证明来源、升级结果及业务事实差异。原始证据保留在受控位置，只提交脱敏 fixture 和验证方法。方案审核、源码实施、发布和正式升级分别办理，当前文档不替代这些授权。
+仅实现共享机械迁移评估、无锁只读 upgrade-check/dry-run、contract-5 升级审计及旧 writer 屏障，并修复未决归档身份保留。经验性证据须在最终 Candidate 上重跑实际旧包与受控私有副本；原型结果不能转写为候选通过。VER-MIGRATION-011 必须在真实 Merge Receipt、正式 artifact 和独立运行写入授权后执行。
