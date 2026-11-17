@@ -8,7 +8,11 @@ import { fixtureIdentity } from "./cli-identity-fixture";
 export function mockCli(initial: Ledger) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mtf-role-cli-")));
   const store = new LedgerStore(root, initial.orchestration_id);
-  initial = { ...structuredClone(initial), contract_version: 4, runtime_identity: fixtureIdentity };
+  initial = {
+    ...structuredClone(initial),
+    contract_version: fixtureIdentity.ledger_contract,
+    runtime_identity: fixtureIdentity,
+  };
   store.create(initial);
   let sequence = 0;
   return {

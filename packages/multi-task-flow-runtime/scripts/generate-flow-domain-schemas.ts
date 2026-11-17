@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { atomicEdge, atomicNode } from "../lib/atomic-orchestration";
+import { migrationReport } from "../lib/orchestration-migration";
 import {
   baselineReceipt,
   executionProfile,
@@ -23,6 +24,7 @@ writeFileSync(
     {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       $id: "https://loomhelm.dev/schemas/multi-task-flow/domain-schemas.json",
+      migration_report: z.toJSONSchema(migrationReport),
       plan: z.toJSONSchema(plan),
       group: z.toJSONSchema(group),
       task: z.toJSONSchema(task),

@@ -2,11 +2,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { callerIdentity } from "../lib/orchestration-identity";
-import {
-  requireQuiescentRun,
-  withRunCommand,
-  withRunLifecycle,
-} from "../lib/orchestration-lifecycle";
+import { withRunCommand, withRunLifecycle } from "../lib/orchestration-lifecycle";
 import { upgradeOrchestration } from "../lib/orchestration-upgrade";
 import { LedgerStore } from "../lib/store";
 
@@ -34,7 +30,6 @@ if (input.mode === "stale-read") {
 } else {
   await withRunLifecycle(store, async () => {
     upgradeOrchestration(store, callerIdentity(), callerIdentity(), {
-      withQuiescentRun: (ledger, action) => requireQuiescentRun(store, ledger, action),
       afterStage(phase) {
         if (phase === input.kill_after) process.kill(process.pid, "SIGKILL");
       },

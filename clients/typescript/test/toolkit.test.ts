@@ -55,7 +55,7 @@ test('rejects a toolkit root symlink before validating or executing resources', 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('canonical ledger initializes and reads unchanged schema2/contract4 state across child runtimes', async () => {
+test('canonical ledger initializes and reads unchanged schema2/contract5 state across child runtimes', async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'loomhelm-canonical-')));
   try {
     const input = await readFile(join(import.meta.dir, '../../../packages/multi-task-flow-runtime/examples/ledger-initialization/initial.json'), 'utf8');
@@ -65,7 +65,7 @@ test('canonical ledger initializes and reads unchanged schema2/contract4 state a
     const path = join(dir, 'runs/example-run/ledger.json');
     const before = await readFile(path, 'utf8');
     const ledger = JSON.parse(before);
-    assert.equal(ledger.schema_version, 2); assert.equal(ledger.contract_version, 4);
+    assert.equal(ledger.schema_version, 2); assert.equal(ledger.contract_version, 5);
     const viewed = await runtime.run('skills/multi-task-flow/scripts/orchestrate.ts', ['show', '--input', '-'], { input: JSON.stringify({ run_id: 'example-run', actor: { role: 'main', thread_id: 'example-main-thread' } }), env });
     assert.equal(viewed.code, 0, viewed.stdout + viewed.stderr);
     assert.equal(await readFile(path, 'utf8'), before);

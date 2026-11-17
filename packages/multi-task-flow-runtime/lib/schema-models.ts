@@ -655,7 +655,13 @@ export const ledgerSchema = z
   .object({
     schema_version: z.literal(2),
     source_schema_version: z.literal(1).nullable().default(null),
-    contract_version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+    contract_version: z.union([
+      z.literal(1),
+      z.literal(2),
+      z.literal(3),
+      z.literal(4),
+      z.literal(5),
+    ]),
     runtime_identity: runIdentity.optional(),
     upgrade: upgradeState.optional(),
     version: z

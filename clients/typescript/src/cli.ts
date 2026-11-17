@@ -21,7 +21,7 @@ async function main(args: string[]): Promise<void> {
   if (args[0] === '--config') { args.shift(); configPath = args.shift(); if (!configPath) throw new Error('Missing config path'); }
   const [command, ...rest] = args;
   if (command === 'help' || !command) {
-    console.log('multi-task-flow [--config PATH] status|tasks|receipts|recover-lock TOKEN|apply OPERATION_ID JSON|run OPERATION_ID TASK_ID COMMAND_JSON|git-status PATH|worktree REPO ABS_PATH BRANCH [BASE]|codex COMMAND ...|flow COMMAND --input -|flow COMMAND --help|flow schema --format json|service COMMAND --input -|gateway upgrade [--dry-run|--rollback] VERSION_OR_TAG|orchestration upgrade --run-id RUN_ID [--dry-run] VERSION_OR_TAG|orchestration compatibility-check --run-id RUN_ID|skills COMMAND ...|release COMMAND ...|workflow COMMAND ...'); return;
+    console.log('multi-task-flow [--config PATH] status|tasks|receipts|recover-lock TOKEN|apply OPERATION_ID JSON|run OPERATION_ID TASK_ID COMMAND_JSON|git-status PATH|worktree REPO ABS_PATH BRANCH [BASE]|codex COMMAND ...|flow COMMAND --input -|flow COMMAND --help|flow schema --format json|service COMMAND --input -|gateway upgrade [--dry-run|--rollback] VERSION_OR_TAG|orchestration upgrade --run-id RUN_ID [--dry-run] VERSION_OR_TAG|orchestration compatibility-check --run-id RUN_ID|orchestration upgrade-check --run-id RUN_ID|orchestration schema --format json|skills COMMAND ...|release COMMAND ...|workflow COMMAND ...'); return;
   }
   if (command === 'skills') { await runSkillsCommand(rest); return; }
   if (command === 'codex') { await runCodexCommand(rest, configPath); return; }

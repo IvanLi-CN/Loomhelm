@@ -17,8 +17,14 @@ export const compatibility = {
     "schema-2/contract-2",
     "schema-2/contract-3",
     "schema-2/contract-4",
+    "schema-2/contract-5",
   ],
-  writable: ["schema-2/contract-2", "schema-2/contract-3", "schema-2/contract-4"],
+  writable: [
+    "schema-2/contract-2",
+    "schema-2/contract-3",
+    "schema-2/contract-4",
+    "schema-2/contract-5",
+  ],
 };
 
 export const releaseManifestSchema = z

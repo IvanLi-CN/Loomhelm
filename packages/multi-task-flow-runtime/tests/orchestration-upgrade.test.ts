@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { withExclusiveLockAsync } from "@loomhelm/runtime-core/modules/flow/storage";
 import { callerIdentity, type RunIdentity, requireRunBinding } from "../lib/orchestration-identity";
-import { requireQuiescentRun, withRunLifecycle } from "../lib/orchestration-lifecycle";
+import { withRunLifecycle } from "../lib/orchestration-lifecycle";
+import { checkMigration } from "../lib/orchestration-migration";
 import { inspectOrchestration, upgradeOrchestration } from "../lib/orchestration-upgrade";
 import { fixtureRun, serviceFixture } from "./service-fixture";
 
@@ -23,7 +24,7 @@ const target: RunIdentity = {
   package_version: "0.2.56",
   build_id: "b".repeat(64),
   source_sha: "b".repeat(40),
-  ledger_contract: 4,
+  ledger_contract: 5,
 };
 function fixture() {
   const { state } = serviceFixture();
@@ -43,7 +44,7 @@ function fixture() {
   );
   return store;
 }
-const dependencies = { withQuiescentRun: <T>(_ledger: any, action: () => T) => action() };
+const dependencies = {};
 
 test("explicit migration preserves business state and is idempotent", () => {
   const store = fixture();
@@ -53,7 +54,7 @@ test("explicit migration preserves business state and is idempotent", () => {
   expect(store.read().revision).toBe(before.revision);
   upgradeOrchestration(store, target, target, dependencies);
   const after = store.read();
-  expect(after.contract_version).toBe(4);
+  expect(after.contract_version).toBe(5);
   expect(after.upgrade.phase).toBe("completed");
   expect(after.operations).toEqual(before.operations);
   expect(after.tasks).toEqual(before.tasks);
@@ -107,18 +108,12 @@ test("reject downgrade, executor mismatch, tampered backup, and absent historica
   ).toThrow();
   const raw = store.read();
   writeFileSync(join(store.runPath, raw.upgrade.backup), "{}");
-  expect(() => upgradeOrchestration(store, target, target, dependencies)).toThrow("backup");
-});
-test("unknown state needs a native-call stop receipt, never just a dead PID", () => {
-  const store = fixture();
-  const ledger = store.read();
-  ledger.operations = [{ status: "unknown" }];
-  expect(() => requireQuiescentRun(store, ledger, () => true)).toThrow("Historical");
-  const path = join(store.runPath, "runtime", "call.json");
-  writeFileSync(path, JSON.stringify({ state: "running", pid: 999999999 }));
-  expect(() => requireQuiescentRun(store, ledger, () => true)).toThrow("safe-stop");
-  writeFileSync(path, JSON.stringify({ state: "stopped" }));
-  expect(requireQuiescentRun(store, ledger, () => true)).toBe(true);
+  expect(checkMigration(store, target).blockers.map((item) => item.code)).toContain(
+    "audit_conflict",
+  );
+  expect(() => upgradeOrchestration(store, target, target, dependencies)).toThrow(
+    "Mechanical migration checks failed",
+  );
 });
 test("diagnosis and dry-run leave both persistent objects unchanged", () => {
   const store = fixture();
@@ -237,29 +232,6 @@ test("native lock acquisition rejection retries only a replaced boundary before 
   }
 });
 
-test("CLI stop receipt never covers an outstanding desktop notification tool", () => {
-  const store = fixture();
-  markFixtureQuiescent(store);
-  const ledger = store.read();
-  ledger.notifications = [{ id: "notice", last_attempt_id: "attempt", delivery_status: "unknown" }];
-  ledger.events = [
-    {
-      type: "notification_delivery_resolved",
-      data: {
-        notification_id: "notice",
-        delivery_attempt_id: "attempt",
-        provider: "codex-app-tools",
-      },
-    },
-  ];
-  expect(() => requireQuiescentRun(store, ledger, () => true)).toThrow("external notification");
-  ledger.events[0].data.provider = "codex-app-server";
-  expect(requireQuiescentRun(store, ledger, () => true)).toBe(true);
-  ledger.events = [];
-  expect(() => requireQuiescentRun(store, ledger, () => true)).toThrow("external notification");
-  ledger.notifications[0].delivery_status = "sent";
-  expect(requireQuiescentRun(store, ledger, () => true)).toBe(true);
-});
 test("upgrade waits for an actual native-call lifetime to exit without killing it", async () => {
   const store = fixture();
   markFixtureQuiescent(store);

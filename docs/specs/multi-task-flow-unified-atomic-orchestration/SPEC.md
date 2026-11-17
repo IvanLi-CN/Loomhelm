@@ -2,7 +2,7 @@
 
 状态：已锁定的长期主题合同。
 
-第 16 节规定保留未决调用的机械迁移合同，不表示已实现、已发布或已获得正式运行写入授权；当前覆盖状态见 IMPLEMENTATION.md。
+第 16 节规定保留结果不确定的调用的机械迁移合同，不表示已实现、已发布或已获得正式运行写入授权；当前覆盖状态见 IMPLEMENTATION.md。
 
 本文是仓库内多任务编排的 canonical 领域、持久化、状态推导、迁移和网页展示合同。实现、测试和后续设计修订必须以本文为基线；`/tmp` 中的设计草稿不属于项目事实源。
 
@@ -282,7 +282,7 @@ AtomicNode + AtomicEdge
 - [Multi-task Flow CLI contract ownership](../../adr/0036-multi-task-flow-cli-contract-ownership.md)
 - [编排版本绑定与前向升级](../../adr/0039-orchestration-version-binding-and-forward-upgrade.md)
 - [初始化恢复的权限事务与原生写锁](../../adr/0040-initialization-recovery-permission-transaction.md)
-- [机械升级保留未决调用](../../adr/0041-historical-side-effect-quiescence-audit.md)
+- [机械升级保留结果不确定的调用](../../adr/0041-historical-side-effect-quiescence-audit.md)
 
 ## 9. 可行性与风险
 
@@ -364,7 +364,7 @@ Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，�
 
 ### REQ-UPGRADE-005
 
-升级 MUST 排斥该编排的并发持久写事务，沿用现有 lifecycle 排斥，并在原子发布后拒绝旧 CLI/Worker 和旧目录等待者写入。已验证的机械迁移 MAY 保留尚未证明静止的未决调用，但 MUST 原样保留业务图、unknown、attempt、claim 和容量，且迁移自身 MUST NOT 发起原生变更调用。迁移 MUST NOT 将既有调用可能继续完成或晚回执可能丢失掩饰为静止；不能证明转换保真、来源合同或旧 writer 排斥时 MUST 阻断，不强杀或伪造终态。
+升级 MUST 排斥该编排的并发持久写事务，沿用现有 lifecycle 排斥，并在原子发布后拒绝旧 CLI/Worker 和旧目录等待者写入。已验证的机械迁移 MAY 保留尚未证明静止的结果不确定的调用，但 MUST 原样保留业务图、unknown、attempt、claim 和容量，且迁移自身 MUST NOT 发起原生变更调用。迁移 MUST NOT 将既有调用可能继续完成或晚回执可能丢失掩饰为静止；不能证明转换保真、来源合同或旧 writer 排斥时 MUST 阻断，不强杀或伪造终态。
 
 ### REQ-UPGRADE-006
 
@@ -374,9 +374,9 @@ Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，�
 
 - covers: `REQ-UPGRADE-001`, `REQ-UPGRADE-002`, `REQ-UPGRADE-003`, `REQ-UPGRADE-004`, `REQ-UPGRADE-005`, `REQ-UPGRADE-006`
 - Method: 隔离历史 ledger 与绑定 fixture、已验证 artifact 身份 fixture、CLI/Worker 并发写入、原生副作用调用观察、升级各落盘边界的崩溃注入及重入测试。
-- Pass condition: 普通命令跨版本或同版本不同 build 均拒绝；专用诊断及 dry-run 不改变业务数据或绑定；目标 CLI 完成迁移和绑定一致切换；中断只续跑冻结目标、不降级；机械迁移不发起原生变更，未决调用及 unknown/claim/容量不丢失，旧回调不能晚写；缺失绑定有唯一证据才补齐；旧 writer 不能绕过门禁；Gateway 和其他编排不受影响。
+- Pass condition: 普通命令跨版本或同版本不同 build 均拒绝；专用诊断及 dry-run 不改变业务数据或绑定；目标 CLI 完成迁移和绑定一致切换；中断只续跑冻结目标、不降级；机械迁移不发起原生变更，结果不确定的调用及 unknown/claim/容量不丢失，旧回调不能晚写；缺失绑定有唯一证据才补齐；旧 writer 不能绕过门禁；Gateway 和其他编排不受影响。
 
-## 16. 保留未决调用的机械迁移
+## 16. 保留结果不确定的调用的机械迁移
 
 ### 范围与术语
 
@@ -386,10 +386,10 @@ Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，�
 flowchart LR
     A[只读检查源身份和机械转换] --> B{支持且业务保真?}
     B -->|否| C[列出全部阻塞项]
-    B -->|是| D[报告迁移可行及保留的未决调用]
+    B -->|是| D[报告迁移可行及保留的结果不确定的调用]
     D --> E[显式升级取得既有锁并重新评估]
     E --> F[原子发布目标与审计摘要]
-    F --> G[拒绝旧 writer 和未决调用重发]
+    F --> G[拒绝旧 writer 和结果不确定的调用重发]
 ```
 
 ### REQ-MIGRATION-001
@@ -398,7 +398,7 @@ flowchart LR
 
 ### REQ-MIGRATION-002
 
-系统 MUST 提供 `orchestration upgrade-check --run-id <run-id>`，只读输出 schema_version=1 的源与调用者身份、目录身份、revision/digest、绑定摘要、迁移支持和就绪状态、全部未决对象及 blocker、已有处理入口。通知 attempt、dispatch native request 与 recovery、归档方向及 operation identity MUST 原样列入摘要；缺失历史身份 MUST NOT 被补造。
+系统 MUST 提供 `orchestration upgrade-check --run-id <run-id>`，只读输出 schema_version=1 的源与调用者身份、目录身份、revision/digest、绑定摘要、迁移支持和就绪状态、全部结果不确定的对象及 blocker、已有处理入口。通知 attempt、dispatch native request 与 recovery、归档方向及 operation identity MUST 原样列入摘要；缺失历史身份 MUST NOT 被补造。
 
 ### REQ-MIGRATION-003
 
@@ -418,7 +418,7 @@ dispatch、native request、observed thread、recovery attempt、既有权限快
 
 ### REQ-MIGRATION-007
 
-archive/unarchive 未决状态 MUST 保留 thread、方向、operation_id 和原 attempt 时间；负向查询 MUST NOT 证明失败或停止，也不能更换原调用身份或重发。身份缺失时 MUST 明确拒绝身份变更；对账不在迁移事务内执行，一个方向的证据不得覆盖相反方向。
+archive/unarchive 结果不确定的状态 MUST 保留 thread、方向、operation_id 和原 attempt 时间；负向查询 MUST NOT 证明失败或停止，也不能更换原调用身份或重发。身份缺失时 MUST 明确拒绝身份变更；对账不在迁移事务内执行，一个方向的证据不得覆盖相反方向。
 
 ### REQ-MIGRATION-008
 
@@ -426,7 +426,7 @@ archive/unarchive 未决状态 MUST 保留 thread、方向、operation_id 和原
 
 ### REQ-MIGRATION-009
 
-升级 MUST 复用现有 prepared、冻结目标、原子发布、备份与前向续跑；审计 MUST 随 prepared 一同接受，包含源身份/revision/digest、绑定摘要、业务及未决对象集合摘要、转换规则、验证器与 writer 屏障判定。中断后仅续跑已冻结目标，摘要与恢复源不符 MUST 拒绝；不伪造 runtime/call.json、不新增独立恢复状态机、不自动清理备份或反向迁移。
+升级 MUST 复用现有 prepared、冻结目标、原子发布、备份与前向续跑；审计 MUST 随 prepared 一同接受，包含源身份/revision/digest、绑定摘要、业务及结果不确定的对象集合摘要、转换规则、验证器与 writer 屏障判定。中断后仅续跑已冻结目标，摘要与恢复源不符 MUST 拒绝；不伪造 runtime/call.json、不新增独立恢复状态机、不自动清理备份或反向迁移。
 
 ### REQ-MIGRATION-010
 
@@ -434,13 +434,13 @@ archive/unarchive 未决状态 MUST 保留 thread、方向、operation_id 和原
 
 ### REQ-MIGRATION-011
 
-当前问题 MUST 以同一 lims-poc02-04-r10 使用 main 合入后正式发布的精确 artifact 完成安全升级验收；正式写入前重新盘点并另获授权。PR 前经验验收 MUST 使用当前 Candidate、校验完整性的实际旧包及正式数据的受控私有副本，验证全部业务和未决对象保真、不重发、旧 writer 拒绝与目标 CLI 可读；不得上传原始私有材料。副本或单测不等于正式问题已解决，合并与发布仍需独立确认。
+当前问题 MUST 以同一 lims-poc02-04-r10 使用 main 合入后正式发布的精确 artifact 完成安全升级验收；正式写入前重新盘点并另获授权。PR 前经验验收 MUST 使用当前 Candidate、校验完整性的实际旧包及正式数据的受控私有副本，验证全部业务和结果不确定的对象保真、不重发、旧 writer 拒绝与目标 CLI 可读；不得上传原始私有材料。副本或单测不等于正式问题已解决，合并与发布仍需独立确认。
 
 ### VER-MIGRATION-001
 
 - covers: `REQ-MIGRATION-001`, `REQ-MIGRATION-002`, `REQ-MIGRATION-003`
 - Method: 历史 unknown fixture 及三个公开调用面的输出矩阵。
-- Pass condition: 不依赖历史静止回执的受支持机械迁移可就绪，完整列出未决调用和真实 blocker；兼容与迁移就绪不混同，不声明原生静止。
+- Pass condition: 不依赖历史静止回执的受支持机械迁移可就绪，完整列出结果不确定的调用和真实 blocker；兼容与迁移就绪不混同，不声明原生静止。
 
 ### VER-MIGRATION-002
 
@@ -452,7 +452,7 @@ archive/unarchive 未决状态 MUST 保留 thread、方向、operation_id 和原
 
 - covers: `REQ-MIGRATION-005`
 - Method: 真实旧包的等待中通知晚回调、同请求和新请求重放，观察 provider 次数。
-- Pass condition: 未决 attempt 原样迁移，旧回调不晚写，新旧请求不重发，迁移 provider 变更次数为零。
+- Pass condition: 结果不确定的 attempt 原样迁移，旧回调不晚写，新旧请求不重发，迁移 provider 变更次数为零。
 
 ### VER-MIGRATION-004
 
@@ -488,13 +488,13 @@ archive/unarchive 未决状态 MUST 保留 thread、方向、operation_id 和原
 
 - covers: `REQ-MIGRATION-002`, `REQ-MIGRATION-003`, `REQ-MIGRATION-010`
 - Method: 实际 npm tarball 与临时 consumer 的 help/schema、检查、dry-run、升级和普通 flow。
-- Pass condition: 公开入口消费完整打包资源，未决状态不阻断纯表示迁移也不被清除，源码与包行为一致。
+- Pass condition: 公开入口消费完整打包资源，结果不确定的状态不阻断纯表示迁移也不被清除，源码与包行为一致。
 
 ### VER-MIGRATION-010
 
 - covers: `REQ-MIGRATION-011`
 - Method: 当前 Candidate 上校验实际旧 artifact、LIMS 私有副本及前后摘要。
-- Pass condition: 同一数据形状的全部业务与未决对象保真，目标 CLI 可读，无新增 provider 变更调用，正式文件字节和其他资源不变；证据卡绑定 Candidate、合同与场景摘要。
+- Pass condition: 同一数据形状的全部业务与结果不确定的对象保真，目标 CLI 可读，无新增 provider 变更调用，正式文件字节和其他资源不变；证据卡绑定 Candidate、合同与场景摘要。
 
 ### VER-MIGRATION-011
 

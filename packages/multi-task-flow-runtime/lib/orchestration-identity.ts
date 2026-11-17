@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { readRegularNoFollow } from "@loomhelm/runtime-core/modules/visual/secure_io";
 import { z } from "zod";
 import { ContractError } from "./errors";
+import { migrationAudit } from "./migration-audit";
 
 export const runIdentity = z
   .object({
@@ -51,6 +52,7 @@ export const upgradeState = z
     source_digest: z.string().regex(/^[a-f0-9]{64}$/),
     backup: z.string().regex(/^upgrade-[a-f0-9]{64}\.json$/),
     phase: z.enum(["prepared", "migrated", "binding_switched", "completed"]),
+    migration_audit: migrationAudit.optional(),
   })
   .strict();
 

@@ -34,7 +34,7 @@ export async function retryConversationArchive(
   taskId: string,
   api: ArchiveProvider = provider,
 ) {
-  return store.read().contract_version === 4
+  return store.read().contract_version >= 4
     ? withRunCommand(store, () => changeConversationArchive(store, taskId, api, true))
     : changeConversationArchive(store, taskId, api, true);
 }
@@ -43,7 +43,7 @@ export async function retryConversationUnarchive(
   taskId: string,
   api: ArchiveProvider = provider,
 ) {
-  return store.read().contract_version === 4
+  return store.read().contract_version >= 4
     ? withRunCommand(store, () => changeConversationArchive(store, taskId, api, false))
     : changeConversationArchive(store, taskId, api, false);
 }
@@ -103,7 +103,15 @@ async function changeConversationArchive(
     const unknown = archived ? "archive_unknown" : "unarchive_unknown";
     const failed = archived ? "archive_failed" : "unarchive_failed";
     const complete = archived ? "closed" : "active";
-    const operationId = `archive-${randomUUID()}`;
+    if (existing?.status === unknown)
+      requireCondition(
+        existing.operation_id,
+        "ARCHIVE_IDENTITY_UNAVAILABLE",
+        "Unresolved archive identity is unavailable",
+        4,
+      );
+    const operationId =
+      existing?.status === unknown ? existing.operation_id! : `archive-${randomUUID()}`;
     const resource = existing ?? {
       id: `conversation-${key.slice(0, 32)}`,
       kind: "conversation" as const,
@@ -111,6 +119,8 @@ async function changeConversationArchive(
       status: "pending" as const,
       evidence_ref: null,
     };
+    // A reconciliation is a new ledger command, not a new provider attempt.
+    const writeInvocation = randomUUID();
     let writeSequence = 0;
     const write = (
       status:
@@ -139,7 +149,7 @@ async function changeConversationArchive(
         return apply(raw, "resource-update", {
           run_id: current.orchestration_id,
           actor: { role: "main", thread_id: current.control.owner_thread_id },
-          request_id: `${operationId}-${++writeSequence}`,
+          request_id: `${operationId}-${writeInvocation}-${++writeSequence}`,
           expected_revision: current.revision,
           payload: {
             resource: {
@@ -149,7 +159,8 @@ async function changeConversationArchive(
               error,
               evidence_ref: evidence,
               operation_id: operationId,
-              last_attempt_at: new Date().toISOString(),
+              last_attempt_at:
+                existing?.status === unknown ? existing.last_attempt_at : new Date().toISOString(),
             },
           },
         });

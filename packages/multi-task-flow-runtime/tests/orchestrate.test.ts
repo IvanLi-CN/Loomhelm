@@ -661,7 +661,7 @@ describe("orchestrate group-base-reconcile", () => {
     const ledger = validateLedger({
       schema_version: 2,
       source_schema_version: null,
-      contract_version: 4,
+      contract_version: fixtureIdentity.ledger_contract,
       runtime_identity: fixtureIdentity,
       orchestration_id: input.run_id,
       revision: 0,
@@ -786,7 +786,7 @@ test("task-context executes the real CLI, calculates readiness and preserves led
   const root = temporaryRoot();
   const ledger = fixture();
   approve(ledger);
-  ledger.contract_version = 4;
+  ledger.contract_version = fixtureIdentity.ledger_contract;
   ledger.runtime_identity = fixtureIdentity;
   ledger.version = versionEnvelope;
   const store = new LedgerStore(root, "run");

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import {
   type ArchiveProvider,
   retryConversationArchive,
@@ -92,9 +92,15 @@ test("definite failure can retry; unknown result reconciles without sending twic
       },
       isArchived: async () => false,
     };
+    const originalAttempt = f.store
+      .read()
+      .resources.find((r: any) => r.target === f.task.thread_id)!;
     expect((await retryConversationArchive(f.store, f.task.id, api)).status).toBe(
       "archive_unknown",
     );
+    const reconciled = await retryConversationArchive(f.store, f.task.id, api);
+    expect(reconciled.operation_id).toBe(originalAttempt.operation_id);
+    expect(reconciled.last_attempt_at).toBe(originalAttempt.last_attempt_at);
     expect(calls).toBe(0);
     expect(
       (await retryConversationArchive(f.store, f.task.id, { ...api, isArchived: async () => true }))
@@ -253,9 +259,15 @@ test("unarchive failure retries; unknown delivery requires positive reconciliati
         throw new Error("must only reconcile");
       },
     };
+    const originalAttempt = f.store
+      .read()
+      .resources.find((r: any) => r.target === f.task.thread_id)!;
     expect((await retryConversationUnarchive(f.store, f.task.id, noResend)).status).toBe(
       "unarchive_unknown",
     );
+    const reconciled = await retryConversationUnarchive(f.store, f.task.id, noResend);
+    expect(reconciled.operation_id).toBe(originalAttempt.operation_id);
+    expect(reconciled.last_attempt_at).toBe(originalAttempt.last_attempt_at);
     expect(
       (
         await retryConversationUnarchive(f.store, f.task.id, {
@@ -393,6 +405,37 @@ test("reconciliation and restoration survive lost archive eligibility", async ()
     expect((await retryConversationUnarchive(f.store, f.task.id, api)).status).toBe("active");
     expect(sends).toBe(1);
     expect(f.store.read().tasks.find((t: any) => t.id === f.task.id).state).toBe("running");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("unknown archive without its original identity refuses before provider lookup or write", async () => {
+  const f = fixture();
+  try {
+    await retryConversationArchive(f.store, f.task.id, {
+      ...success,
+      archive: async () => ({ outcome: "unknown", evidence_ref: "fixture:lost" }),
+    });
+    f.store.update((raw) => {
+      delete raw.resources.find((r: any) => r.target === f.task.thread_id).operation_id;
+    });
+    const before = readFileSync(f.store.ledgerPath, "utf8");
+    let calls = 0;
+    await expect(
+      retryConversationArchive(f.store, f.task.id, {
+        archive: async () => {
+          calls++;
+          throw new Error("must not send");
+        },
+        isArchived: async () => {
+          calls++;
+          return true;
+        },
+      }),
+    ).rejects.toMatchObject({ code: "ARCHIVE_IDENTITY_UNAVAILABLE" });
+    expect(calls).toBe(0);
+    expect(readFileSync(f.store.ledgerPath, "utf8")).toBe(before);
   } finally {
     f.cleanup();
   }

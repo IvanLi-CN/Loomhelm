@@ -8,7 +8,8 @@ import {
   writeAtomicNoFollow,
   writeExclusiveNoFollow,
 } from "@loomhelm/runtime-core/modules/visual/secure_io";
-import { requireCondition } from "./errors";
+import { ContractError, requireCondition } from "./errors";
+import { auditMatchesSource, migrationAudit } from "./migration-audit";
 import {
   identityOf,
   type RunIdentity,
@@ -16,13 +17,12 @@ import {
   sameRunIdentity,
   upgradeState,
 } from "./orchestration-identity";
+import { assessMigration, checkMigration, readMigrationSnapshot } from "./orchestration-migration";
 import { validateLedger } from "./schema";
 import { type LedgerStore, withExclusiveLock } from "./store";
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 export type UpgradeDependencies = {
-  /** Retain process/native exclusion until this synchronous transaction returns. */
-  withQuiescentRun<T>(ledger: any, action: () => T): T;
   afterStage?: (phase: string) => void;
 };
 function requireForward(source: RunIdentity, target: RunIdentity): void {
@@ -40,19 +40,15 @@ function requireForward(source: RunIdentity, target: RunIdentity): void {
     4,
   );
   requireCondition(
-    target.ledger_contract === 4,
+    target.ledger_contract === 5,
     "INCOMPATIBLE_RELEASE",
-    "Target must implement ledger contract 4",
+    "Target must implement ledger contract 5",
     4,
   );
 }
 /** Read-only: does not bootstrap a binding or resolve mutable tags. */
 export function inspectOrchestration(store: LedgerStore, caller: RunIdentity) {
-  const raw = JSON.parse(store.readRaw());
-  const bindingPath = join(store.runPath, "runtime", "viewer-binding.json");
-  const binding = existsSync(bindingPath)
-    ? JSON.parse(readRegularNoFollow(bindingPath, store.rootPath).toString("utf8"))
-    : null;
+  const { raw, binding } = readMigrationSnapshot(store);
   const source = raw.runtime_identity ?? (binding && identityOf(binding));
   return {
     run_id: raw.orchestration_id,
@@ -71,7 +67,7 @@ export function upgradeOrchestration(
   store: LedgerStore,
   caller: RunIdentity,
   requestedTarget: RunIdentity,
-  dependencies: UpgradeDependencies,
+  dependencies: UpgradeDependencies = {},
   dryRun = false,
   requestedSelector = requestedTarget.package_version,
 ): unknown {
@@ -82,6 +78,17 @@ export function upgradeOrchestration(
     "Use the target package CLI",
     4,
   );
+  if (dryRun) {
+    const report = checkMigration(store, caller, target);
+    if (!report.migration_ready)
+      throw new ContractError(
+        "RUN_MIGRATION_UNSAFE",
+        "Mechanical migration checks failed",
+        4,
+        report,
+      );
+    return { changed: false, dry_run: true, ...report };
+  }
   return withExclusiveLock(join(store.runPath, "locks", "viewer-binding.lock"), () =>
     store.maintain((context) => {
       const read = (path: string) =>
@@ -153,15 +160,29 @@ export function upgradeOrchestration(
           return { changed: false, identity: target, upgrade: previous };
         requireCondition(
           raw.schema_version === 2 &&
-            [3, 4].includes(raw.contract_version) &&
+            [3, 4, 5].includes(raw.contract_version) &&
             source.ledger_contract === raw.contract_version,
           "MIGRATION_REQUIRED",
           "No verified mechanical migration is available for this source",
           4,
         );
       }
-      if (dryRun) return { changed: false, dry_run: true, source, target, upgrade: pending };
-      return dependencies.withQuiescentRun(raw, () => {
+      {
+        const snapshot = readMigrationSnapshot(store);
+        requireCondition(
+          snapshot.content === originalContent,
+          "OBSERVATION_STALE",
+          "Locked source changed",
+          4,
+        );
+        const report = assessMigration(snapshot, caller, target);
+        if (!report.migration_ready)
+          throw new ContractError(
+            "RUN_MIGRATION_UNSAFE",
+            "Mechanical migration checks failed",
+            4,
+            report,
+          );
         let state = pending;
         const commit = (phase: "prepared" | "migrated" | "binding_switched" | "completed") => {
           raw.upgrade = { ...state!, phase };
@@ -202,8 +223,23 @@ export function upgradeOrchestration(
             requested_selector: requestedSelector,
             backup,
             phase: "prepared",
+            migration_audit: migrationAudit.parse({
+              schema_version: 1,
+              policy: "preserve-unresolved-v1",
+              validator_version: 1,
+              source_contract: raw.contract_version,
+              source_revision: raw.revision,
+              source_digest: sourceDigest,
+              source_binding_digest: digest(JSON.stringify(binding)),
+              source_call_digest: report.source_call_digest,
+              business_digest: report.business_digest,
+              unresolved_digest: report.unresolved_digest,
+              unresolved: report.unresolved,
+              writer_barrier: "ledger-contract-5-and-binding-schema-2",
+              native_quiescence: "not_asserted",
+            }),
           };
-          raw.contract_version = 4;
+          raw.contract_version = 5;
           raw.runtime_identity = source;
           raw.upgrade = state;
           raw.revision += 1;
@@ -226,15 +262,16 @@ export function upgradeOrchestration(
           5,
         );
         const sourceDirectory = join(dirname(store.runPath), state!.source_directory);
+        const sourceCallPath = join(sourceDirectory, "runtime", "call.json");
         requireCondition(
-          digest(read(join(sourceDirectory, "ledger.json"))) === state!.source_digest &&
-            digest(
-              JSON.stringify(
-                JSON.parse(read(join(sourceDirectory, "runtime", "viewer-binding.json"))),
-              ),
-            ) === state!.source_binding_digest,
-          "UPGRADE_BACKUP_INVALID",
-          "Retained source directory does not match the registered source",
+          auditMatchesSource(raw, state, {
+            backup: backupContent,
+            ledger: read(join(sourceDirectory, "ledger.json")),
+            binding: read(join(sourceDirectory, "runtime", "viewer-binding.json")),
+            call: existsSync(sourceCallPath) ? read(sourceCallPath) : null,
+          }),
+          "UPGRADE_AUDIT_INVALID",
+          "Migration audit does not match the retained source",
           5,
         );
         // Preserve the complete business graph; only lifecycle metadata and revision may differ.
@@ -284,7 +321,7 @@ export function upgradeOrchestration(
         );
         if (state!.phase === "binding_switched") commit("completed");
         return { changed: true, identity: target, upgrade: state };
-      });
+      }
     }),
   );
 }

@@ -31,7 +31,7 @@ const saved = Object.fromEntries(
 let server: ReturnType<typeof serveFixture> | undefined;
 try {
   let ledger = v2Fixture();
-  ledger.contract_version = 4;
+  ledger.contract_version = fixtureIdentity.ledger_contract;
   ledger.runtime_identity = fixtureIdentity;
   ledger.version = versionEnvelope;
   ledger.tasks[0].kind = "verification";
