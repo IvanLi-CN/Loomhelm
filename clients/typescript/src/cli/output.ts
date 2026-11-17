@@ -34,6 +34,9 @@ export function recovery(code: string): string | undefined {
 export class HumanProjection {
   private lines: string[] = [];
   private failed = false;
+  private classified = false;
+  private unknown = false;
+  private queuedCharacters = 0;
   private code = '';
   private started = false;
   private depthOmitted = false;
@@ -42,14 +45,15 @@ export class HumanProjection {
     const { path, value } = event;
     if (event.depthOmitted) this.depthOmitted = true;
     const key = String(path.at(-1) ?? 'result');
-    if (path.length === 1 && key === 'ok' && value === false) this.failed = true;
+    if (path.length === 1 && key === 'ok' && typeof value === 'boolean') { this.classified = true; this.failed = !value; }
+    if (['state', 'status'].includes(key) && value === 'unknown') this.unknown = true;
     if (path.length === 1 && key === 'code') this.code = String(value);
-    if (path.length === 1 && key === 'error') this.failed = true;
+    if (path.length === 1 && key === 'error') { this.failed = true; this.classified = true; }
     if (path.some(part => typeof part === 'string' && secret.test(part))) return;
     if (!output.verbose && path.some(part => typeof part === 'number' && part >= 20)) return;
     if (event.kind !== 'scalar') {
       if (event.kind === 'array' && event.count !== undefined) {
-        this.lines.push(`${this.pathLabel(path)}：${event.count} 项${!output.verbose && event.count > 20 ? `（省略 ${event.count - 20} 项，使用 --verbose 或 --output json）` : ''}`);
+        this.queue(`${this.pathLabel(path)}：${event.count} 项${!output.verbose && event.count > 20 ? `（省略 ${event.count - 20} 项，使用 --verbose 或 --output json）` : ''}`);
       }
       return;
     }
@@ -59,8 +63,9 @@ export class HumanProjection {
     const status = typeof value === 'string' && ['state', 'status'].includes(key) ? ({ unknown: '未确认', blocked: '阻塞', running: '运行中', stopped: '已停止', failed: '失败', succeeded: '成功' } as Record<string, string>)[value] ?? value : value;
     const text = key === 'code' && typeof status === 'string' && /^[A-Z][A-Z0-9_]{0,159}$/.test(status) ? status : safeText(status === true ? '是' : status === false ? '否' : status === null ? '无' : status, this.command === 'service login' && ['url', 'login_url'].includes(key));
     const suffix = event.truncated || text.length > cap ? '…（已省略，完整内容见 --output json）' : '';
-    this.lines.push(`${this.pathLabel(path)}：${text.slice(0, cap)}${suffix}`);
+    this.queue(`${this.pathLabel(path)}：${text.slice(0, cap)}${suffix}`);
   }
+  private queue(line: string): void { this.lines.push(line); this.queuedCharacters += line.length + 1; }
   private pathLabel(path: JsonPath): string {
     const tail = path.slice(-6).filter(p => p !== 'result');
     const label = tail.map(p => typeof p === 'number' ? `[${p + 1}]` : (labels[p] ?? safeText(p).slice(0, 80))).join(' · ');
@@ -68,18 +73,21 @@ export class HumanProjection {
   }
   async flush(): Promise<void> {
     if (!this.lines.length) return;
-    const stream = this.forced ?? (this.failed ? 'stderr' : 'stdout');
+    // Keep the decision buffer bounded when an envelope places ok after its payload.
+    if (!this.classified && !this.forced && this.queuedCharacters < 64 * 1024) return;
+    const stream = this.forced ?? (!this.classified || this.failed ? 'stderr' : 'stdout');
     let text = '';
     if (!this.started) { text = `${this.command} · 接收中，结果未完成\n`; this.started = true; }
-    text += this.lines.join('\n') + '\n'; this.lines = [];
+    text += this.lines.join('\n') + '\n'; this.lines = []; this.queuedCharacters = 0;
     await this.sink(stream, text);
   }
   async finish(): Promise<void> {
+    this.classified = true;
     await this.flush();
     const stream = this.forced ?? (this.failed ? 'stderr' : 'stdout');
-    const next = recovery(this.code);
+    const next = recovery(this.code) ?? (this.unknown ? recovery('UNKNOWN') : undefined);
     if (this.depthOmitted) await this.sink(stream, '深层内容已省略（超过 64 层），完整结果使用 --output json。\n');
-    const line = this.failed ? '命令返回错误' : this.code === 'UNKNOWN' ? '命令返回未确认结果' : '结果接收完成（不代表调用已静止）';
+    const line = this.failed ? '命令返回错误' : this.code === 'UNKNOWN' || this.unknown ? '命令返回未确认结果' : '结果接收完成（不代表调用已静止）';
     const color = useColor(!!process[stream].isTTY);
     await this.sink(stream, `${color ? '\x1b[36m' : ''}${line}${color ? '\x1b[0m' : ''}\n${next ? `下一步：${next}\n` : ''}`);
   }

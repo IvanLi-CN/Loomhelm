@@ -14,7 +14,7 @@
 
 所有公开命令层级提供 `-h`、`--help`、`help` 和命令组帮助；JSON 帮助包含 `schema_version=1`、`command`、`summary`、`usage`、`options`、`examples`、`subcommands`。`schema --format json` 始终输出原机器 Schema。人类帮助按用途显示参数和示例，不直接倾倒 request/response Schema。
 
-human 默认展示关键身份、状态、revision、计数、阻塞及安全的下一步；列表最多显示 20 项，单字段最多 160 字符，省略明确提示；verbose 逐项显示展开路径，单字符串最多 4096 字符，完整结果使用 JSON。人类展示必须区分业务结果、输出交付和调用静止，unknown 不等于失败。JSON 业务字段、错误通道和退出码保留原合同；人类错误写 stderr。新增全局参数错误沿用顶层 stderr `{code: "CLI_ERROR", error: "..."}` 和退出码 1。
+human 默认展示关键身份、状态、revision、计数、阻塞及安全的下一步；列表最多显示 20 项，单字段最多 160 字符，省略明确提示；verbose 逐项显示展开路径，单字符串最多 4096 字符，完整结果使用 JSON。人类展示必须区分业务结果、输出交付和调用静止，unknown 不等于失败。JSON 业务字段、错误通道和退出码保留原合同；人类错误写 stderr。响应尚未给出结果标记时使用有界判定缓冲，超限的接收中信息写 stderr，完整成功结果再按 stdout 展示；错误摘要不依赖 JSON 字段顺序。没有顶层 code 的 unknown 状态仍提示先对账。新增全局参数错误沿用顶层 stderr `{code: "CLI_ERROR", error: "..."}` 和退出码 1。
 
 human 和 verbose 的投影路径最多 64 层，超深内容明确提示省略，仍校验全部 JSON；每个有界输入批次让出事件循环，使停止信号可及时处理。含凭据标识的诊断文本保守隐藏，错误码和恢复建议独立保留。
 

@@ -139,16 +139,16 @@ test('deep JSON retains linear state and bounded human output batches', async ()
 });
 test('human diagnostic values redact credentials even outside sensitive field names', async () => {
   output.style = 'human';
-  const samples = ['Remote service rejected token SYNTHETIC-CREDENTIAL', 'api key SYNTHETIC-CREDENTIAL', 'password SYNTHETIC-CREDENTIAL', 'refresh_token SYNTHETIC-CREDENTIAL', 'access-token=SYNTHETIC-CREDENTIAL', 'authorization: Bearer SYNTHETIC-CREDENTIAL', 'Bearer SYNTHETIC-CREDENTIAL', 'password=SYNTHETIC-CREDENTIAL', '{"token":"SYNTHETIC-CREDENTIAL"}', 'https://example.test/?ticket=SYNTHETIC-CREDENTIAL', 'https://user:SYNTHETIC-CREDENTIAL@example.test/'];
+  const samples = ['Remote service rejected token ZX9-HIDDEN-VALUE', 'api key ZX9-HIDDEN-VALUE', 'password ZX9-HIDDEN-VALUE', 'refresh_token ZX9-HIDDEN-VALUE', 'access-token=ZX9-HIDDEN-VALUE', 'authorization: Bearer ZX9-HIDDEN-VALUE', 'Bearer ZX9-HIDDEN-VALUE', 'password=ZX9-HIDDEN-VALUE', '{"token":"ZX9-HIDDEN-VALUE"}', 'https://example.test/?ticket=ZX9-HIDDEN-VALUE', 'https://user:ZX9-HIDDEN-VALUE@example.test/'];
   for (const message of samples) {
     const lines: string[] = [];
     const stream = new HumanJsonStream('flow show', async (_, text) => { lines.push(text); });
     await stream.write(Buffer.from(JSON.stringify({ ok: false, code: 'AUTH_TOKEN_EXPIRED', message }))); await stream.finish();
-    expect(lines.join('')).not.toContain('SYNTHETIC-CREDENTIAL'); expect(lines.join('')).toContain('AUTH_TOKEN_EXPIRED');
+    expect(lines.join('')).not.toContain('ZX9-HIDDEN-VALUE'); expect(lines.join('')).toContain('AUTH_TOKEN_EXPIRED');
   }
   const modulePath = resolve('src/cli/output.ts');
   const probe = await runProcess(process.execPath, ['-e', `import { printDiagnostics, output } from ${JSON.stringify(modulePath)}; output.style='human'; await printDiagnostics(${JSON.stringify(samples.join('\n'))});`]);
-  expect(probe.code).toBe(0); expect(probe.stderr).not.toContain('SYNTHETIC-CREDENTIAL'); expect(probe.stderr).toContain('敏感诊断已隐藏');
+  expect(probe.code).toBe(0); expect(probe.stderr).not.toContain('ZX9-HIDDEN-VALUE'); expect(probe.stderr).toContain('敏感诊断已隐藏');
 });
 
 test('extremely deep projection work stays bounded and yields even with no displayed fields', async () => {
@@ -166,4 +166,30 @@ test('extremely deep projection work stays bounded and yields even with no displ
   await human.write(Buffer.from('0' + ']'.repeat(depth))); await human.finish();
   const invalid = new HumanJsonStream('flow show', async () => {});
   await expect(invalid.write(Buffer.from('['.repeat(depth) + 'invalid'))).rejects.toThrow();
+});
+
+test('human error routing is independent of envelope field order and decision buffering is bounded', async () => {
+  output.style = 'human';
+  const lines: { channel: string; text: string }[] = [];
+  const human = new HumanJsonStream('flow show', async (channel, text) => { lines.push({ channel, text }); });
+  await human.write(Buffer.from('{"message":"denied",'));
+  expect(lines).toHaveLength(0);
+  await human.write(Buffer.from('"ok":false,"code":"ACTOR_MISMATCH"}')); await human.finish();
+  expect(lines.length).toBeGreaterThan(0); expect(lines.every(line => line.channel === 'stderr')).toBe(true);
+  const overflow: string[] = [];
+  const deep = new HumanJsonStream('flow show', async (channel) => { overflow.push(channel); });
+  await deep.write(Buffer.from('{' + Array.from({ length: 600 }, (_, i) => JSON.stringify(`field${i}`) + ':' + JSON.stringify('x'.repeat(160))).join(',') + ','));
+  expect(overflow.length).toBeGreaterThan(0); expect(overflow.every(channel => channel === 'stderr')).toBe(true);
+  await deep.write(Buffer.from('"ok":false}')); await deep.finish();
+  expect(overflow.every(channel => channel === 'stderr')).toBe(true);
+});
+test('unknown records without envelope code still give reconciliation guidance', async () => {
+  output.style = 'human'; const lines: string[] = [];
+  const human = new HumanJsonStream('codex dispatch', async (_, text) => { lines.push(text); });
+  await human.write(Buffer.from('{"operationId":"dispatch-example","state":"unknown"}')); await human.finish();
+  expect(lines.join('')).toContain('命令返回未确认结果'); expect(lines.join('')).toContain('reconcile');
+  const success: string[] = [];
+  const plain = new HumanJsonStream('service status', async (channel, text) => { success.push(channel + ':' + text); });
+  await plain.write(Buffer.from('{"installed":false}')); await plain.finish();
+  expect(success.every(line => line.startsWith('stdout:'))).toBe(true);
 });

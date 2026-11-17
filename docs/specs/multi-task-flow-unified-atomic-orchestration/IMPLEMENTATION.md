@@ -6,7 +6,7 @@
 
 REQ-CLI-001 至 REQ-CLI-003 由客户端 CLI 的 output-options、help、query-options、json-stream 和 output 模块实现。公开入口统一选择风格；Flow JSON 保留背压直通，human 增量消费同一结果。service status/doctor 和 show/view 的普通参数只构造既有请求，不增加身份推断或变更权限。测试入口为 `clients/typescript/test/cli-output.test.ts`、`cli-output-integration.test.ts` 及既有 `cli-integration.test.ts`；transport fixture 不访问真实服务或 Codex。候选的最终 CI/review 结果仍须绑定当前 head。
 
-输出回归覆盖显式风格在参数错误路径上的保留、4,096 层嵌套的线性解析状态与受限输出批次，以及结构化和非结构化诊断中的合成凭据隐藏；正式 Agent 示例显式指定 JSON。额外覆盖 100,000 层嵌套的投影事件与路径处理上界、无展示输出时的事件循环让出，以及空格分隔的凭据标识。CLI 单元、隔离传输和既有集成测试共 29 项通过，既有 Flow 大输出、背压和独立停止通道 5 项通过。
+输出回归覆盖显式风格在参数错误路径上的保留、4,096 层嵌套的线性解析状态与受限输出批次，以及结构化和非结构化诊断中的合成凭据隐藏；正式 Agent 示例显式指定 JSON。额外覆盖 100,000 层嵌套的投影事件与路径处理上界、无展示输出时的事件循环让出，以及空格分隔的凭据标识。CLI 单元、隔离传输和既有集成测试共 31 项通过，既有 Flow 大输出、背压和独立停止通道 5 项通过。错误 envelope 字段重排、结果判定缓冲上界及无顶层 code 的 unknown 对账提示均有回归；解析器保留 O(嵌套深度) 的活动语法帧，不缓存完整响应。
 
 TTY 默认变更具有公开终端兼容性影响；显式 JSON 的业务合同及持久状态格式不变。未修改包版本、兼容线或全局安装，发布决策仍归仓库既有政策。
 

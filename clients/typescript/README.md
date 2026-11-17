@@ -19,7 +19,7 @@ bunx --bun @loomhelm/multi-task-flow@0.2.55 --output json flow view --input - < 
 ```sh
 bunx --bun @loomhelm/multi-task-flow@<exact-version> --output human --help
 bunx --bun @loomhelm/multi-task-flow@<exact-version> --output human service status
-bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json flow show --output human --run-id RUN_ID --actor-role main --thread-id THREAD_ID
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output human flow show --run-id RUN_ID --actor-role main --thread-id THREAD_ID
 bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json flow show --input - < request.json
 ```
 
@@ -41,7 +41,7 @@ bunx --bun @loomhelm/multi-task-flow@0.2.55 --output json flow view --input - < 
 
 | 维度 | 当前值 |
 | - | - |
-| package | `@loomhelm/multi-task-flow@0.2.55 --output json` |
+| package | `@loomhelm/multi-task-flow@0.2.55` |
 | compatibility line | `compat-v1` |
 | Skill | `2.7.11` |
 | ledger contract | `3` |
