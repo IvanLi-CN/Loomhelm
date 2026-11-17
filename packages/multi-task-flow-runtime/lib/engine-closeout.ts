@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lifecycleStageOf } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
 import { externalRef, id, isContributionKind, ledgerSchema } from "../lib/schema";
 import type { CommandContext } from "./engine-command-context";
@@ -305,7 +306,7 @@ export function executeCloseoutCommand(context: CommandContext): unknown | undef
       );
       const closeout = owner.atoms.at(-1);
       requireCondition(
-        closeout?.lifecycle_stage !== "closed"
+        lifecycleStageOf(closeout ?? {}) !== "closed"
           ? owner.atoms.every((atom) => atom.status === "completed")
           : ["planned", "running"].includes(closeout.status),
         "ATOMS_PENDING",
@@ -328,7 +329,7 @@ export function executeCloseoutCommand(context: CommandContext): unknown | undef
       );
       owner.state = "closed";
       if (owner.lifecycle && !legacyLedger(ledger)) owner.lifecycle.closed = "passed";
-      if (closeout?.lifecycle_stage === "closed") closeout.status = "completed";
+      if (lifecycleStageOf(closeout ?? {}) === "closed") closeout.status = "completed";
       addEvent(ledger, request, "group_updated", groupId, {
         group_id: groupId,
         state: "closed",

@@ -3,7 +3,11 @@ import { existsSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { initializeParams, initializeScope } from "./invocation-initialize-recovery";
 import { digest, invocationSignal, registerInvocationResource } from "./invocation-journal";
+import { nativeOperation } from "./native-operation-context";
+
+const transports = new WeakMap<Socket, { id: string | null; requests: number }>();
 
 type JsonRecord = Record<string, unknown>;
 export function record(value: unknown): JsonRecord | null {
@@ -88,6 +92,7 @@ export async function connectSocket(
 ): Promise<{ socket: Socket; buffer: Buffer }> {
   const transport = registerInvocationResource("codex-transport", { path_digest: digest(path) });
   const socket = createConnection(path);
+  transports.set(socket, { id: transport.id, requests: 0 });
   const signal = invocationSignal();
   const stop = () => socket.destroy();
   signal?.addEventListener("abort", stop, { once: true });
@@ -97,15 +102,28 @@ export async function connectSocket(
   });
   try {
     await new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        socket.off("connect", onConnect);
+        socket.off("error", onError);
+        socket.off("close", onClose);
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const onClose = () => onError(new Error("Codex app-server closed before connection"));
+      const onConnect = () => {
+        cleanup();
+        resolve();
+      };
       const timer = setTimeout(
-        () => reject(new Error("Codex app-server socket connection timed out")),
+        () => onError(new Error("Codex app-server socket connection timed out")),
         connectionTimeoutMs,
       );
-      socket.once("connect", () => {
-        clearTimeout(timer);
-        resolve();
-      });
-      socket.once("error", reject);
+      socket.once("connect", onConnect);
+      socket.once("error", onError);
+      socket.once("close", onClose);
     });
     const key = randomBytes(16).toString("base64");
     socket.write(
@@ -113,16 +131,27 @@ export async function connectSocket(
     );
     let header = Buffer.alloc(0);
     await new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        socket.off("data", onData);
+        socket.off("error", onError);
+        socket.off("close", onClose);
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const onClose = () =>
+        onError(new Error("Codex app-server closed during WebSocket handshake"));
       const timer = setTimeout(
-        () => reject(new Error("Codex app-server WebSocket handshake timed out")),
+        () => onError(new Error("Codex app-server WebSocket handshake timed out")),
         connectionTimeoutMs,
       );
       const onData = (chunk: Buffer) => {
         header = Buffer.concat([header, chunk]);
         const boundary = header.indexOf("\r\n\r\n");
         if (boundary < 0) return;
-        clearTimeout(timer);
-        socket.off("data", onData);
+        cleanup();
         const response = header.subarray(0, boundary + 4).toString("utf8");
         const expected = createHash("sha1")
           .update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
@@ -138,7 +167,8 @@ export async function connectSocket(
         resolve();
       };
       socket.on("data", onData);
-      socket.once("error", reject);
+      socket.once("error", onError);
+      socket.once("close", onClose);
     });
     return { socket, buffer: header };
   } catch (error) {
@@ -155,12 +185,23 @@ export async function rpc(
   params: JsonRecord,
   options: { timeoutMs?: number } = {},
 ): Promise<JsonRecord> {
+  const transport = transports.get(socket);
+  const connectionInitialize =
+    !!transport &&
+    transport.requests === 0 &&
+    id === 1 &&
+    method === "initialize" &&
+    digest(params) === digest(initializeParams);
+  if (transport) transport.requests++;
   const resource = registerInvocationResource("codex-request", {
     id,
     method,
     params_digest: digest(params),
     thread_id: params.threadId ?? null,
     attempt_id: params.clientUserMessageId ?? null,
+    ...(transport?.id ? { transport_id: transport.id } : {}),
+    ...(connectionInitialize ? { effect_scope: initializeScope } : {}),
+    ...(nativeOperation() ? { operation: nativeOperation() } : {}),
   });
   try {
     return await new Promise<JsonRecord>((resolve, reject) => {
@@ -172,6 +213,7 @@ export async function rpc(
       };
       const fail = (error: Error) => {
         cleanup();
+        if (connectionInitialize) socket.destroy();
         reject(error);
       };
       const onClose = () => fail(new Error("Codex app-server closed the WebSocket"));

@@ -579,11 +579,12 @@ export function validatePlan(candidate: Plan, options: PlanValidationOptions = {
     candidate.atomic_nodes.length > 0 ||
     candidate.atomic_edges.some((edge) => "from_node_id" in edge);
   const hasLegacyAtomicEdges = candidate.atomic_edges.some((edge) => "from_atom_id" in edge);
+  const hasLifecycleAtoms = candidate.atoms.length > 0 || candidate.group_atoms.length > 0;
   if (options.requireCanonicalLifecycleGraph !== false) {
     requireCondition(
       options.allowLegacyLifecycleRoleInference === true ||
         hasCanonicalAtomicGraph ||
-        !hasLegacyAtomicEdges,
+        (!hasLegacyAtomicEdges && !hasLifecycleAtoms),
       "ATOMIC_CONTRACT_REQUIRED",
       "New plans with lifecycle atoms must use canonical atomic nodes and node-based atomic edges",
     );

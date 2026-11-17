@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { ZodError, z } from "zod";
-import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
+import { canonicalizeContract3Plan, lifecycleStageOf } from "../lib/atomic-orchestration";
 import { readCodexCapabilities } from "../lib/codex-agent-api";
 import {
   createCliThread,
@@ -280,7 +280,7 @@ try {
             title: atom.title,
             purpose: atom.purpose,
             output: atom.output,
-            lifecycle_stage: atom.lifecycle_stage,
+            lifecycle_stage: lifecycleStageOf(atom),
             ...(atom.lifecycle_role ? { lifecycle_role: atom.lifecycle_role } : {}),
             status: "planned" as const,
           }));

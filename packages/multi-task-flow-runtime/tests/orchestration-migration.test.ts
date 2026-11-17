@@ -157,6 +157,17 @@ test("legacy canonical lifecycle graphs survive mechanical upgrade to contract 6
   expect(after.contract_version).toBe(6);
   expect(after.upgrade.migration_audit.source_contract).toBe(3);
   expect(after.plans[0].atomic_nodes.every((node: any) => !node.lifecycle_role)).toBe(true);
+
+  const nextTarget: RunIdentity = {
+    ...target,
+    package_version: "0.6.1",
+    build_id: "c".repeat(64),
+    source_sha: "c".repeat(40),
+  };
+  process.env.LOOMHELM_CALLER_IDENTITY = JSON.stringify(nextTarget);
+  expect(() => upgradeOrchestration(store, nextTarget, nextTarget)).not.toThrow();
+  const upgradedAgain = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+  expect(upgradedAgain.upgrade.migration_audit.source_contract).toBe(3);
 });
 
 test("read-only observation detects a concurrent source change and rejects links", () => {

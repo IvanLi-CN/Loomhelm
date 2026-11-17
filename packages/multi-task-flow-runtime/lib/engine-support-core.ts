@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
+import { lifecycleStageOf } from "../lib/atomic-orchestration";
 import { ContractError, requireCondition } from "../lib/errors";
 import {
   effectiveProfile,
@@ -306,6 +307,29 @@ export function isSharedDeliveryTask(ledger: Ledger, task: Ledger["tasks"][numbe
     deliveryTopologyForGroup(ledger.tasks, task.group_id) === "shared_delivery"
   );
 }
+/** Evidence verification uses the delivery conversation without becoming a contribution. */
+export function isDeliveryVerification(task: Task): boolean {
+  return (
+    task.kind === "verification" &&
+    task.execution_owner === "delivery_agent" &&
+    task.conversation_policy === "delivery_owned" &&
+    task.delivery_policy === "evidence"
+  );
+}
+export function ownsDeliveryVerification(
+  ledger: Ledger,
+  task: Task,
+  actor: Request["actor"],
+): boolean {
+  return (
+    isDeliveryVerification(task) &&
+    task.thread_id === null &&
+    actor.role === "group" &&
+    ledger.groups.some(
+      (group) => group.id === task.group_id && group.agent_thread_id === actor.thread_id,
+    )
+  );
+}
 export function requireContributionDispatchGate(
   ledger: Ledger,
   owner: Ledger["groups"][number],
@@ -313,8 +337,8 @@ export function requireContributionDispatchGate(
   retryAction: "dispatch-claim" | "task-update" = "dispatch-claim",
 ): void {
   if (legacyLedger(ledger)) return;
-  const workspaceAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
-  const prAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "pr_created");
+  const workspaceAtom = owner.atoms.find((atom) => lifecycleStageOf(atom) === "workspace_ready");
+  const prAtom = owner.atoms.find((atom) => lifecycleStageOf(atom) === "pr_created");
   const missing: string[] = [];
   if (owner.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     missing.push("workspace_ready");
@@ -576,7 +600,7 @@ export function prReceipt(
 export function parentPrReady(
   ledger: Ledger,
   owner: Ledger["groups"][number],
-  prAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "pr_created"),
+  prAtom = owner.atoms.find((atom) => lifecycleStageOf(atom) === "pr_created"),
 ): boolean {
   const pr = deliveryUnitPr(owner);
   const canonicalState = owner.pr && "state" in owner.pr ? owner.pr.state : null;

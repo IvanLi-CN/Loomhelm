@@ -205,6 +205,12 @@ export function upgradeOrchestration(
         if (!state) {
           const sourceDigest = digest(originalContent);
           const backup = `upgrade-${sourceDigest}.json`;
+          const migrationSourceContract =
+            raw.contract_version === 6 &&
+            raw.upgrade?.migration_audit?.source_contract !== undefined &&
+            raw.upgrade.migration_audit.source_contract < 6
+              ? raw.upgrade.migration_audit.source_contract
+              : raw.contract_version;
           const backupPath = join(store.runPath, backup);
           if (!existsSync(backupPath))
             writeExclusiveNoFollow(
@@ -236,7 +242,7 @@ export function upgradeOrchestration(
               schema_version: 1,
               policy: "preserve-unresolved-v1",
               validator_version: 1,
-              source_contract: raw.contract_version,
+              source_contract: migrationSourceContract,
               source_revision: raw.revision,
               source_digest: sourceDigest,
               source_binding_digest: digest(JSON.stringify(binding)),

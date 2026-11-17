@@ -1,17 +1,32 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-  createDirectoryNoFollow,
   readRegularNoFollow,
-  renameNoReplace,
-  syncDirectoryNoFollow,
   writeAtomicNoFollow,
-  writeExclusiveNoFollow,
 } from "@loomhelm/runtime-core/modules/visual/secure_io";
+import {
+  append,
+  digest,
+  directory,
+  finishedSchema,
+  hash,
+  markerPath,
+  type markerSchema,
+  readEvent,
+  readMarker,
+  resourceSchema,
+  startSchema,
+  terminalSchema,
+  uuid,
+} from "./invocation-events";
+
+export { digest, readMarker } from "./invocation-events";
+
 import { z } from "zod";
 import { requireCondition } from "./errors";
+import { initializeRecovery, initializeRecoveryReceipt } from "./invocation-initialize-recovery";
 import {
   bindingSchemaVersionForContract,
   callerIdentity,
@@ -22,120 +37,6 @@ import {
 import { validateLedger } from "./schema";
 import { type LedgerStore, withExclusiveLock } from "./store";
 import { viewerBindingSchema } from "./viewer-binding";
-
-const uuid = z.string().uuid();
-const hash = z.string().regex(/^[a-f0-9]{64}$/);
-const markerSchema = z
-  .object({
-    invocation_id: uuid,
-    identity: runIdentity,
-    state: z.enum(["running", "stopped"]),
-    schema_version: z.literal(2).optional(),
-  })
-  .strict();
-const eventBase = { schema_version: z.literal(1), invocation_id: uuid };
-const startSchema = z
-  .object({
-    ...eventBase,
-    type: z.literal("start"),
-    command: z.string().min(1),
-    input_digest: hash,
-    identity: runIdentity,
-    run_id: z.string(),
-    revision: z.number().int().nonnegative(),
-    actor: z.unknown(),
-    process: z.object({
-      pid: z.number().int().positive(),
-      supervision_token: z.string().nullable(),
-    }),
-    at: z.string().datetime(),
-  })
-  .strict();
-const resourceSchema = z
-  .object({
-    ...eventBase,
-    type: z.literal("resource_intent"),
-    resource_id: uuid,
-    kind: z.string().min(1),
-    reference: z.unknown(),
-    at: z.string().datetime(),
-  })
-  .strict();
-const terminalSchema = z
-  .object({
-    ...eventBase,
-    type: z.literal("resource_terminal"),
-    resource_id: uuid,
-    intent_digest: hash,
-    evidence: z.record(z.string(), z.unknown()),
-  })
-  .strict();
-const finishedSchema = z
-  .object({
-    ...eventBase,
-    type: z.literal("execution_finished"),
-    start_digest: hash,
-    outcome: z.enum(["succeeded", "failed"]),
-    output_delivery: z.literal("unobserved"),
-    at: z.string().datetime(),
-  })
-  .strict();
-
-export function digest(value: unknown): string {
-  const canonical = (item: unknown): unknown =>
-    Array.isArray(item)
-      ? item.map(canonical)
-      : item !== null && typeof item === "object"
-        ? Object.fromEntries(
-            Object.entries(item)
-              .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-              .map(([key, value]) => [key, canonical(value)]),
-          )
-        : item;
-  return createHash("sha256")
-    .update(JSON.stringify(canonical(value)))
-    .digest("hex");
-}
-export function markerPath(store: LedgerStore): string {
-  return join(store.runPath, "runtime", "call.json");
-}
-export function readMarker(store: LedgerStore) {
-  const path = markerPath(store);
-  return existsSync(path)
-    ? markerSchema.parse(JSON.parse(readRegularNoFollow(path, store.rootPath).toString("utf8")))
-    : null;
-}
-function directory(store: LedgerStore, id: string): string {
-  return join(store.runPath, "runtime", "invocations", uuid.parse(id));
-}
-function readEvent(store: LedgerStore, id: string, name: string): any {
-  const path = join(directory(store, id), name + ".json");
-  return existsSync(path)
-    ? JSON.parse(readRegularNoFollow(path, store.rootPath).toString("utf8"))
-    : null;
-}
-/** Sync privately before publishing an immutable event name. No event is overwritten. */
-function append(store: LedgerStore, id: string, name: string, value: object): void {
-  const dir = directory(store, id);
-  for (const path of [
-    join(store.runPath, "runtime"),
-    join(store.runPath, "runtime", "invocations"),
-    dir,
-  ]) {
-    if (!existsSync(path)) {
-      createDirectoryNoFollow(path, store.rootPath);
-      syncDirectoryNoFollow(join(path, ".."), store.rootPath);
-    }
-  }
-  const staged = join(dir, ".event-" + randomUUID());
-  writeExclusiveNoFollow(
-    staged,
-    JSON.stringify({ schema_version: 1, invocation_id: id, ...value }),
-    store.rootPath,
-  );
-  renameNoReplace(staged, join(dir, name + ".json"), store.rootPath);
-  syncDirectoryNoFollow(dir, store.rootPath);
-}
 
 /** One verifier serves inspection, normal finalization and recovery. A projection never establishes proof. */
 function stopProof(store: LedgerStore, marker: z.infer<typeof markerSchema>) {
@@ -156,6 +57,7 @@ function stopProof(store: LedgerStore, marker: z.infer<typeof markerSchema>) {
   )
     missing.push("execution_finished");
   const resources: Record<string, string> = {};
+  const recovery = initializeRecovery(store, marker);
   const dir = directory(store, id);
   if (existsSync(dir))
     for (const file of readdirSync(dir).sort()) {
@@ -163,7 +65,9 @@ function stopProof(store: LedgerStore, marker: z.infer<typeof markerSchema>) {
       const resource = readEvent(store, id, file.slice(0, -5));
       const terminal = readEvent(store, id, file.slice(0, -5) + "-terminal");
       const resourceId = file.slice(9, -5);
-      if (
+      if (recovery.eligible && recovery.receipt_valid && recovery.resource_id === resourceId) {
+        resources[resourceId] = recovery.receipt_digest!;
+      } else if (
         !resourceSchema.safeParse(resource).success ||
         resource.invocation_id !== id ||
         resource.resource_id !== resourceId ||
@@ -182,7 +86,8 @@ function stopProof(store: LedgerStore, marker: z.infer<typeof markerSchema>) {
     execution_digest: digest(finished),
     resources,
   };
-  return { missing, receipt };
+  const evidenceRefs = recovery.eligible ? recovery.evidence_refs : Object.values(resources).sort();
+  return { missing, receipt, recovery, evidenceRefs };
 }
 export function inspectInvocation(store: LedgerStore) {
   const marker = readMarker(store);
@@ -209,7 +114,8 @@ export function inspectInvocation(store: LedgerStore) {
     quiescent: proof.missing.length === 0 && marker.state === "stopped",
     missing_evidence: proof.missing,
     marker_digest: digest(marker),
-    evidence_refs: Object.values(proof.receipt.resources).sort(),
+    evidence_refs: proof.evidenceRefs,
+    recovery: proof.recovery,
   };
 }
 
@@ -229,9 +135,9 @@ export function invocationSignal(): AbortSignal | undefined {
 export function registerInvocationResource(
   kind: string,
   reference: unknown,
-): { end: (evidence: Record<string, unknown>) => void; unknown: () => void } {
+): { id: string | null; end: (evidence: Record<string, unknown>) => void; unknown: () => void } {
   const current = active.getStore();
-  if (!current) return { end: () => {}, unknown: () => {} };
+  if (!current) return { id: null, end: () => {}, unknown: () => {} };
   requireCondition(
     current.accepting,
     "INVOCATION_CLOSED",
@@ -255,6 +161,7 @@ export function registerInvocationResource(
     }),
   );
   return {
+    id,
     end(evidence) {
       requireCondition(
         current.pending.has(id),
@@ -393,7 +300,18 @@ export async function executeInvocation<T>(
       } finally {
         if (timer) clearTimeout(timer);
       }
-      if (!current.journalFailed && current.pending.size === 0) {
+      if (!current.journalFailed) {
+        const marker = readMarker(store)!;
+        const recovery = initializeRecovery(store, marker);
+        if (recovery.eligible && !recovery.receipt_valid)
+          append(
+            store,
+            id,
+            "initialize-recovery",
+            initializeRecoveryReceipt(marker, recovery.proof_digest),
+          );
+      }
+      if (!current.journalFailed && stopProof(store, readMarker(store)!).missing.length === 0) {
         publishStopped(store, id, identity);
         if (process.env.LOOMHELM_INVOCATION_ID && process.connected)
           process.send?.({ type: "stopped", invocation_id: id });
@@ -427,7 +345,9 @@ export function recoverySource(
     [3, 4, 5, 6].includes(ledger.contract_version) &&
       ledger.schema_version === 2 &&
       source.ledger_contract === ledger.contract_version &&
-      binding.schema_version === bindingSchemaVersionForContract(ledger.contract_version) &&
+      (ledger.contract_version === 5
+        ? [2, 3].includes(binding.schema_version)
+        : binding.schema_version === bindingSchemaVersionForContract(ledger.contract_version)) &&
       binding.run_id === ledger.orchestration_id &&
       sameRunIdentity(source, identityOf(binding)),
     "RUN_VERSION_MISMATCH",
@@ -508,9 +428,11 @@ export function reconcileInvocation(store: LedgerStore, input: unknown): unknown
         4,
       );
       const marker = readMarker(store);
+      const initializeRecoveryState = marker ? initializeRecovery(store, marker) : null;
       requireCondition(
         marker?.invocation_id === parsed.payload.invocation_id &&
-          sameRunIdentity(marker.identity, identities.source),
+          (sameRunIdentity(marker.identity, identities.source) ||
+            initializeRecoveryState?.eligible === true),
         "INVOCATION_STATE_CONFLICT",
         "Invocation identity changed",
         4,
@@ -540,18 +462,33 @@ export function reconcileInvocation(store: LedgerStore, input: unknown): unknown
         "Historical invocation has no uniquely verifiable execution provenance",
         4,
       );
-      const proof = stopProof(store, marker!);
-      requireCondition(
-        proof.missing.length === 0,
-        "INVOCATION_EVIDENCE_REQUIRED",
-        "Invocation has missing execution or native-call evidence",
-        4,
-      );
-      const evidence = Object.values(proof.receipt.resources).sort();
+      let proof = stopProof(store, marker!);
+      const evidence = proof.evidenceRefs;
       requireCondition(
         digest([...parsed.payload.evidence_refs].sort()) === digest(evidence),
         "INVOCATION_EVIDENCE_REQUIRED",
         "Evidence digests must match persisted resource receipts",
+        4,
+      );
+      if (proof.recovery.eligible && !proof.recovery.receipt_valid) {
+        requireCondition(
+          !readEvent(store, marker!.invocation_id, "initialize-recovery"),
+          "INVOCATION_EVIDENCE_REQUIRED",
+          "Existing initialize recovery proof is invalid",
+          4,
+        );
+        append(
+          store,
+          marker!.invocation_id,
+          "initialize-recovery",
+          initializeRecoveryReceipt(marker!, proof.recovery.proof_digest),
+        );
+        proof = stopProof(store, marker!);
+      }
+      requireCondition(
+        proof.missing.length === 0,
+        "INVOCATION_EVIDENCE_REQUIRED",
+        "Invocation has missing execution or native-call evidence",
         4,
       );
       const result = {

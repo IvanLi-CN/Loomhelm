@@ -11,6 +11,7 @@ import {
   canonicalizeContract3Plan,
   deriveBusinessStatus,
   evaluateMilestone,
+  lifecycleStageOf,
   type MilestoneEvaluation,
 } from "../lib/atomic-orchestration";
 import { localSemanticProjection, SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
@@ -286,7 +287,7 @@ export function allowsBootstrapMainOwnedStart(
   group: Ledger["groups"][number],
   task?: Ledger["tasks"][number],
 ): boolean {
-  const workspaceAtom = group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
+  const workspaceAtom = group.atoms.find((atom) => lifecycleStageOf(atom) === "workspace_ready");
   return Boolean(
     task &&
       group.state === "active" &&
@@ -304,7 +305,7 @@ export function allowsBootstrapGroupStart(
   ledger: Ledger,
   group: Ledger["groups"][number],
 ): boolean {
-  const workspaceAtom = group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
+  const workspaceAtom = group.atoms.find((atom) => lifecycleStageOf(atom) === "workspace_ready");
   return Boolean(
     group.state === "active" &&
       group.delivery_unit_kind === "bootstrap" &&
@@ -320,7 +321,7 @@ export function deliveryGateDiagnostics(
   group: Ledger["groups"][number],
   task?: Ledger["tasks"][number],
 ): Record<string, string>[] {
-  const workspaceAtom = group.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
+  const workspaceAtom = group.atoms.find((atom) => lifecycleStageOf(atom) === "workspace_ready");
   const diagnostics: Record<string, string>[] = [];
   if (group.state !== "active")
     diagnostics.push({ code: "DELIVERY_UNIT_NOT_ACTIVE", message: "交付单元尚未进入 active 状态" });

@@ -3,6 +3,7 @@ import {
   createDemoLedger,
   createPlanningDemoLedger,
 } from "../examples/orchestration-viewer/ledger";
+import { lifecycleRoleOf } from "../lib/atomic-orchestration";
 import { contractJsonSchema, localSemanticProjection } from "../lib/contract";
 import { apply } from "../lib/engine";
 import { defaultGroupAtoms, group, validateLedger } from "../lib/schema";
@@ -39,7 +40,68 @@ test("an unconfigured historical plan does not borrow runtime atoms", () => {
 for (const contamination of ["clean", "binding", "atom", "coordination", "lifecycle"] as const) {
   test(`plan revisions require clean new group runtime: ${contamination}`, () => {
     const ledger = createPlanningDemoLedger();
+    const withExplicitRole = (atom: any) => {
+      const role = lifecycleRoleOf(atom);
+      return role ? { ...atom, lifecycle_role: role } : atom;
+    };
+    ledger.groups = ledger.groups.map((item) => ({
+      ...item,
+      atoms: item.atoms.map(withExplicitRole),
+    }));
+    ledger.tasks = ledger.tasks.map((item) => ({
+      ...item,
+      atoms: item.atoms.map(withExplicitRole),
+    }));
+    ledger.plans = ledger.plans.map((item) => ({
+      ...item,
+      atoms: item.atoms.map(withExplicitRole),
+      group_atoms: item.group_atoms.map(withExplicitRole),
+    }));
     const proposed = structuredClone(ledger.plans[0]!);
+    const taskGroup = new Map(ledger.tasks.map((task) => [task.id, task.group_id]));
+    const roleOrder = new Map([
+      ["prepare-parent", 0],
+      ["prepare-branch", 0],
+      ["create-pr", 1],
+      ["merge-pr", 2],
+      ["closeout", 3],
+    ]);
+    proposed.atoms = proposed.atoms.map(withExplicitRole);
+    proposed.group_atoms = proposed.group_atoms.map(withExplicitRole);
+    proposed.atomic_nodes = [...proposed.atoms, ...proposed.group_atoms].map((atom: any) => ({
+      kind: "work",
+      id: atom.id,
+      title: atom.title,
+      purpose: atom.purpose,
+      output: atom.output,
+      acceptance: [],
+      activity_type: "verification",
+      state: "planned",
+      scope:
+        typeof atom.task_id === "string"
+          ? { kind: "task", task_id: atom.task_id, delivery_unit_id: taskGroup.get(atom.task_id) }
+          : { kind: "delivery_unit", delivery_unit_id: atom.group_id },
+      ...(atom.lifecycle_role ? { lifecycle_role: atom.lifecycle_role } : {}),
+    }));
+    const lifecycleEdges = [...proposed.atoms, ...proposed.group_atoms].flatMap((atom: any) => {
+      const ownerKey = typeof atom.task_id === "string" ? "task_id" : "group_id";
+      const ownerId = atom[ownerKey];
+      const atoms = [...proposed.atoms, ...proposed.group_atoms]
+        .filter((candidate: any) => candidate[ownerKey] === ownerId && lifecycleRoleOf(candidate))
+        .sort(
+          (left: any, right: any) =>
+            (roleOrder.get(lifecycleRoleOf(left)!) ?? 99) -
+            (roleOrder.get(lifecycleRoleOf(right)!) ?? 99),
+        );
+      if (atoms[0]?.id !== atom.id) return [];
+      return atoms.slice(1).map((next: any, index: number) => ({
+        id: `lifecycle-${ownerId}-${index}`,
+        from_node_id: atoms[index]!.id,
+        to_node_id: next.id,
+        requires: { kind: "source_terminal_success" },
+      }));
+    });
+    proposed.atomic_edges = lifecycleEdges;
     proposed.id = `new-group-${contamination}`;
     proposed.supersedes_id = ledger.execution_plan_id;
     proposed.approval_id = null;
@@ -67,6 +129,36 @@ for (const contamination of ["clean", "binding", "atom", "coordination", "lifecy
       ...incoming.atoms.map(({ status, ...atom }) => ({
         ...atom,
         group_id: incoming.id,
+      })),
+    );
+    const incomingNodes = proposed.group_atoms
+      .filter((atom: any) => atom.group_id === incoming.id)
+      .map((atom: any) => ({
+        kind: "work",
+        id: atom.id,
+        title: atom.title,
+        purpose: atom.purpose,
+        output: atom.output,
+        acceptance: [],
+        activity_type: "verification",
+        state: "planned",
+        scope: { kind: "delivery_unit", delivery_unit_id: incoming.id },
+        lifecycle_role: atom.lifecycle_role,
+      }));
+    proposed.atomic_nodes.push(...incomingNodes);
+    const incomingRoles = incomingNodes
+      .slice()
+      .sort(
+        (left: any, right: any) =>
+          (roleOrder.get(lifecycleRoleOf(left)!) ?? 99) -
+          (roleOrder.get(lifecycleRoleOf(right)!) ?? 99),
+      );
+    proposed.atomic_edges.push(
+      ...incomingRoles.slice(1).map((atom: any, index: number) => ({
+        id: `lifecycle-${incoming.id}-${index}`,
+        from_node_id: incomingRoles[index]!.id,
+        to_node_id: atom.id,
+        requires: { kind: "source_terminal_success" },
       })),
     );
     if (contamination === "binding") incoming.agent_thread_id = "forged-thread";

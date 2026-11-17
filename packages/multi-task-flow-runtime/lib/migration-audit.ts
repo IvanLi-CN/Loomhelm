@@ -116,7 +116,12 @@ export function auditMatchesSource(raw: any, state: any, retained: RetainedSourc
       binding.run_id === backup.orchestration_id &&
       backup.orchestration_id === raw.orchestration_id &&
       binding.revision === state.source_binding_revision &&
-      audit.source_contract === backup.contract_version &&
+      audit.source_contract ===
+        (backup.contract_version === 6 &&
+        backup.upgrade?.migration_audit?.source_contract !== undefined &&
+        backup.upgrade.migration_audit.source_contract < 6
+          ? backup.upgrade.migration_audit.source_contract
+          : backup.contract_version) &&
       audit.source_revision === state.source_revision &&
       audit.source_revision === backup.revision &&
       audit.source_digest === state.source_digest &&

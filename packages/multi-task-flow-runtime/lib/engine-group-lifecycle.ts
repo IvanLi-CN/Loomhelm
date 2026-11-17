@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lifecycleStageOf } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
 import { externalRef, fact, group, id, isContributionKind, providerReceipt } from "../lib/schema";
 import type { CommandContext } from "./engine-command-context";
@@ -94,6 +95,13 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
+      if (core.isDeliveryVerification(target))
+        requireCondition(
+          core.ownsDeliveryVerification(ledger, target, request.actor),
+          "FORBIDDEN",
+          "Only the bound delivery agent owns verification",
+          3,
+        );
       const mainOwned =
         target.execution_owner === "main" &&
         target.conversation_policy === "main_owned" &&
@@ -105,7 +113,10 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         ledger.groups.find((item) => item.id === target.group_id)?.agent_thread_id ===
           request.actor.thread_id;
       requireCondition(
-        (request.actor.role === "task" || mainOwned || sharedOwned) &&
+        (request.actor.role === "task" ||
+          mainOwned ||
+          sharedOwned ||
+          core.ownsDeliveryVerification(ledger, target, request.actor)) &&
           taskCanUpdateAtoms(ledger, target),
         "FORBIDDEN",
         "The task owner updates atoms while execution is active or completing closeout",
@@ -124,7 +135,7 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
       requireCondition(
         !(
           ledger.contract_version >= 3 &&
-          atom.lifecycle_stage === "pr_merged" &&
+          lifecycleStageOf(atom) === "pr_merged" &&
           state === "completed"
         ),
         "EVIDENCE_REQUIRED",
@@ -200,17 +211,18 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         "Invalid delivery-unit atom transition",
         3,
       );
+      const lifecycleStage = lifecycleStageOf(atom);
       requireCondition(
-        !(state === "completed" && atom.lifecycle_stage === "closed"),
+        !(state === "completed" && lifecycleStage === "closed"),
         "GROUP_CLOSE_REQUIRED",
         "The closeout atom completes with group-close",
         4,
       );
-      if (state === "completed" && atom.lifecycle_stage)
+      if (state === "completed" && lifecycleStage)
         requireCondition(
-          legacyLedger(ledger) || owner.lifecycle[atom.lifecycle_stage] === "passed",
+          legacyLedger(ledger) || owner.lifecycle[lifecycleStage] === "passed",
           "LIFECYCLE_BLOCKED",
-          `Delivery-unit lifecycle stage ${atom.lifecycle_stage} is not passed`,
+          `Delivery-unit lifecycle stage ${lifecycleStage} is not passed`,
           4,
         );
       atom.status = state;

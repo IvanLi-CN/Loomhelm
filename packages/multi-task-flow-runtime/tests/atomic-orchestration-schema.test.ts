@@ -7,6 +7,7 @@ import {
   deriveBusinessStatus,
   evaluateMilestone,
   lifecycleRoleOf,
+  lifecycleStageOf,
   taskPrBinding,
   validateAtomicGraph,
   validateContributionStart,
@@ -439,6 +440,22 @@ test("uses explicit lifecycle roles for arbitrary atom IDs and bounds legacy inf
   expect(lifecycleRoleOf({ id: "unrelated-closeout", task_id: "task-1" })).toBeNull();
 });
 
+test("materializes legacy lifecycle stages for role-only runtime atoms", () => {
+  expect(
+    lifecycleStageOf({ lifecycle_role: "prepare-parent", scope: { kind: "delivery_unit" } }),
+  ).toBe("workspace_ready");
+  expect(lifecycleStageOf({ lifecycle_role: "prepare-branch", scope: { kind: "task" } })).toBe(
+    "branch_ready",
+  );
+  expect(lifecycleStageOf({ lifecycle_role: "create-pr", scope: { kind: "task" } })).toBe(
+    "pr_created",
+  );
+  expect(lifecycleStageOf({ lifecycle_role: "merge-pr", scope: { kind: "task" } })).toBe(
+    "pr_merged",
+  );
+  expect(lifecycleStageOf({ lifecycle_role: "closeout", scope: { kind: "task" } })).toBe("closed");
+});
+
 test("strict lifecycle validation rejects legacy stage and ID inference", () => {
   const atoms = ["prepare-branch", "create-pr", "merge-pr", "closeout"].map((suffix) => ({
     id: `task-1-${suffix}`,
@@ -537,6 +554,13 @@ test("strict plan validation rejects lifecycle atom edges without a canonical gr
     from_atom_id: from_node_id,
     to_atom_id: to_node_id,
   }));
+  expect(() => validatePlan(plan)).toThrow("canonical atomic nodes");
+});
+
+test("strict plan validation rejects lifecycle atoms without a canonical graph", () => {
+  const plan = strictTaskLifecyclePlan();
+  plan.atomic_nodes = [];
+  plan.atomic_edges = [];
   expect(() => validatePlan(plan)).toThrow("canonical atomic nodes");
 });
 

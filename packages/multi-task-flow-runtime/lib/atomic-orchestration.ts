@@ -33,6 +33,19 @@ export function lifecycleRoleFromStage(
   return null;
 }
 
+/** Resolve a canonical lifecycle role into the runtime stage vocabulary used by older ledgers. */
+export function lifecycleStageFromRole(
+  role: AtomicLifecycleRole | null | undefined,
+  scope: "task" | "delivery_unit",
+): LegacyLifecycleStage | null {
+  if (role === "prepare-parent") return scope === "delivery_unit" ? "workspace_ready" : null;
+  if (role === "prepare-branch") return scope === "task" ? "branch_ready" : null;
+  if (role === "create-pr") return "pr_created";
+  if (role === "merge-pr") return "pr_merged";
+  if (role === "closeout") return "closed";
+  return null;
+}
+
 function legacyRoleFromId(
   idValue: unknown,
   ownerId: unknown,
@@ -105,6 +118,24 @@ export function lifecycleRoleOf(atom: {
   scope?: { kind?: unknown; task_id?: unknown; delivery_unit_id?: unknown };
 }): AtomicLifecycleRole | null {
   return explicitLifecycleRoleOf(atom) ?? inferredLifecycleRoleOf(atom);
+}
+
+export function lifecycleStageOf(atom: {
+  lifecycle_role?: unknown;
+  lifecycle_stage?: unknown;
+  task_id?: unknown;
+  group_id?: unknown;
+  scope?: { kind?: unknown };
+}): LegacyLifecycleStage | null {
+  if (
+    atom.lifecycle_stage === "workspace_ready" ||
+    atom.lifecycle_stage === "branch_ready" ||
+    atom.lifecycle_stage === "pr_created" ||
+    atom.lifecycle_stage === "pr_merged" ||
+    atom.lifecycle_stage === "closed"
+  )
+    return atom.lifecycle_stage;
+  return lifecycleStageFromRole(explicitLifecycleRoleOf(atom), lifecycleScopeOf(atom));
 }
 
 export const atomicExternalRef = z

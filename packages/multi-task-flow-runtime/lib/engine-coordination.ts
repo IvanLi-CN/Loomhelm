@@ -229,7 +229,7 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
       validateRevisionReason(revision);
       proposed.revision = revision;
       proposed.lifecycle = "proposed";
-      validatePlan(proposed);
+      validatePlan(proposed, { allowLegacyLifecycleRoleInference: ledger.contract_version < 6 });
       if (proposed.plan_handoff) {
         const cutAssignments = previous.plan_handoff
           ? collectCutAssignmentEvidence(ledger, previous)
@@ -596,6 +596,12 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
       ensureSchedulable(ledger, approved(ledger));
       const target = find(ledger.tasks, (item) => item.id === string(payload.task_id), "Task");
       requireCondition(
+        !core.isDeliveryVerification(target),
+        "DELIVERY_VERIFICATION_DISPATCH",
+        "A delivery verification must use its bound delivery agent, not a task conversation",
+        3,
+      );
+      requireCondition(
         target.disposition === "active",
         "TASK_NOT_ACTIVE",
         "Task is no longer an active responsibility",
@@ -783,6 +789,13 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
         op.request.target_type === "group"
           ? find(ledger.groups, (item) => item.id === op.target_id, "Group")
           : null;
+      if (target && outcome === "succeeded")
+        requireCondition(
+          !core.isDeliveryVerification(target),
+          "DELIVERY_VERIFICATION_DISPATCH",
+          "A delivery verification must use its bound delivery agent, not a task conversation",
+          3,
+        );
       if (targetGroup && ledger.contract_version >= 3 && outcome === "succeeded")
         requireGroupDispatchGate(ledger, targetGroup);
       const evidence = object(payload.native_evidence ?? {});

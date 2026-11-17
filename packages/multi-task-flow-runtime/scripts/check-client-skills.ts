@@ -10,6 +10,13 @@ const manifest = JSON.parse(readFileSync(path, "utf8"));
 const hash = (data) => createHash("sha256").update(data).digest("hex");
 const refresh = process.argv.includes("--write");
 const additional = [
+  "skills/multi-task-flow/lib/invocation-events.ts",
+  "skills/multi-task-flow/lib/invocation-initialize-recovery.ts",
+  "skills/multi-task-flow/lib/native-operation-context.ts",
+  "skills/multi-task-flow/tests/delivery-owned-verification.test.ts",
+  "skills/multi-task-flow/tests/initialize-recovery-fixture.ts",
+  "skills/multi-task-flow/tests/initialize-recovery.test.ts",
+  "skills/multi-task-flow/tests/initialize-rpc.test.ts",
   "skills/multi-task-flow/tests/detail-status.test.ts",
   "skills/multi-task-flow/tests/execution-policy.test.ts",
   "skills/multi-task-flow/tests/ui/detail-agent.test.ts",

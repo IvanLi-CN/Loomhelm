@@ -245,3 +245,7 @@ ADR 0041 记录对 ADR 0039 静止前提的替代，需求和验收仍只由 SPE
 ## 派发前置核验
 
 Skill 将宿主工具可见性与实际调用证据分开：保留 CLI-only 创建、claim、native evidence、orphan 与 unknown 门禁，取消要求证明所有普通 Agent 原生工具均被撤权的不可执行前提。包式服务身份核验按 ADR 0032 对齐 config、CLI artifact identity 与 runtime status；旧 bundle manifest 不再是 package-backed 安装的前置证据。覆盖由 Skill 合同检查与 shared-service 运行时身份测试提供；本次不改变运行时权限模型或升级已安装服务。
+
+## delivery-owned verification 与 initialize 能力恢复
+
+源码支持原绑定 delivery agent 驱动 verification/evidence 的启动、atoms、完成，保留 readiness、容量与适用 workspace/baseline 门禁。initialize 通过 transport 关联、精确 scope 和版本化派生证明安全收敛；旧 0.5.0 的完整来源白名单可在升级前使用 inspect/reconcile 恢复。回归入口为 delivery-owned-verification、initialize-recovery、initialize-rpc 和 invocation-journal 测试；打包 CLI 的现场副本证明须绑定候选 SHA，不将源码实现当成正式现场已生效。

@@ -96,6 +96,6 @@ prepared 在既有 lifecycle、维护、账本和绑定排斥下原子交换 run
 
 ## Invocation inspection and reconciliation
 
-`invocation-inspect` 与 `invocation-reconcile` 只允许绑定的 main；前者为零写入查询，后者不执行原生调用、不修改业务状态或权限。专用入口核验历史 source 与修复 executor 的独立身份，允许受支持的 schema-2/contract-3、contract-4 源在正式升级前对账；普通命令仍要求精确绑定当前版本。`evidence_refs` 必须恰好包含检查结果中各资源终态文件的 SHA-256 摘要，不能提交“进程已死”或自行声明 stopped。缺少完整执行来源、执行完成或资源终态凭据的历史调用返回 `INVOCATION_EVIDENCE_REQUIRED`，保持阻断。
+`invocation-inspect` 与 `invocation-reconcile` 只允许绑定的 main；前者为零写入查询，后者不执行原生调用、不修改业务状态或权限。专用入口核验历史 source 与修复 executor 的独立身份，允许受支持的 schema-2/contract-3、contract-4 源以及 initialize 恢复规则列明的精确审计 contract-5 来源在正式升级前对账；普通命令仍要求精确绑定当前版本。`evidence_refs` 必须精确采用 inspect 返回的 canonical SHA-256 摘要；普通路径覆盖各资源终态，initialize 能力恢复覆盖原始证明文件，规则见 [INITIALIZE_RECOVERY.md](INITIALIZE_RECOVERY.md)。调用方不得自行改变 refs，不能提交“进程已死”或自行声明 stopped。缺少完整执行来源、执行完成或资源终态凭据的历史调用返回 `INVOCATION_EVIDENCE_REQUIRED`，保持阻断。
 
 Flow 默认流式传输，不限制累计输出字节；stdout/stderr 每次最多转发 64 KiB 并等待写完成，慢消费者会暂停上游读取。只有用户明确配置 `maxOutputBytes` 时才按 stdout 与 stderr 合计预算限制（1 字节至 64 MiB）；通用捕获型执行器仍默认限制 1 MiB。输出失败走相同停止路径，已输出 stdout 后只在 stderr 报告失败并非零退出，不追加第二份 JSON 或重做业务。独立 IPC 仅接受匹配 invocation_id 的 stop/stopped，协作停止最多等待 200 秒；后续终止自有进程树不产生安全停止证明。
