@@ -13,7 +13,12 @@ import {
   gatewayDemoResponse,
 } from "../scripts/export-gateway-recovery";
 import { ViewerWorkerPool } from "../scripts/viewer-runtime";
-import { fixtureRelease, fixtureRun, serviceFixture } from "./service-fixture";
+import {
+  bindHistoricalFixture,
+  fixtureRelease,
+  fixtureRun,
+  serviceFixture,
+} from "./service-fixture";
 
 export const diagnostic: WorkerDiagnostic = {
   diagnostic_id: "diag-6a65efb9-9ecd-404c-8af8-87f9c414ec17",
@@ -164,6 +169,7 @@ test("Gateway serves recovery HTML with Worker acquisition broken, preserves API
   const fixture = serviceFixture();
   const release = fixtureRelease(fixture.root);
   const { store } = fixtureRun(fixture.state.paths.data, "demo-recovery");
+  bindHistoricalFixture(fixture.state, "demo-recovery", release.manifest);
   store.update((run) => {
     run.resources = run.tasks
       .filter((task: { thread_id: string | null }) => task.thread_id)

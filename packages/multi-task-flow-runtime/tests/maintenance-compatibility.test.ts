@@ -157,7 +157,7 @@ test("candidate reader failure uses an executed previous viewer read-only proof"
   cpSync(old.source, join(f.state.paths.releases, oldId), { recursive: true });
   f.state.saveConfig({ ...f.state.config(), current_build: oldId });
   const target = releaseFor(f.state, "target", {
-    readable: ["schema-2/contract-2", "schema-2/contract-3"],
+    readable: ["schema-2/contract-2", "schema-2/contract-3", "schema-2/contract-4"],
   });
   const report = compatibilityReport(f.state, target.manifest, target.source);
   expect(report.errors).toEqual([]);
@@ -196,7 +196,7 @@ test("new write loss needs exact approval; changes invalidate it", () => {
 test("unreadable, malformed, symlinked and incompatible custom runs cannot be approved away", () => {
   const f = setup();
   const target = releaseFor(f.state, "future", {
-    readable: ["schema-2/contract-2", "schema-2/contract-3"],
+    readable: ["schema-2/contract-2", "schema-2/contract-3", "schema-2/contract-4"],
   });
   expect(compatibilityReport(f.state, target.manifest).errors[0]?.capability).toBe("read");
   const view = join(f.store.runPath, "view");
@@ -530,7 +530,7 @@ test("two independent CLI writers serialize one migration and replay the same re
 test("the public CLI returns exact blocker details without stopping service control", async () => {
   const f = setup();
   const rejected = releaseFor(f.state, "reject", {
-    readable: ["schema-2/contract-2", "schema-2/contract-3"],
+    readable: ["schema-2/contract-2", "schema-2/contract-3", "schema-2/contract-4"],
   });
   const child = Bun.spawn(
     [process.execPath, join(import.meta.dir, "../scripts/service.ts"), "upgrade", "--input", "-"],

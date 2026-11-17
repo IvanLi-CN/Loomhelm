@@ -5,7 +5,12 @@ import { join, resolve } from "node:path";
 import { chromium } from "playwright";
 import { ServiceAuth } from "../lib/service-auth";
 import { startSharedViewer } from "../lib/service-http";
-import { fixtureRelease, fixtureRun, serviceFixture } from "../tests/service-fixture";
+import {
+  bindHistoricalFixture,
+  fixtureRelease,
+  fixtureRun,
+  serviceFixture,
+} from "../tests/service-fixture";
 
 const output = resolve(process.argv[2]!);
 mkdirSync(output, { recursive: true });
@@ -14,6 +19,7 @@ const browser = await chromium.launch({ headless: true });
 const fixture = serviceFixture();
 const bundle = fixtureRelease(fixture.root);
 fixtureRun(fixture.state.paths.data);
+bindHistoricalFixture(fixture.state, "demo-run", bundle.manifest);
 const initialViewer = await startSharedViewer(fixture.state, bundle.manifest, dist, 0);
 let activeViewer: Awaited<ReturnType<typeof startSharedViewer>> | null = initialViewer;
 const base = `http://127.0.0.1:${initialViewer.port}`;

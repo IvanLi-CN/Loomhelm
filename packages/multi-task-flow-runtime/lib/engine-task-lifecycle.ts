@@ -189,7 +189,7 @@ export function executeTaskLifecycleCommand(context: CommandContext): unknown | 
           "Record verified workspace baseline before running",
           4,
         );
-        if (ledger.contract_version === 3 && op?.request.development_baseline) {
+        if (ledger.contract_version >= 3 && op?.request.development_baseline) {
           const group = find(ledger.groups, (item) => item.id === target.group_id, "Group");
           const postMerge = ["release", "deployment", "verification"].includes(target.kind);
           const lineage = postMerge ? group.merge_sha : group.current_sha;
@@ -260,7 +260,7 @@ export function executeTaskLifecycleCommand(context: CommandContext): unknown | 
           4,
         );
       if (state === "closed") {
-        if (ledger.contract_version === 3)
+        if (ledger.contract_version >= 3)
           requireCondition(
             target.atoms.every((atom) => atom.status === "completed"),
             "ATOMS_PENDING",

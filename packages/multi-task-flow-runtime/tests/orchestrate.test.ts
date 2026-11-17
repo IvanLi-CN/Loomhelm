@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { apply } from "../lib/engine";
 import { validateLedger } from "../lib/schema";
 import { LedgerStore } from "../lib/store";
+import { fixtureIdentity } from "./cli-identity-fixture";
 
 const createdRoots: string[] = [];
 const initialInput = JSON.parse(
@@ -658,7 +659,8 @@ describe("orchestrate group-base-reconcile", () => {
     const ledger = validateLedger({
       schema_version: 2,
       source_schema_version: null,
-      contract_version: 2,
+      contract_version: 4,
+      runtime_identity: fixtureIdentity,
       orchestration_id: input.run_id,
       revision: 0,
       repository: input.payload.repository,

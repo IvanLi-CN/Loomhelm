@@ -14,6 +14,7 @@ import {
 import { requireCondition } from "../lib/errors";
 import { topologicalOrder, validateGrouping } from "../lib/graph";
 import { normalizeRetiredPlanAlias } from "../lib/legacy-plan-alias";
+import { runIdentity, upgradeState } from "./orchestration-identity";
 
 export const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
 const text = z.string().trim().min(1);
@@ -654,7 +655,9 @@ export const ledgerSchema = z
   .object({
     schema_version: z.literal(2),
     source_schema_version: z.literal(1).nullable().default(null),
-    contract_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    contract_version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+    runtime_identity: runIdentity.optional(),
+    upgrade: upgradeState.optional(),
     version: z
       .object({
         skill_id: text,

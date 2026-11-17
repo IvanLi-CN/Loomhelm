@@ -1,7 +1,7 @@
 ---
 name: multi-task-flow
 description: 通过隔离的 JSON 账本、按需创建的交付单元和任务对话、PR 协调及已认证的本地仪表板，编排依赖驱动的 Codex 任务。
-version: 2.7.11
+version: 3.0.0
 ---
 
 # Multi-task flow
@@ -145,6 +145,12 @@ Use the published npm CLI only in this form: `bunx --bun @loomhelm/multi-task-fl
 The explicitly installed shared user service uses the system-service exception for its background lifecycle. See `references/shared-viewer.md` for fixed-port ownership, compatibility, maintenance and migration recovery.
 
 显式安装的共享用户服务使用系统服务例外管理后台生命周期。固定端口所有权、兼容性、维护和迁移恢复见 `references/shared-viewer.md`。
+
+## 编排版本与显式升级
+
+普通 flow（包括只读）必须使用与该编排账本及运行绑定完全一致的包版本、build、source 和合同集合。版本不匹配时先用 `multi-task-flow orchestration compatibility-check --run-id <run-id>` 诊断；只有主人明确授权升级该正式编排后，才使用目标版本 CLI 执行 `orchestration upgrade --run-id <run-id> --dry-run <version|tag>` 和不带 dry-run 的相同命令。安装新 CLI 或阅读本 Skill 不授权迁移已有正式运行。
+
+新初始化原子发布 contract 4 和 schema-2 版本绑定，保留 Contract 3 的原子编排及初始化恢复语义。显式升级通过整个 run 目录的原子发布迁移受支持账本并切换绑定，保留源目录恢复快照，CLI 侧不可逆，不提供编排 rollback。升级中断只续跑登记的冻结目标；普通 flow 不得修复或跳过升级阶段。缺少可信历史身份、没有机械迁移链或无法证明原生调用已停止时保持阻断；不要改账本、释放 claim、强杀进程或按全局 Gateway 版本猜测。专用诊断与 dry-run 不产生业务写入或绑定切换。完整阶段及错误码见 canonical CLI 合同。
 
 ## Contract 3 强制边界
 
