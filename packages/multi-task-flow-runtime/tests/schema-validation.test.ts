@@ -1,6 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
-import { plannedAction, validateLedger } from "../lib/schema";
+import { defaultGroupAtoms, plannedAction, validateLedger } from "../lib/schema";
+import { fixtureIdentity } from "./cli-identity-fixture";
+import { fixture } from "./engine-fixtures";
+
+function roleOnlyLifecycleLedger(contract: 5 | 6) {
+  const ledger: any = structuredClone(fixture());
+  const group = ledger.groups[0];
+  const plan = ledger.plans[0];
+  const atoms = defaultGroupAtoms(group.id);
+  group.atoms = atoms;
+  plan.group_atoms = atoms.map(({ status: _status, ...atom }) => ({
+    ...atom,
+    group_id: group.id,
+  }));
+  plan.atomic_edges = [];
+  ledger.schema_version = 2;
+  ledger.source_schema_version = null;
+  ledger.contract_version = contract;
+  ledger.runtime_identity = { ...fixtureIdentity, ledger_contract: contract };
+  ledger.execution_plan_id = plan.id;
+  return ledger;
+}
 
 describe("planned action schema", () => {
   test("accepts a structured task target", () => {
@@ -60,5 +81,10 @@ describe("planned action schema", () => {
       receipt: null,
     });
     expect(() => validateLedger(ledger)).toThrow("Fact subject must reference");
+  });
+
+  test("requires canonical lifecycle graphs for fresh contract-6 ledgers but preserves historical reads", () => {
+    expect(() => validateLedger(roleOnlyLifecycleLedger(6))).toThrow("canonical atomic nodes");
+    expect(() => validateLedger(roleOnlyLifecycleLedger(5))).not.toThrow();
   });
 });

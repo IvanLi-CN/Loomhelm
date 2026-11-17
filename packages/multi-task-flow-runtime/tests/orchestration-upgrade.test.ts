@@ -92,6 +92,28 @@ test("explicit migration preserves business state and is idempotent", () => {
 test("contract-6 source with schema-4 binding is already compatible", () => {
   const store = fixture();
   const raw = JSON.parse(store.readRaw());
+  for (const plan of raw.plans) {
+    plan.group_atoms = plan.group_atoms.map(({ lifecycle_stage: _stage, ...atom }) => ({
+      ...atom,
+      lifecycle_stage: null,
+    }));
+    plan.atomic_edges = [];
+  }
+  for (const group of raw.groups)
+    group.atoms = group.atoms.map(({ lifecycle_stage: _stage, ...atom }) => ({
+      ...atom,
+      lifecycle_stage: null,
+    }));
+  for (const event of raw.events) {
+    for (const field of ["old_group_snapshot", "group_snapshot"] as const) {
+      const snapshot = event.data?.[field];
+      if (snapshot?.atoms)
+        snapshot.atoms = snapshot.atoms.map(({ lifecycle_stage: _stage, ...atom }) => ({
+          ...atom,
+          lifecycle_stage: null,
+        }));
+    }
+  }
   raw.contract_version = 6;
   raw.runtime_identity = target;
   writeFileSync(store.ledgerPath, JSON.stringify(raw));

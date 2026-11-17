@@ -579,7 +579,9 @@ export function validatePlan(candidate: Plan, options: PlanValidationOptions = {
     candidate.atomic_nodes.length > 0 ||
     candidate.atomic_edges.some((edge) => "from_node_id" in edge);
   const hasLegacyAtomicEdges = candidate.atomic_edges.some((edge) => "from_atom_id" in edge);
-  const hasLifecycleAtoms = candidate.atoms.length > 0 || candidate.group_atoms.length > 0;
+  const hasLifecycleAtoms = [...candidate.atoms, ...candidate.group_atoms].some(
+    (atom) => lifecycleRoleOf(atom) !== null || atom.lifecycle_stage != null,
+  );
   if (options.requireCanonicalLifecycleGraph !== false) {
     requireCondition(
       options.allowLegacyLifecycleRoleInference === true ||

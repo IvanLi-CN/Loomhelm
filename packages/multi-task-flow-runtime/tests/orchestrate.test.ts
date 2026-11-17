@@ -747,10 +747,16 @@ describe("orchestrate group-base-reconcile", () => {
     };
     const input = structuredClone(initialInput);
     input.run_id = "cli-reconcile-run";
+    input.payload.initial_plan.atoms = [];
+    input.payload.initial_plan.group_atoms = [];
     input.payload.initial_plan.atomic_edges = [];
-    input.payload.groups[0].atoms = input.payload.initial_plan.group_atoms
-      .filter((atom: any) => atom.group_id === input.payload.groups[0].id)
-      .map(({ group_id, ...atom }: any) => ({ ...atom, status: "planned" }));
+    input.payload.initial_plan.edges = [];
+    input.payload.groups[0].atoms = [];
+    input.payload.tasks = input.payload.tasks.map((task: any) => ({
+      ...task,
+      kind: "verification",
+      atoms: [],
+    }));
     input.payload.groups[0] = {
       ...input.payload.groups[0],
       agent_thread_id: "group-thread",

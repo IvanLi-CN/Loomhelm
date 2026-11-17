@@ -242,7 +242,7 @@ export function validateLedger(value: unknown): Ledger {
   for (const item of parsed.plans) {
     validatePlan(item, {
       allowLegacyLifecycleRoleInference: historicalLifecycleRoleInference,
-      requireCanonicalLifecycleGraph: false,
+      requireCanonicalLifecycleGraph: !historicalLifecycleRoleInference,
     });
     if (item.lifecycle === "proposed")
       requireCondition(
