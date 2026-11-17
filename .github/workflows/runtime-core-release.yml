@@ -58,6 +58,10 @@ jobs:
               raise SystemExit('runtime-core package version mismatch or invalid SemVer')
           if package.get('private') is True:
               raise SystemExit('runtime-core release package must be publishable')
+          repository = package.get('repository') or {}
+          expected_url = f"git+https://github.com/{os.environ['GITHUB_REPOSITORY']}.git"
+          if not isinstance(repository, dict) or repository.get('type') != 'git' or repository.get('url') != expected_url or repository.get('directory') != 'packages/runtime-core':
+              raise SystemExit('runtime-core repository metadata must match GitHub provenance')
           PY
       - name: Verify exact npm version is unpublished
         if: inputs.publish == true
