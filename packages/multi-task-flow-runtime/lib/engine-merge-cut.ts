@@ -407,6 +407,7 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
               receipt.target_branch === op.request.target_branch &&
               receipt.base_sha === op.expected_sha &&
               receipt.head_sha === op.request.expected_head_sha &&
+              receipt.merge_sha === evidence.sha &&
               receipt.evidence_ref === evidence.evidence_ref,
             "EVIDENCE_MISMATCH",
             "Provider merge receipt does not match the configured repository and merge claim",
@@ -459,9 +460,9 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
           for (const task of ledger.tasks.filter(
             (item) =>
               item.group_id === owner.id &&
-              item.state === "running" &&
-              ((item.execution_owner === "main" && item.conversation_policy === "main_owned") ||
-                isSharedDeliveryTask(ledger, item)),
+              item.execution_owner === "main" &&
+              item.conversation_policy === "main_owned" &&
+              item.state === "running",
           )) {
             task.state = "integrated";
             task.finished_at = evidence.observed_at;
@@ -503,18 +504,6 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
             evidence_ref: evidence.evidence_ref,
             occurred_at: evidence.observed_at,
           });
-        }
-        if (op.request.mode === "parent" && ledger.contract_version === 3) {
-          for (const task of ledger.tasks.filter(
-            (item) => item.group_id === owner.id && isSharedDeliveryTask(ledger, item),
-          )) {
-            completeTaskLifecycleAtom(ledger, request, task, "pr_merged", {
-              fact_id: evidence.id,
-              evidence_ref: evidence.evidence_ref,
-              occurred_at: evidence.observed_at,
-            });
-            task.lifecycle.pr_merged = "passed";
-          }
         }
         op.receipt_fact_id = evidence.id;
       } else if (outcome === "failed") {

@@ -685,12 +685,7 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
       requireCondition(
         !ledger.operations.some(
           (item) =>
-            item.kind === "merge" &&
-            activeOperation(item) &&
-            (item.target_id === taskId ||
-              (item.target_id === owner.id &&
-                item.request.mode === "child" &&
-                item.request.task_id === taskId)),
+            activeOperation(item) && (item.target_id === taskId || item.target_id === owner.id),
         ),
         "OPERATION_PENDING",
         "Task has an unresolved operation",

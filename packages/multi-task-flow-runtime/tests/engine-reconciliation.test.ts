@@ -428,6 +428,39 @@ test("external merge reconciliation accepts an unbound task PR binding without r
     }),
   );
   const beforeMismatch = JSON.stringify(ledger);
+  for (const pending of [
+    { kind: "publish_pr" as const, target_id: task.id, request: {} },
+    { kind: "merge" as const, target_id: group.id, request: { mode: "parent" } },
+    { kind: "merge" as const, target_id: group.id, request: { mode: "child", task_id: "b" } },
+  ]) {
+    const candidate = structuredClone(ledger);
+    candidate.operations.push({
+      id: "pending-operation",
+      actor_id: "main-thread",
+      status: "claimed",
+      expected_sha: base,
+      receipt_fact_id: null,
+      created_at: at,
+      updated_at: at,
+      ...pending,
+    });
+    const before = JSON.stringify(candidate);
+    expect(() =>
+      apply(
+        candidate,
+        "task-external-merge-reconcile",
+        request(candidate, "pending-reconcile", {
+          task_id: task.id,
+          pr,
+          provider_observation: observation,
+          quality_evidence: quality,
+          merge_sha: merge,
+          recovery_approval_id: "recovery-a",
+        }),
+      ),
+    ).toThrow("unresolved operation");
+    expect(JSON.stringify(candidate)).toBe(before);
+  }
   expect(() =>
     apply(
       ledger,

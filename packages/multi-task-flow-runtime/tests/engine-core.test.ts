@@ -545,6 +545,7 @@ test("contract-3 child merge completes merge-pr before task closeout", () => {
       target_branch: "parent",
       state: "merged" as const,
       evidence_ref: "merge-proof",
+      merge_sha: merge,
     },
   };
   const providerObservation = {
@@ -554,6 +555,30 @@ test("contract-3 child merge completes merge-pr before task closeout", () => {
     merge_sha: merge,
     state: "merged" as const,
   };
+  for (const receiptMergeSha of [null, head]) {
+    const before = JSON.stringify(ledger);
+    expect(() =>
+      apply(
+        ledger,
+        "merge-resolve",
+        request(
+          ledger,
+          `wrong-receipt-${receiptMergeSha ?? "null"}`,
+          {
+            operation_id: "merge-a",
+            outcome: "succeeded",
+            provider_evidence: {
+              ...providerEvidence,
+              receipt: { ...providerEvidence.receipt, merge_sha: receiptMergeSha },
+            },
+            provider_observation: providerObservation,
+          },
+          actor,
+        ),
+      ),
+    ).toThrow("Provider merge receipt does not match");
+    expect(JSON.stringify(ledger)).toBe(before);
+  }
   expect(() =>
     apply(
       ledger,
