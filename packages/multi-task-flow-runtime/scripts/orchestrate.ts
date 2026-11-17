@@ -85,6 +85,22 @@ function materializeExplicitLifecycleMetadata(atom: any, scope: "task" | "delive
     ...(lifecycle_stage !== undefined ? { lifecycle_stage } : {}),
   };
 }
+
+function materializeRuntimeLifecycleAtom(
+  runtimeAtom: any,
+  planned: any,
+  scope: "task" | "delivery_unit",
+): any {
+  const metadata = materializeExplicitLifecycleMetadata(planned ?? runtimeAtom, scope);
+  const { lifecycle_role: _role, lifecycle_stage: _stage, ...rest } = runtimeAtom;
+  return {
+    ...rest,
+    ...(metadata.lifecycle_role ? { lifecycle_role: metadata.lifecycle_role } : {}),
+    ...(metadata.lifecycle_stage !== undefined
+      ? { lifecycle_stage: metadata.lifecycle_stage }
+      : {}),
+  };
+}
 const migrationRequest = z
   .object({
     run_id: id,
@@ -310,27 +326,26 @@ try {
             ...(atom.lifecycle_role ? { lifecycle_role: atom.lifecycle_role } : {}),
             status: "planned" as const,
           }));
+        const plannedById = new Map(
+          plannedAtoms.map((atom: (typeof plannedAtoms)[number]) => [atom.id, atom]),
+        );
+        const atoms =
+          group.atoms.length === 0
+            ? plannedAtoms
+            : group.atoms.map((atom) =>
+                materializeRuntimeLifecycleAtom(atom, plannedById.get(atom.id), "delivery_unit"),
+              );
         return {
           ...group,
           pr: canonicalPr,
-          ...(group.atoms.length === 0 && plannedAtoms.length > 0 ? { atoms: plannedAtoms } : {}),
+          atoms,
         };
       });
       const plannedTaskAtoms = new Map(initialPlan.atoms.map((atom: any) => [atom.id, atom]));
       const tasks = parsed.payload.tasks.map((task) => {
-        const atoms = task.atoms.map((atom: any) => {
-          const planned = plannedTaskAtoms.get(atom.id);
-          const source = planned ?? atom;
-          const metadata = materializeExplicitLifecycleMetadata(source, "task");
-          const { lifecycle_role: _role, lifecycle_stage: _stage, ...runtimeAtom } = atom;
-          return {
-            ...runtimeAtom,
-            ...(metadata.lifecycle_role ? { lifecycle_role: metadata.lifecycle_role } : {}),
-            ...(metadata.lifecycle_stage !== undefined
-              ? { lifecycle_stage: metadata.lifecycle_stage }
-              : {}),
-          };
-        });
+        const atoms = task.atoms.map((atom: any) =>
+          materializeRuntimeLifecycleAtom(atom, plannedTaskAtoms.get(atom.id), "task"),
+        );
         const normalized = { ...task, atoms };
         return isContributionKind(task.kind) && (!task.pr || !("state" in task.pr))
           ? { ...normalized, pr: { state: "unbound" as const } }

@@ -138,6 +138,35 @@ describe("orchestrate init", () => {
     );
   });
 
+  test("normalizes role-only lifecycle metadata on prepopulated delivery-unit atoms", async () => {
+    const root = temporaryRoot();
+    const input = structuredClone(initialInput);
+    for (const atom of input.payload.initial_plan.group_atoms) {
+      if (atom.lifecycle_role) delete atom.lifecycle_stage;
+    }
+    input.payload.groups[0].atoms = input.payload.initial_plan.group_atoms.map(
+      ({ group_id, ...atom }: any) => ({
+        ...atom,
+        lifecycle_stage: null,
+        status: "planned",
+      }),
+    );
+
+    const result = await runInit(root, input);
+    expect(result.exitCode).toBe(0);
+    const ledger = JSON.parse(
+      readFileSync(join(root, "runs", input.run_id, "ledger.json"), "utf8"),
+    );
+    const runtimeAtoms = ledger.groups[0].atoms.filter((atom: any) => atom.lifecycle_role);
+
+    expect(runtimeAtoms.map((atom: any) => atom.lifecycle_stage)).toEqual([
+      "workspace_ready",
+      "pr_created",
+      "pr_merged",
+      "closed",
+    ]);
+  });
+
   test("propagates role-only task lifecycle metadata into runtime atoms", async () => {
     const root = temporaryRoot();
     const input = structuredClone(initialInput);

@@ -7361,7 +7361,7 @@
     {
       "path": "skills/multi-task-flow/scripts/orchestrate.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/orchestrate.ts",
-      "installedSha256": "ea39aefd6c6c1b6877768b150096ec897fe6444358a4745f50e8860d592e162e"
+      "installedSha256": "619f2957d6369c94335db9b512941c8508a627dd67e508979d1f3e4ba2199994"
     },
     {
       "path": "skills/multi-task-flow/scripts/service.ts",
@@ -7466,7 +7466,7 @@
     {
       "path": "skills/multi-task-flow/tests/orchestrate.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/orchestrate.test.ts",
-      "installedSha256": "2e3075519305212e573e79086070f55ab5f59f7bda601ca7f7bdfa3c3b123711"
+      "installedSha256": "8d744bbd92af2845bf85979363ac370f0bc0a517eb63a014e8a64bda45cb4409"
     },
     {
       "path": "skills/multi-task-flow/tests/output-events.test.ts",
