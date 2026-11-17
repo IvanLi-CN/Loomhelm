@@ -170,6 +170,22 @@ Gateway 不再为缺失历史绑定的账本使用当前安装或 fallback 身�
 
 若证据不可取得，必须保留未解决状态和精确缺口，返回证据边界设计；不能用弱化门禁替代。目标持久合同为 ledger contract 5、schema_version 2；该结构转换尚未实现。实施仍须完成命令 JSON Schema、证据源验证方式、旧生产者排斥和迁移兼容验证，不假定有现成 receipt API。
 
+### 受控维护边界的验证结果
+
+原生 `codex-cli 0.169.0` 的隔离实验扩展验证了 thread 文件锁对 `thread/resume`、`thread/archive` 和 `thread/unarchive` 的排斥；持锁期间目标 rollout 的路径和摘要保持不变。这个排斥范围仍不足以作为完整维护回执：同一目标在持锁期间可通过 `thread/queue/add` 接收持久消息，关闭并重启私有 app-server 后，`thread/queue/list` 仍可读取该消息。未启动该消息对应的 turn，未使用正式 thread 或正式 Host 写入。
+
+| 维护假设 | 隔离验证结果 | 对静止证明的影响 |
+| - | - | - |
+| thread writer 文件锁能排斥 resume、archive 和 unarchive | 三种原生请求均拒绝，rollout 路径及摘要不变 | 可作为这些临界区的排斥机制，仍须独立覆盖接收队列 |
+| thread writer 文件锁能禁止新消息入队 | `thread/queue/add` 成功，队列新增一项 | 持锁或一次空队列查询不能证明生产者已禁入 |
+| 私有 app-server 退出即可排空队列 | 重启后仍能读取先前入队项 | 进程退出不能替代持久队列终止证明 |
+| `ViewerWorkerPool.stop()` 返回即所有 Worker 已结束 | 延迟 Worker 未完成时，stop 在约 500ms 后返回 | 该接口的有界返回不能充当维护排空回执 |
+| Dashboard stop 返回即归档调用已结束 | 注入等待中的 provider 后调用 stop，释放 provider 仍触发后续账本提交 | 关闭监听和 observer 不能替代原生调用 join |
+
+Worker 和 Dashboard 实验使用仓库实际生命周期入口与任务自有 fixture；provider 为可控等待桩，结论限定为 stop/join 语义，不冒充真实 provider 终止证据。原生锁与队列实验使用独立 CODEX_HOME、私有 app-server 和 disposable thread；仅在这些自有资源执行创建、归档和入队，未发送业务任务。
+
+正式 run 四个相关 thread 的受限只读 `thread/queue/list` 观察均为空，ledger revision 和摘要保持不变；该观察仅说明查询时没有可见队列项，不能覆盖并发入队或证明全部生产者被排斥。现有公开原生请求面尚未提供经验证的、同时覆盖新请求禁入、既有调用终止及持久队列的维护接口。在这些能力成立前，历史证据路线与维护边界路线均不足以满足 VER-QUIESCENCE-010，不能发布成功审计结论或放行当前 run 升级。
+
 ### 实现边界与验证对应
 
 预期边界为 orchestration lifecycle/upgrade、service CLI、现有 Codex 只读证据读取、upgrade 审计 schema 和隔离回归；CLI_CONTRACT 及 Skill 引用合同在实现时同步，不预先声明候选命令已可用。初始化恢复发送语义和 UI 不变。SPEC 的 VER-QUIESCENCE-001 至 VER-QUIESCENCE-009 是运行时回归要求，010 是当前私有状态的证据可行性和演练，011 是独立授权后的正式成功证明；目前均不能以既有测试结果标记通过。
