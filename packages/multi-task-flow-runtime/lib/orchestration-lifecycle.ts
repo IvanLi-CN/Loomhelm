@@ -10,6 +10,7 @@ import { ContractError, requireCondition } from "./errors";
 import { migrationDigest } from "./migration-audit";
 import { executeInvocation, inspectInvocation } from "./invocation-journal";
 import { callerIdentity, requireRunBinding } from "./orchestration-identity";
+import { validateLedger } from "./schema";
 import type { LedgerStore } from "./store";
 
 /** A waiter on a retired directory must retry instead of running under its obsolete lock. */
@@ -83,7 +84,7 @@ export async function withRunCommand<T>(
 ): Promise<T> {
   if (executing.getStore() === store.runPath) return action();
   return withRunLifecycle(store, async () => {
-    const ledger = store.read();
+    const ledger = validateLedger(store.read());
     const identity = callerIdentity();
     requireRunBinding(store.rootPath, ledger.orchestration_id, ledger, identity);
     const path = join(store.runPath, "runtime", "call.json");
