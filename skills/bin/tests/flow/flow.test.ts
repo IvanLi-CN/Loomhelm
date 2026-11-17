@@ -677,6 +677,25 @@ describe("acceptance and review state", () => {
       "d".repeat(40),
     );
 
+    const staleReceiptPointer = structuredClone(normalized) as Record<
+      string,
+      unknown
+    >;
+    const staleReview = staleReceiptPointer.review as Record<string, unknown>;
+    const staleWave = (
+      staleReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    const staleLanes = staleWave.lanes as Record<string, Record<string, unknown>>;
+    staleLanes.contract.receipt_id = staleLanes["state-concurrency"].receipt_id;
+    expect(() =>
+      openReviewWaveState(staleReceiptPointer, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "f".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+
     const freshHead = "b".repeat(40);
     const fresh = openReviewWaveState(normalized, {
       stage: "initial",

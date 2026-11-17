@@ -181,21 +181,26 @@ function isLegacyReviewWave(
     : [];
   const migratedSchemaSix =
     ledger.legacy_compatibility === true && ledger.legacy_schema_version === 6;
-  const lanes = Object.values(wave.lanes);
+  const lanes = Object.entries(wave.lanes);
   if (!lanes.length) return false;
-  const hasSchemaSixReceipt = lanes.some((rawLane) => {
+  const hasSchemaSixReceipt = lanes.some(([laneName, rawLane]) => {
     if (!isRecord(rawLane) || typeof rawLane.receipt_id !== "string")
       return false;
     const receipt = receipts.find(
       (candidate) =>
         isRecord(candidate) && candidate.receipt_id === rawLane.receipt_id,
     );
-    return isRecord(receipt) && receipt.review_receipt_schema === 6;
+    return (
+      isRecord(receipt) &&
+      receipt.review_receipt_schema === 6 &&
+      receiptBindsToWave(receipt, wave, laneName)
+    );
   });
   const legacyLaneShape = lanes.every(
-    (rawLane) => isRecord(rawLane) && !isRecord(rawLane.requested_profile),
+    ([, rawLane]) =>
+      isRecord(rawLane) && !isRecord(rawLane.requested_profile),
   );
-  for (const rawLane of lanes) {
+  for (const [laneName, rawLane] of lanes) {
     if (
       !isRecord(rawLane) ||
       typeof rawLane.model !== "string" ||
@@ -211,7 +216,8 @@ function isLegacyReviewWave(
         (candidate) =>
           isRecord(candidate) && candidate.receipt_id === rawLane.receipt_id,
       );
-      if (!isRecord(receipt)) return false;
+      if (!isRecord(receipt) || !receiptBindsToWave(receipt, wave, laneName))
+        return false;
       if (![6, 7].includes(Number(receipt.review_receipt_schema))) return false;
     }
     if (isRecord(rawLane.requested_profile)) continue;
@@ -219,4 +225,17 @@ function isLegacyReviewWave(
     return false;
   }
   return hasSchemaSixReceipt || (migratedSchemaSix && legacyLaneShape);
+}
+
+function receiptBindsToWave(
+  receipt: Record<string, unknown>,
+  wave: Record<string, unknown>,
+  laneName: string,
+): boolean {
+  return (
+    receipt.wave_id === wave.wave_id &&
+    receipt.lane === laneName &&
+    receipt.head_sha === wave.head_sha &&
+    receipt.base_sha === wave.base_sha
+  );
 }
