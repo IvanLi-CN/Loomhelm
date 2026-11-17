@@ -6,6 +6,27 @@
 
 [SPEC.md](./SPEC.md) 记录长期需求、验收和兼容合同；[AGENT_INTERACTIONS.md](./AGENT_INTERACTIONS.md) 记录角色职责、交互顺序和时序图；[DATA_MODEL.md](./DATA_MODEL.md) 记录 canonical schema、投影和外部事实；[STATE_MACHINES.md](./STATE_MACHINES.md) 记录各对象的正常状态机、异常恢复状态机和范围修订；[CLI_CONTRACT.md](./CLI_CONTRACT.md) 记录命令接口；本文件记录实现入口、验证映射与已知偏差。
 
+## 编排输出与调用停止对账
+
+REQ-INVOCATION-001 至 REQ-INVOCATION-006 的候选实现已接入客户端、原生适配器和显式升级路径；独立安装产物已实测大输出、真实 READY 握手、取消、IPC 断连和已发布旧 CLI/Worker 拒绝路径；最终 Candidate 必须重新绑定实测证据与 PR 质量门禁，不能据此视作 merge-ready。详细设计见 [OUTPUT_AND_INVOCATION.md](OUTPUT_AND_INVOCATION.md)。
+
+| 需求 | 涉及源码 | 当前覆盖与缺口 |
+| - | - | - |
+| REQ-INVOCATION-001 | `clients/typescript/src/runtime/process.ts`、`clients/typescript/src/cli/flow.ts`、`clients/typescript/src/toolkit.ts` | `flow-process.ts` 使用 runtime-core 0.2.0 的异步输出接收器、零累计捕获和独立 IPC；80 MiB 慢消费者、显式预算、EPIPE 与通用 1 MiB 默认值有回归覆盖 |
+| REQ-INVOCATION-002 | `packages/multi-task-flow-runtime/scripts/orchestrate.ts`、`lib/orchestration-lifecycle.ts`、`lib/store.ts` | show/view（含 task-context）在已有账本锁内读取 ledger、binding 与 invocation 一致快照，输出前释放锁；持有 lifecycle 锁时的零写入与 actor/build 拒绝已覆盖 |
+| REQ-INVOCATION-003、REQ-INVOCATION-004 | `packages/multi-task-flow-runtime/lib/orchestration-lifecycle.ts` 及原生调用适配器 | `invocation-journal.ts` 统一记录资源意图与终态、执行结束和停止事实；初始化、恢复 writer 与 RPC 适配器登记资源；恢复 writer 仅在既有 history 校验确认匹配终态 turn 后登记凭证，observe/RPC 失败不构成终态；错误 turn、断线、协作停止和强杀有回归覆盖 |
+| REQ-INVOCATION-005、REQ-INVOCATION-006 | 编排 CLI/help/schema、生命周期与升级边界 | `invocation-inspect` / `invocation-reconcile` 接入 help/schema；contract 3/4 的显式停止对账及独立机械迁移至 contract 5/schema-3 绑定已覆盖；主线 0.4.0 的 contract-5/schema-2 来源可按机械迁移保留未知调用，升级后新调用未停止仍拒绝重入，已发布 0.3.0 CLI/Worker 在隔离 contract 5 运行上拒绝访问且持久文件保持不变；真实原生取消与 IPC 断连缺少终态凭证时保持 running/unknown 并阻断副作用；前向升级先严格解析绑定，未知格式在原子发布前拒绝 |
+
+机械迁移沿用 ADR 0041 与 SPEC 第 16 节的共享评估器，不把旧 receipt 改为 stopped；只有冻结审计中精确匹配的旧调用摘要可由目标身份建立新 journal。包资源登记同时包含迁移审计、评估器及其回归，独立安装消费者不得依赖仓库源码。schema-3 绑定拒绝旧维护 writer；新调用仍依赖不可变资源终态凭证。当前候选必须重做受影响的包验收、审查与 CI，历史 SHA 的通过结果不可替代。
+
+候选包版本已由主人指定为 `0.5.0`，保留 `compat-v1`；这里只准备版本元数据，实际合并和手动 CI 发布仍由主人控制。
+
+`@loomhelm/multi-task-flow@0.3.0` 的通用执行器默认合计捕获 stdout/stderr 上限为 1 MiB；超限后先 SIGTERM，250 ms 后 SIGKILL。编排子进程在 action 前写 running，在 finally 写 stopped；终止可能阻止 finally 完成。当前 LedgerStore 读取预算为 256 MiB，传输先于支持的数据容量失败。
+
+隔离运行副本已复现 summary 成功且 stopped、full 报输出超限且残留 running、随后 summary 被 RUN_QUIESCENCE_UNPROVEN 阻断。完整结果为 5,828,273 字节；另一份干净副本提高至 64 MiB 后三次调用均成功且 stopped。这证明触发链路，不证明既有残留调用已停止，也不构成最终流式方案验收。
+
+正式 octo-rill 调用现有 marker 仅包含 invocation_id、运行身份和 running，缺少 command、input digest 与进程实例证据。隔离复现不能代替其停止证明；候选源码不会恢复正式运行、升级全局安装或发布 Flow 包。完整验收仍需按 VER-INVOCATION-001 至 VER-INVOCATION-006 补齐，原生验证只使用 disposable run 与会话。
+
 ## Canonical persistence
 
 `packages/multi-task-flow-runtime/lib/atomic-orchestration.ts` 定义 AtomicNode、AtomicEdge、TaskPrBinding、DeliveryUnitExternalFacts、里程碑条件和执行策略的判别联合；`packages/multi-task-flow-runtime/lib/schema.ts` 将它们接入 ledger/plan 校验。`atomic_nodes` 与 `atomic_edges` 是 contract 3 的持久化编排事实。Task 与 DeliveryUnit 只保留兼容外壳、身份、执行策略和外部事实，不保存可独立编辑的 `atom_ids`、`task_ids`、`milestone_ids` 或业务状态。

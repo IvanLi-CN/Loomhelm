@@ -17,6 +17,7 @@ import { isWorkItem } from "./codex-cli-initialization";
 import { connectSocket, framePayload, parseRpc, record, websocketFrame } from "./codex-rpc";
 import { ContractError } from "./errors";
 import type { RecoveryAttempt } from "./initialization-recovery-attempt";
+import { invocationSignal, registerInvocationResource } from "./invocation-journal";
 import {
   type RecoveryPermissions,
   readPermissions,
@@ -39,7 +40,11 @@ export function requireRecoveryCapability(): void {
 /** A private, task-owned server holds the native writer lock throughout inspection, start and ledger resolution. */
 export async function withRecoveryWriter<T>(
   attempt: RecoveryAttempt,
-  action: (rpc: RecoveryRpc, restore: () => Promise<void>) => Promise<T>,
+  action: (
+    rpc: RecoveryRpc,
+    restore: () => Promise<void>,
+    confirmTerminalTurn: (turnId: string) => void,
+  ) => Promise<T>,
   permissions: { restrict: boolean; capture: (original: RecoveryPermissions) => void },
 ): Promise<T> {
   if (!attempt.permissions)
@@ -49,6 +54,10 @@ export async function withRecoveryWriter<T>(
       5,
     );
   requireRecoveryCapability();
+  const resource = registerInvocationResource("codex-recovery-writer", {
+    attempt_id: attempt.attempt_id,
+    thread_id: attempt.thread_id,
+  });
   const directory = mkdtempSync(join(realpathSync(tmpdir()), "mfr-"));
   const path = join(directory, "s");
   const directoryIdentity = lstatSync(directory);
@@ -57,6 +66,7 @@ export async function withRecoveryWriter<T>(
   let sequence = 0;
   let pending = Buffer.alloc(0);
   let failure: Error | undefined;
+  let terminalTurnId: string | undefined;
   let original = attempt.permissions.original;
   let restoreNeeded = false;
   let settingsSequence = 0;
@@ -77,6 +87,9 @@ export async function withRecoveryWriter<T>(
     waiting.clear();
     abort.abort();
   };
+  const invocationAbort = () => fail(new Error("Invocation stop requested"));
+  const invocation = invocationSignal();
+  invocation?.addEventListener("abort", invocationAbort, { once: true });
   const configured = Number(process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS ?? 300_000);
   const budget =
     Number.isFinite(configured) && configured >= 1_000 && configured <= 600_000
@@ -255,7 +268,14 @@ export async function withRecoveryWriter<T>(
       if (failure) throw failure;
       return result;
     };
-    const result = await Promise.race([action(guardedRequest, restore), failed]);
+    const result = await Promise.race([
+      action(guardedRequest, restore, (turnId) => {
+        if (!turnId || (attempt.recovery_turn_id && turnId !== attempt.recovery_turn_id))
+          throw new Error("Recovery terminal turn identity changed");
+        terminalTurnId = turnId;
+      }),
+      failed,
+    ]);
     if (failure) throw failure;
     return result;
   } finally {
@@ -268,6 +288,17 @@ export async function withRecoveryWriter<T>(
       abort.abort();
       socket?.destroy();
       await joined;
+      invocation?.removeEventListener("abort", invocationAbort);
+      if (!restoreNeeded && !failure && terminalTurnId)
+        resource.end({
+          attempt_id: attempt.attempt_id,
+          thread_id: attempt.thread_id,
+          turn_id: terminalTurnId,
+          turn_status: "completed",
+          transport_closed: true,
+          permissions_restored: true,
+        });
+      else resource.unknown();
       // Remove only this invocation's exact socket and empty private directory.
       try {
         const current = lstatSync(directory);

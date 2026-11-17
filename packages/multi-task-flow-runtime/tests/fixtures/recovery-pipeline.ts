@@ -120,69 +120,73 @@ try {
       writer: (attempt, action, options) =>
         withRecoveryWriter(
           attempt,
-          (native, restore) =>
-            action(native, async () => {
-              // A snapshot digest can be forged from readable ledger state. Even valid
-              // evidence must not bypass the native writer's verified restoration.
-              const before = readFileSync(store.ledgerPath, "utf8");
-              const current = store.read() as typeof ledger;
-              const registered = current.operations[0].request.initialization_recovery!;
-              assert.equal(readState().policy.type, "readOnly");
-              const bypass = spawnSync(
-                process.execPath,
-                [
-                  join(import.meta.dir, "../../scripts/orchestrate.ts"),
-                  "dispatch-resolve",
-                  "--input",
-                  "-",
-                ],
-                {
-                  env: { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: directory },
-                  input: JSON.stringify({
-                    ...request(current, "bypass-before-restore", {}),
-                    payload: {
-                      operation_id: "op",
-                      outcome: "succeeded",
-                      thread_id: "fixture-thread",
-                      native_evidence: {
-                        source: "multi-task-flow-reconcile",
-                        native_tool_name: "codex exec",
+          (native, restore, confirmTerminalTurn) =>
+            action(
+              native,
+              async () => {
+                // A snapshot digest can be forged from readable ledger state. Even valid
+                // evidence must not bypass the native writer's verified restoration.
+                const before = readFileSync(store.ledgerPath, "utf8");
+                const current = store.read() as typeof ledger;
+                const registered = current.operations[0].request.initialization_recovery!;
+                assert.equal(readState().policy.type, "readOnly");
+                const bypass = spawnSync(
+                  process.execPath,
+                  [
+                    join(import.meta.dir, "../../scripts/orchestrate.ts"),
+                    "dispatch-resolve",
+                    "--input",
+                    "-",
+                  ],
+                  {
+                    env: { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: directory },
+                    input: JSON.stringify({
+                      ...request(current, "bypass-before-restore", {}),
+                      payload: {
                         operation_id: "op",
-                        native_request_id: "native",
-                        thread_id: registered.thread_id,
-                        workspace_path: registered.workspace_path,
-                        initial_head: registered.initial_head,
-                        model: registered.execution_profile.model,
-                        thinking: registered.execution_profile.thinking,
-                        turn_completed: true,
-                        initialization_turn_id: registered.original_turn_id,
-                        evidence_ref: `codex-initialization-recovery:${registered.attempt_id}`,
-                        created_at: new Date().toISOString(),
-                        reconciliation_mode: "app-server",
-                        diagnostics: [],
-                        initialization_recovery: {
-                          attempt_id: registered.attempt_id,
-                          original_turn_id: registered.original_turn_id,
-                          recovery_turn_id: registered.recovery_turn_id,
-                          prompt_digest: registered.prompt_digest,
-                          transport: "codex-app-server-private-unix",
-                          native_version: "0.169.0",
-                          restored_permissions_digest: recoveryDigest(
-                            registered.permissions!.original,
-                          ),
+                        outcome: "succeeded",
+                        thread_id: "fixture-thread",
+                        native_evidence: {
+                          source: "multi-task-flow-reconcile",
+                          native_tool_name: "codex exec",
+                          operation_id: "op",
+                          native_request_id: "native",
+                          thread_id: registered.thread_id,
+                          workspace_path: registered.workspace_path,
+                          initial_head: registered.initial_head,
+                          model: registered.execution_profile.model,
+                          thinking: registered.execution_profile.thinking,
+                          turn_completed: true,
+                          initialization_turn_id: registered.original_turn_id,
+                          evidence_ref: `codex-initialization-recovery:${registered.attempt_id}`,
+                          created_at: new Date().toISOString(),
+                          reconciliation_mode: "app-server",
+                          diagnostics: [],
+                          initialization_recovery: {
+                            attempt_id: registered.attempt_id,
+                            original_turn_id: registered.original_turn_id,
+                            recovery_turn_id: registered.recovery_turn_id,
+                            prompt_digest: registered.prompt_digest,
+                            transport: "codex-app-server-private-unix",
+                            native_version: "0.169.0",
+                            restored_permissions_digest: recoveryDigest(
+                              registered.permissions!.original,
+                            ),
+                          },
                         },
                       },
-                    },
-                  }),
-                  encoding: "utf8",
-                },
-              );
-              assert.equal(bypass.status, 5, bypass.stdout + bypass.stderr);
-              assert.equal(JSON.parse(bypass.stdout).code, "CLI_ONLY_DISPATCH");
-              assert.equal(readFileSync(store.ledgerPath, "utf8"), before);
-              assert.equal(readState().policy.type, "readOnly");
-              await restore();
-            }),
+                    }),
+                    encoding: "utf8",
+                  },
+                );
+                assert.equal(bypass.status, 5, bypass.stdout + bypass.stderr);
+                assert.equal(JSON.parse(bypass.stdout).code, "CLI_ONLY_DISPATCH");
+                assert.equal(readFileSync(store.ledgerPath, "utf8"), before);
+                assert.equal(readState().policy.type, "readOnly");
+                await restore();
+              },
+              confirmTerminalTurn,
+            ),
           options,
         ),
       verify: () => head,

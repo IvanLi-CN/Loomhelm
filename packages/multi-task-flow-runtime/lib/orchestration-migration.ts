@@ -329,7 +329,10 @@ export function assessMigration(snapshot: MigrationSnapshot, caller: RunIdentity
     );
   if (source && !pending && source.ledger_contract !== raw.contract_version)
     block("identity_conflict", "Source identity and ledger contract disagree");
-  if (raw.contract_version >= 4 && binding?.schema_version !== 2)
+  if (
+    (raw.contract_version === 4 && binding?.schema_version !== 2) ||
+    (raw.contract_version === 5 && ![2, 3].includes(binding?.schema_version))
+  )
     block("writer_unfenced", "Identity-bound ledgers require the fenced binding schema");
   if (
     source &&

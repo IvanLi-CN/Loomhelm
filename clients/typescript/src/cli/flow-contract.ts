@@ -1052,6 +1052,44 @@ const specialCommands: Record<string, JsonSchema> = {
 };
 
 Object.assign(entries, specialCommands);
+const invocationStatus = {
+  oneOf: [{ type: "null" }, {
+    type: "object", required: ["invocation_id", "state", "quiescent", "missing_evidence"],
+    properties: {
+      invocation_id: { type: "string", format: "uuid" }, state: { enum: ["running", "stopped"] },
+      quiescent: booleanValue, missing_evidence: stringArrayValue,
+      marker_digest: { type: "string", pattern: "^[a-f0-9]{64}$" }, evidence_refs: stringArrayValue,
+    },
+  }],
+};
+for (const name of ["show", "view"]) {
+  const success = successResponse(objectValue);
+  entries[name] = { ...entries[name], response: { success: {
+    ...success, required: ["ok", "code", "revision", "result", "invocation"],
+    properties: { ...(success.properties as JsonSchema), invocation: invocationStatus },
+  }, error: errorResponse } };
+}
+const inspectionSuccess = {
+  type: "object", required: ["ok", "code", "revision", "source", "executor", "invocation"],
+  properties: { ok: { const: true }, code: { const: "OK" }, revision: { type: "integer" },
+    source: objectValue, executor: objectValue, invocation: invocationStatus },
+};
+entries["invocation-inspect"] = {
+  access: "read", availability: "cli-only",
+  request: { type: "object", additionalProperties: false, required: ["run_id", "actor"], properties: { run_id: id, actor } },
+  response: { success: inspectionSuccess, error: errorResponse },
+};
+entries["invocation-reconcile"] = {
+  access: "write", availability: "cli-only",
+  request: mutationRequest(objectSchema(["invocation_id", "marker_digest", "evidence_refs"], [], {
+    invocation_id: { type: "string", format: "uuid" },
+    marker_digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+    evidence_refs: { type: "array", maxItems: 256, items: { type: "string", pattern: "^[a-f0-9]{64}$" } },
+  })),
+  response: { success: { type: "object", required: ["ok", "code", "revision", "invocation_id"],
+    properties: { ok: { const: true }, code: { const: "APPLIED" }, revision: { type: "integer" }, invocation_id: { type: "string", format: "uuid" } } }, error: errorResponse },
+};
+
 
 add("initialization-recovery-claim", ["operation_id", "attempt"], ["operation_id", "attempt_id"], { payloadOverrides: { attempt: objectValue } });
 add("initialization-recovery-observe", ["operation_id", "attempt_id", "turn_id"], ["operation_id", "turn_id"]);
@@ -1084,6 +1122,10 @@ export const FLOW_CONTRACT = Object.freeze({
     "UPGRADE_AUDIT_INVALID",
     "MIGRATION_AUDIT_REQUIRED",
     "ARCHIVE_IDENTITY_UNAVAILABLE",
+    "INVOCATION_EVIDENCE_REQUIRED",
+    "INVOCATION_STATE_CONFLICT",
+    "INVOCATION_CLOSED",
+    "INVOCATION_RESOURCE_CONFLICT",
     "UPGRADE_INCOMPLETE",
 		"ACTION_NOT_APPROVED",
 		"ACTION_NOT_PLANNED",

@@ -6028,7 +6028,10 @@
               },
               "writer_barrier": {
                 "type": "string",
-                "const": "ledger-contract-5-and-binding-schema-2"
+                "enum": [
+                  "ledger-contract-5-and-binding-schema-2",
+                  "ledger-contract-5-and-binding-schema-3"
+                ]
               },
               "native_quiescence": {
                 "type": "string",

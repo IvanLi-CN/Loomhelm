@@ -6,6 +6,7 @@ import { delimiter, isAbsolute, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { runProcess, type ProcessOptions, type ProcessResult } from './runtime/process.ts';
+import { runFlowProcess } from './runtime/flow-process.ts';
 import { identityDigest, validatePackageIdentity, type CanonicalDigestAlgorithm, type PackageIdentity } from './release.ts';
 
 export interface SkillCapabilityReport { name: string; ready: boolean; readinessScope: 'all-declared-scenarios'; resourcesValid: boolean; dependencies: { skill: string; kind: 'skill' | 'command' | 'host'; strength: string; condition: string; available: boolean; code: string }[]; platform: string; arch: string; nativeSupported: boolean; source: string }
@@ -234,6 +235,7 @@ export class SkillsRuntime {
       frontend_contract: info.contracts.frontend, viewer_contract: info.contracts.viewer,
     }) };
     if (options.env?.LOOMHELM_TOOLKIT_ROOT === undefined) env.LOOMHELM_TOOLKIT_ROOT = root;
-    return runProcess(executable, [...(script.endsWith('.ts') ? ['--no-install'] : executable === '/bin/bash' ? ['-p'] : []), target, ...args], { ...options, cwd: options.cwd ?? root, env });
+    const runner = options.outputSink ? runFlowProcess : runProcess;
+    return runner(executable, [...(script.endsWith('.ts') ? ['--no-install'] : executable === '/bin/bash' ? ['-p'] : []), target, ...args], { ...options, cwd: options.cwd ?? root, env });
   }
 }

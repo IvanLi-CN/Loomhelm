@@ -6,12 +6,12 @@ import { StringDecoder } from "node:string_decoder";
 import { runProcess } from "@loomhelm/runtime-core/modules/core/process";
 import { connectSocket, record, rpc, socketPath } from "../lib/codex-rpc";
 import {
-  AgentRole,
+  type AgentRole,
   boundedMessage,
-  CliCreationInput,
-  CliRun,
+  type CliCreationInput,
+  type CliRun,
   CodexCreationError,
-  CodexDiagnostic,
+  type CodexDiagnostic,
   diagnostic,
   diagnosticFromError,
   diagnosticsFromError,
@@ -20,9 +20,10 @@ import {
   isWorkItem,
   parseInitializationEvent,
   pushDiagnostic,
-  RepositoryIdentity,
+  type RepositoryIdentity,
   verifyInitializationTurn,
 } from "./codex-cli-initialization";
+import { invocationSignal, registerInvocationResource } from "./invocation-journal";
 
 export * from "./codex-cli-initialization";
 
@@ -39,6 +40,12 @@ export async function runInitialization(input: CliCreationInput): Promise<CliRun
   const decoder = new StringDecoder("utf8");
   const stderrDecoder = new StringDecoder("utf8");
   const controller = new AbortController();
+  const resource = registerInvocationResource("codex-initialization", {
+    native_request_id: input.native_request_id,
+  });
+  const stop = () => controller.abort();
+  const parentSignal = invocationSignal();
+  parentSignal?.addEventListener("abort", stop, { once: true });
   let pending = "";
   let stderrPending = "";
   let stderrDiagnosticCount = 0;
@@ -237,6 +244,14 @@ export async function runInitialization(input: CliCreationInput): Promise<CliRun
     for (const item of failure.diagnostics) pushDiagnostic(result.diagnostics, item);
     result.error ??= diagnosticText(failure);
   }
+  parentSignal?.removeEventListener("abort", stop);
+  if (result.turn_completed && result.exit_code !== null)
+    resource.end({
+      thread_id: result.thread_id,
+      exit_code: result.exit_code,
+      turn_completed: true,
+    });
+  else resource.unknown();
   return result;
 }
 

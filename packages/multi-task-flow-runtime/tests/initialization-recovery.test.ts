@@ -103,6 +103,7 @@ function setup() {
           throw new Error(`unexpected ${method}`);
         },
         async () => {},
+        () => {},
       );
     },
   };
@@ -349,13 +350,13 @@ test("native completion lost before turn observation is reconciled by exact regi
   s.dependencies.writer = async (attempt, action, permissions) =>
     writer(
       attempt,
-      async (native, restore) => {
+      async (native, restore, confirmTerminalTurn) => {
         const wrapped = async (method: string, params: Record<string, unknown>) => {
           const result = await native(method, params);
           if (method === "turn/start") throw new Error("lost native start response");
           return result;
         };
-        return action(wrapped, restore);
+        return action(wrapped, restore, confirmTerminalTurn);
       },
       permissions,
     );
@@ -451,10 +452,14 @@ test("original permission snapshot is immutable and restoration failure blocks r
   s.dependencies.writer = async (attempt, action, permissions) =>
     writer(
       attempt,
-      (native) =>
-        action(native, async () => {
-          throw new Error("restore failed");
-        }),
+      (native, _restore, confirmTerminalTurn) =>
+        action(
+          native,
+          async () => {
+            throw new Error("restore failed");
+          },
+          confirmTerminalTurn,
+        ),
       permissions,
     );
   await expect(

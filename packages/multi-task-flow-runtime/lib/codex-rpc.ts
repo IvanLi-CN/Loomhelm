@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { digest, invocationSignal, registerInvocationResource } from "./invocation-journal";
 
 type JsonRecord = Record<string, unknown>;
 export function record(value: unknown): JsonRecord | null {
@@ -85,52 +86,65 @@ export async function connectSocket(
   path: string,
   connectionTimeoutMs = timeoutMs(),
 ): Promise<{ socket: Socket; buffer: Buffer }> {
+  const transport = registerInvocationResource("codex-transport", { path_digest: digest(path) });
   const socket = createConnection(path);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("Codex app-server socket connection timed out")),
-      connectionTimeoutMs,
-    );
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      resolve();
+  const signal = invocationSignal();
+  const stop = () => socket.destroy();
+  signal?.addEventListener("abort", stop, { once: true });
+  socket.once("close", () => {
+    signal?.removeEventListener("abort", stop);
+    transport.end({ local_transport_closed: true });
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("Codex app-server socket connection timed out")),
+        connectionTimeoutMs,
+      );
+      socket.once("connect", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.once("error", reject);
     });
-    socket.once("error", reject);
-  });
-  const key = randomBytes(16).toString("base64");
-  socket.write(
-    `GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`,
-  );
-  let header = Buffer.alloc(0);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("Codex app-server WebSocket handshake timed out")),
-      connectionTimeoutMs,
+    const key = randomBytes(16).toString("base64");
+    socket.write(
+      `GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`,
     );
-    const onData = (chunk: Buffer) => {
-      header = Buffer.concat([header, chunk]);
-      const boundary = header.indexOf("\r\n\r\n");
-      if (boundary < 0) return;
-      clearTimeout(timer);
-      socket.off("data", onData);
-      const response = header.subarray(0, boundary + 4).toString("utf8");
-      const expected = createHash("sha1")
-        .update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
-        .digest("base64");
-      if (
-        !response.startsWith("HTTP/1.1 101") ||
-        !response.toLowerCase().includes(`sec-websocket-accept: ${expected.toLowerCase()}`)
-      ) {
-        reject(new Error("Codex app-server WebSocket handshake was rejected"));
-        return;
-      }
-      header = header.subarray(boundary + 4);
-      resolve();
-    };
-    socket.on("data", onData);
-    socket.once("error", reject);
-  });
-  return { socket, buffer: header };
+    let header = Buffer.alloc(0);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("Codex app-server WebSocket handshake timed out")),
+        connectionTimeoutMs,
+      );
+      const onData = (chunk: Buffer) => {
+        header = Buffer.concat([header, chunk]);
+        const boundary = header.indexOf("\r\n\r\n");
+        if (boundary < 0) return;
+        clearTimeout(timer);
+        socket.off("data", onData);
+        const response = header.subarray(0, boundary + 4).toString("utf8");
+        const expected = createHash("sha1")
+          .update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+          .digest("base64");
+        if (
+          !response.startsWith("HTTP/1.1 101") ||
+          !response.toLowerCase().includes(`sec-websocket-accept: ${expected.toLowerCase()}`)
+        ) {
+          reject(new Error("Codex app-server WebSocket handshake was rejected"));
+          return;
+        }
+        header = header.subarray(boundary + 4);
+        resolve();
+      };
+      socket.on("data", onData);
+      socket.once("error", reject);
+    });
+    return { socket, buffer: header };
+  } catch (error) {
+    socket.destroy();
+    throw error;
+  }
 }
 
 export async function rpc(
@@ -141,35 +155,64 @@ export async function rpc(
   params: JsonRecord,
   options: { timeoutMs?: number } = {},
 ): Promise<JsonRecord> {
-  socket.write(websocketFrame(JSON.stringify({ jsonrpc: "2.0", id, method, params })));
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      socket.off("data", onData);
-      reject(new Error(`Codex app-server timed out waiting for ${method}`));
-    }, options.timeoutMs ?? timeoutMs());
-    const onData = (chunk: Buffer) => {
-      buffer.value = Buffer.concat([buffer.value, chunk]);
-      let matched: JsonRecord | undefined;
-      while (true) {
-        const frame = framePayload(buffer.value);
-        if (!frame) break;
-        buffer.value = buffer.value.subarray(frame.consumed);
-        if (frame.opcode === 8) {
-          clearTimeout(timer);
-          socket.off("data", onData);
-          reject(new Error("Codex app-server closed the WebSocket"));
-          return;
-        }
-        const parsed = parseRpc(frame.payload);
-        if (parsed?.id === id) matched = parsed;
-      }
-      if (!matched) return;
-      clearTimeout(timer);
-      socket.off("data", onData);
-      resolve(matched);
-    };
-    socket.on("data", onData);
+  const resource = registerInvocationResource("codex-request", {
+    id,
+    method,
+    params_digest: digest(params),
+    thread_id: params.threadId ?? null,
+    attempt_id: params.clientUserMessageId ?? null,
   });
+  try {
+    return await new Promise<JsonRecord>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        socket.off("data", onData);
+        socket.off("close", onClose);
+        socket.off("error", onError);
+      };
+      const fail = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const onClose = () => fail(new Error("Codex app-server closed the WebSocket"));
+      const onError = (error: Error) => fail(error);
+      const timer = setTimeout(
+        () => fail(new Error(`Codex app-server timed out waiting for ${method}`)),
+        options.timeoutMs ?? timeoutMs(),
+      );
+      const onData = (chunk: Buffer) => {
+        try {
+          buffer.value = Buffer.concat([buffer.value, chunk]);
+          let matched: JsonRecord | undefined;
+          while (true) {
+            const frame = framePayload(buffer.value);
+            if (!frame) break;
+            buffer.value = buffer.value.subarray(frame.consumed);
+            if (frame.opcode === 8) {
+              onClose();
+              return;
+            }
+            const parsed = parseRpc(frame.payload);
+            if (parsed?.id === id) matched = parsed;
+          }
+          if (!matched) return;
+          cleanup();
+          resource.end({ id, method, response_digest: digest(matched) });
+          resolve(matched);
+        } catch (error) {
+          fail(error instanceof Error ? error : new Error(String(error)));
+        }
+      };
+      socket.on("data", onData);
+      socket.once("close", onClose);
+      socket.once("error", onError);
+      socket.write(websocketFrame(JSON.stringify({ jsonrpc: "2.0", id, method, params })));
+      onData(Buffer.alloc(0));
+    });
+  } catch (error) {
+    resource.unknown();
+    throw error;
+  }
 }
 
 export async function startTurnAndWait(
@@ -179,69 +222,98 @@ export async function startTurnAndWait(
   threadId: string,
 ): Promise<JsonRecord> {
   const requestId = 3;
-  socket.write(
-    websocketFrame(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: requestId,
-        method: "turn/start",
-        params,
-      }),
-    ),
-  );
-  return new Promise((resolve, reject) => {
-    const deadline = setTimeout(() => {
-      socket.off("data", onData);
-      reject(new Error("Codex app-server timed out waiting for turn completion"));
-    }, timeoutMs());
-    let response: JsonRecord | undefined;
-    let completed = false;
-    const finish = () => {
-      if (!response || !completed) return;
-      clearTimeout(deadline);
-      socket.off("data", onData);
-      resolve(response);
-    };
-    const onData = (chunk: Buffer) => {
-      buffer.value = Buffer.concat([buffer.value, chunk]);
-      while (true) {
-        const frame = framePayload(buffer.value);
-        if (!frame) return;
-        buffer.value = buffer.value.subarray(frame.consumed);
-        if (frame.opcode === 8) {
-          clearTimeout(deadline);
-          socket.off("data", onData);
-          reject(new Error("Codex app-server closed the WebSocket"));
-          return;
-        }
-        const message = parseRpc(frame.payload);
-        if (!message) continue;
-        if (message.id === requestId) {
-          response = message;
-          if (message.error) {
-            clearTimeout(deadline);
-            socket.off("data", onData);
-            reject(new Error(String(record(message.error)?.message ?? "turn/start rejected")));
-            return;
+  const resource = registerInvocationResource("codex-turn", {
+    thread_id: threadId,
+    request_id: requestId,
+    params_digest: digest(params),
+    attempt_id: params.clientUserMessageId ?? null,
+  });
+  try {
+    return await new Promise<JsonRecord>((resolve, reject) => {
+      let response: JsonRecord | undefined;
+      const terminals = new Map<string, JsonRecord>();
+      const cleanup = () => {
+        clearTimeout(deadline);
+        socket.off("data", onData);
+        socket.off("close", onClose);
+        socket.off("error", onError);
+      };
+      const fail = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const onClose = () => fail(new Error("Codex app-server closed before turn completion"));
+      const onError = (error: Error) => fail(error);
+      const deadline = setTimeout(
+        () => fail(new Error("Codex app-server timed out waiting for turn completion")),
+        timeoutMs(),
+      );
+      const finish = () => {
+        const turnId = record(record(response?.result)?.turn)?.id;
+        if (typeof turnId !== "string") return;
+        const terminal = terminals.get(turnId);
+        if (!terminal || !response) return;
+        const status = record(terminal.turn)?.status;
+        if (!["completed", "failed", "interrupted"].includes(String(status))) return;
+        cleanup();
+        resource.end({
+          thread_id: threadId,
+          turn_id: turnId,
+          status,
+          response_digest: digest(response),
+          terminal_digest: digest(terminal),
+        });
+        if (status === "completed") resolve(response);
+        else reject(new Error(`turn ended with status ${status}`));
+      };
+      const onData = (chunk: Buffer) => {
+        try {
+          buffer.value = Buffer.concat([buffer.value, chunk]);
+          while (true) {
+            const frame = framePayload(buffer.value);
+            if (!frame) break;
+            buffer.value = buffer.value.subarray(frame.consumed);
+            if (frame.opcode === 8) {
+              onClose();
+              return;
+            }
+            const message = parseRpc(frame.payload);
+            if (!message) continue;
+            if (message.id === requestId) {
+              response = message;
+              if (message.error) {
+                resource.end({
+                  thread_id: threadId,
+                  rejected: true,
+                  response_digest: digest(message),
+                });
+                fail(new Error(String(record(message.error)?.message ?? "turn/start rejected")));
+                return;
+              }
+            } else if (message.method === "turn/completed") {
+              const notification = record(message.params);
+              const turnId = record(notification?.turn)?.id;
+              if (notification?.threadId === threadId && typeof turnId === "string")
+                terminals.set(turnId, notification!);
+            }
           }
           finish();
-          continue;
+        } catch (error) {
+          fail(error instanceof Error ? error : new Error(String(error)));
         }
-        if (message.method !== "turn/completed") continue;
-        const notification = record(message.params);
-        if (notification?.threadId !== threadId) continue;
-        const status = record(notification.turn)?.status;
-        if (status === "completed") completed = true;
-        else if (status === "failed" || status === "interrupted") {
-          clearTimeout(deadline);
-          socket.off("data", onData);
-          reject(new Error(`turn ended with status ${status}`));
-          return;
-        }
-        finish();
-      }
-    };
-    socket.on("data", onData);
-    onData(Buffer.alloc(0));
-  });
+      };
+      socket.on("data", onData);
+      socket.once("close", onClose);
+      socket.once("error", onError);
+      socket.write(
+        websocketFrame(
+          JSON.stringify({ jsonrpc: "2.0", id: requestId, method: "turn/start", params }),
+        ),
+      );
+      onData(Buffer.alloc(0));
+    });
+  } catch (error) {
+    resource.unknown();
+    throw error;
+  }
 }

@@ -166,3 +166,5 @@ agent lease 默认 60 分钟，browser lease 默认 5 分钟；浏览器页面�
 历史账本的合同迁移使用 `ledger-maintenance-check` 和 `ledger-maintenance-apply`，不是 `import`/`migrate` 别名。check 先产生 source/target contract、owner、revision、ledger digest、pending operations 和 operation digest；apply 必须携带原 owner thread、expected revision、expected ledger SHA-256、operation digest、maintenance identity、approval reference、reason 和 `writers_paused: true`，并保留完整 backup。迁移只允许机械补齐合同 envelope，不补造 baseline、event、owner 或业务策略。
 
 最新 reader 对受支持历史格式执行双读；旧 reader 仅在最新 reader 无法安全解释时进入隔离只读 fallback。fallback 不得取得 lease、修改 revision、写入 ledger 或伪装成当前 service；损坏或无法证明安全读取的 run 单独标记并 fail closed。恢复时先按 `run_id`、build/source/merge identity、generation、PID、ledger SHA-256 和 provider receipt 对账，再决定重试或回退。
+
+Flow 输出使用背压流式转发，默认不限制累计输出字节。显式 `maxOutputBytes` 配置仍限制 stdout/stderr 合计输出，范围为 1 字节至 64 MiB；未配置时，仅通用捕获型调用使用 1 MiB 默认值。输出中断不会自动重做业务；使用 `flow invocation-inspect --input -` 检查停止凭据，证据齐全时才使用 `flow invocation-reconcile --input -` 补写停止事实。
