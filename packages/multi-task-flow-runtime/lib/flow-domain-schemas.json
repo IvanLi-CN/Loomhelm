@@ -4901,6 +4901,18 @@
                   }
                 ]
               },
+              "merge_sha": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "pr": {
                 "anyOf": [
                   {
@@ -4967,6 +4979,7 @@
               "target_branch",
               "base_sha",
               "head_sha",
+              "merge_sha",
               "pr",
               "state",
               "evidence_ref"
@@ -12829,6 +12842,18 @@
                         }
                       ]
                     },
+                    "merge_sha": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "pr": {
                       "anyOf": [
                         {
@@ -12895,6 +12920,7 @@
                     "target_branch",
                     "base_sha",
                     "head_sha",
+                    "merge_sha",
                     "pr",
                     "state",
                     "evidence_ref"

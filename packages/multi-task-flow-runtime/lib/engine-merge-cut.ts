@@ -74,6 +74,8 @@ const {
   requireGroupDispatchGate,
   ownerOfTask,
   taskExecutionState,
+  taskMergePrerequisitesComplete,
+  completeTaskLifecycleAtom,
   taskRuntimeState,
   taskBoundary,
   hasTaskStarted,
@@ -120,9 +122,9 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
           3,
         );
         requireCondition(
-          target.atoms.every((atom) => atom.status === "completed"),
+          taskMergePrerequisitesComplete(ledger, target),
           "ATOMS_PENDING",
-          "Complete the task's atoms before merging",
+          "Complete the task's pre-merge atoms before merging",
           4,
         );
         requireCondition(
@@ -387,6 +389,31 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
           "Provider observation does not match the merge claim",
           5,
         );
+        if (ledger.contract_version === 3 && op.request.mode === "child") {
+          const receipt = evidence.receipt;
+          const childTask = find(ledger.tasks, (item) => item.id === op.request.task_id, "Task");
+          requireCondition(
+            receipt !== null &&
+              receipt !== undefined &&
+              evidence.source === ledger.repository.provider &&
+              receipt.provider === ledger.repository.provider &&
+              receipt.repository === `${ledger.repository.owner}/${ledger.repository.name}` &&
+              receipt.resource_type === "pr" &&
+              receipt.resource_id === op.request.pr.id &&
+              receipt.pr !== null &&
+              stable(receipt.pr) === stable(op.request.pr) &&
+              receipt.state === "merged" &&
+              receipt.branch === childTask.branch &&
+              receipt.target_branch === op.request.target_branch &&
+              receipt.base_sha === op.expected_sha &&
+              receipt.head_sha === op.request.expected_head_sha &&
+              receipt.merge_sha === evidence.sha &&
+              receipt.evidence_ref === evidence.evidence_ref,
+            "EVIDENCE_MISMATCH",
+            "Provider merge receipt does not match the configured repository and merge claim",
+            5,
+          );
+        }
         const owner = find(ledger.groups, (item) => item.id === op.target_id, "Group");
         if (op.request.target_branch === owner.parent_branch)
           requireCondition(
@@ -470,6 +497,14 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
           if (target.lifecycle && !legacyLedger(ledger)) target.lifecycle.pr_merged = "passed";
         }
         ledger.facts.push(evidence);
+        if (op.request.mode === "child") {
+          const target = find(ledger.tasks, (item) => item.id === op.request.task_id, "Task");
+          completeTaskLifecycleAtom(ledger, request, target, "pr_merged", {
+            fact_id: evidence.id,
+            evidence_ref: evidence.evidence_ref,
+            occurred_at: evidence.observed_at,
+          });
+        }
         op.receipt_fact_id = evidence.id;
       } else if (outcome === "failed") {
         const observation = z

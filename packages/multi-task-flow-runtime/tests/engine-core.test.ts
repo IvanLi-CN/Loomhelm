@@ -6,6 +6,7 @@ import {
   ready,
   requireGroupDispatchGate,
 } from "../lib/engine";
+import { taskMergePrerequisitesComplete } from "../lib/engine-support-gates";
 import { deriveExecutionPhase } from "../lib/revisions";
 import {
   type Ledger,
@@ -19,6 +20,7 @@ import {
   approveV2,
   at,
   base,
+  contract3ChildMergeFixture,
   fixture,
   groupActor,
   head,
@@ -499,6 +501,249 @@ test("task readiness starts at the first executable atomic work", () => {
       ),
     ),
   ).toThrow("Earlier atoms must complete first");
+});
+
+test("contract-3 child merge completes merge-pr before task closeout", () => {
+  const { ledger, actor, pr } = contract3ChildMergeFixture();
+  apply(
+    ledger,
+    "merge-claim",
+    request(
+      ledger,
+      "merge-claim",
+      {
+        operation_id: "merge-a",
+        mode: "child",
+        group_id: "g",
+        task_id: "a",
+        target_branch: "parent",
+        expected_base_sha: base,
+        expected_head_sha: head,
+        pr,
+      },
+      actor,
+    ),
+  );
+  expect(ledger.tasks[0]!.atoms.map((atom) => atom.status)).toEqual([
+    "completed",
+    "completed",
+    "planned",
+    "planned",
+  ]);
+
+  const providerEvidence = {
+    id: "merge-fact",
+    kind: "pr_merged" as const,
+    subject_id: "a",
+    status: "passed" as const,
+    source: "github",
+    observed_at: at,
+    sha: merge,
+    evidence_ref: "merge-proof",
+    receipt: {
+      ...providerPrReceipt(pr.id, "task-a", base, head),
+      target_branch: "parent",
+      state: "merged" as const,
+      evidence_ref: "merge-proof",
+      merge_sha: merge,
+    },
+  };
+  const providerObservation = {
+    pr,
+    head_sha: head,
+    base_sha: base,
+    merge_sha: merge,
+    state: "merged" as const,
+  };
+  for (const receiptMergeSha of [null, head]) {
+    const before = JSON.stringify(ledger);
+    expect(() =>
+      apply(
+        ledger,
+        "merge-resolve",
+        request(
+          ledger,
+          `wrong-receipt-${receiptMergeSha ?? "null"}`,
+          {
+            operation_id: "merge-a",
+            outcome: "succeeded",
+            provider_evidence: {
+              ...providerEvidence,
+              receipt: { ...providerEvidence.receipt, merge_sha: receiptMergeSha },
+            },
+            provider_observation: providerObservation,
+          },
+          actor,
+        ),
+      ),
+    ).toThrow("Provider merge receipt does not match");
+    expect(JSON.stringify(ledger)).toBe(before);
+  }
+  expect(() =>
+    apply(
+      ledger,
+      "merge-resolve",
+      request(
+        ledger,
+        "merge-wrong-provider",
+        {
+          operation_id: "merge-a",
+          outcome: "succeeded",
+          provider_evidence: { ...providerEvidence, source: "other-provider" },
+          provider_observation: providerObservation,
+        },
+        actor,
+      ),
+    ),
+  ).toThrow("Provider merge receipt does not match");
+  expect(() =>
+    apply(
+      ledger,
+      "merge-resolve",
+      request(
+        ledger,
+        "merge-missing-receipt",
+        {
+          operation_id: "merge-a",
+          outcome: "succeeded",
+          provider_evidence: { ...providerEvidence, receipt: null },
+          provider_observation: providerObservation,
+        },
+        actor,
+      ),
+    ),
+  ).toThrow("Provider merge receipt does not match");
+  expect(() =>
+    apply(
+      ledger,
+      "merge-resolve",
+      request(
+        ledger,
+        "merge-wrong-branch",
+        {
+          operation_id: "merge-a",
+          outcome: "succeeded",
+          provider_evidence: {
+            ...providerEvidence,
+            receipt: { ...providerEvidence.receipt, branch: "other-branch" },
+          },
+          provider_observation: providerObservation,
+        },
+        actor,
+      ),
+    ),
+  ).toThrow("Provider merge receipt does not match");
+
+  apply(
+    ledger,
+    "merge-resolve",
+    request(
+      ledger,
+      "m".repeat(128),
+      {
+        operation_id: "merge-a",
+        outcome: "succeeded",
+        provider_evidence: providerEvidence,
+        provider_observation: providerObservation,
+      },
+      actor,
+    ),
+  );
+  expect(ledger.tasks[0]!.state).toBe("integrated");
+  expect(ledger.tasks[0]!.atoms.map((atom) => atom.status)).toEqual([
+    "completed",
+    "completed",
+    "completed",
+    "planned",
+  ]);
+  expect(ledger.events).toContainEqual(
+    expect.objectContaining({
+      type: "atom_updated",
+      data: expect.objectContaining({
+        task_id: "a",
+        atom_id: "task-a-merge-pr",
+        state: "completed",
+        source: "provider-merge",
+        fact_id: "merge-fact",
+      }),
+    }),
+  );
+  expect(
+    ledger.events.find(
+      (event) => event.type === "atom_updated" && event.data.source === "provider-merge",
+    )!.id.length,
+  ).toBeLessThanOrEqual(128);
+  expect(() =>
+    apply(
+      ledger,
+      "task-update",
+      request(ledger, "close-too-early", { task_id: "a", state: "closed" }, actor),
+    ),
+  ).toThrow("Complete the task's atoms before closing");
+
+  apply(
+    ledger,
+    "atom-update",
+    request(
+      ledger,
+      "closeout-start",
+      { task_id: "a", atom_id: "task-a-closeout", state: "running" },
+      actor,
+    ),
+  );
+  apply(
+    ledger,
+    "atom-update",
+    request(
+      ledger,
+      "closeout-complete",
+      { task_id: "a", atom_id: "task-a-closeout", state: "completed" },
+      actor,
+    ),
+  );
+  apply(
+    ledger,
+    "task-update",
+    request(ledger, "close-task", { task_id: "a", state: "closed" }, actor),
+  );
+  expect(ledger.tasks[0]!.lifecycle.closed).toBe("passed");
+});
+
+test("contract-3 child merge gates follow canonical predecessors instead of atom order", () => {
+  const { ledger } = contract3ChildMergeFixture();
+  const task = ledger.tasks[0]!;
+  const [prepare, create, mergeAtom, closeout] = task.atoms;
+  create!.status = "planned";
+  task.atoms = [prepare!, mergeAtom!, create!, closeout!];
+  expect(taskMergePrerequisitesComplete(ledger, task)).toBe(false);
+});
+
+test("contract-3 merge atom cannot be completed without provider evidence", () => {
+  const { ledger, actor } = contract3ChildMergeFixture();
+  const mergeAtom = ledger.tasks[0]!.atoms.find((atom) => atom.lifecycle_stage === "pr_merged")!;
+  apply(
+    ledger,
+    "atom-update",
+    request(
+      ledger,
+      "merge-atom-running",
+      { task_id: "a", atom_id: mergeAtom.id, state: "running" },
+      actor,
+    ),
+  );
+  expect(() =>
+    apply(
+      ledger,
+      "atom-update",
+      request(
+        ledger,
+        "merge-atom-complete",
+        { task_id: "a", atom_id: mergeAtom.id, state: "completed" },
+        actor,
+      ),
+    ),
+  ).toThrow("completed by provider merge evidence");
+  expect(ledger.tasks[0]!.atoms.find((atom) => atom.id === mergeAtom.id)!.status).toBe("running");
 });
 
 test("contribution dispatch is blocked until the parent PR gate is complete", () => {
