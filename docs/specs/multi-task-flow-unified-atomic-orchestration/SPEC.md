@@ -30,6 +30,8 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 
 原子图、任务图和交付单元图 MUST 使用同一份 canonical 原子数据，聚合投影 MUST 保留回溯到原子节点、条件、证据和阻塞原因的路径；历史格式只能按兼容合同读取或经可恢复的显式迁移处理。
 
+完整任务依赖图 MUST 只展示一个全局开始和一个全局结束边界，分别来自编排的 `main_start` 与 `main_end`。交付单元的开始与收口边界 MUST NOT 投影为额外的开始或结束节点；穿过这些边界的依赖、条件和来源路径 MUST 保留，单元收口不代表编排结束。
+
 ### REQ-VIEWER-ATOMIC-001
 
 原子依赖图 MUST 展示 canonical `AtomicNode` 与 `AtomicEdge` 中所有已持久化的节点和边，即使图存在环、孤儿节点、缺失依赖或顺序冲突；viewer MUST 通过节点、边和详情警告标记异常区域，不得通过过滤异常事实制造一个看似合法的子图。
@@ -356,14 +358,6 @@ Contract 3 的 Flow dispatch operation 在 `conversation-create` 超时、进程
 
 恢复 MUST 在中性 resume 取得原生写锁后、首次权限 override 前保存完整原权限快照，禁止以全局默认值替代。固定握手使用只读权限；正式 dispatch 成功 MUST 先在同一锁内恢复原权限并通过原生 effective-settings 通知核验，成功 evidence MUST 绑定快照摘要。恢复失败保持 unknown，不准备 handoff；崩溃后重入只恢复和对账，不能重发握手或覆盖与原始及握手权限均不相同的配置。历史 attempt 缺少快照以及无法无损保存的命名 profile MUST fail closed，不能自动推断或迁移；保留历史账本读取能力。`show task-context` MUST 为已绑定 Task 返回上下文及实际 readiness，拒绝未绑定身份且不改写账本。
 
-## Visual Evidence
-
-Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，由 owner 确认。
-
-![指针选择文字，无焦点框](assets/gateway-focus-pointer.png)
-
-![键盘导航，组合容器统一焦点](assets/gateway-focus-keyboard.png)
-
 ## 15. 编排版本绑定与前向升级
 
 ### REQ-UPGRADE-001
@@ -523,6 +517,12 @@ archive/unarchive 结果不确定的状态 MUST 保留 thread、方向、operati
 - Pass condition: upgrade completed 且目标 CLI 可读，ledger/binding/identity 一致；业务图、owner、thread/worktree、unknown/attempt/claim/容量按批准差异保留，无迁移触发的重复副作用；其他 run、Gateway/daemon 与全局安装不变，才可宣布原始升级问题解决。
 
 ## Visual Evidence
+
+Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，由 owner 确认。
+
+![指针选择文字，无焦点框](assets/gateway-focus-pointer.png)
+
+![键盘导航，组合容器统一焦点](assets/gateway-focus-keyboard.png)
 
 详情面板在当前工作区源码预览中验收；图中归属 chip 将两个原始字段合并展示，悬浮提示保留各自原值，交付方式使用独立图标加文本 chip。
 

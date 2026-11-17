@@ -4,6 +4,8 @@
 
 ## Documentation map
 
+任务图的 `web/graph-projection.ts` 仅将全局 `main_start` / `main_end` 投影为起终点；交付单元边界仍参与隐藏路径折叠和来源追溯。`tests/graph-projection.test.ts` 覆盖多单元汇合、跨单元依赖以及全局起终点唯一性。
+
 [SPEC.md](./SPEC.md) 记录长期需求、验收和兼容合同；[AGENT_INTERACTIONS.md](./AGENT_INTERACTIONS.md) 记录角色职责、交互顺序和时序图；[DATA_MODEL.md](./DATA_MODEL.md) 记录 canonical schema、投影和外部事实；[STATE_MACHINES.md](./STATE_MACHINES.md) 记录各对象的正常状态机、异常恢复状态机和范围修订；[CLI_CONTRACT.md](./CLI_CONTRACT.md) 记录命令接口；本文件记录实现入口、验证映射与已知偏差。
 
 ## 编排输出与调用停止对账
