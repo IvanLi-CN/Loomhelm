@@ -7361,7 +7361,7 @@
     {
       "path": "skills/multi-task-flow/scripts/orchestrate.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/orchestrate.ts",
-      "installedSha256": "ffc6c3d1530f6861fe11bee546929ac5fe008f62992fe11dc2f7e671adeb4641"
+      "installedSha256": "ea39aefd6c6c1b6877768b150096ec897fe6444358a4745f50e8860d592e162e"
     },
     {
       "path": "skills/multi-task-flow/scripts/service.ts",
@@ -7466,7 +7466,7 @@
     {
       "path": "skills/multi-task-flow/tests/orchestrate.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/orchestrate.test.ts",
-      "installedSha256": "93a07968083d52ce70a96bc6fd69949aee51904e7ac0b542feef4b4ec3570d8c"
+      "installedSha256": "2e3075519305212e573e79086070f55ab5f59f7bda601ca7f7bdfa3c3b123711"
     },
     {
       "path": "skills/multi-task-flow/tests/output-events.test.ts",
@@ -9267,7 +9267,7 @@
     {
       "path": "skills/multi-task-flow/tests/engine-core.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/engine-core.test.ts",
-      "installedSha256": "93439fcb64aacddd6468d8bafe9bfd98bdd9207b4f8f0d97fa1a496d7b5eee1c"
+      "installedSha256": "0231b86d7962b053c405e450974ff354c02e8b123d4f3bfb2d3d1b634e0146e1"
     },
     {
       "path": "skills/multi-task-flow/tests/engine-fixtures.ts",
