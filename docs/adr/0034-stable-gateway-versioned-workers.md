@@ -20,6 +20,8 @@ Workers are selected and reused by immutable version identity and run compatibil
 
 ## Upgrade and recovery
 
+编排版本降级、`orchestration upgrade --rollback` 及仅切换 sidecar 的升级语义由 [ADR 0039](0039-orchestration-version-binding-and-forward-upgrade.md) 替代：编排升级必须经目标 CLI 自动迁移并前向完成。下文相关旧命令描述保留为历史决策背景，不再作为编排升级合同；Gateway 独立回滚规则继续有效。
+
 Gateway and Worker updates are separate operations. A Gateway update is a daemon/package upgrade: it stages and verifies a new daemon/Gateway release, drains the current daemon process, restarts the same fixed-port Gateway and health-checks its public API and asset contract. Existing run/version mappings do not change during a Gateway update.
 
 A Worker update stages a new package release alongside existing releases. It does not change a global latest pointer for existing runs. A run version change is an explicit CLI run-scoped operation that records the target package version, build ID, source SHA and compatibility result in the run binding before the gateway routes new requests to the new worker. The old worker remains available until its active requests drain and no run mapping references it.

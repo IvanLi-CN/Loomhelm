@@ -14,7 +14,7 @@ import {
 import { versionEnvelope } from "../lib/contract";
 import { sweepConversationArchives } from "../lib/conversation-archive";
 import { desktopHandoff } from "../lib/desktop-handoff";
-import { actorSchema, apply, authorize, requestSchema } from "../lib/engine";
+import { actorSchema, apply, authorize, ready, requestSchema } from "../lib/engine";
 import { ContractError } from "../lib/errors";
 import {
   effectiveProfile,
@@ -23,6 +23,8 @@ import {
 } from "../lib/execution-profile";
 import { recoverInitialization } from "../lib/initialization-recovery";
 import { prepareNativeNotification, reconcileNotification } from "../lib/notification-delivery";
+import { callerIdentity, requireRunBinding } from "../lib/orchestration-identity";
+import { withRunCommand } from "../lib/orchestration-lifecycle";
 import { mutateExecutionProfile } from "../lib/profile-mutation";
 import {
   DEFAULT_EXECUTION_PROFILE,
@@ -43,7 +45,7 @@ import {
   validateTaskExecutionPolicies,
 } from "../lib/schema";
 import { checkViewerCompatibility, renewViewerUsage } from "../lib/service-usage";
-import { defaultRoot, LedgerStore } from "../lib/store";
+import { defaultRoot, LedgerStore, safeId } from "../lib/store";
 import { migrationCanonicalInput } from "../lib/store-migration";
 import { buildView } from "../lib/view";
 
@@ -206,661 +208,695 @@ try {
     throw new ContractError("INVALID_ARGUMENTS", "Usage: orchestrate.ts <command> --input -");
   const input = JSON.parse(await Runtime.stdin.text());
   const root = process.env.TASK_ORCHESTRATION_DATA_ROOT ?? defaultRoot();
-  checkViewerCompatibility(root);
-  if (command === "init") {
-    const parsed = initialRequest.parse(input);
-    if (parsed.actor.role !== "main")
-      throw new ContractError("FORBIDDEN", "Only the main conversation may initialize a run", 3);
-    const requestedPlan = parsed.payload.initial_plan;
-    if (requestedPlan.approval_id !== null)
-      throw new ContractError("INVALID_PLAN", "Initial plan must be unapproved");
-    const configuredGroupIds = new Set(requestedPlan.group_atoms.map((atom) => atom.group_id));
-    const planGroupIds = new Set(
-      requestedPlan.nodes
-        .map((node) => node.group_id)
-        .filter((groupId): groupId is string => groupId !== null),
-    );
-    if (!parsed.payload.groups.every((item) => planGroupIds.has(item.id)))
-      throw new ContractError("ORPHAN_GROUP", "Runtime group is not present in the active plan");
-    const initialPlanDraft =
-      configuredGroupIds.size === parsed.payload.groups.length
-        ? requestedPlan
-        : {
-            ...requestedPlan,
-            group_atoms: [
-              ...requestedPlan.group_atoms,
-              ...parsed.payload.groups
-                .filter((item) => !configuredGroupIds.has(item.id))
-                .flatMap((item) =>
-                  defaultGroupAtoms(item.id).map(({ status: _status, ...atom }) => ({
-                    ...atom,
-                    group_id: item.id,
-                  })),
-                ),
-            ],
-          };
-    const initialPlan = canonicalizeContract3Plan(initialPlanDraft, parsed.payload.tasks);
-    validatePlan(initialPlan);
-    validateSchedulablePlan(initialPlan);
-    validateInitialRuntimeState(parsed.payload.groups, parsed.payload.tasks);
-    validateNewTaskKinds(parsed.payload.tasks);
-    validateTaskExecutionPolicies(parsed.payload.tasks, true);
-    const groups = parsed.payload.groups.map((group) => {
-      const canonicalPr =
-        group.pr && "state" in group.pr
-          ? group.pr
-          : group.pr
-            ? {
-                state: "published" as const,
-                pr: group.pr,
-                parent_branch: group.parent_branch ?? "main",
-              }
-            : { state: "unpublished" as const };
-      const plannedAtoms = initialPlan.group_atoms
-        .filter((atom: any) => atom.group_id === group.id)
-        .map((atom: any) => ({
-          id: atom.id,
-          title: atom.title,
-          purpose: atom.purpose,
-          output: atom.output,
-          lifecycle_stage: atom.lifecycle_stage,
-          status: "planned" as const,
-        }));
-      return {
-        ...group,
-        pr: canonicalPr,
-        ...(group.atoms.length === 0 && plannedAtoms.length > 0 ? { atoms: plannedAtoms } : {}),
-      };
-    });
-    const tasks = parsed.payload.tasks.map((task) =>
-      isContributionKind(task.kind) && (!task.pr || !("state" in task.pr))
-        ? { ...task, pr: { state: "unbound" as const } }
-        : task,
-    );
-    const timestamp = new Date().toISOString();
-    const ledger = validateLedger({
-      schema_version: 2,
-      source_schema_version: null,
-      contract_version: 3,
-      version: versionEnvelope,
-      orchestration_id: parsed.run_id,
-      revision: 0,
-      repository: parsed.payload.repository,
-      control: {
-        owner_thread_id: parsed.actor.thread_id,
-        ownership: "bound",
-        approval_id: null,
-      },
-      config: {
-        ...parsed.payload.config,
-        execution_profile: parsed.payload.config.execution_profile ?? DEFAULT_EXECUTION_PROFILE,
-      },
-      plans: [initialPlan],
-      atomic_nodes: initialPlan.atomic_nodes,
-      atomic_edges: initialPlan.atomic_edges,
-      active_plan_id: initialPlan.id,
-      execution_plan_id: initialPlan.id,
-      groups,
-      tasks,
-      follow_prs: [],
-      facts: [],
-      operations: [],
-      events: [],
-      milestones: [],
-      requests: [],
-      notifications: [],
-      resources: [],
-      updated_at: timestamp,
-    });
-    for (const target of [...ledger.groups, ...ledger.tasks])
-      if (!target.execution_profile_source) materializeRecommendation(ledger, target);
-    new LedgerStore(root, parsed.run_id).create(ledger);
-    console.log(
-      JSON.stringify({
-        ok: true,
-        code: "CREATED",
-        revision: 0,
-        result: { run_id: parsed.run_id },
-      }),
-    );
-  } else if (
-    [
-      "execution-profile-migrate",
-      "execution-profile-update",
-      "execution-profile-default-update",
-      "execution-profile-recommend",
-    ].includes(command)
-  ) {
-    const parsed = requestSchema.parse(input);
-    console.log(
-      JSON.stringify(
-        await mutateExecutionProfile(new LedgerStore(root, parsed.run_id), command, parsed),
-      ),
-    );
-  } else if (command === "migrate") {
-    const parsed = migrationRequest.parse(input);
-    const result = new LedgerStore(root, parsed.run_id).migrate({
-      ...parsed,
-      canonical_input: migrationCanonicalInput(parsed.run_id, parsed.actor),
-    });
-    console.log(JSON.stringify(result));
-  } else if (command === "notification-reconcile" && input.request_id === undefined) {
-    const parsed = z
-      .object({
-        run_id: id,
-        actor: actorSchema,
-        status: z.enum(["pending", "sent", "failed", "unknown", "acknowledged"]).optional(),
-      })
-      .strict()
-      .parse(input);
-    const ledger = validateLedger(new LedgerStore(root, parsed.run_id).read());
-    authorize(ledger, parsed.actor);
-    const notifications = parsed.status
-      ? ledger.notifications.filter((item) => item.status === parsed.status)
-      : ledger.notifications;
-    console.log(
-      JSON.stringify({
-        ok: true,
-        code: "OK",
-        revision: ledger.revision,
-        result: {
-          notifications,
-          pending: ledger.notifications.filter((item) =>
-            ["pending", "failed", "unknown"].includes(item.status),
-          ).length,
-          unacknowledged: ledger.notifications.filter((item) => item.status === "sent").length,
-        },
-      }),
-    );
-  } else if (command === "notification-send" || command === "notification-prepare") {
-    const parsed = requestSchema.parse(input);
-    const payload = z.object({ notification_id: id }).strict().parse(parsed.payload);
-    const store = new LedgerStore(root, parsed.run_id);
-    const delivery = record(await deliverNotification(store, parsed, input, payload, true));
-    console.log(
-      JSON.stringify({
-        ok: true,
-        code: delivery?.replayed ? "REPLAYED" : "APPLIED",
-        revision: delivery?.revision,
-        result: delivery,
-      }),
-    );
-  } else if (command === "creation-reconcile" || command === "initialization-recover") {
-    const parsed = requestSchema.parse(input);
-    const payload = z.object({ operation_id: id }).strict().parse(parsed.payload);
-    const store = new LedgerStore(root, parsed.run_id);
-    const ledger = validateLedger(store.read());
-    if (parsed.actor.role !== "main" || parsed.actor.thread_id !== ledger.control.owner_thread_id)
-      throw new ContractError(
-        "ACTOR_MISMATCH",
-        "Creation reconciliation must be run by the bound main thread",
+  // Preserve init's full input error contract before looking up any run resource.
+  if (command === "init") initialRequest.parse(input);
+  safeId(input.run_id);
+  const caller = callerIdentity();
+  const execute = async () => {
+    if (command !== "init") {
+      const store = new LedgerStore(root, input.run_id);
+      requireRunBinding(root, input.run_id, store.read(), caller);
+    }
+    checkViewerCompatibility(root);
+    if (command === "init") {
+      const parsed = initialRequest.parse(input);
+      if (parsed.actor.role !== "main")
+        throw new ContractError("FORBIDDEN", "Only the main conversation may initialize a run", 3);
+      const requestedPlan = parsed.payload.initial_plan;
+      if (requestedPlan.approval_id !== null)
+        throw new ContractError("INVALID_PLAN", "Initial plan must be unapproved");
+      const configuredGroupIds = new Set(requestedPlan.group_atoms.map((atom) => atom.group_id));
+      const planGroupIds = new Set(
+        requestedPlan.nodes
+          .map((node) => node.group_id)
+          .filter((groupId): groupId is string => groupId !== null),
       );
-    const replayRequest = ledger.requests.find(
-      (item) =>
-        item.request_id === parsed.request_id ||
-        item.request_id === `${parsed.request_id}-reconcile-unknown`,
-    );
-    if (replayRequest && replayRequest.command === "dispatch-resolve") {
+      if (!parsed.payload.groups.every((item) => planGroupIds.has(item.id)))
+        throw new ContractError("ORPHAN_GROUP", "Runtime group is not present in the active plan");
+      const initialPlanDraft =
+        configuredGroupIds.size === parsed.payload.groups.length
+          ? requestedPlan
+          : {
+              ...requestedPlan,
+              group_atoms: [
+                ...requestedPlan.group_atoms,
+                ...parsed.payload.groups
+                  .filter((item) => !configuredGroupIds.has(item.id))
+                  .flatMap((item) =>
+                    defaultGroupAtoms(item.id).map(({ status: _status, ...atom }) => ({
+                      ...atom,
+                      group_id: item.id,
+                    })),
+                  ),
+              ],
+            };
+      const initialPlan = canonicalizeContract3Plan(initialPlanDraft, parsed.payload.tasks);
+      validatePlan(initialPlan);
+      validateSchedulablePlan(initialPlan);
+      validateInitialRuntimeState(parsed.payload.groups, parsed.payload.tasks);
+      validateNewTaskKinds(parsed.payload.tasks);
+      validateTaskExecutionPolicies(parsed.payload.tasks, true);
+      const groups = parsed.payload.groups.map((group) => {
+        const canonicalPr =
+          group.pr && "state" in group.pr
+            ? group.pr
+            : group.pr
+              ? {
+                  state: "published" as const,
+                  pr: group.pr,
+                  parent_branch: group.parent_branch ?? "main",
+                }
+              : { state: "unpublished" as const };
+        const plannedAtoms = initialPlan.group_atoms
+          .filter((atom: any) => atom.group_id === group.id)
+          .map((atom: any) => ({
+            id: atom.id,
+            title: atom.title,
+            purpose: atom.purpose,
+            output: atom.output,
+            lifecycle_stage: atom.lifecycle_stage,
+            status: "planned" as const,
+          }));
+        return {
+          ...group,
+          pr: canonicalPr,
+          ...(group.atoms.length === 0 && plannedAtoms.length > 0 ? { atoms: plannedAtoms } : {}),
+        };
+      });
+      const tasks = parsed.payload.tasks.map((task) =>
+        isContributionKind(task.kind) && (!task.pr || !("state" in task.pr))
+          ? { ...task, pr: { state: "unbound" as const } }
+          : task,
+      );
+      const timestamp = new Date().toISOString();
+      const ledger = validateLedger({
+        schema_version: 2,
+        source_schema_version: null,
+        contract_version: 4,
+        runtime_identity: caller,
+        version: versionEnvelope,
+        orchestration_id: parsed.run_id,
+        revision: 0,
+        repository: parsed.payload.repository,
+        control: {
+          owner_thread_id: parsed.actor.thread_id,
+          ownership: "bound",
+          approval_id: null,
+        },
+        config: {
+          ...parsed.payload.config,
+          execution_profile: parsed.payload.config.execution_profile ?? DEFAULT_EXECUTION_PROFILE,
+        },
+        plans: [initialPlan],
+        atomic_nodes: initialPlan.atomic_nodes,
+        atomic_edges: initialPlan.atomic_edges,
+        active_plan_id: initialPlan.id,
+        execution_plan_id: initialPlan.id,
+        groups,
+        tasks,
+        follow_prs: [],
+        facts: [],
+        operations: [],
+        events: [],
+        milestones: [],
+        requests: [],
+        notifications: [],
+        resources: [],
+        updated_at: timestamp,
+      });
+      for (const target of [...ledger.groups, ...ledger.tasks])
+        if (!target.execution_profile_source) materializeRecommendation(ledger, target);
+      new LedgerStore(root, parsed.run_id).create(ledger);
       console.log(
         JSON.stringify({
           ok: true,
-          code: "REPLAYED",
-          revision: replayRequest.committed_revision,
-          result: replayRequest.result,
+          code: "CREATED",
+          revision: 0,
+          result: { run_id: parsed.run_id },
         }),
       );
-      process.exit(0);
-    }
-    const operation = ledger.operations.find(
-      (item) => item.id === payload.operation_id && item.kind === "dispatch",
-    );
-    if (!operation) throw new ContractError("NOT_FOUND", "Dispatch operation not found");
-    if (operation.status !== "unknown")
-      throw new ContractError(
-        "OPERATION_TERMINAL",
-        "Dispatch is not awaiting creation reconciliation",
-      );
-    if (!operation.request.native_request_id)
-      throw new ContractError("NATIVE_REQUEST_CONFLICT", "Dispatch has no bound native request");
-    const profile = executionProfile.parse(operation.request.execution_profile);
-    const creation = record(operation.request.creation_result);
-    const evidence = record(creation?.native_evidence);
-    const threadId =
-      operation.request.observed_thread_id ??
-      (typeof creation?.thread_id === "string" ? creation.thread_id : undefined) ??
-      (typeof evidence?.thread_id === "string" ? evidence.thread_id : undefined);
-    if (!threadId) {
-      const result = record(
-        recordCreationReconciliationUnknown(
-          store,
-          parsed,
-          operation,
-          profile,
-          undefined,
-          "No observed thread identity",
+    } else if (
+      [
+        "execution-profile-migrate",
+        "execution-profile-update",
+        "execution-profile-default-update",
+        "execution-profile-recommend",
+      ].includes(command)
+    ) {
+      const parsed = requestSchema.parse(input);
+      console.log(
+        JSON.stringify(
+          await mutateExecutionProfile(new LedgerStore(root, parsed.run_id), command, parsed),
         ),
       );
+    } else if (command === "migrate") {
+      const parsed = migrationRequest.parse(input);
+      const result = new LedgerStore(root, parsed.run_id).migrate({
+        ...parsed,
+        canonical_input: migrationCanonicalInput(parsed.run_id, parsed.actor),
+      });
+      console.log(JSON.stringify(result));
+    } else if (command === "notification-reconcile" && input.request_id === undefined) {
+      const parsed = z
+        .object({
+          run_id: id,
+          actor: actorSchema,
+          status: z.enum(["pending", "sent", "failed", "unknown", "acknowledged"]).optional(),
+        })
+        .strict()
+        .parse(input);
+      const ledger = validateLedger(new LedgerStore(root, parsed.run_id).read());
+      authorize(ledger, parsed.actor);
+      const notifications = parsed.status
+        ? ledger.notifications.filter((item) => item.status === parsed.status)
+        : ledger.notifications;
       console.log(
         JSON.stringify({
-          ...result,
-          revision: validateLedger(store.read()).revision,
+          ok: true,
+          code: "OK",
+          revision: ledger.revision,
           result: {
-            operation_id: operation.id,
-            outcome: "unknown",
-            reason: "No observed thread identity",
+            notifications,
+            pending: ledger.notifications.filter((item) =>
+              ["pending", "failed", "unknown"].includes(item.status),
+            ).length,
+            unacknowledged: ledger.notifications.filter((item) => item.status === "sent").length,
           },
         }),
       );
-      process.exit(0);
-    }
-    const target =
-      operation.request.target_type === "group"
-        ? ledger.groups.find((item) => item.id === operation.target_id)
-        : ledger.tasks.find((item) => item.id === operation.target_id);
-    if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
-    const parameters = record(operation.request.creation_parameters);
-    const role = operation.request.target_type === "group" ? "Delivery Agent" : "Task Agent";
-    let reconciliation:
-      | Awaited<ReturnType<typeof reconcileCliThread>>
-      | Awaited<ReturnType<typeof recoverInitialization>>["reconciliation"];
-    const resolve = (resolutionRevision: number, reconciliation: Record<string, unknown>) =>
-      store.update((raw) =>
-        apply(raw, "dispatch-resolve", {
-          ...parsed,
-          expected_revision: resolutionRevision,
-          payload: {
-            operation_id: operation.id,
-            outcome: "succeeded",
-            thread_id: threadId,
-            native_evidence: {
-              source: "multi-task-flow-reconcile",
-              native_tool_name: "codex exec",
-              operation_id: operation.id,
-              native_request_id: operation.request.native_request_id,
-              model: profile.model,
-              thinking: profile.thinking,
-              ...reconciliation,
-            },
-          },
+    } else if (command === "notification-send" || command === "notification-prepare") {
+      const parsed = requestSchema.parse(input);
+      const payload = z.object({ notification_id: id }).strict().parse(parsed.payload);
+      const store = new LedgerStore(root, parsed.run_id);
+      const delivery = record(await deliverNotification(store, parsed, input, payload, true));
+      console.log(
+        JSON.stringify({
+          ok: true,
+          code: delivery?.replayed ? "REPLAYED" : "APPLIED",
+          revision: delivery?.revision,
+          result: delivery,
         }),
       );
-    let result: unknown;
-    try {
-      if (command === "initialization-recover" || operation.request.initialization_recovery) {
-        const recovered = await recoverInitialization(
-          store,
-          parsed,
-          operation.id,
-          command === "initialization-recover",
-          undefined,
-          (recovered) => {
-            result = resolve(recovered.revision, recovered.reconciliation);
-          },
+    } else if (command === "creation-reconcile" || command === "initialization-recover") {
+      const parsed = requestSchema.parse(input);
+      const payload = z.object({ operation_id: id }).strict().parse(parsed.payload);
+      const store = new LedgerStore(root, parsed.run_id);
+      const ledger = validateLedger(store.read());
+      if (parsed.actor.role !== "main" || parsed.actor.thread_id !== ledger.control.owner_thread_id)
+        throw new ContractError(
+          "ACTOR_MISMATCH",
+          "Creation reconciliation must be run by the bound main thread",
         );
-        reconciliation = recovered.reconciliation;
-      } else
-        reconciliation = await reconcileCliThread({
-          thread_id: threadId,
-          model: profile.model,
-          thinking: profile.thinking,
-          source_cwd: String(parameters?.cwd ?? process.cwd()),
-          role,
-        });
-    } catch (error) {
-      // Recovery may have committed a durable intent before the native side effect.
-      // Never overwrite it using the caller's now-stale revision or silently resend.
-      if (command === "initialization-recover" || operation.request.initialization_recovery)
-        throw error;
-      const result = record(
-        recordCreationReconciliationUnknown(store, parsed, operation, profile, threadId, error),
+      const replayRequest = ledger.requests.find(
+        (item) =>
+          item.request_id === parsed.request_id ||
+          item.request_id === `${parsed.request_id}-reconcile-unknown`,
       );
+      if (replayRequest && replayRequest.command === "dispatch-resolve") {
+        console.log(
+          JSON.stringify({
+            ok: true,
+            code: "REPLAYED",
+            revision: replayRequest.committed_revision,
+            result: replayRequest.result,
+          }),
+        );
+        return;
+      }
+      const operation = ledger.operations.find(
+        (item) => item.id === payload.operation_id && item.kind === "dispatch",
+      );
+      if (!operation) throw new ContractError("NOT_FOUND", "Dispatch operation not found");
+      if (operation.status !== "unknown")
+        throw new ContractError(
+          "OPERATION_TERMINAL",
+          "Dispatch is not awaiting creation reconciliation",
+        );
+      if (!operation.request.native_request_id)
+        throw new ContractError("NATIVE_REQUEST_CONFLICT", "Dispatch has no bound native request");
+      const profile = executionProfile.parse(operation.request.execution_profile);
+      const creation = record(operation.request.creation_result);
+      const evidence = record(creation?.native_evidence);
+      const threadId =
+        operation.request.observed_thread_id ??
+        (typeof creation?.thread_id === "string" ? creation.thread_id : undefined) ??
+        (typeof evidence?.thread_id === "string" ? evidence.thread_id : undefined);
+      if (!threadId) {
+        const result = record(
+          recordCreationReconciliationUnknown(
+            store,
+            parsed,
+            operation,
+            profile,
+            undefined,
+            "No observed thread identity",
+          ),
+        );
+        console.log(
+          JSON.stringify({
+            ...result,
+            revision: validateLedger(store.read()).revision,
+            result: {
+              operation_id: operation.id,
+              outcome: "unknown",
+              reason: "No observed thread identity",
+            },
+          }),
+        );
+        return;
+      }
+      const target =
+        operation.request.target_type === "group"
+          ? ledger.groups.find((item) => item.id === operation.target_id)
+          : ledger.tasks.find((item) => item.id === operation.target_id);
+      if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
+      const parameters = record(operation.request.creation_parameters);
+      const role = operation.request.target_type === "group" ? "Delivery Agent" : "Task Agent";
+      let reconciliation:
+        | Awaited<ReturnType<typeof reconcileCliThread>>
+        | Awaited<ReturnType<typeof recoverInitialization>>["reconciliation"];
+      const resolve = (resolutionRevision: number, reconciliation: Record<string, unknown>) =>
+        store.update((raw) =>
+          apply(raw, "dispatch-resolve", {
+            ...parsed,
+            expected_revision: resolutionRevision,
+            payload: {
+              operation_id: operation.id,
+              outcome: "succeeded",
+              thread_id: threadId,
+              native_evidence: {
+                source: "multi-task-flow-reconcile",
+                native_tool_name: "codex exec",
+                operation_id: operation.id,
+                native_request_id: operation.request.native_request_id,
+                model: profile.model,
+                thinking: profile.thinking,
+                ...reconciliation,
+              },
+            },
+          }),
+        );
+      let result: unknown;
+      try {
+        if (command === "initialization-recover" || operation.request.initialization_recovery) {
+          const recovered = await recoverInitialization(
+            store,
+            parsed,
+            operation.id,
+            command === "initialization-recover",
+            undefined,
+            (recovered) => {
+              result = resolve(recovered.revision, recovered.reconciliation);
+            },
+          );
+          reconciliation = recovered.reconciliation;
+        } else
+          reconciliation = await reconcileCliThread({
+            thread_id: threadId,
+            model: profile.model,
+            thinking: profile.thinking,
+            source_cwd: String(parameters?.cwd ?? process.cwd()),
+            role,
+          });
+      } catch (error) {
+        // Recovery may have committed a durable intent before the native side effect.
+        // Never overwrite it using the caller's now-stale revision or silently resend.
+        if (command === "initialization-recover" || operation.request.initialization_recovery)
+          throw error;
+        const result = record(
+          recordCreationReconciliationUnknown(store, parsed, operation, profile, threadId, error),
+        );
+        console.log(
+          JSON.stringify({
+            ...result,
+            revision: validateLedger(store.read()).revision,
+            result: {
+              operation_id: operation.id,
+              outcome: "unknown",
+              thread_id: threadId,
+              reason: diagnosticText(error),
+              diagnostics: diagnosticsFromError(error),
+            },
+          }),
+        );
+        return;
+      }
+      if (result === undefined) result = resolve(parsed.expected_revision, reconciliation);
+      const notification = notificationRequestOf(result);
+      const delivery = notification
+        ? record(await deliverNotification(store, parsed, input, notification))
+        : null;
       console.log(
         JSON.stringify({
-          ...result,
+          ...record(result),
           revision: validateLedger(store.read()).revision,
-          result: {
-            operation_id: operation.id,
-            outcome: "unknown",
-            thread_id: threadId,
-            reason: diagnosticText(error),
-            diagnostics: diagnosticsFromError(error),
-          },
+          ...(delivery ? { notification_delivery: delivery } : {}),
         }),
       );
-      process.exit(0);
-    }
-    if (result === undefined) result = resolve(parsed.expected_revision, reconciliation);
-    const notification = notificationRequestOf(result);
-    const delivery = notification
-      ? record(await deliverNotification(store, parsed, input, notification))
-      : null;
-    console.log(
-      JSON.stringify({
-        ...record(result),
-        revision: validateLedger(store.read()).revision,
-        ...(delivery ? { notification_delivery: delivery } : {}),
-      }),
-    );
-  } else if (command === "conversation-create") {
-    const parsed = requestSchema.parse(input);
-    const payload = z
-      .object({
-        operation_id: id,
-        title: z.string().min(1),
-        prompt: z.string().min(1),
-      })
-      .strict()
-      .parse(parsed.payload);
-    const store = new LedgerStore(root, parsed.run_id);
-    let ledger = validateLedger(store.read());
-    const operation = ledger.operations.find(
-      (item) => item.id === payload.operation_id && item.kind === "dispatch",
-    );
-    if (!operation) throw new ContractError("NOT_FOUND", "Dispatch operation not found");
-    const target =
-      operation.request.target_type === "group"
-        ? ledger.groups.find((item) => item.id === operation.target_id)
-        : ledger.tasks.find((item) => item.id === operation.target_id);
-    if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
-    const profile = executionProfile.parse(operation.request.execution_profile);
-    const role = operation.request.target_type === "group" ? "Delivery Agent" : "Task Agent";
-    const creationParameters = {
-      title: payload.title,
-      prompt: payload.prompt,
-      cwd: process.cwd(),
-      execution_profile: profile,
-      transport: "codex-exec",
-    };
-    if (ledger.requests.some((item) => item.request_id === `${parsed.request_id}-bind`)) {
+    } else if (command === "conversation-create") {
+      const parsed = requestSchema.parse(input);
+      const payload = z
+        .object({
+          operation_id: id,
+          title: z.string().min(1),
+          prompt: z.string().min(1),
+        })
+        .strict()
+        .parse(parsed.payload);
+      const store = new LedgerStore(root, parsed.run_id);
+      let ledger = validateLedger(store.read());
+      const operation = ledger.operations.find(
+        (item) => item.id === payload.operation_id && item.kind === "dispatch",
+      );
+      if (!operation) throw new ContractError("NOT_FOUND", "Dispatch operation not found");
+      const target =
+        operation.request.target_type === "group"
+          ? ledger.groups.find((item) => item.id === operation.target_id)
+          : ledger.tasks.find((item) => item.id === operation.target_id);
+      if (!target) throw new ContractError("NOT_FOUND", "Dispatch target not found");
+      const profile = executionProfile.parse(operation.request.execution_profile);
+      const role = operation.request.target_type === "group" ? "Delivery Agent" : "Task Agent";
+      const creationParameters = {
+        title: payload.title,
+        prompt: payload.prompt,
+        cwd: process.cwd(),
+        execution_profile: profile,
+        transport: "codex-exec",
+      };
+      if (ledger.requests.some((item) => item.request_id === `${parsed.request_id}-bind`)) {
+        store.update((raw) =>
+          apply(raw, "dispatch-bind-request", {
+            ...parsed,
+            request_id: `${parsed.request_id}-bind`,
+            payload: {
+              operation_id: payload.operation_id,
+              native_request_id: operation.request.native_request_id,
+              creation_parameters: creationParameters,
+            },
+          }),
+        );
+        console.log(
+          JSON.stringify({
+            ok: true,
+            code: "REPLAYED",
+            revision: ledger.revision,
+            handoff: {
+              ...desktopHandoff(ledger, operation.id, payload.prompt),
+              should_send: false,
+              notification_id: operation.request.handoff_notification_id ?? null,
+              next_action:
+                "Inspect notification; pending requires notification-prepare, unknown requires reconciliation; never resend a replay",
+            },
+            result: operation.request.creation_result ?? {
+              operation_id: operation.id,
+              outcome: "unknown",
+              native_request_id: operation.request.native_request_id,
+            },
+          }),
+        );
+        return;
+      }
+      validateProfileCapability(profile, await readCodexCapabilities());
+      if (JSON.stringify(profile) !== JSON.stringify(effectiveProfile(ledger, target)))
+        throw new ContractError("PROFILE_CONFLICT", "Claim profile changed");
+      try {
+        verifyRepositoryIdentity(creationParameters.cwd, ledger.repository);
+      } catch (error) {
+        throw new ContractError(
+          "REPOSITORY_MISMATCH",
+          `Creation source does not match the ledger repository: ${String(error)}`,
+          5,
+        );
+      }
+      if (operation.status !== "claimed" || operation.request.native_request_id)
+        throw new ContractError(
+          "CREATION_PENDING",
+          "Creation already attempted; reconcile before retry",
+        );
+      const nativeRequestId = `multi-task-flow-${randomUUID()}`;
       store.update((raw) =>
         apply(raw, "dispatch-bind-request", {
           ...parsed,
           request_id: `${parsed.request_id}-bind`,
+          expected_revision: parsed.expected_revision,
           payload: {
             operation_id: payload.operation_id,
-            native_request_id: operation.request.native_request_id,
+            native_request_id: nativeRequestId,
             creation_parameters: creationParameters,
           },
         }),
       );
+      const creation = await createCliThread({
+        title: payload.title,
+        prompt: payload.prompt,
+        role,
+        native_request_id: nativeRequestId,
+        repository: ledger.repository,
+        onThreadStarted: (threadId) => {
+          try {
+            const current = validateLedger(store.read());
+            store.update((raw) =>
+              apply(raw, "dispatch-progress", {
+                ...parsed,
+                request_id: `${parsed.request_id}-thread`,
+                expected_revision: current.revision,
+                payload: {
+                  operation_id: payload.operation_id,
+                  native_request_id: nativeRequestId,
+                  thread_id: threadId,
+                },
+              }),
+            );
+          } catch (error) {
+            if (!(error instanceof ContractError && error.code === "REVISION_CONFLICT"))
+              throw error;
+          }
+        },
+        ...profile,
+      });
+      ledger = validateLedger(store.read());
+      const result = store.update((raw) =>
+        apply(raw, "dispatch-resolve", {
+          ...parsed,
+          request_id: `${parsed.request_id}-resolve`,
+          expected_revision: ledger.revision,
+          payload: {
+            operation_id: payload.operation_id,
+            outcome: creation.outcome,
+            ...(creation.thread_id ? { thread_id: creation.thread_id } : {}),
+            native_evidence: {
+              source: "multi-task-flow-cli",
+              native_tool_name: "codex exec",
+              ...creation,
+              created_at: new Date().toISOString(),
+              native_request_id: nativeRequestId,
+              operation_id: payload.operation_id,
+              model: creation.model,
+              thinking: creation.thinking,
+              evidence_ref: creation.evidence_ref,
+              ...(creation.error ? { error: creation.error } : {}),
+            },
+          },
+        }),
+      );
+      const notification = notificationRequestOf(result);
+      const delivery = notification
+        ? record(await deliverNotification(store, parsed, input, notification))
+        : null;
+      console.log(
+        JSON.stringify({
+          ...record(result),
+          revision: validateLedger(store.read()).revision,
+          handoff:
+            creation.outcome === "succeeded"
+              ? {
+                  ...desktopHandoff(validateLedger(store.read()), operation.id, payload.prompt),
+                  ...delivery,
+                }
+              : null,
+        }),
+      );
+    } else if (command === "show" || command === "view") {
+      const parsed = z
+        .object({
+          run_id: id,
+          actor: actorSchema,
+          plan_id: id.optional(),
+          section: z
+            .enum([
+              "summary",
+              "plan",
+              "tasks",
+              "operations",
+              "notifications",
+              "task-context",
+              "full",
+            ])
+            .optional(),
+          task_id: id.optional(),
+        })
+        .strict()
+        .parse(input);
+      const ledger = validateLedger(new LedgerStore(root, parsed.run_id).read());
+      const allowed =
+        ledger.control.ownership === "bound" &&
+        (parsed.actor.role === "main"
+          ? parsed.actor.thread_id === ledger.control.owner_thread_id
+          : parsed.actor.role === "group"
+            ? ledger.groups.some((g) => g.agent_thread_id === parsed.actor.thread_id)
+            : ledger.tasks.some((t) => t.thread_id === parsed.actor.thread_id));
+      if (!allowed)
+        throw new ContractError("ACTOR_MISMATCH", "Conversation is not bound to the run", 3);
+      const section = parsed.section ?? "full";
+      if (section === "task-context" && !parsed.task_id)
+        throw new ContractError("INVALID_INPUT", "task-context requires task_id", 2);
+      const contextTask = parsed.task_id
+        ? ledger.tasks.find((item) => item.id === parsed.task_id)
+        : null;
+      if (
+        section === "task-context" &&
+        (!contextTask || contextTask.thread_id !== parsed.actor.thread_id)
+      )
+        throw new ContractError(
+          "ACTOR_MISMATCH",
+          "Task context is limited to the bound task conversation",
+          3,
+        );
+      const contextPlan = ledger.plans.find((item) => item.id === ledger.execution_plan_id);
+      const contextNode = contextPlan?.nodes.find(
+        (item) => item.kind === "task" && item.ref_id === parsed.task_id,
+      );
+      const contextEdges =
+        contextPlan?.edges.filter(
+          (edge) => edge.from_node_id === contextNode?.id || edge.to_node_id === contextNode?.id,
+        ) ?? [];
+      const contextAtomicNodes = (contextPlan?.atomic_nodes ?? ledger.atomic_nodes).filter(
+        (node) =>
+          (node.kind === "work" &&
+            node.scope?.kind === "task" &&
+            node.scope.task_id === parsed.task_id) ||
+          (node.kind === "milestone" &&
+            node.scope?.kind === "task" &&
+            node.scope.task_id === parsed.task_id),
+      );
+      const sections = {
+        summary: {
+          orchestration_id: ledger.orchestration_id,
+          revision: ledger.revision,
+          control: ledger.control,
+        },
+        plan: ledger.plans,
+        tasks: ledger.tasks,
+        operations: ledger.operations,
+        notifications: ledger.notifications,
+        "task-context": {
+          task: contextTask,
+          delivery_unit: contextTask
+            ? ledger.groups.find((item) => item.id === contextTask.group_id)
+            : null,
+          plan_node: contextNode ?? null,
+          dependency_edges: contextEdges,
+          atomic_nodes: contextAtomicNodes,
+          atomic_edges: (contextPlan?.atomic_edges ?? ledger.atomic_edges).filter((edge) =>
+            contextAtomicNodes.some(
+              (node) => node.id === edge.from_node_id || node.id === edge.to_node_id,
+            ),
+          ),
+          resources: contextTask
+            ? ledger.resources.filter(
+                (resource) =>
+                  resource.target === contextTask.id ||
+                  resource.target === contextTask.thread_id ||
+                  resource.target === contextTask.branch,
+              )
+            : [],
+          ready: parsed.task_id ? ready(ledger, parsed.task_id) : false,
+        },
+        full: ledger,
+      };
       console.log(
         JSON.stringify({
           ok: true,
-          code: "REPLAYED",
+          code: "OK",
           revision: ledger.revision,
-          handoff: {
-            ...desktopHandoff(ledger, operation.id, payload.prompt),
-            should_send: false,
-            notification_id: operation.request.handoff_notification_id ?? null,
-            next_action:
-              "Inspect notification; pending requires notification-prepare, unknown requires reconciliation; never resend a replay",
-          },
-          result: operation.request.creation_result ?? {
-            operation_id: operation.id,
-            outcome: "unknown",
-            native_request_id: operation.request.native_request_id,
-          },
+          result: command === "view" ? buildView(ledger, parsed.plan_id) : sections[section],
         }),
       );
-      process.exit(0);
+    } else {
+      const parsed = requestSchema.parse(input);
+      const store = new LedgerStore(root, parsed.run_id);
+      const commandLedger = validateLedger(store.read());
+      const recoveryResolution =
+        command === "dispatch-resolve" &&
+        commandLedger.operations.some(
+          (operation) =>
+            operation.id === parsed.payload.operation_id &&
+            !!operation.request.initialization_recovery,
+        );
+      if (
+        recoveryResolution ||
+        (commandLedger.contract_version >= 3 &&
+          ["dispatch-bind-request", "dispatch-resolve"].includes(command)) ||
+        [
+          "initialization-recovery-claim",
+          "initialization-recovery-observe",
+          "initialization-recovery-permissions",
+        ].includes(command)
+      )
+        throw new ContractError(
+          "CLI_ONLY_DISPATCH",
+          "Dispatch binding, resolution and recovery mutations are internal to conversation-create, creation-reconcile and initialization-recover; direct mutation is not an accepted flow",
+          5,
+        );
+      const result = record(
+        command === "notification-reconcile"
+          ? reconcileNotification(store, parsed)
+          : store.update((raw) => apply(raw, command, parsed)),
+      );
+      if (!result) throw new ContractError("INVALID_RESULT", "Invalid command result");
+      const request = notificationRequestOf(result);
+      const delivered =
+        request && result.code === "APPLIED"
+          ? await deliverNotification(store, parsed, input, request)
+          : null;
+      if (delivered === null) console.log(JSON.stringify(result));
+      else {
+        console.log(
+          JSON.stringify({
+            ...result,
+            result: {
+              ...record(result.result),
+              notification_delivery: delivered,
+            },
+          }),
+        );
+      }
     }
-    validateProfileCapability(profile, await readCodexCapabilities());
-    if (JSON.stringify(profile) !== JSON.stringify(effectiveProfile(ledger, target)))
-      throw new ContractError("PROFILE_CONFLICT", "Claim profile changed");
+    if (
+      [
+        "task-update",
+        "notification-ack",
+        "notification-reconcile",
+        "merge-resolve",
+        "task-migrate",
+        "task-external-merge-reconcile",
+      ].includes(command)
+    ) {
+      await sweepConversationArchives(new LedgerStore(root, input.run_id)).catch(() => {});
+    }
     try {
-      verifyRepositoryIdentity(creationParameters.cwd, ledger.repository);
-    } catch (error) {
-      throw new ContractError(
-        "REPOSITORY_MISMATCH",
-        `Creation source does not match the ledger repository: ${String(error)}`,
-        5,
-      );
-    }
-    if (operation.status !== "claimed" || operation.request.native_request_id)
-      throw new ContractError(
-        "CREATION_PENDING",
-        "Creation already attempted; reconcile before retry",
-      );
-    const nativeRequestId = `multi-task-flow-${randomUUID()}`;
-    store.update((raw) =>
-      apply(raw, "dispatch-bind-request", {
-        ...parsed,
-        request_id: `${parsed.request_id}-bind`,
-        expected_revision: parsed.expected_revision,
-        payload: {
-          operation_id: payload.operation_id,
-          native_request_id: nativeRequestId,
-          creation_parameters: creationParameters,
-        },
-      }),
-    );
-    const creation = await createCliThread({
-      title: payload.title,
-      prompt: payload.prompt,
-      role,
-      native_request_id: nativeRequestId,
-      repository: ledger.repository,
-      onThreadStarted: (threadId) => {
-        try {
-          const current = validateLedger(store.read());
-          store.update((raw) =>
-            apply(raw, "dispatch-progress", {
-              ...parsed,
-              request_id: `${parsed.request_id}-thread`,
-              expected_revision: current.revision,
-              payload: {
-                operation_id: payload.operation_id,
-                native_request_id: nativeRequestId,
-                thread_id: threadId,
-              },
-            }),
-          );
-        } catch (error) {
-          if (!(error instanceof ContractError && error.code === "REVISION_CONFLICT")) throw error;
-        }
-      },
-      ...profile,
-    });
-    ledger = validateLedger(store.read());
-    const result = store.update((raw) =>
-      apply(raw, "dispatch-resolve", {
-        ...parsed,
-        request_id: `${parsed.request_id}-resolve`,
-        expected_revision: ledger.revision,
-        payload: {
-          operation_id: payload.operation_id,
-          outcome: creation.outcome,
-          ...(creation.thread_id ? { thread_id: creation.thread_id } : {}),
-          native_evidence: {
-            source: "multi-task-flow-cli",
-            native_tool_name: "codex exec",
-            ...creation,
-            created_at: new Date().toISOString(),
-            native_request_id: nativeRequestId,
-            operation_id: payload.operation_id,
-            model: creation.model,
-            thinking: creation.thinking,
-            evidence_ref: creation.evidence_ref,
-            ...(creation.error ? { error: creation.error } : {}),
-          },
-        },
-      }),
-    );
-    const notification = notificationRequestOf(result);
-    const delivery = notification
-      ? record(await deliverNotification(store, parsed, input, notification))
-      : null;
-    console.log(
-      JSON.stringify({
-        ...record(result),
-        revision: validateLedger(store.read()).revision,
-        handoff:
-          creation.outcome === "succeeded"
-            ? {
-                ...desktopHandoff(validateLedger(store.read()), operation.id, payload.prompt),
-                ...delivery,
-              }
-            : null,
-      }),
-    );
-  } else if (command === "show" || command === "view") {
-    const parsed = z
-      .object({
-        run_id: id,
-        actor: actorSchema,
-        plan_id: id.optional(),
-        section: z
-          .enum(["summary", "plan", "tasks", "operations", "notifications", "task-context", "full"])
-          .optional(),
-        task_id: id.optional(),
-      })
-      .strict()
-      .parse(input);
-    const ledger = validateLedger(new LedgerStore(root, parsed.run_id).read());
-    const allowed =
-      ledger.control.ownership === "bound" &&
-      (parsed.actor.role === "main"
-        ? parsed.actor.thread_id === ledger.control.owner_thread_id
-        : parsed.actor.role === "group"
-          ? ledger.groups.some((g) => g.agent_thread_id === parsed.actor.thread_id)
-          : ledger.tasks.some((t) => t.thread_id === parsed.actor.thread_id));
-    if (!allowed)
-      throw new ContractError("ACTOR_MISMATCH", "Conversation is not bound to the run", 3);
-    const section = parsed.section ?? "full";
-    if (section === "task-context" && !parsed.task_id)
-      throw new ContractError("INVALID_INPUT", "task-context requires task_id", 2);
-    const contextTask = parsed.task_id
-      ? ledger.tasks.find((item) => item.id === parsed.task_id)
-      : null;
-    if (
-      section === "task-context" &&
-      (!contextTask || contextTask.thread_id !== parsed.actor.thread_id)
-    )
-      throw new ContractError(
-        "ACTOR_MISMATCH",
-        "Task context is limited to the bound task conversation",
-        3,
-      );
-    const contextPlan = ledger.plans.find((item) => item.id === ledger.execution_plan_id);
-    const contextNode = contextPlan?.nodes.find(
-      (item) => item.kind === "task" && item.ref_id === parsed.task_id,
-    );
-    const contextEdges =
-      contextPlan?.edges.filter(
-        (edge) => edge.from_node_id === contextNode?.id || edge.to_node_id === contextNode?.id,
-      ) ?? [];
-    const contextAtomicNodes = (contextPlan?.atomic_nodes ?? ledger.atomic_nodes).filter(
-      (node) =>
-        (node.kind === "work" &&
-          node.scope?.kind === "task" &&
-          node.scope.task_id === parsed.task_id) ||
-        (node.kind === "milestone" &&
-          node.scope?.kind === "task" &&
-          node.scope.task_id === parsed.task_id),
-    );
-    const sections = {
-      summary: {
-        orchestration_id: ledger.orchestration_id,
-        revision: ledger.revision,
-        control: ledger.control,
-      },
-      plan: ledger.plans,
-      tasks: ledger.tasks,
-      operations: ledger.operations,
-      notifications: ledger.notifications,
-      "task-context": {
-        task: contextTask,
-        delivery_unit: contextTask
-          ? ledger.groups.find((item) => item.id === contextTask.group_id)
-          : null,
-        plan_node: contextNode ?? null,
-        dependency_edges: contextEdges,
-        atomic_nodes: contextAtomicNodes,
-        atomic_edges: (contextPlan?.atomic_edges ?? ledger.atomic_edges).filter((edge) =>
-          contextAtomicNodes.some(
-            (node) => node.id === edge.from_node_id || node.id === edge.to_node_id,
-          ),
-        ),
-        resources: contextTask
-          ? ledger.resources.filter(
-              (resource) =>
-                resource.target === contextTask.id ||
-                resource.target === contextTask.thread_id ||
-                resource.target === contextTask.branch,
-            )
-          : [],
-        ready: parsed.task_id ? ready(ledger, parsed.task_id) : false,
-      },
-      full: ledger,
-    };
-    console.log(
-      JSON.stringify({
-        ok: true,
-        code: "OK",
-        revision: ledger.revision,
-        result: command === "view" ? buildView(ledger, parsed.plan_id) : sections[section],
-      }),
-    );
-  } else {
-    const parsed = requestSchema.parse(input);
-    const store = new LedgerStore(root, parsed.run_id);
-    const commandLedger = validateLedger(store.read());
-    if (
-      (commandLedger.contract_version >= 3 &&
-        ["dispatch-bind-request", "dispatch-resolve"].includes(command)) ||
-      ["initialization-recovery-claim", "initialization-recovery-observe"].includes(command)
-    )
-      throw new ContractError(
-        "CLI_ONLY_DISPATCH",
-        "Dispatch binding, resolution and recovery mutations are internal to conversation-create, creation-reconcile and initialization-recover; direct mutation is not an accepted flow",
-        5,
-      );
-    const result = record(
-      command === "notification-reconcile"
-        ? reconcileNotification(store, parsed)
-        : store.update((raw) => apply(raw, command, parsed)),
-    );
-    if (!result) throw new ContractError("INVALID_RESULT", "Invalid command result");
-    const request = notificationRequestOf(result);
-    const delivered =
-      request && result.code === "APPLIED"
-        ? await deliverNotification(store, parsed, input, request)
-        : null;
-    if (delivered === null) console.log(JSON.stringify(result));
-    else {
-      console.log(
+      renewViewerUsage(root, input.run_id);
+    } catch {
+      console.error(
         JSON.stringify({
-          ...result,
-          result: {
-            ...record(result.result),
-            notification_delivery: delivered,
-          },
+          warning: "VIEWER_RENEWAL_FAILED",
+          message: "Ledger operation completed but viewer lease renewal failed; use service ensure",
         }),
       );
     }
-  }
-  if (
-    [
-      "task-update",
-      "notification-ack",
-      "notification-reconcile",
-      "merge-resolve",
-      "task-migrate",
-      "task-external-merge-reconcile",
-    ].includes(command)
-  ) {
-    await sweepConversationArchives(new LedgerStore(root, input.run_id)).catch(() => {});
-  }
-  try {
-    renewViewerUsage(root, input.run_id);
-  } catch {
-    console.error(
-      JSON.stringify({
-        warning: "VIEWER_RENEWAL_FAILED",
-        message: "Ledger operation completed but viewer lease renewal failed; use service ensure",
-      }),
-    );
-  }
+  };
+  if (command === "init") await execute();
+  else await withRunCommand(new LedgerStore(root, input.run_id), execute);
 } catch (error) {
   let code = "IO_ERROR",
     exitCode = 6,

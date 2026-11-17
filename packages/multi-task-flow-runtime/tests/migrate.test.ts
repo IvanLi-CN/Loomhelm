@@ -1,3 +1,4 @@
+import "./cli-identity-fixture";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
@@ -35,7 +36,16 @@ function root(): string {
 
 async function runOrchestrate(dataRoot: string, command: string, input: unknown) {
   const child = Bun.spawn(
-    [process.execPath, join(import.meta.dir, "../scripts/orchestrate.ts"), command, "--input", "-"],
+    [
+      process.execPath,
+      join(
+        import.meta.dir,
+        command === "init" ? "../scripts/orchestrate.ts" : "historical-migration-cli.ts",
+      ),
+      command,
+      "--input",
+      "-",
+    ],
     {
       env: { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: dataRoot },
       stdin: "pipe",
@@ -60,6 +70,8 @@ async function createLegacyRun(dataRoot: string, runId = "legacy-run") {
   expect(initialized.exitCode).toBe(0);
   const ledgerPath = join(dataRoot, "runs", runId, "ledger.json");
   const legacy = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  delete legacy.runtime_identity;
+  delete legacy.upgrade;
   legacy.groups[0] = {
     ...legacy.groups[0],
     agent_thread_id: "group-thread",
@@ -119,7 +131,7 @@ afterEach(() => {
   for (const value of roots.splice(0)) rmSync(value, { recursive: true, force: true });
 });
 
-describe("orchestrate migrate", () => {
+describe("historical migration primitive", () => {
   test("ordinary migrate cannot repair historical policy gaps through child-review retirement", async () => {
     const dataRoot = root();
     const { ledgerPath } = await createLegacyRun(dataRoot);

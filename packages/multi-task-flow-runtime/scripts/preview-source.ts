@@ -37,6 +37,7 @@ import { servicePaths } from "../lib/service-paths";
 import { buildId, digest } from "../lib/service-release";
 import { ServiceState } from "../lib/service-state";
 import { LedgerStore } from "../lib/store";
+import { writeViewerBinding } from "../lib/viewer-binding";
 
 const moduleRoot = resolve(import.meta.dir, "..");
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mtf-source-preview-")));
@@ -163,6 +164,23 @@ const body = {
   files,
 };
 const manifest = { ...body, build_id: buildId(body) };
+// This is a newly created isolated preview, never evidence for a historical run.
+writeViewerBinding(state, {
+  schema_version: 1,
+  run_id: run.orchestration_id,
+  package_name: "@loomhelm/multi-task-flow",
+  package_version: "source-preview",
+  build_id: manifest.build_id,
+  source_sha: manifest.source_sha,
+  compatibility_line: "compat-v1",
+  ledger_contract: manifest.ledger_contract,
+  api_contract: manifest.api_versions[0]!,
+  frontend_contract: manifest.frontend_contracts[0]!,
+  viewer_contract: manifest.viewer_contract,
+  revision: 0,
+  request_id: "isolated-source-preview",
+  updated_at: new Date().toISOString(),
+});
 const registry = new PortRegistry(defaultRegistryDir());
 const allocation = await registry.allocate({
   scopeId: state.paths.scope,

@@ -389,7 +389,7 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
           "Provider observation does not match the merge claim",
           5,
         );
-        if (ledger.contract_version === 3 && op.request.mode === "child") {
+        if (ledger.contract_version >= 3 && op.request.mode === "child") {
           const receipt = evidence.receipt;
           const childTask = find(ledger.tasks, (item) => item.id === op.request.task_id, "Task");
           requireCondition(
@@ -446,7 +446,7 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
           owner.state = "merged";
           if (op.request.mode === "parent-followup") owner.current_sha = evidence.sha;
           if (op.request.mode === "parent") {
-            if (ledger.contract_version !== 3) owner.parent_pr = op.request.pr;
+            if (ledger.contract_version < 3) owner.parent_pr = op.request.pr;
             else
               owner.pr = {
                 state: "merged",
@@ -483,7 +483,7 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
               "DeliveryUnit",
             );
             target.pr =
-              ledger.contract_version !== 3
+              ledger.contract_version < 3
                 ? op.request.pr
                 : {
                     state: "merged",

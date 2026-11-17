@@ -3,10 +3,12 @@ import { find, now, onlyMain, stable, string } from "./engine-support-core";
 import { addEvent } from "./engine-support-gates";
 import { requireCondition } from "./errors";
 import { recoveryAttempt } from "./initialization-recovery-attempt";
+import { recoveryPermissions } from "./recovery-permissions";
 
 export const initializationRecoveryCommands = [
   "initialization-recovery-claim",
   "initialization-recovery-observe",
+  "initialization-recovery-permissions",
 ] as const;
 export function executeInitializationRecoveryCommand({
   ledger,
@@ -26,6 +28,29 @@ export function executeInitializationRecoveryCommand({
     "Recovery requires an unknown CLI creation",
     5,
   );
+  if (command === "initialization-recovery-permissions") {
+    const attempt = recoveryAttempt.parse(op.request.initialization_recovery);
+    const original = recoveryPermissions.parse(payload.original);
+    requireCondition(
+      attempt.attempt_id === payload.attempt_id &&
+        attempt.permissions?.version === 1 &&
+        (!attempt.permissions.original ||
+          stable(attempt.permissions.original) === stable(original)),
+      "RECOVERY_IDENTITY_CONFLICT",
+      "Recovery permissions changed or are unavailable",
+      5,
+    );
+    op.request.initialization_recovery = { ...attempt, permissions: { version: 1, original } };
+    op.updated_at = now();
+    addEvent(ledger, request, "dispatch_request_bound", op.target_id, {
+      operation_id: op.id,
+      initialization_recovery: {
+        attempt_id: attempt.attempt_id,
+        permissions: { version: 1, original },
+      },
+    });
+    return { operation_id: op.id, attempt_id: attempt.attempt_id };
+  }
   if (command === "initialization-recovery-observe") {
     const attempt = recoveryAttempt.parse(op.request.initialization_recovery);
     const turnId = string(payload.turn_id);

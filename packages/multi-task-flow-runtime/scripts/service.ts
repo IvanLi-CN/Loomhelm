@@ -4,6 +4,9 @@ import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
 import { z } from "zod";
 import { ContractError, requireCondition } from "../lib/errors";
 import { maintenanceApply, maintenanceCheck } from "../lib/ledger-maintenance";
+import { callerIdentity, runIdentity } from "../lib/orchestration-identity";
+import { requireQuiescentRun, withRunLifecycle } from "../lib/orchestration-lifecycle";
+import { inspectOrchestration, upgradeOrchestration } from "../lib/orchestration-upgrade";
 import { validateLedger } from "../lib/schema";
 import { ServiceAuth } from "../lib/service-auth";
 import {
@@ -27,9 +30,8 @@ import {
 import { servicePaths } from "../lib/service-paths";
 import { ServiceState } from "../lib/service-state";
 import { cachedDaemonUpdate, triggerDaemonUpdateCheck } from "../lib/service-update";
-import { withExclusiveLock, writeAtomic } from "../lib/store";
+import { LedgerStore, safeId, withExclusiveLock, writeAtomic } from "../lib/store";
 import { buildView } from "../lib/view";
-import { ensureViewerBinding, writeViewerBinding } from "../lib/viewer-binding";
 
 const actor = z
   .object({
@@ -116,6 +118,13 @@ export async function serviceCommand(
     recordVerifiedTarget(state, identity);
     return result;
   }
+  if (command === "orchestration-compatibility-check") {
+    const parsed = z.object({ run_id: z.string() }).strict().parse(input);
+    return inspectOrchestration(
+      new LedgerStore(state.paths.data, safeId(parsed.run_id)),
+      callerIdentity(),
+    );
+  }
   if (command === "orchestration-upgrade") {
     const parsed = z
       .object({
@@ -125,71 +134,53 @@ export async function serviceCommand(
       })
       .strict()
       .parse(input);
-    triggerDaemonUpdateCheck(state);
-    const identity = resolvePackageTarget(parsed.target);
-    const current = ensureViewerBinding(state, parsed.run_id);
     requireCondition(
-      identity.compatibility_line === current.compatibility_line,
-      "INCOMPATIBLE_RELEASE",
-      "Target package compatibility line does not match the run binding",
+      parsed.mode !== "rollback",
+      "DOWNGRADE_FORBIDDEN",
+      "Orchestration upgrades are forward-only",
+      4,
     );
-    requireCondition(
-      identity.contracts.ledger === current.ledger_contract &&
-        identity.contracts.api === current.api_contract &&
-        identity.contracts.frontend === current.frontend_contract &&
-        identity.contracts.viewer === current.viewer_contract,
-      "INCOMPATIBLE_RELEASE",
-      "Target package contracts do not match the run binding",
-    );
-    if (parsed.mode === "rollback") requireVerifiedRollback(state, identity);
-    if (parsed.mode === "dry-run") {
-      recordVerifiedTarget(state, identity);
-      return {
-        surface: "orchestration",
-        run_id: parsed.run_id,
-        changed: false,
-        current,
-        target: identity.version,
-        requested: parsed.target,
-        dry_run: true,
-      };
-    }
-    if (identity.build_id === current.build_id)
-      return {
-        surface: "orchestration",
-        run_id: parsed.run_id,
-        changed: false,
-        current,
-        daemon_refresh: "best-effort",
-      };
-    const next = writeViewerBinding(
-      state,
-      {
-        schema_version: 1,
-        run_id: parsed.run_id,
-        package_name: identity.package_name,
-        package_version: identity.version,
-        build_id: identity.build_id,
-        source_sha: identity.source_sha,
-        compatibility_line: identity.compatibility_line,
-        ledger_contract: identity.contracts.ledger,
-        api_contract: identity.contracts.api,
-        frontend_contract: identity.contracts.frontend,
-        viewer_contract: identity.contracts.viewer,
-        revision: current.revision,
-        request_id: `orchestration-upgrade-${current.revision}-${identity.build_id}`,
-        updated_at: new Date().toISOString(),
-      },
-      { revision: current.revision, source_sha: current.source_sha },
-    );
-    recordVerifiedTarget(state, identity);
-    return {
-      surface: "orchestration",
-      run_id: parsed.run_id,
-      changed: next.build_id !== current.build_id,
-      current: next,
-      daemon_refresh: "best-effort",
-    };
+    const caller = callerIdentity();
+    const store = new LedgerStore(state.paths.data, safeId(parsed.run_id));
+    return withRunLifecycle(store, async () => {
+      const raw = JSON.parse(store.readRaw());
+      const pending = raw.upgrade && raw.upgrade.phase !== "completed" ? raw.upgrade : null;
+      // A registered attempt never re-resolves mutable tags, even on explicit resume.
+      const self = parsed.target === caller.package_version;
+      const identity = pending || self ? null : resolvePackageTarget(parsed.target);
+      const target = pending
+        ? runIdentity.parse(pending.target)
+        : self
+          ? caller
+          : runIdentity.parse({
+              package_name: identity!.package_name,
+              package_version: identity!.version,
+              build_id: identity!.build_id,
+              source_sha: identity!.source_sha,
+              compatibility_line: identity!.compatibility_line,
+              ledger_contract: identity!.contracts.ledger,
+              api_contract: identity!.contracts.api,
+              frontend_contract: identity!.contracts.frontend,
+              viewer_contract: identity!.contracts.viewer,
+            });
+      if (pending)
+        requireCondition(
+          [pending.requested_selector, target.package_version].includes(parsed.target),
+          "UPGRADE_TARGET_FROZEN",
+          "Resume the registered target",
+          4,
+        );
+      return upgradeOrchestration(
+        store,
+        caller,
+        target,
+        {
+          withQuiescentRun: (ledger, action) => requireQuiescentRun(store, ledger, action),
+        },
+        parsed.mode === "dry-run",
+        parsed.target,
+      );
+    });
   }
   if (command === "compatibility-check") {
     const parsed = z.union([source, z.object({ rollback: z.literal(true) }).strict()]).parse(input);

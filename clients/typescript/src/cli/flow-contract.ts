@@ -1070,12 +1070,17 @@ export const FLOW_CONTRACT = Object.freeze({
 	$schema: "https://json-schema.org/draft/2020-12/schema",
 	$id: "https://loomhelm.dev/schemas/multi-task-flow/flow-contract.schema.json",
 	schema_version: 2,
-	contract_version: 3,
+	contract_version: 4,
 	content_type: "application/json",
 	invocation:
 		"bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --input -",
 	commands: entries,
 	error_codes: [
+    "CALLER_IDENTITY_UNAVAILABLE",
+    "RUN_VERSION_MISMATCH",
+    "RUN_BOUNDARY_CHANGED",
+    "RUN_QUIESCENCE_UNPROVEN",
+    "UPGRADE_INCOMPLETE",
 		"ACTION_NOT_APPROVED",
 		"ACTION_NOT_PLANNED",
 		"ACTIVE_GROUP_IDLE",

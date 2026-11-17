@@ -123,7 +123,7 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
       );
       requireCondition(
         !(
-          ledger.contract_version === 3 &&
+          ledger.contract_version >= 3 &&
           atom.lifecycle_stage === "pr_merged" &&
           state === "completed"
         ),
@@ -296,7 +296,7 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
       if (
         state === "running" &&
         cliDispatch?.request.development_baseline &&
-        ledger.contract_version === 3
+        ledger.contract_version >= 3
       )
         requireCondition(
           cliDispatch.request.development_baseline.sha === owner.current_sha,
@@ -831,7 +831,7 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
       });
 
       target.pr =
-        ledger.contract_version === 3
+        ledger.contract_version >= 3
           ? { state: "merged", pr, branch: target.branch, merge_sha: mergeSha }
           : pr;
       target.lifecycle.pr_created = "passed";

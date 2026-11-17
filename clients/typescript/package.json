@@ -1,6 +1,6 @@
 {
   "name": "@loomhelm/multi-task-flow",
-  "version": "0.2.55",
+  "version": "0.3.0",
   "description": "Versioned Bun CLI and complete Multi-task Flow Skill runtime for Loomhelm",
   "type": "module",
   "engines": {
@@ -41,9 +41,9 @@
   },
   "loomhelm": {
     "compatibilityLine": "compat-v1",
-    "skillVersion": "2.7.11",
+    "skillVersion": "3.0.0",
     "contracts": {
-      "ledger": 3,
+      "ledger": 4,
       "api": 1,
       "frontend": 1,
       "viewer": 5,

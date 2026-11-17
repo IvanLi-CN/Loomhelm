@@ -1,15 +1,14 @@
-import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { readRegularNoFollow } from "@loomhelm/runtime-core/modules/visual/secure_io";
 import { z } from "zod";
 import { ContractError, requireCondition } from "./errors";
 import type { ServiceState } from "./service-state";
-import { LedgerStore, safeId, withExclusiveLock, writeAtomic } from "./store";
+import { safeId, withExclusiveLock, writeAtomic } from "./store";
 
 export const viewerBindingSchema = z
   .object({
-    schema_version: z.literal(1),
+    schema_version: z.union([z.literal(1), z.literal(2)]),
     run_id: z.string().min(1),
     package_name: z.literal("@loomhelm/multi-task-flow"),
     package_version: z.union([
@@ -55,68 +54,19 @@ export function readViewerBinding(state: ServiceState, runId: string): ViewerBin
 }
 
 export type ViewerBindingIdentity = Omit<ViewerBinding, "revision" | "request_id" | "updated_at">;
-function identityFromConfig(
-  state: ServiceState,
-  runId: string,
-  fallback?: Partial<ViewerBindingIdentity>,
-): ViewerBindingIdentity {
-  const config = (() => {
-    try {
-      return state.config();
-    } catch {
-      return {} as any;
-    }
-  })();
-  const packageName = config.package_name ?? fallback?.package_name;
-  const packageVersion = config.package_version ?? fallback?.package_version;
-  const buildId = config.current_build || fallback?.build_id;
-  const sourceSha = config.source_sha ?? fallback?.source_sha;
-  const compatibilityLine = config.compatibility_line ?? fallback?.compatibility_line;
-  requireCondition(
-    Boolean(packageName && packageVersion && buildId && sourceSha && compatibilityLine),
-    "VIEWER_BINDING_IDENTITY_UNAVAILABLE",
-    "Verified Gateway package identity is unavailable",
-    2,
-  );
-  return {
-    schema_version: 1,
-    run_id: safeId(runId),
-    package_name: packageName!,
-    package_version: packageVersion!,
-    build_id: buildId!,
-    source_sha: sourceSha!,
-    compatibility_line: compatibilityLine!,
-    ledger_contract: config.ledger_contract ?? fallback?.ledger_contract ?? 3,
-    api_contract: config.api_contract ?? fallback?.api_contract ?? 1,
-    frontend_contract: config.frontend_contract ?? fallback?.frontend_contract ?? 1,
-    viewer_contract: config.viewer_contract ?? fallback?.viewer_contract ?? 5,
-  };
-}
-
 export function ensureViewerBinding(
   state: ServiceState,
   runId: string,
-  fallback?: Partial<ViewerBindingIdentity>,
+  _fallback?: Partial<ViewerBindingIdentity>,
 ): ViewerBinding {
   const existing = readViewerBinding(state, runId);
-  if (existing) return existing;
-  const store = new LedgerStore(state.paths.data, safeId(runId));
-  store.read();
-  const path = viewerBindingPath(state, runId);
-  return withExclusiveLock(bindingLockPath(state, runId), () => {
-    const current = readViewerBinding(state, runId);
-    if (current) return current;
-    const identity = identityFromConfig(state, runId, fallback);
-    const binding = viewerBindingSchema.parse({
-      ...identity,
-      revision: 0,
-      request_id: `bootstrap-${randomUUID()}`,
-      updated_at: new Date().toISOString(),
-    });
-    mkdirSync(join(state.paths.data, "runs", runId, "runtime"), { recursive: true, mode: 0o700 });
-    writeAtomic(path, JSON.stringify(binding) + "\n");
-    return binding;
-  });
+  requireCondition(
+    existing !== null,
+    "SOURCE_IDENTITY_UNAVAILABLE",
+    "Historical run identity is missing; current Gateway identity cannot establish its source",
+    4,
+  );
+  return existing!;
 }
 
 export function writeViewerBinding(
@@ -128,6 +78,12 @@ export function writeViewerBinding(
   const path = viewerBindingPath(state, binding.run_id);
   return withExclusiveLock(bindingLockPath(state, binding.run_id), () => {
     const previous = readViewerBinding(state, binding.run_id);
+    requireCondition(
+      previous?.schema_version !== 2 && binding.schema_version !== 2,
+      "UPGRADE_REQUIRED",
+      "Contract-4 binding changes require the explicit forward upgrade transaction",
+      4,
+    );
     if (
       expected &&
       (!previous ||

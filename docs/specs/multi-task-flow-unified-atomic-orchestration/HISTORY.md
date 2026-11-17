@@ -25,3 +25,13 @@
 ## Interrupted initialization recovery
 
 采用 ADR 0038：显式单次初始化恢复与纯 creation reconciliation 分离；允许只有用户消息的 interrupted 握手，精确兼容历史角色文本，并对创建/恢复增加跨进程预算。恢复 attempt、原始 items 摘要和原生 recovery turn identity 追加保存，重入不重发，不改写旧 turn 或生产账本。
+
+- 2026-11-17: 修复恢复握手污染后续正式任务权限：原权限先持久化，限制仅用于握手，恢复并核验后再成功绑定。历史缺少快照的 attempt 保留读取但拒绝自动恢复。修复 task-context 的 ready 导入，并补充真实 CLI 和端到端状态化回归；不修改生产账本或全局安装版本。
+
+## 编排前向升级边界
+
+采用 ADR 0039：普通命令严格匹配完整运行身份；目标 CLI 经显式 upgrade 自动迁移，升级中断显式续跑，不提供编排降级。该决定替代 ADR 0034 中的编排 rollback 规则，保留 Gateway 独立回滚边界；具体需求归于 REQ-UPGRADE-001 至 REQ-UPGRADE-006。初始化恢复继续采用已合并的 [PR #310](https://github.com/IvanLi-CN/Loomhelm/pull/310)，与升级生命周期分别维护。
+
+## 编排前向升级的原子发布屏障
+
+候选复现表明旧版维护入口可以绕过单独的 ledger contract 屏障改写 schema-1 绑定；采用主人确认的整个 run 目录原子发布，同时切换账本拒绝合同与绑定格式。保留隐藏源目录快照，旧目录锁等待者按身份拒绝，新生命周期等待者重新取得当前锁；不提供编排回滚或自动清理。初始化恢复和创建预算继续复用 PR #310。
