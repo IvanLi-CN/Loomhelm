@@ -46,6 +46,8 @@ PR gate 使用 PR 的 exact base SHA 和 head SHA；merge queue 会重新解析�
 
 npm 写入需要在 npm 包设置中绑定 GitHub owner `IvanLi-CN`、repository `Loomhelm` 和 workflow filename `skill-release-publish.yml`，并允许 `npm publish` 与 `npm dist-tag`；workflow publish job 需要 `id-token: write`，且使用 GitHub-hosted runner 与 npm CLI 11.21.0 或更高版本。owner approval、GitHub token 权限和 npm Trusted Publisher 配置必须在受控 workflow environment 中提供；本地 `bun pm pack` 或 gate 通过不代表完成 npm publication。
 
+`@loomhelm/runtime-core` 单独绑定 `runtime-core-release.yml`。新建 Trusted Publisher 必须在 npm 显示的截止时间前完成首次成功发布；状态为 `Expired` 时需由 owner 授权删除并重建原绑定。发布工作流在上传后最多等待约 15 分钟，并验证 registry 的 exact identity 和冻结 tarball integrity；若 npm 已接收上传但工作流未完成，使用原 `source_sha`、原 `version`、`publish=true` 和原上传运行的 `finalize_run_id` 收尾。该路径复用原 artifact，只执行对账、dist-tag 和不可变 Git tag，不重建或再次上传；原 artifact 缺失或身份不符时停止。
+
 ## Ledger and viewer compatibility
 
 最新 viewer 支持以下读取/写入矩阵；`schema-2/contract-2` 的历史写入仍受 task execution policy 和显式维护门禁约束，新 development baseline synchronization 使用 `schema-2/contract-3`。

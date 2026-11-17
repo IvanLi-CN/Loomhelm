@@ -111,7 +111,7 @@ DeliveryUnit 的 `closed` 业务状态 MUST 保留已经验证的 `pr_merged` �
 ### VER-VIEWER-ATOMIC-002
 
 - covers: `REQ-VIEWER-ATOMIC-004`, `REQ-VIEWER-ATOMIC-005`, `REQ-VIEWER-ATOMIC-006`
-- Method: 详情内容、原子关系、Agent 操作、配置浮层、PR 提示及空状态 UI 测试；组合状态穷举测试与领域校验交叉验证；源码预览人工视觉验收。回归同时覆盖快照刷新后的原子选择保持、Bootstrap 主对话绑定、配置保存及快照替换后的焦点恢复和不支持 Popover API 时的浮层卸载。浏览器服务回归以实际投影的 canonical 原子边为断言依据，并覆盖短中等视口的抽屉打开行为；同时符合桌面宽度与抽屉断点时，抽屉策略优先，鼠标和键盘选择均必须打开可见详情；整合主线（包括 Gateway 升级恢复路径）后重新执行相同断点与交互回归；发布元数据整合不得改变已确认的 viewer 版本预期。目录升级安全测试的失败消息保留子进程实际结果，诊断不得放宽既有拒绝断言或更改锁实现。
+- Method: 详情内容、原子关系、Agent 操作、配置浮层、PR 提示及空状态 UI 测试；组合状态穷举测试与领域校验交叉验证；源码预览人工视觉验收。回归同时覆盖快照刷新后的原子选择保持、Bootstrap 主对话绑定、配置保存及快照替换后的焦点恢复和不支持 Popover API 时的浮层卸载。浏览器服务回归以实际投影的 canonical 原子边为断言依据，并覆盖短中等视口的抽屉打开行为；同时符合桌面宽度与抽屉断点时，抽屉策略优先，鼠标和键盘选择均必须打开可见详情；整合主线（包括 Gateway 升级恢复路径）后重新执行相同断点与交互回归；发布元数据整合不得改变已确认的 viewer 版本预期。
 - Pass condition: 两栏上下堆叠，原子选择与 Agent 上下文边界正确；所有 chip 和图标与值匹配并可聚焦查看原始值；异常组合明确兜底；折叠、浮层与空状态不导致布局空白或误报未关联 PR。
 
 ### VER-VIEWER-RECOVERY-001
@@ -388,7 +388,7 @@ Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，�
 ### VER-UPGRADE-001
 
 - covers: `REQ-UPGRADE-001`, `REQ-UPGRADE-002`, `REQ-UPGRADE-003`, `REQ-UPGRADE-004`, `REQ-UPGRADE-005`, `REQ-UPGRADE-006`
-- Method: 隔离历史 ledger 与绑定 fixture、已验证 artifact 身份 fixture、CLI/Worker 并发写入、原生副作用调用观察、升级各落盘边界的崩溃注入及重入测试。
+- Method: 隔离历史 ledger 与绑定 fixture、已验证 artifact 身份 fixture、CLI/Worker 并发写入、原生副作用调用观察、升级各落盘边界的崩溃注入及重入测试。目录升级安全测试的失败消息保留子进程实际结果，诊断不得放宽既有拒绝断言或更改锁实现。
 - Pass condition: 普通命令跨版本或同版本不同 build 均拒绝；专用诊断及 dry-run 不改变业务数据或绑定；目标 CLI 完成迁移和绑定一致切换；中断只续跑冻结目标、不降级；在途副作用未退出时阻断，静止 unknown/claim/容量不丢失；缺失绑定有唯一证据才补齐；旧 writer 不能绕过门禁；Gateway 和其他编排不受影响。
 
 ## Visual Evidence
