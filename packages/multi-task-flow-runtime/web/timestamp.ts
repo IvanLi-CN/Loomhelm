@@ -1,10 +1,17 @@
 import { formatLocalTime, fullLocalTime } from "./time";
 import { attachTooltip } from "./tooltip";
 
-export function renderTimestamp(value: string | null | undefined): HTMLElement {
+export function renderTimestamp(
+  value: string | null | undefined,
+  emptyLabel = "未知",
+): HTMLElement {
   const wrapper = document.createElement("span");
   wrapper.className = "timestamp-wrap";
-  if (!value || !Number.isFinite(Date.parse(value))) return wrapper;
+  if (!value || !Number.isFinite(Date.parse(value))) {
+    wrapper.classList.add("detail-placeholder");
+    wrapper.textContent = value?.trim() ? "未知" : emptyLabel;
+    return wrapper;
+  }
   const time = document.createElement("time");
   time.dateTime = value;
   time.dataset.localTimestamp = value;

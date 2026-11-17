@@ -8,6 +8,151 @@ beforeEach(() => {
 });
 
 describe("dashboard details content", () => {
+  test("missing, whitespace and invalid field values have explicit empty states", () => {
+    const task = {
+      id: "task",
+      title: "任务",
+      group_id: " ",
+      kind: "contribution",
+      state: "planned",
+      thread_id: null,
+      pr: { url: null },
+      requirements_path: null,
+      started_at: null,
+      finished_at: null,
+      conversation_policy: " ",
+      delivery_policy: "",
+      atoms: [{ id: "prepare", title: "准备", status: "planned", purpose: " ", output: "" }],
+    } as unknown as View["tasks"][number];
+    const view = {
+      groups: [],
+      tasks: [task],
+      actual_intervals: [],
+      nodes: [],
+      edges: [],
+      follow_prs: [],
+    } as unknown as View;
+    const details = createDetailContent({
+      getData: () => view,
+      labels: {},
+      labelTask: () => "待开始",
+      time: () => "未知",
+      safeExternal: () => null,
+    });
+    const valueFor = (label: string) =>
+      [...document.querySelectorAll(".detail-field")]
+        .find((row) => row.querySelector(":scope > .detail-label")?.textContent === label)
+        ?.querySelector(":scope > .detail-value")?.textContent;
+    details.showTask(task);
+    expect(valueFor("完成时间")).toBe("尚未完成");
+    expect(valueFor("所属交付单元")).toBe("未关联");
+    expect(valueFor("用途")).toBe("未配置");
+    expect(valueFor("产出要求")).toBe("未配置");
+    expect(document.querySelector(".detail-policy-value")?.getAttribute("data-policy-state")).toBe(
+      "unknown",
+    );
+    expect(valueFor("交付策略")).toContain("交付待确认");
+    for (const value of document.querySelectorAll(".detail-value")) {
+      expect(
+        Boolean(
+          value.textContent?.trim() || value.querySelector("[data-empty-label], svg, button"),
+        ),
+      ).toBe(true);
+    }
+    task.state = "closed";
+    details.showTask(task);
+    expect(valueFor("完成时间")).toBe("未知");
+    task.finished_at = "invalid";
+    details.showTask(task);
+    expect(valueFor("完成时间")).toBe("未知");
+  });
+  test("atom selection updates its inspector without replacing owner or Agent context", () => {
+    const group = {
+      id: "core",
+      title: "核心",
+      state: "active",
+      agent_thread_id: null,
+      parent_pr: { url: null },
+      atoms: [
+        {
+          id: "prepare",
+          title: "准备",
+          status: "completed",
+          purpose: "建立分支",
+          output: "分支就绪",
+        },
+        {
+          id: "merge",
+          title: "合并",
+          status: "planned",
+          purpose: "合并已验收的 PR",
+          output: "PR 已合并",
+        },
+      ],
+    } as unknown as Group;
+    const view = { groups: [group], tasks: [], actual_intervals: [] } as unknown as View;
+    const details = createDetailContent({
+      getData: () => view,
+      labels: {},
+      labelTask: () => "",
+      time: () => "",
+      safeExternal: () => null,
+    });
+    details.showGroup(group);
+    const owner = document.querySelector(".detail-pane-owner")!;
+    const agent = document.querySelector(".detail-pane-agent")!;
+    expect(
+      [...document.querySelector("#details-summary")!.children]
+        .slice(0, 3)
+        .map((node) => node.className),
+    ).toEqual(["detail-status-group", "detail-title", "detail-pr-link"]);
+    expect(document.querySelector(".detail-pr-action")?.getAttribute("aria-disabled")).toBe("true");
+    expect(document.querySelector(".detail-pr-action")?.getAttribute("aria-label")).toBe(
+      "父 PR尚未创建",
+    );
+    expect(owner.textContent).not.toContain("父 PR");
+    expect(agent.textContent).toContain("未关联");
+    expect(agent.querySelector("a")).toBeNull();
+    document.querySelector<HTMLElement>('[data-context-id="merge"]')!.click();
+    expect(document.querySelector(".detail-pane-atom")?.textContent).toContain("合并已验收的 PR");
+    expect(
+      document
+        .querySelector(".detail-atom-heading .detail-atom-status")
+        ?.getAttribute("aria-label"),
+    ).toBe("原子任务状态：待开始");
+    expect(document.querySelector(".detail-atom-status svg")).not.toBeNull();
+    expect(
+      [...document.querySelectorAll(".detail-pane-atom .detail-label")].some(
+        (node) => node.textContent === "状态",
+      ),
+    ).toBe(false);
+
+    expect(document.querySelector(".detail-pane-owner")).toBe(owner);
+    expect(document.querySelector(".detail-pane-agent")).toBe(agent);
+    expect(document.querySelector('[aria-current="true"]')?.getAttribute("data-context-id")).toBe(
+      "merge",
+    );
+    const relations = document.querySelector<HTMLDetailsElement>(".atom-relations-disclosure")!;
+    expect(relations.open).toBe(false);
+    relations.open = true;
+    relations.dispatchEvent(new Event("toggle"));
+    details.showGroup(group);
+    expect(document.querySelector<HTMLDetailsElement>(".atom-relations-disclosure")?.open).toBe(
+      true,
+    );
+    expect(document.querySelector(".detail-atom-title")?.textContent).toBe("合并");
+    document
+      .querySelector<HTMLElement>('[data-context-id="prepare"]')!
+      .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(document.querySelector(".detail-pane-atom")?.textContent).toContain("建立分支");
+    expect(document.querySelector(".detail-atom-status")?.getAttribute("aria-label")).toBe(
+      "原子任务状态：已完成",
+    );
+    document.querySelector(".detail-atom-status")!.dispatchEvent(new window.FocusEvent("focus"));
+    expect(
+      document.querySelector(".detail-atom-heading .dependency-tooltip.is-open")?.textContent,
+    ).toBe("原子任务状态：已完成");
+  });
   test("group details and previews use only group execution times", () => {
     const group = {
       id: "core",
@@ -51,9 +196,7 @@ describe("dashboard details content", () => {
         ?.querySelector(".hover-preview-value")?.textContent;
     details.showGroup(group);
     expect(document.querySelector(".detail-duration")?.textContent).toBe("30分");
-    expect(document.querySelector("#details-content")?.textContent).toContain(
-      "历史执行任务贡献任务",
-    );
+    expect(document.querySelector('[aria-label="历史执行任务"]')).toBeNull();
     expect(duration(details.groupPreview(group))).toBe("30分");
     group.started_at = null;
     group.finished_at = null;
@@ -167,7 +310,9 @@ describe("dashboard details content", () => {
     const content = document.querySelector("#details-content")?.textContent ?? "";
     expect(document.querySelector("#details-content")?.dataset.detailKind).toBe("group");
     expect(document.querySelector("#details-summary")?.textContent).toContain("Bootstrap");
-    expect(content).toContain("交付协调者");
+    expect(document.querySelector(".detail-pane-agent .detail-pane-heading")?.textContent).toBe(
+      "Agent：未关联",
+    );
     expect(content).toContain("合并父 PR");
     expect(document.querySelector('[data-context-id="group-atom-merge"]')?.dataset.focused).toBe(
       "true",
@@ -302,7 +447,7 @@ describe("dashboard details content", () => {
       item.textContent?.replace(/^[^\p{L}\p{N}]*/u, "").trim(),
     );
     expect(items).toEqual(["准备父分支", "验收收集结果", "交付单元验收", "合并父 PR", "收口"]);
-    expect(document.querySelector('[data-current="true"]')).toBeNull();
+    expect(document.querySelector('.atom-list [data-current="true"]')).toBeNull();
   });
   test("group details include the full Agent output at the end", () => {
     const group = {
@@ -313,6 +458,7 @@ describe("dashboard details content", () => {
       parent_pr: { url: null },
       latest_agent_output: {
         thread_id: "thread-group",
+        thread_title: "交付协调对话",
         agent_state: "idle",
         stale: false,
         state: "available",
@@ -336,7 +482,11 @@ describe("dashboard details content", () => {
     const labels = [...document.querySelectorAll("#details-content .detail-label")].map(
       (node) => node.textContent,
     );
-    expect(labels.at(-1)).toBe("Agent 输出");
+    expect(labels).not.toContain("Agent 输出");
+    expect(document.querySelector(".detail-pane-agent .detail-pane-heading")?.textContent).toBe(
+      "Agent：交付协调对话",
+    );
+    expect(document.querySelector(".detail-agent-owner")).toBeNull();
     expect(document.querySelector(".detail-agent-output")?.textContent).toContain("交付单元已完成");
   });
   test("keeps the summary outside the scroll body and preserves only the same object's reading position", () => {
@@ -671,17 +821,28 @@ describe("dashboard details content", () => {
     });
     profileDetails.showTask(view.tasks[0]!);
     expect(document.querySelectorAll(".execution-profile-editor")).toHaveLength(1);
+    expect(document.querySelector(".detail-pane-owner .execution-profile-editor")).toBeNull();
+    expect(document.querySelector(".detail-pane-agent .execution-profile-editor")).not.toBeNull();
+    for (const label of ["执行 Agent", "对话策略", "交付策略"]) {
+      expect(
+        [...document.querySelectorAll(".detail-pane-owner .detail-label")].some(
+          (node) => node.textContent === label,
+        ),
+      ).toBe(false);
+    }
     expect(document.querySelector('select[aria-label="运行默认模型"]')).toBeNull();
     expect(document.querySelector('input[type="range"]')).not.toBeNull();
 
-    expect(document.getElementById("details-content")?.className).toBe("");
+    expect(document.getElementById("details-content")?.classList.contains("details-empty")).toBe(
+      false,
+    );
     const content = document.getElementById("details-content")?.textContent ?? "";
     expect(content).toContain("任务");
     expect(content).toContain("贡献 contribution");
     expect(content).not.toContain("选择交付单元或任务");
-    expect(content).toContain("父 PR 合并");
-    expect(content).toContain("父 PR 已合并 merged");
-    expect(content).toContain("edge-merge-task");
+    expect(content).not.toContain("父 PR 合并");
+    expect(content).not.toContain("父 PR 已合并 merged");
+    expect(content).not.toContain("edge-merge-task");
     const body = document.getElementById("details-content")!;
     body.scrollTop = 200;
     details.showTask(view.tasks[0]!);
@@ -732,6 +893,23 @@ describe("dashboard details content", () => {
     expect(document.getElementById("details-content")?.textContent).toContain(
       "观察 Turnlatest-runtime-turn",
     );
+    const diagnostics = document.querySelector<HTMLDetailsElement>(
+      ".detail-pane-agent .detail-agent-diagnostics",
+    )!;
+    expect(diagnostics.open).toBe(false);
+    expect(diagnostics.parentElement?.classList.contains("detail-agent-facts")).toBe(true);
+    expect(diagnostics.querySelector("summary")?.textContent).toContain("运行时提示");
+    expect(diagnostics.querySelector("summary")?.textContent).not.toContain("运行诊断");
+    expect(diagnostics.querySelector("summary > :last-child")?.tagName.toLowerCase()).toBe("svg");
+    expect(diagnostics.textContent).toContain("观察 Turnlatest-runtime-turn");
+    expect(diagnostics.textContent).toContain("运行时观察时间");
+    expect(document.querySelector(".detail-pane-owner")?.textContent).not.toContain("观察 Turn");
+    diagnostics.open = true;
+    diagnostics.dispatchEvent(new Event("toggle"));
+    archiveDetails.showTask(view.tasks[0]!);
+    expect(document.querySelector<HTMLDetailsElement>(".detail-agent-diagnostics")?.open).toBe(
+      true,
+    );
     expect(document.getElementById("details-content")?.textContent).not.toContain(
       "older-public-turn",
     );
@@ -746,7 +924,9 @@ describe("dashboard details content", () => {
     (document.querySelector(".archive-action") as HTMLButtonElement).click();
     expect(retries).toBe(1);
     const conversation = document.querySelector(".detail-conversation")!;
-    expect(conversation.querySelector("a")?.textContent).toBe("打开对话");
+    expect(document.querySelector(".detail-agent-actions a")?.getAttribute("aria-label")).toBe(
+      "打开对话",
+    );
     expect(conversation.querySelector(".archive-action")?.textContent).toBe("重试归档");
     for (const label of ["对话归档", "归档说明", "归档操作", "最近归档尝试", "归档证据"])
       expect(
@@ -830,7 +1010,7 @@ describe("dashboard details content", () => {
     );
   });
 
-  test("renders path provenance and hidden plan boundaries without flattening conditions", () => {
+  test("omits aggregate task relationships from the owner panel", () => {
     const view = {
       orchestration: {
         id: "run",
@@ -925,29 +1105,11 @@ describe("dashboard details content", () => {
 
     details.showTask(view.tasks[0]!);
 
-    const content = document.getElementById("details-content")?.textContent ?? "";
-    expect(content).toContain("开始");
-    expect(content).toContain("任务已完成 completed");
-    expect(content).toContain("子 PR 已集成 integrated");
-    expect(content).toContain("父 PR 已合并 merged");
-    expect(content).toContain("entry-task");
-    expect(content).toContain("a-task");
-    expect(content).toContain("b-task");
-    const relations = document.querySelector<HTMLDetailsElement>(".detail-relations");
-    expect(relations).not.toBeNull();
-    expect(relations?.open).toBe(false);
-    expect(relations?.querySelector("summary")?.textContent).toContain("前驱 3 · 后继 0");
-    expect(relations?.querySelectorAll(".detail-relation-path")).toHaveLength(3);
-    expect(relations?.querySelector<HTMLDetailsElement>(".detail-relation-path")?.open).toBe(false);
-    relations!.open = true;
-    relations!.querySelector<HTMLDetailsElement>(".detail-relation-path")!.open = true;
-    details.showTask(view.tasks[0]!);
-    const rerenderedRelations = document.querySelector<HTMLDetailsElement>(".detail-relations");
-    expect(rerenderedRelations?.open).toBe(true);
+    expect(document.querySelector(".detail-pane-owner .detail-relations")).toBeNull();
     expect(
-      rerenderedRelations?.querySelector<HTMLDetailsElement>(".detail-relation-path")?.open,
-    ).toBe(true);
-    expect(document.querySelector(".detail-relations-trigger")).toBeNull();
-    expect(document.querySelector(".detail-relations-tooltip")).toBeNull();
+      [...document.querySelectorAll(".detail-pane-owner .detail-label")].some(
+        (node) => node.textContent === "关系",
+      ),
+    ).toBe(false);
   });
 });

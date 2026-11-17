@@ -1,3 +1,4 @@
+import { ChevronRight, createElement, GitPullRequest } from "lucide";
 import { inspectAtomicGraph } from "../lib/atomic-graph-order";
 import { initialOutput, paintOutput } from "./agent-output";
 import {
@@ -6,21 +7,21 @@ import {
   hasArchiveAction,
   renderArchiveAction,
 } from "./conversation-control";
-import { attachDependencyTooltip, type DependencyTooltipItem } from "./dependency-tooltip";
-import {
-  buildGraphProjection,
-  type GraphDependencyPath,
-  type GraphProjectionEdge,
-  nodeTitle,
-} from "./graph-projection";
-import { dependencyLabel, groupExecutionVisualState, taskKindLabel } from "./labels";
+import { agentHeader } from "./detail-agent";
+import { atomHeading } from "./detail-atom-heading";
+import { atomRelations } from "./detail-atom-relations";
+import { renderDetailStatus } from "./detail-status";
+import { deliveryPolicyChip, executionPolicyChip } from "./execution-policy-chip";
+import { buildGraphProjection } from "./graph-projection";
+import { groupExecutionVisualState, taskKindLabel } from "./labels";
 import { conversationUrl } from "./links";
 import type { AtomicTask, Group, Task, View } from "./model";
 import { renderGroupPreview, renderTaskPreview } from "./preview-content";
 import { createProfileEditor, type ProfileEditorContext } from "./profile-editor";
 import { renderStatusRow } from "./status-row";
-import { formatDuration } from "./time";
+import { formatDuration, fullLocalTime } from "./time";
 import { renderTimestamp } from "./timestamp";
+import { attachTooltip } from "./tooltip";
 
 type DetailContentContext = {
   getData: () => View | null;
@@ -57,13 +58,47 @@ function clearDetails(): HTMLElement {
   return container;
 }
 
-function field(container: HTMLElement, name: string, value: HTMLElement | string): void {
+function field(
+  container: HTMLElement,
+  name: string,
+  value: HTMLElement | string | null | undefined,
+): void {
   const row = text("div", "", "detail-field");
   row.append(text("div", name, "detail-label"));
   const content = text("div", "", "detail-value");
-  content.append(typeof value === "string" ? document.createTextNode(value) : value);
+  const emptyLabels: Record<string, string> = {
+    所属交付单元: "未关联",
+    用途: "未配置",
+    产出要求: "未配置",
+    "执行 Agent": "未声明",
+    对话策略: "未声明",
+    交付策略: "未声明",
+  };
+  const hasValue =
+    typeof value === "string"
+      ? Boolean(value.trim())
+      : value &&
+        (value.textContent?.trim() ||
+          value.matches("[data-empty-label]") ||
+          value.querySelector("button, input, select, svg, [data-empty-label]"));
+  content.append(
+    hasValue && value != null
+      ? typeof value === "string"
+        ? document.createTextNode(value)
+        : value
+      : text("span", emptyLabels[name] ?? "未提供", "detail-placeholder"),
+  );
   row.append(content);
   container.append(row);
+}
+
+function groupFactRow(container: HTMLElement, label: string): HTMLElement {
+  const row = text("section", "", "detail-fact-row");
+  row.setAttribute("aria-label", label);
+  const items = text("div", "", "detail-fact-items");
+  row.append(text("span", label, "detail-fact-category"), items);
+  container.append(row);
+  return items;
 }
 
 function requirementsValue(path: string | null, kind: "task" | "group", id: string): HTMLElement {
@@ -98,38 +133,8 @@ function durationValue(start: string | null, end: string | null): HTMLElement {
   return value;
 }
 
-function coordinatorValue(group: Group): string {
-  const status =
-    group.coordinator?.status ??
-    (group.delivery_unit_kind === "bootstrap"
-      ? group.agent_thread_id
-        ? "bound"
-        : "unknown"
-      : group.agent_thread_id
-        ? "bound"
-        : "not_created");
-  if (status === "bound")
-    return group.delivery_unit_kind === "bootstrap" ? "主对话已绑定" : "已绑定";
-  return status === "not_created" ? "尚未创建" : "未知";
-}
-
-function readinessValue(group: Group): string {
-  const readiness = group.runtime_readiness;
-  if (!readiness) return "未知";
-  const status =
-    readiness.status === "ready" ? "Ready" : readiness.status === "blocked" ? "Blocked" : "Unknown";
-  const blockers = readiness.blockers.map((blocker) => {
-    const resource = blocker.resource
-      ? ` · 资源：${blocker.resource.status === "not_created" ? "尚未创建" : "未知"}`
-      : "";
-    return `${blocker.message}${resource}`;
-  });
-  return [status, ...blockers].join(" · ");
-}
-
 function atomList(
   atoms: Task["atoms"] | Group["atoms"],
-  dependencies: (index: number) => DependencyTooltipItem[],
   focusedAtomId?: string | null,
   parent?: { kind: "task" | "group"; id: string },
   diagnostics?: (id: string) => string[],
@@ -139,7 +144,7 @@ function atomList(
   list.className = "atom-list";
   const wrapper = document.createElement("div");
   wrapper.append(list);
-  for (const [index, atom] of atoms.entries()) {
+  for (const atom of atoms) {
     const item = document.createElement("li");
     item.dataset.status = atom.status;
     if (parent) {
@@ -177,7 +182,6 @@ function atomList(
       renderStatusRow({ name: atom.title, status: atom.status, completedAt: atom.completed_at }),
     );
     list.append(item);
-    wrapper.append(attachDependencyTooltip(item, dependencies(index), `${atom.title}，查看依赖`));
   }
   return wrapper;
 }
@@ -279,6 +283,7 @@ function scopedAtomicAtoms(
     const node = nodeById.get(id)!;
     const old = legacyById.get(id);
     return {
+      ...old,
       id,
       title: node.title,
       status: atomicStatus(node.state ?? old?.status ?? "planned"),
@@ -296,161 +301,215 @@ function scopedAtomicAtoms(
   return { atoms, diagnostics };
 }
 
-function atomicIncomingEdges(
-  data: View,
-  atomId: string,
-): { from_node_id: string; to_node_id: string }[] {
-  const canonical = data.canonical_atomic_edges ?? [];
-  if (canonical.length) return canonical.filter((edge) => edge.to_node_id === atomId);
-  return (data.atomic_edges ?? [])
-    .filter((edge) => edge.to_atom_id === atomId)
-    .map((edge) => ({ from_node_id: edge.from_atom_id, to_node_id: edge.to_atom_id }));
-}
-
-function pathValue(path: GraphDependencyPath, index: number | null): string {
-  const conditions = path.requires.length
-    ? path.requires.map(dependencyLabel).join(" → ")
-    : "未声明条件";
-  const rawEdges = path.sourceEdgeIds.length ? path.sourceEdgeIds.join("、") : "无";
-  const boundary = path.boundaryNodeIds.length
-    ? `；隐藏边界：${path.boundaryNodeIds.join("、")}`
-    : "";
-  const truncated = path.truncated ? "；其余路径已省略" : "";
-  return `${index === null ? "" : `路径${index}：`}条件：${conditions}；原始边：${rawEdges}${boundary}${truncated}`;
-}
-
-function dependencyValue(
-  projection: ReturnType<typeof buildGraphProjection>,
-  edge: GraphProjectionEdge,
-  neighborId: string,
-  data: View,
-): DependencyTooltipItem {
-  const paths = edge.paths
-    .map((path, index) => pathValue(path, edge.paths.length > 1 ? index + 1 : null))
-    .join("；");
-  const node = projection.nodes.find((item) => item.id === neighborId);
-  const task = node?.nodeKind === "task" ? data.tasks.find((item) => item.id === node.refId) : null;
-  const completedAt =
-    task?.finished_at ??
-    data.actual_milestones.find((item) => item.node_id === node?.sourceNodeId)?.occurred_at;
-  return {
-    name: nodeTitle(projection, neighborId),
-    state: paths,
-    status: task?.state ?? (completedAt ? "completed" : (node?.state ?? "planned")),
-    completedAt,
-  };
-}
-
-function dependenciesFor(
-  projection: ReturnType<typeof buildGraphProjection>,
-  nodeId: string | undefined,
-  direction: "incoming" | "outgoing",
-  data: View,
-): DependencyTooltipItem[] {
-  if (!nodeId) return [];
-  const edges = projection.edges.filter((edge) =>
-    direction === "incoming" ? edge.target === nodeId : edge.source === nodeId,
-  );
-  return edges.map((edge) =>
-    dependencyValue(projection, edge, direction === "incoming" ? edge.source : edge.target, data),
-  );
-}
-
-function relationshipList(
-  label: string,
-  items: DependencyTooltipItem[],
-  pathOpen: boolean[],
-  pathIndex: { value: number },
-): HTMLElement {
-  const section = text("section", "", "detail-relation-list");
-  section.append(text("h4", label, "detail-relation-heading"));
-  if (!items.length) {
-    section.append(text("span", "无", "detail-placeholder"));
-    return section;
-  }
-  const list = document.createElement("ul");
-  for (const item of items) {
-    const row = document.createElement("li");
-    row.append(
-      renderStatusRow({
-        name: item.name,
-        status: item.status ?? "unknown",
-        completedAt: item.completedAt,
+export function createDetailContent(context: DetailContentContext) {
+  const expandedAtomRelations = new Map<string, boolean>();
+  const expandedAgentDiagnostics = new Map<string, boolean>();
+  function arrangeInspector(
+    container: HTMLElement,
+    facts: HTMLElement,
+    atoms: AtomicTask[],
+    focusedAtomId: string | null,
+    owner: Task | Group,
+  ) {
+    const data = context.getData()!;
+    const panel = (name: string, title: string) => {
+      const element = text("section", "", `detail-pane detail-pane-${name}`);
+      element.setAttribute("aria-label", title);
+      element.append(text("h3", title, "detail-pane-heading"));
+      return element;
+    };
+    const info = panel("owner", "thread_id" in owner ? "任务信息" : "交付单元信息");
+    const list = panel("atoms", "原子任务列表");
+    const progress = text(
+      "span",
+      `${atoms.filter((atom) => atom.status === "completed").length}/${atoms.length}`,
+      "detail-atom-progress",
+    );
+    progress.setAttribute(
+      "aria-label",
+      `已完成 ${atoms.filter((atom) => atom.status === "completed").length}，共 ${atoms.length} 个原子任务`,
+    );
+    list.querySelector(".detail-pane-heading")!.append(progress);
+    const atomInfo = panel("atom", "原子任务信息");
+    info.querySelector("h3")?.remove();
+    const agent = panel("agent", "Agent");
+    const atomField = [...container.children].find((element) => element !== facts) as HTMLElement;
+    if (atomField) {
+      atomField.querySelector(":scope > .detail-label")?.remove();
+      list.append(atomField);
+    }
+    const outputField = facts.querySelector(".detail-agent-output")?.closest(".detail-field");
+    const conversation = facts.querySelector(".detail-conversation");
+    conversation?.closest(".detail-field")?.remove();
+    const conversationField = [...facts.querySelectorAll(".detail-field")].find(
+      (element) => element.querySelector(":scope > .detail-label")?.textContent === "交付单元对话",
+    );
+    conversationField?.remove();
+    for (const element of facts.querySelectorAll(".detail-field")) {
+      const label = element.querySelector(":scope > .detail-label")?.textContent;
+      if (["交付协调者", "交付 Agent", "开始时间", "持续时间", "调度状态"].includes(label ?? ""))
+        element.remove();
+    }
+    const timing = text("div", "", "detail-summary-timing");
+    const start = owner.started_at;
+    timing.append(
+      text(
+        "span",
+        `开始 ${start && Number.isFinite(Date.parse(start)) ? fullLocalTime(start) : "未知"}`,
+      ),
+    );
+    const duration = text("span", "持续 ");
+    duration.append(durationValue(start ?? null, owner.finished_at ?? null));
+    timing.append(duration);
+    document.getElementById("details-summary")?.append(timing);
+    const stateBadge = document.querySelector<HTMLElement>("#details-summary .detail-state");
+    const isTask = "thread_id" in owner;
+    const runtimeOwner = isTask ? data.groups.find((group) => group.id === owner.group_id) : owner;
+    stateBadge?.replaceWith(
+      renderDetailStatus({
+        kind: isTask ? "task" : "group",
+        state: owner.state,
+        visualState: isTask
+          ? owner.state
+          : groupExecutionVisualState(owner.state, owner.coordination_execution?.state),
+        label: stateBadge.textContent ?? "未知",
+        runtime: runtimeOwner?.runtime_readiness,
+        dispatch: owner.dispatch_readiness,
       }),
     );
-    if (item.state) {
-      const path = document.createElement("details");
-      path.className = "detail-relation-path";
-      path.open = pathOpen[pathIndex.value++] ?? false;
-      const summary = document.createElement("summary");
-      summary.textContent = "查看路径证据";
-      path.append(summary, text("span", item.state, "detail-relation-path-value"));
-      row.append(path);
+    const prUrl = context.safeExternal((isTask ? owner.pr?.url : owner.parent_pr?.url) ?? null);
+    const prKind = isTask ? "子 PR" : "父 PR";
+    const prAction = document.createElement("a");
+    prAction.className = "detail-pr-action";
+    if (prUrl) {
+      prAction.href = prUrl;
+      prAction.target = "_blank";
+      prAction.rel = "noopener noreferrer";
+    } else {
+      prAction.setAttribute("aria-disabled", "true");
+      prAction.tabIndex = -1;
     }
-    list.append(row);
+    prAction.append(createElement(GitPullRequest, { "aria-hidden": "true" }));
+    const prLabel = prUrl ? `查看${prKind}` : `${prKind}尚未创建`;
+    const prWrapper = text("span", "", "detail-pr-link");
+    prWrapper.append(prAction, attachTooltip(prAction, prLabel, prLabel));
+    document.querySelector("#details-summary .detail-title")?.after(prWrapper);
+    const threadId = "thread_id" in owner ? owner.thread_id : owner.agent_thread_id;
+    agent
+      .querySelector(".detail-pane-heading")!
+      .replaceWith(agentHeader(threadId, owner.latest_agent_output?.thread_title));
+    const agentFacts = text("div", "", "detail-agent-facts");
+    const diagnostics = document.createElement("details");
+    diagnostics.className = "detail-agent-diagnostics";
+    const diagnosticKey = `${isTask ? "task" : "group"}:${owner.id}`;
+    diagnostics.open = expandedAgentDiagnostics.get(diagnosticKey) ?? false;
+    const diagnosticSummary = document.createElement("summary");
+    diagnosticSummary.append(
+      createElement(ChevronRight, { "aria-hidden": "true" }),
+      document.createTextNode("运行诊断"),
+    );
+    diagnostics.append(diagnosticSummary);
+    diagnostics.addEventListener("toggle", () =>
+      expandedAgentDiagnostics.set(diagnosticKey, diagnostics.open),
+    );
+    for (const element of [...facts.querySelectorAll(".detail-field")]) {
+      const label = element.querySelector(":scope > .detail-label")?.textContent;
+      if (["运行时观察时间", "观察 Turn"].includes(label ?? "")) {
+        diagnostics.append(element);
+      } else if (
+        ["执行配置", "执行 Agent", "对话策略", "交付策略", "运行时提示"].includes(label ?? "")
+      ) {
+        if (label === "运行时提示") element.classList.add("detail-agent-runtime-note");
+        if (["执行 Agent", "对话策略", "交付策略"].includes(label ?? "")) {
+          element.classList.add("detail-agent-chip");
+        }
+        agentFacts.append(element);
+      }
+    }
+    for (const row of facts.querySelectorAll(".detail-fact-row")) {
+      if (!row.querySelector(".detail-fact-items")?.childElementCount) row.remove();
+    }
+    const runtimeNote = agentFacts.querySelector(".detail-agent-runtime-note");
+    if (runtimeNote) agentFacts.append(runtimeNote);
+    if (runtimeNote && diagnostics.childElementCount > 1) {
+      diagnosticSummary.replaceChildren(
+        ...runtimeNote.childNodes,
+        createElement(ChevronRight, { "aria-hidden": "true" }),
+      );
+      diagnosticSummary.setAttribute("aria-label", "运行时提示与诊断详情");
+      runtimeNote.replaceWith(diagnostics);
+    }
+    if (agentFacts.childElementCount) agent.append(agentFacts);
+    if (!runtimeNote && diagnostics.childElementCount > 1) agent.append(diagnostics);
+    if (conversation) {
+      conversation.querySelector("a")?.remove();
+      if (conversation.querySelector("button, .detail-conversation-notice"))
+        agent.append(conversation);
+    }
+    if (outputField) {
+      outputField.querySelector(":scope > .detail-label")?.remove();
+      agent.append(outputField);
+    }
+    info.append(facts);
+    const leftColumn = text("div", "", "detail-column detail-column-left");
+    const rightColumn = text("div", "", "detail-column detail-column-right");
+    leftColumn.append(info, list);
+    rightColumn.append(atomInfo, agent);
+    container.classList.add("detail-inspector");
+    container.replaceChildren(leftColumn, rightColumn);
+    const selectAtom = (id: string | null) => {
+      const atom = atoms.find((item) => item.id === id);
+      container.dataset.atomSelection = atom?.id ?? "";
+      atomInfo.replaceChildren();
+      for (const item of list.querySelectorAll<HTMLElement>(".atom-list li")) {
+        const selected = item.dataset.contextId === atom?.id;
+        item.dataset.focused = String(selected);
+        if (selected) item.setAttribute("aria-current", "true");
+        else item.removeAttribute("aria-current");
+      }
+      if (!atom) {
+        atomInfo.append(text("p", "未配置原子任务", "detail-placeholder"));
+        return;
+      }
+      atomInfo.append(atomHeading(atom));
+      field(atomInfo, "原子任务 ID", atom.id);
+      field(atomInfo, "用途", atom.purpose || "未配置");
+      field(atomInfo, "产出要求", atom.output || "未配置");
+      field(
+        atomInfo,
+        "关系",
+        atomRelations(data, atom, {
+          expanded: expandedAtomRelations.get(atom.id),
+          onToggle: (expanded) => expandedAtomRelations.set(atom.id, expanded),
+        }),
+      );
+      atomInfo.lastElementChild?.classList.add("detail-atom-relations");
+    };
+    for (const item of list.querySelectorAll<HTMLElement>(".atom-list li")) {
+      item.setAttribute("role", "button");
+      item.addEventListener("click", () => selectAtom(item.dataset.contextId ?? null));
+      item.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          item.click();
+        }
+      });
+    }
+    const selected = focusedAtomId ?? container.dataset.atomSelection;
+    selectAtom(atoms.some((atom) => atom.id === selected) ? selected! : (atoms[0]?.id ?? null));
   }
-  section.append(list);
-  return section;
-}
-
-function relationshipBody(
-  predecessors: DependencyTooltipItem[],
-  successors: DependencyTooltipItem[],
-  pathOpen: boolean[],
-): HTMLElement {
-  const body = document.createElement("div");
-  body.className = "detail-relations-body";
-  const pathIndex = { value: 0 };
-  body.append(
-    relationshipList("前驱", predecessors, pathOpen, pathIndex),
-    relationshipList("后继", successors, pathOpen, pathIndex),
-  );
-  return body;
-}
-
-function relationshipValue(
-  predecessors: DependencyTooltipItem[],
-  successors: DependencyTooltipItem[],
-): HTMLElement {
-  const count = `前驱 ${predecessors.length} · 后继 ${successors.length}`;
-  const disclosure = document.createElement("details");
-  disclosure.className = "detail-relations";
-  disclosure.open = document.getElementById("details-content")?.dataset.relationshipOpen === "true";
-  let pathOpen: boolean[] = [];
-  try {
-    const raw = document.getElementById("details-content")?.dataset.relationshipPathOpen;
-    if (raw) pathOpen = JSON.parse(raw) as boolean[];
-  } catch {
-    pathOpen = [];
-  }
-  const summary = document.createElement("summary");
-  summary.append(text("span", "关系"), text("span", count, "detail-relation-count"));
-  disclosure.append(summary, relationshipBody(predecessors, successors, pathOpen));
-  return disclosure;
-}
-
-export function createDetailContent(context: DetailContentContext) {
   function begin(kind: "task" | "group", id: string, title: string, state: string) {
     const container = document.getElementById("details-content")!;
     const selection = `${kind}:${id}`;
     const sameSelection = container.dataset.selection === selection;
+    if (!sameSelection) delete container.dataset.atomSelection;
     const top = sameSelection ? container.scrollTop : 0;
-    const relationshipOpen = sameSelection
-      ? (container.querySelector<HTMLDetailsElement>(".detail-relations")?.open ?? false)
-      : false;
-    const relationshipPathOpen = sameSelection
-      ? [...container.querySelectorAll<HTMLDetailsElement>(".detail-relation-path")].map(
-          (path) => path.open,
-        )
-      : [];
     container.dataset.selection = selection;
     container.dataset.detailKind = kind;
-    container.dataset.relationshipOpen = String(relationshipOpen);
-    container.dataset.relationshipPathOpen = JSON.stringify(relationshipPathOpen);
     container.replaceChildren();
     container.className = "";
     const summary = document.getElementById("details-summary")!;
-    summary.replaceChildren(text("div", title, "detail-title"), text("div", state, "detail-state"));
+    summary.replaceChildren(text("div", state, "detail-state"), text("div", title, "detail-title"));
     return {
       container,
       restore: () => {
@@ -490,6 +549,7 @@ export function createDetailContent(context: DetailContentContext) {
           task.execution_profile_source === "recommendation"
             ? `按任务类型 ${task.kind} 推荐 · ${task.execution_profile_rule ?? "kind-v1"}`
             : null,
+          true,
         ),
       );
     }
@@ -499,8 +559,6 @@ export function createDetailContent(context: DetailContentContext) {
     const node = data.nodes.find((item) => item.kind === "task" && item.ref_id === task.id);
     const projection =
       Array.isArray(data.nodes) && Array.isArray(data.edges) ? buildGraphProjection(data) : null;
-    const predecessors = projection ? dependenciesFor(projection, node?.id, "incoming", data) : [];
-    const successors = projection ? dependenciesFor(projection, node?.id, "outgoing", data) : [];
     const scoped = scopedAtomicAtoms(data, { kind: "task", id: task.id });
     const taskAtoms = scoped.atoms.length ? scoped.atoms : (task.atoms ?? task.planned_atoms);
     field(
@@ -508,29 +566,12 @@ export function createDetailContent(context: DetailContentContext) {
       "原子任务",
       atomList(
         taskAtoms,
-        (index) => {
-          const id = taskAtoms?.[index]?.id;
-          return atomicIncomingEdges(data, id).map((edge) => {
-            const source =
-              taskAtoms?.find((atom) => atom.id === edge.from_node_id) ??
-              data.tasks
-                .flatMap((item) => item.atoms ?? item.planned_atoms ?? [])
-                .find((atom) => atom.id === edge.from_node_id);
-            return {
-              name: source?.title ?? edge.from_node_id,
-              state: "",
-              status: source?.status ?? "unknown",
-              completedAt: source?.completed_at,
-            };
-          });
-        },
         focusedAtomId,
         { kind: "task", id: task.id },
         (id) => scoped.diagnostics.get(id) ?? [],
       ),
     );
     container.append(facts);
-    field(facts, "关系", relationshipValue(predecessors, successors));
     const projectedNode = projection?.nodes.find((item) => item.sourceNodeId === node?.id);
     const plannedGroup =
       projectedNode?.plannedGroupId && projectedNode.plannedGroupId !== task.group_id
@@ -540,7 +581,11 @@ export function createDetailContent(context: DetailContentContext) {
     if (plannedGroup) field(facts, "计划归属交付单元", plannedGroup);
     if (task.blocker) field(facts, "等待原因", task.blocker);
     field(facts, "开始时间", renderTimestamp(task.started_at));
-    field(facts, "完成时间", renderTimestamp(task.finished_at));
+    field(
+      facts,
+      "完成时间",
+      renderTimestamp(task.finished_at, task.state === "closed" ? "未知" : "尚未完成"),
+    );
     field(facts, "持续时间", durationValue(task.started_at, task.finished_at));
     const output = text("div", "", "detail-agent-output");
     output.dataset.outputTaskId = task.id;
@@ -580,19 +625,8 @@ export function createDetailContent(context: DetailContentContext) {
       );
     }
     field(facts, "任务对话", conversation);
-    field(
-      facts,
-      "执行 Agent",
-      task.execution_owner === "main"
-        ? "Main Agent"
-        : task.execution_owner === "delivery_agent"
-          ? "交付 Agent"
-          : task.execution_owner === "task_agent"
-            ? "Task Agent"
-            : "未声明",
-    );
-    field(facts, "对话策略", task.conversation_policy ?? "未声明");
-    field(facts, "交付策略", task.delivery_policy ?? "未声明");
+    field(facts, "执行 Agent", executionPolicyChip(task.execution_owner, task.conversation_policy));
+    field(facts, "交付策略", deliveryPolicyChip(task.delivery_policy));
     field(
       facts,
       "调度状态",
@@ -602,8 +636,6 @@ export function createDetailContent(context: DetailContentContext) {
           ? "可调度"
           : "未知",
     );
-    const pr = context.safeExternal(task.pr?.url ?? null);
-    if (pr) field(facts, "子 PR", link("查看 PR", pr));
     field(facts, "任务要求", requirementsValue(task.requirements_path, "task", task.id));
     for (const follow of data.follow_prs.filter((item) => item.origin_task_id === task.id)) {
       const url = context.safeExternal(follow.pr.url);
@@ -616,29 +648,17 @@ export function createDetailContent(context: DetailContentContext) {
       );
     }
     field(facts, "Agent 输出", output);
+    arrangeInspector(container, facts, taskAtoms ?? [], focusedAtomId, task);
     restore();
   };
 
   const showGroup = (group: Group, focusedAtomId: string | null = null): void => {
     const data = context.getData();
     if (!data) return;
-    const tasks = data.tasks.filter((task) => task.group_id === group.id);
-    const historicalTaskIds = [
-      ...new Set(
-        data.actual_intervals.filter((row) => row.group_id === group.id).map((row) => row.task_id),
-      ),
-    ];
     const executionState = groupExecutionVisualState(
       group.state,
       group.coordination_execution?.state,
     );
-    const projection =
-      Array.isArray(data.nodes) && Array.isArray(data.edges) ? buildGraphProjection(data) : null;
-    const node = projection?.nodes.find(
-      (item) => item.nodeKind === "group" && item.refId === group.id,
-    );
-    const predecessors = projection ? dependenciesFor(projection, node?.id, "incoming", data) : [];
-    const successors = projection ? dependenciesFor(projection, node?.id, "outgoing", data) : [];
     const { container, restore } = begin(
       "group",
       group.id,
@@ -649,41 +669,11 @@ export function createDetailContent(context: DetailContentContext) {
     const groupAtoms = scoped.atoms.length
       ? scoped.atoms
       : (group.atoms ?? group.planned_atoms ?? []);
-    const atomById = new Map(groupAtoms.map((atom) => [atom.id, atom]));
     field(
       container,
       "原子任务",
       atomList(
         groupAtoms,
-        (index) => {
-          const atom = groupAtoms[index]!;
-          const items: DependencyTooltipItem[] = atomicIncomingEdges(data, atom.id).map((edge) => {
-            const source = atomById.get(edge.from_node_id);
-            return {
-              name: source?.title ?? edge.from_node_id,
-              state: "",
-              status: source?.status ?? "planned",
-              completedAt: source?.completed_at,
-            };
-          });
-          if ("lifecycle_stage" in atom && atom.lifecycle_stage) {
-            const titles = {
-              workspace_ready: "父分支准备就绪",
-              pr_created: "父 PR 已创建",
-              pr_merged: "父 PR 已合并",
-              closed: "交付单元收口",
-            };
-            const status = group.lifecycle?.[atom.lifecycle_stage];
-            items.push({
-              name: titles[atom.lifecycle_stage],
-              state: "",
-              status:
-                status === "passed" ? "completed" : status === "failed" ? "blocked" : "planned",
-              completedAt: group.lifecycle_completed_at?.[atom.lifecycle_stage],
-            });
-          }
-          return items;
-        },
         focusedAtomId,
         { kind: "group", id: group.id },
         (id) => scoped.diagnostics.get(id) ?? [],
@@ -695,31 +685,16 @@ export function createDetailContent(context: DetailContentContext) {
       field(facts, "协调等待", group.coordination_execution.reason ?? "等待贡献任务");
     if (group.coordination_execution?.state === "blocked")
       field(facts, "协调阻塞", group.coordination_execution.reason ?? "未知原因");
-    field(facts, "关系", relationshipValue(predecessors, successors));
-    field(facts, "交付协调者", coordinatorValue(group));
-    field(facts, "运行就绪", readinessValue(group));
-    field(
-      facts,
-      "上游合并能力",
-      group.pr_merged_availability === "available" ? "可作为下游依赖" : "不可用",
-    );
-    field(facts, "任务数", `${tasks.length} 个任务`);
-    if (historicalTaskIds.length)
-      field(
-        facts,
-        "历史执行任务",
-        historicalTaskIds
-          .map((id) => data.tasks.find((task) => task.id === id)?.title ?? id)
-          .join("、"),
-      );
-    field(facts, "持续时间", durationValue(group.started_at ?? null, group.finished_at ?? null));
+    const metadata = text("section", "", "detail-group-metadata");
+    metadata.setAttribute("aria-label", "交付单元信息");
+    facts.append(metadata);
+    const executionFacts = groupFactRow(metadata, "执行");
     if (context.profileContext) {
-      const profileContext = context.profileContext();
       field(
-        facts,
+        executionFacts,
         "执行配置",
         createProfileEditor(
-          profileContext,
+          context.profileContext(),
           "group",
           group.id,
           group.execution_profile ?? null,
@@ -727,40 +702,18 @@ export function createDetailContent(context: DetailContentContext) {
           data.profile_read_only
             ? "当前视图只读或尚未迁移"
             : (group.profile_freeze_reason ?? (group.agent_thread_id ? "对话已创建" : null)),
+          null,
+          true,
         ),
       );
     }
-    field(
-      facts,
-      "交付单元对话",
-      group.agent_thread_id ? link("打开对话", conversationUrl(group.agent_thread_id)) : "尚未创建",
-    );
-    field(
-      facts,
-      "交付 Agent",
-      group.delivery_unit_kind === "bootstrap"
-        ? "Main Agent（Bootstrap 特例）"
-        : group.delivery_agent_readiness === "bound"
-          ? "已绑定"
-          : "未绑定",
-    );
-    field(
-      facts,
-      "调度状态",
-      group.dispatch_readiness === "blocked"
-        ? `不可调度：${group.dispatch_diagnostics?.map((item) => item.message).join("；") || "未知原因"}`
-        : group.dispatch_readiness === "ready"
-          ? "可调度"
-          : "未知",
-    );
-    const pr = context.safeExternal(group.parent_pr?.url ?? null);
-    field(facts, "父 PR", pr ? link("查看 PR", pr) : "尚未创建");
     field(facts, "交付单元要求", requirementsValue(group.requirements_path, "group", group.id));
     const output = text("div", "", "detail-agent-output");
     output.dataset.outputGroupId = group.id;
     output.dataset.outputFull = "true";
     paintOutput(output, group.latest_agent_output ?? initialOutput(group.agent_thread_id), true);
     field(facts, "Agent 输出", output);
+    arrangeInspector(container, facts, groupAtoms, focusedAtomId, group);
     restore();
   };
 

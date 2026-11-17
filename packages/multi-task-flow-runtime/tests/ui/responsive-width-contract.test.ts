@@ -77,7 +77,9 @@ test("tall medium details provide an independently scrollable content body", () 
   expect(tall).toContain(
     '.workspace[data-view-tab="tasks"]:not(.has-details) { grid-template-rows: auto minmax(240px, 1fr); }',
   );
-  expect(tall).toContain("#details-content { flex: 1 1 auto; min-height: 0; overflow: auto; }");
+  expect(tall).toContain(
+    "#details-content { flex: 1 1 auto; min-height: 0; overflow: auto; padding-right: var(--sheet-padding-inline); }",
+  );
   expect(tall).toContain(
     ".workspace-view > .timeline-view { min-height: 0; display: flex; flex-direction: column; }",
   );
@@ -98,7 +100,7 @@ test("tall medium task boards compress through their ancestor chain", () => {
     .split("@media (min-width: 768px) and (max-width: 1444px) and (min-height: 961px) {")[1]!
     .split("@media (min-width: 768px) and (max-width: 1444px) and (max-height: 960px)")[0]!;
   expect(tall).toContain(
-    ".workspace-tasks { display: flex; flex-direction: column; overflow: hidden; }",
+    ".workspace-tasks { display: flex; flex-direction: column; overflow: hidden; margin-right: calc(-1 * var(--sheet-padding-inline)); }",
   );
   expect(tall).toContain(
     ".workspace-tasks .task-list-section { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; }",

@@ -38,6 +38,18 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 
 原子任务状态 MUST 仅由状态图标表达；用户聚焦的节点使用聚焦样式；viewer MUST NOT 因节点是第一项或第一个 `planned` 节点而自动添加“当前待推进项”样式。
 
+### REQ-VIEWER-ATOMIC-004
+
+详情 MUST 使用两栏布局，每栏独立上下堆叠：左栏为任务或交付单元信息及原子任务列表，右栏为当前选中原子任务信息及 Agent 信息和输出。原子任务选择只改变右上原子信息，不得混淆所属任务或交付单元的 Agent 上下文。列表标题 MUST 显示已完成数与总数；原子关系默认折叠，同一行显示摘要与右端展开图标，展开后用紧凑图表展示 canonical 前驱和后继。已完成原子摘要显示后继，其余显示前驱。
+
+### REQ-VIEWER-ATOMIC-005
+
+任务或交付单元标题左侧 MUST 使用单个无边框状态图标概览业务、运行就绪和调度状态，tooltip 保留三个来源状态；原子状态图标显示在原子标题右侧。组合状态只允许按生产者不变量剪枝，未知枚举、缺失字段和不可能组合 MUST 使用未知状态兜底且保留原值。执行归属和对话策略 MUST 合成为一个图标加文本 chip，悬浮或聚焦显示两个原始字段，交付方式使用独立图标加文本 chip；原始状态机、组合边界和异常兜底见 [STATE_MACHINES.md](STATE_MACHINES.md)。
+
+### REQ-VIEWER-ATOMIC-006
+
+Agent 信息 MUST 集中在右栏 Agent 区域：标题显示对话标题或未关联，打开对话与复制对话 ID 使用标题右端图标按钮，执行配置编辑器使用浮层且不得撑开信息行，运行时观察与诊断默认折叠。所有详情字段 MUST 提供明确空状态。PR 绑定事实与详情查询结果 MUST 区分：已有绑定但暂未获取详情时保留 PR identity、链接及刷新能力，不得误显示尚未关联。
+
 ### REQ-SCHEDULE-001
 
 计划在批准前 MUST 通过完整理论排期校验；任一可执行节点缺少可计算的正确定时、存在悬空依赖、循环依赖、未批准计划或其他导致开始/结束偏移不可确定的情况时，批准和 scheduled 状态转换 MUST 被拒绝。
@@ -91,6 +103,12 @@ DeliveryUnit 的 `closed` 业务状态 MUST 保留已经验证的 `pr_merged` �
 - covers: `REQ-VIEWER-ATOMIC-001`, `REQ-VIEWER-ATOMIC-002`, `REQ-VIEWER-ATOMIC-003`
 - Method: viewer projection、原子图和详情内容测试，覆盖合法 DAG、并列节点、环、孤儿节点、缺失依赖、开始/结束节点、里程碑、选中节点和状态图标。
 - Pass condition: 所有 canonical 节点与边始终可见；合法 DAG 的详情顺序与依赖一致；非法图显示完整事实和异常原因；不产生第二顺序字段；列表不再自动高亮第一个 planned 节点。
+
+### VER-VIEWER-ATOMIC-002
+
+- covers: `REQ-VIEWER-ATOMIC-004`, `REQ-VIEWER-ATOMIC-005`, `REQ-VIEWER-ATOMIC-006`
+- Method: 详情内容、原子关系、Agent 操作、配置浮层、PR 提示及空状态 UI 测试；组合状态穷举测试与领域校验交叉验证；源码预览人工视觉验收。
+- Pass condition: 两栏上下堆叠，原子选择与 Agent 上下文边界正确；所有 chip 和图标与值匹配并可聚焦查看原始值；异常组合明确兜底；折叠、浮层与空状态不导致布局空白或误报未关联 PR。
 
 ### VER-SCHEDULE-001
 

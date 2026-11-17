@@ -1,4 +1,27 @@
 import { menuChevron, profileModelMenu } from "./profile-model-menu";
+import { attachTooltip } from "./tooltip";
+
+function profileIcon(info: boolean): SVGSVGElement {
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("fill", "none");
+  icon.setAttribute("stroke", "currentColor");
+  icon.setAttribute("stroke-width", "1.8");
+  icon.setAttribute("stroke-linecap", "round");
+  icon.setAttribute("stroke-linejoin", "round");
+  icon.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(icon.namespaceURI, "path");
+  path.setAttribute("d", info ? "M12 11v6 M12 7h.01" : "m16 3 5 5-12 12-6 1 1-6Z M14 5l5 5");
+  if (info) {
+    const circle = document.createElementNS(icon.namespaceURI, "circle");
+    circle.setAttribute("cx", "12");
+    circle.setAttribute("cy", "12");
+    circle.setAttribute("r", "9");
+    icon.append(circle);
+  }
+  icon.append(path);
+  return icon;
+}
 export type ExecutionProfile = { model: string; thinking: string };
 export type ProfileCapabilities = { model: string; thinking: string[] }[];
 export type ProfileTarget = "task" | "group" | "run";
@@ -13,6 +36,71 @@ export type ProfileEditorContext = {
   ) => Promise<void>;
 };
 
+let profilePanelSerial = 0;
+
+function floatProfilePanel(
+  dropdown: HTMLDetailsElement,
+  trigger: HTMLElement,
+  panel: HTMLElement,
+): void {
+  panel.id = `profile-panel-${++profilePanelSerial}`;
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-label", "编辑执行配置");
+  trigger.setAttribute("aria-haspopup", "dialog");
+  trigger.setAttribute("aria-controls", panel.id);
+  trigger.setAttribute("aria-expanded", "false");
+  const nativePopover = typeof panel.showPopover === "function";
+  if (nativePopover) panel.setAttribute("popover", "auto");
+  const position = () => {
+    const anchor = trigger.getBoundingClientRect();
+    const height = panel.getBoundingClientRect().height;
+    const below = window.innerHeight - anchor.bottom - 14;
+    const above = anchor.top - 14;
+    const placeAbove = height > below && above > below;
+    panel.style.maxHeight = `${Math.max(40, placeAbove ? above : below)}px`;
+    panel.style.left = `${Math.max(8, Math.min(anchor.left, window.innerWidth - panel.offsetWidth - 8))}px`;
+    panel.style.top = `${Math.max(8, placeAbove ? anchor.top - panel.offsetHeight - 6 : anchor.bottom + 6)}px`;
+  };
+  let bindings: AbortController | undefined;
+  dropdown.addEventListener("toggle", () => {
+    bindings?.abort();
+    trigger.setAttribute("aria-expanded", String(dropdown.open));
+    if (!dropdown.open) {
+      if (nativePopover && panel.matches(":popover-open")) panel.hidePopover();
+      return;
+    }
+    if (nativePopover && !panel.matches(":popover-open")) panel.showPopover();
+    position();
+    bindings = new AbortController();
+    const { signal } = bindings;
+    window.addEventListener("resize", position, { signal });
+    window.addEventListener("scroll", position, { capture: true, signal });
+    document.addEventListener(
+      "pointerdown",
+      (event) => {
+        if (event.target instanceof Node && !dropdown.contains(event.target)) dropdown.open = false;
+      },
+      { signal },
+    );
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key !== "Escape" || panel.querySelector('.profile-model[aria-expanded="true"]'))
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+        dropdown.open = false;
+        if (nativePopover && panel.matches(":popover-open")) panel.hidePopover();
+        trigger.focus({ preventScroll: true });
+      },
+      { capture: true, signal },
+    );
+  });
+  panel.addEventListener("toggle", (event) => {
+    if ((event as ToggleEvent).newState === "closed") dropdown.open = false;
+  });
+}
+
 export function createProfileEditor(
   context: ProfileEditorContext,
   target: ProfileTarget,
@@ -21,9 +109,30 @@ export function createProfileEditor(
   effective: ExecutionProfile | null,
   freezeReason: string | null,
   recommendation: string | null = null,
+  compact = false,
 ): HTMLElement {
   const wrapper = document.createElement("div");
   wrapper.className = "execution-profile-editor";
+  if (compact) {
+    wrapper.classList.add("is-compact");
+    const value = document.createElement("span");
+    value.className = "profile-effective";
+    value.textContent = effective ? `${effective.model} · ${effective.thinking}` : "执行配置待迁移";
+    wrapper.append(value);
+    const reason =
+      freezeReason ??
+      (!context.capabilities ? context.capabilityError || "模型能力暂不可用" : null);
+    if (reason) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "profile-info-button";
+      button.append(profileIcon(true));
+      const explanation = document.createElement("span");
+      explanation.textContent = `不可编辑：${reason}`;
+      wrapper.append(button, attachTooltip(button, explanation, "执行配置不可编辑的原因"));
+      return wrapper;
+    }
+  }
   const runReadOnly = target === "run" && Boolean(freezeReason);
   if (freezeReason && !runReadOnly) {
     const value = document.createElement("p");
@@ -50,13 +159,17 @@ export function createProfileEditor(
     trigger.append(icon);
   } else {
     trigger.setAttribute("aria-label", "编辑执行配置");
-    trigger.textContent = effective
-      ? `${effective.model} · ${effective.thinking}`
-      : "选择模型与思考强度";
-    trigger.append(menuChevron());
+    if (compact) trigger.append(profileIcon(false));
+    else {
+      trigger.textContent = effective
+        ? `${effective.model} · ${effective.thinking}`
+        : "选择模型与思考强度";
+      trigger.append(menuChevron());
+    }
   }
   const panel = document.createElement("div");
   panel.className = "profile-panel";
+  if (compact) floatProfilePanel(dropdown, trigger, panel);
   const caption = document.createElement("p");
   caption.className = "profile-caption";
   caption.textContent =

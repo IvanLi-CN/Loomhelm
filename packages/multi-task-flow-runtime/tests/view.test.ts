@@ -635,6 +635,33 @@ describe("timeline projections", () => {
       "ready",
     );
 
+    // Start with every gate passing, so other failures cannot mask a regression.
+    for (const phase of ["planned", "blocked", "closed"] as const) {
+      const changed = structuredClone(ledger);
+      changed.groups.find((item) => item.id === group.id)!.state = phase;
+      const projected = (buildView(changed) as any).groups.find(
+        (item: any) => item.id === group.id,
+      );
+      expect(projected.dispatch_readiness).toBe("blocked");
+      expect(projected.runtime_readiness.status).toBe("blocked");
+    }
+    const lostWorkspace = structuredClone(ledger);
+    lostWorkspace.resources = lostWorkspace.resources.filter(
+      (resource) => !(resource.kind === "worktree" && resource.target === group.id),
+    );
+    const unavailable = (buildView(lostWorkspace) as any).groups.find(
+      (item: any) => item.id === group.id,
+    );
+    expect(unavailable.dispatch_readiness).toBe("ready");
+    expect(unavailable.runtime_readiness.status).toBe("blocked");
+    const uncertainControl = structuredClone(ledger);
+    uncertainControl.control.ownership = "uncertain";
+    const uncertain = (buildView(uncertainControl) as any).groups.find(
+      (item: any) => item.id === group.id,
+    );
+    expect(uncertain.dispatch_readiness).toBe("ready");
+    expect(uncertain.runtime_readiness.status).toBe("unknown");
+
     receipt.target_branch = group.parent_branch!;
     const wrongTargetView = buildView(ledger) as any;
     const wrongTargetGroup = wrongTargetView.groups.find((item: any) => item.id === group.id);

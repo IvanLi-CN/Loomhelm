@@ -211,3 +211,207 @@ Agent 空闲、对话连接、最新输出和观察器断开等信息属于独�
 - 异常流程不得新增 `reconciling`、`reopened` 或其他临时业务状态；恢复动作必须落为追加事件，并重新计算受影响投影。
 - `closed` DeliveryUnit 的下游能力与其自身继续派发的 readiness 必须分别显示和判断。
 - 范围变化必须产生计划修订和 successor DeliveryUnit；原对象的 closeout、事实、结果和副作用记录必须保留。
+
+## 5. 详情面板的三状态组合投影
+
+详情名称右侧只显示一个状态图标。它组合业务/执行状态 S、运行就绪 R 和调度门禁 D，悬浮或键盘聚焦时以两行显示三项原始信息。第一行是任务或交付单元状态，第二行是运行就绪与调度状态。它是只读展示状态机，不改变第 1 节的对象边界，不持久化，不作为派发许可，也不替代 `is_ready`、依赖检查或操作审批。
+
+### 5.1 状态一：业务/执行状态
+
+Canonical TaskStatus 与 DeliveryUnitStatus 的正常、异常状态机见第 2 节和第 3 节。详情读取的兼容 Viewer 尚包含旧账本标签；下图描述其输入与观察叠加，不能反向作为 canonical 业务迁移规则。
+
+```mermaid
+stateDiagram-v2
+    state input_kind <<choice>>
+    [*] --> input_kind
+    input_kind --> Task: 任务
+    input_kind --> DeliveryUnit: 交付单元
+    state Task {
+        [*] --> task_phase
+        task_phase --> agent_idle: starting/running 且非 stale 的 idle turn
+        agent_idle --> task_phase: 非 idle turn，恢复 starting/running
+    }
+    state DeliveryUnit {
+        [*] --> group_phase
+        group_phase --> execution_overlay: running/waiting/blocked 观察且原状态非 closed
+        group_phase --> execution_overlay: active 且观察为 idle/unknown
+        execution_overlay --> group_phase: 观察条件不再成立
+    }
+```
+
+`task_phase` 的输入集合是 `planned | ready | starting | running | agent_idle | waiting | blocked | integrated | completed | closed`；`group_phase` 是 `planned | active | merged | closed | blocked`。`groupExecutionVisualState` 保留 raw group state，额外计算展示状态；closed 不允许观察覆盖。已存在的观察不能证明业务状态已迁移：例如 raw active、观察 blocked、R ready、D ready 是合法组合。约束必须检查 raw state，不能检查显示文字或观察后的状态。Task 的 idle 叠加遵循 `runtimeTaskState`，不覆盖 waiting、blocked、终态或非 active disposition。
+
+### 5.2 状态二：运行就绪 R
+
+`groupRuntimeReadiness` 根据同一账本快照重新计算。Task 没有独立的同名字段，详情取所属交付单元的 R，提示文字必须写“所属单元运行就绪”。下图的边表示事实变化后的重新计算，不是写入业务状态的命令。
+
+```mermaid
+stateDiagram-v2
+    [*] --> unknown
+    unknown --> ready: 控制权、协调者、单元状态和所需资源证据通过
+    unknown --> blocked: 得到明确阻断证据
+    ready --> blocked: 单元关闭/阻塞或资源证据失效
+    ready --> unknown: 不再属于当前计划或关键证据未知
+    blocked --> ready: 阻断解除且全部所需证据通过
+    blocked --> unknown: 当前事实只能判为未知
+```
+
+判定顺序是：非当前计划相关单元为 unknown；closed 为 blocked；需要运行证据但控制权未确认时为 unknown；协调者未创建为 blocked、未知为 unknown；planned 或 blocked 单元为 blocked；最后检查 workspace、worktree、branch、发布回执和适用的基线证据。资源 blocker 的明确失败与未知由 `blockersReadiness` 合并。顺序本身影响可达组合：不相关的 closed 单元可以是 unknown；已合并但尚未 closed 的单元目前仍可能是 ready，不能擅自改成 blocked。
+
+### 5.3 状态三：调度门禁 D
+
+D 是 `view.ts` 的 policy/交付门禁投影，不是 Task 的最终可执行状态。交付单元完整输出只有 ready、blocked；Task 还允许旧执行策略未配置时的 unknown。
+
+```mermaid
+stateDiagram-v2
+    [*] --> unknown: 任务策略全未配置或输入缺失
+    unknown --> ready: 策略有效且适用门禁通过
+    unknown --> blocked: 已知策略或适用门禁不通过
+    ready --> blocked: 绑定或门禁失效
+    blocked --> ready: 绑定与适用门禁恢复
+    ready --> unknown: 任务策略回到未配置
+    blocked --> unknown: 任务策略回到未配置
+```
+
+交付单元 D ready 要求 raw state 为 active、workspace lifecycle 通过且对应原子 completed、父 PR 门禁通过或满足 bootstrap 例外，并且 regular 单元已绑定 Agent。Task 则先检查三项执行策略是否全 null，再检查策略问题；贡献任务额外检查交付门禁，最后检查 bootstrap 或 Agent 绑定。D 不检查 Task 自身是否 completed，因此 completed + D ready 并不矛盾。R 还检查独立的资源证据和控制权，所以 D ready 既不蕴含 R ready，R ready 也不蕴含 D ready。
+
+### 5.4 组合、剪枝与状态转换
+
+先构造笛卡尔积 `P = S × R × D`，再按对象类型应用源码已证明的不变量，得到允许集合 A。组装与转换使用同一个账本/view 快照；不能把三次异步读取拼接，也不能为了动画依次修改三项而经过非法中间态。若来源状态机在事件 e 后得到 S′、R′、D′，组合机直接转移为 `q′ = (S′, R′, D′)`；q′ 不属于 A 时转到 unknown fallback。观察叠加另存为 V，完整 key 是 `[kind, S, V, R, D]`，禁止用一个概览类别替代这个 key。
+
+交付单元的原始积有 `5 × 3 × 3 = 45` 个三元组。当前完整生产者输出满足以下关系，保留 15 个候选，排除 30 个；这是按可见字段约束得到的保守允许集合，不声称每一对候选之间都有直接迁移边。
+
+| Raw S | 允许的 R | 允许的 D | 三元组数 |
+| - | - | - | - |
+| active | ready / blocked / unknown | ready / blocked | 6 |
+| merged | ready / blocked / unknown | blocked | 3 |
+| planned | blocked / unknown | blocked | 2 |
+| blocked | blocked / unknown | blocked | 2 |
+| closed | blocked / unknown | blocked | 2 |
+
+证明来源：`deliveryGateDiagnostics` 对任意非 active 单元添加 `DELIVERY_UNIT_NOT_ACTIVE`，因此其 D 不可能 ready；`groupRuntimeReadiness` 在资源检查之前阻断 planned、blocked、closed，因此这些 S 的 R 不可能 ready；`view.ts` 的 group dispatch 分支只产生 ready 或 blocked。group D unknown 表示缺失/旧投影/尚未支持的数据，并非当前完整生产者的合法正常输出；UI 仍接受输入并走 unknown fallback，不能崩溃。
+
+不能额外剪掉 active + R blocked + D ready（调度门禁通过后 worktree 证据缺失）、active + R unknown + D ready（控制权未知）、active + R ready + D blocked（父 PR 门禁未通过），以及 merged + R ready + D blocked（当前 runtime 检查不把 merged 当作 closed）。这些是真实规则允许的情况，不应使用直觉上的 `D ready ⇒ R ready` 抹掉。
+
+Task 的兼容输入积为 `10 × 3 × 3 = 90`。目前这三个可见字段不足以证明进一步的通用互斥关系，故保守保留；不能把 group 的剪枝规则套到 Task。R 属于 owner，D 属于 Task policy，S 属于 Task 的业务/执行观察，三者作用域不同。这里保留 90 个候选不等于声称某个固定任务在某个固定计划中能遍历全部候选；若将来引入 kind、policy、owner phase 等额外约束，必须先用生产者证据证明并扩充测试，再收窄允许集合。
+
+```mermaid
+stateDiagram-v2
+    [*] --> evaluate
+    evaluate --> unknown_fallback: 枚举未知、字段缺失或三元组不在允许集合
+    evaluate --> allowed_product: 三元组满足所属类型的不变量
+    allowed_product --> evaluate: 收到新的完整 view 快照
+    unknown_fallback --> evaluate: 收到新的完整 view 快照
+    state allowed_product {
+        [*] --> exact_tuple
+        exact_tuple --> exact_tuple: 保留 S、R、D 和观察 V，重算概览图标
+    }
+```
+
+### 5.5 单图标与未知兜底
+
+一个图标显示概览，精确状态由完整 tuple key 与两行 tooltip 保留。多个合法 tuple 可以共享图形，但它们仍是不同的组合状态；这不是已经证明行为等价的最小化状态机，不能声称单个形状无损编码全部 105 个候选。概览按下表从上到下匹配，第一项命中即停止。
+
+| 条件 | 唯一图标 | 概览 |
+| - | - | - |
+| 非法 tuple、未知枚举、字段缺失，或任一就绪字段/执行观察为 unknown | circle-help | 状态待确认 |
+| 已知的 integrated / completed / closed / merged | circle-check | 已结束，具体含义以原状态为准 |
+| 执行观察 blocked 或 R blocked | circle-alert | 运行阻塞 |
+| starting / running / active | loader-circle | 执行中，尊重 reduced motion |
+| waiting / agent_idle / idle | hourglass | 等待中 |
+| D blocked | circle-dashed | 调度门禁未通过 |
+| 其余已知、合法且门禁通过 | circle-dot | 就绪 |
+
+终态优先于其后正常的关闭门禁，避免 closed + R blocked + D blocked 被误画成执行故障；unknown 与非法组合则始终优先兜底。兜底为中性色问号，不显示成功或可运行，不静默改写原值，不清空详情；tooltip 保留原值并说明组合不一致或未识别原因。异常说明附在第一行，仍保持两行状态说明。键盘聚焦、屏幕阅读器和悬浮获得同样的信息。
+
+### 5.6 回归边界
+
+`tests/detail-status.test.ts` 穷举 45 个 group tuple 的 15/30 边界、90 个 Task 候选、不同 tuple 的 key 唯一性、观察覆盖边界和未来枚举/缺失字段兜底；同时通过真正的 `buildView` 检查 regular/bootstrap、五种 group phase、Agent 绑定和控制权变化，断言生产者不会输出被剪掉的组合。`tests/ui/detail-status.test.ts` 验证只有一个图标、tooltip 两行、键盘打开、非法组合使用问号且原值可读。生产者不变量改变时必须连同本表、组合投影和测试一起评审，不能只放宽 UI 校验以隐藏矛盾。
+
+## 6. 执行归属、对话策略与 Agent chip
+
+`execution_owner` 与 `conversation_policy` 是任务编排配置，不是 Agent 忙闲或任务执行进度。以下图表示配置快照的分类及重新投影；箭头表示收到新配置后重新校验，不授权任意修改配置，也不替代计划审批、修订和冻结规则。原始枚举与合法性以 `lib/schema-policies.ts` 的 `taskExecutionPolicyIssues` 和声明 schema 为准。
+
+### 6.1 执行归属状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> validate_owner
+    state "null：未声明" as owner_null
+    state "main：Main Agent" as owner_main
+    state "delivery_agent：交付 Agent" as owner_delivery
+    state "task_agent：Task Agent" as owner_task
+    validate_owner --> owner_null: null
+    validate_owner --> owner_main: main
+    validate_owner --> owner_delivery: delivery_agent
+    validate_owner --> owner_task: task_agent
+    owner_null --> validate_owner: 新配置快照
+    owner_main --> validate_owner: 新配置快照
+    owner_delivery --> validate_owner: 新配置快照
+    owner_task --> validate_owner: 新配置快照
+```
+
+### 6.2 对话策略状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> validate_conversation
+    state "null：未声明" as policy_null
+    state "main_owned：主对话" as policy_main
+    state "delivery_owned：交付对话" as policy_delivery
+    state "task_agent：任务对话" as policy_task
+    state "none：枚举存在，但无合法完整配对" as policy_none
+    validate_conversation --> policy_null: null
+    validate_conversation --> policy_main: main_owned
+    validate_conversation --> policy_delivery: delivery_owned
+    validate_conversation --> policy_task: task_agent
+    validate_conversation --> policy_none: none
+    policy_null --> validate_conversation: 新配置快照
+    policy_main --> validate_conversation: 新配置快照
+    policy_delivery --> validate_conversation: 新配置快照
+    policy_task --> validate_conversation: 新配置快照
+    policy_none --> validate_conversation: 新配置快照
+```
+
+### 6.3 合成、剪枝与界面状态机
+
+枚举笛卡尔积共 `4 × 5 = 20` 对。下表保留三组正常配对及一组未声明草稿，排除其余 16 对。`none` 虽然是对话策略枚举，但当前三个非空执行归属都要求各自固定策略，因此不能形成合法完整配对。
+
+| execution_owner / conversation_policy | null | main_owned | delivery_owned | task_agent | none |
+| - | - | - | - | - | - |
+| null | 未声明草稿 | 不完整 | 不完整 | 不完整 | 不完整 |
+| main | 不完整 | Main Agent | 冲突 | 冲突 | 冲突 |
+| delivery_agent | 不完整 | 冲突 | 交付 Agent | 冲突 | 冲突 |
+| task_agent | 不完整 | 冲突 | 冲突 | Task Agent | 冲突 |
+
+这只是两个字段的投影，不等于完整任务策略已经有效：草稿还要求 `delivery_policy = null`，完整声明还要求交付策略非空并满足其独立约束。例如 `task_agent` 不得拥有 `parent_pr`，`main` 与 `delivery_agent` 不得拥有 `child_pr`。交付方式继续单独显示，不参与归属 chip 的命名；计划拓扑校验继续由领域层负责。
+
+```mermaid
+stateDiagram-v2
+    [*] --> project
+    project --> undeclared: null + null
+    project --> main: main + main_owned
+    project --> delivery: delivery_agent + delivery_owned
+    project --> task: task_agent + task_agent
+    project --> incomplete: 已知枚举且仅一项为 null
+    project --> conflict: 其余已知枚举组合
+    project --> unknown: 字段缺失或未来枚举
+    state "圆虚线 + 未声明" as undeclared
+    state "单人 + Main Agent" as main
+    state "多人 + 交付 Agent" as delivery
+    state "机器人 + Task Agent" as task
+    state "警示 + 声明不完整" as incomplete
+    state "警示 + 归属冲突" as conflict
+    state "问号 + 归属待确认" as unknown
+    undeclared --> project: 新配置快照
+    main --> project: 新配置快照
+    delivery --> project: 新配置快照
+    task --> project: 新配置快照
+    incomplete --> project: 新配置快照
+    conflict --> project: 新配置快照
+    unknown --> project: 新配置快照
+```
+
+界面使用一个“图标 + 文本”归属 chip，悬浮或键盘聚焦显示 `execution_owner`、`conversation_policy` 两个字段的原始值；异常状态另附原因。`null`、缺失字段 `undefined` 和未知字符串明确区分，不通过猜测自动纠正。独立交付 chip 同样使用图标加文本，并在 tooltip 保留原始 `delivery_policy`；`parent_pr` / `child_pr` 显示父 PR / 子 PR，`shared_delivery_unit` 显示共享交付，`evidence` 显示验收证据，`none` 显示无交付产物。
+
+`web/execution-policy-model.ts` 实现纯投影，`web/execution-policy-chip.ts` 实现可聚焦 chip。`tests/execution-policy.test.ts` 穷举 20 对并与领域校验器核对四组保留状态，同时覆盖缺失与未来枚举；`tests/ui/execution-policy-chip.test.ts` 验证单图标、文本、两个原始字段及异常说明。修改领域对应关系时必须同步更新本表、投影和测试。

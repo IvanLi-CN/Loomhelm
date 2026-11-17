@@ -4,6 +4,43 @@ import { createProfileEditor } from "../../web/profile-editor";
 const profile = { model: "gpt-6.1-sol", thinking: "medium" };
 const capabilities = [{ model: "gpt-6.1-sol", thinking: ["medium", "high"] }];
 
+test("compact profile popover closes on outside interaction and Escape without saving", async () => {
+  let updates = 0;
+  const editor = createProfileEditor(
+    {
+      capabilities,
+      update: async () => {
+        updates++;
+      },
+    },
+    "task",
+    "a",
+    profile,
+    profile,
+    null,
+    null,
+    true,
+  );
+  document.body.append(editor);
+  const dropdown = editor.querySelector("details")!;
+  const trigger = editor.querySelector<HTMLElement>("summary")!;
+  const panel = editor.querySelector<HTMLElement>('.profile-panel[role="dialog"]')!;
+  expect(trigger.getAttribute("aria-controls")).toBe(panel.id);
+  dropdown.open = true;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  document.body.dispatchEvent(new window.PointerEvent("pointerdown", { bubbles: true }));
+  expect(dropdown.open).toBe(false);
+  dropdown.open = true;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(dropdown.open).toBe(false);
+  expect(document.activeElement).toBe(trigger);
+  expect(updates).toBe(0);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  editor.remove();
+});
+
 test("editor submits a full pair and keeps server failures visible", async () => {
   let received: unknown;
   const editor = createProfileEditor(
