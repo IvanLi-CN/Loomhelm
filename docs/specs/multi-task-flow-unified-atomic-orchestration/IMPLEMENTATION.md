@@ -154,3 +154,5 @@ ADR 0039 与 REQ-UPGRADE-001 至 REQ-UPGRADE-006 的候选实现位于 `orchestr
 Gateway 不再为缺失历史绑定的账本使用当前安装或 fallback 身份补建来源；隔离源码预览只为本次新建的临时副本显式登记预览身份，不能作为历史编排来源证据。
 
 回归覆盖自定义视图下 Worker 的真实执行身份、CLI 外桌面通知的静止证据、原子交换期间原生锁获取拒绝后的安全重试，以及空 init 输入的既有错误码。历史 schema-1/contract-1 与 contract-2 的公开只读诊断保持源文件字节不变，并拒绝缺少已验证迁移链的升级。
+
+详情面板新增的渲染、组合投影及回归测试模块通过 `scripts/check-client-skills.ts` 注册到 `skills/resource-manifest.json` 的运行时源码映射，确保打包安装包含同一套模块和摘要；更新源码不自动更新用户级已安装版本。

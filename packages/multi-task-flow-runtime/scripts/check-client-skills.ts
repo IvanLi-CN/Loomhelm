@@ -10,6 +10,19 @@ const manifest = JSON.parse(readFileSync(path, "utf8"));
 const hash = (data) => createHash("sha256").update(data).digest("hex");
 const refresh = process.argv.includes("--write");
 const additional = [
+  "skills/multi-task-flow/tests/detail-status.test.ts",
+  "skills/multi-task-flow/tests/execution-policy.test.ts",
+  "skills/multi-task-flow/tests/ui/detail-agent.test.ts",
+  "skills/multi-task-flow/tests/ui/detail-atom-relations.test.ts",
+  "skills/multi-task-flow/tests/ui/detail-status.test.ts",
+  "skills/multi-task-flow/tests/ui/execution-policy-chip.test.ts",
+  "skills/multi-task-flow/web/detail-agent.ts",
+  "skills/multi-task-flow/web/detail-atom-heading.ts",
+  "skills/multi-task-flow/web/detail-atom-relations.ts",
+  "skills/multi-task-flow/web/detail-status-model.ts",
+  "skills/multi-task-flow/web/detail-status.ts",
+  "skills/multi-task-flow/web/execution-policy-chip.ts",
+  "skills/multi-task-flow/web/execution-policy-model.ts",
   "skills/multi-task-flow/tests/orchestration-upgrade-compatibility.test.ts",
   "skills/multi-task-flow/lib/store-upgrade-publication.ts",
   "skills/multi-task-flow/tests/orchestration-upgrade-worker.ts",
