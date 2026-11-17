@@ -106,11 +106,15 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FINALIZE_RUN_ID" > "$RUNNER_TEMP/original-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FINALIZE_RUN_ID/jobs?per_page=100" > "$RUNNER_TEMP/original-jobs.json"
           python3 - <<'PY'
           import json, os
           run = json.load(open(os.environ['RUNNER_TEMP'] + '/original-run.json', encoding='utf-8'))
-          if run.get('head_sha') != os.environ['SOURCE_SHA'] or run.get('path') != '.github/workflows/runtime-core-release.yml' or run.get('event') != 'workflow_dispatch':
-              raise SystemExit('original upload run does not match the exact source and release workflow')
+          if run.get('path') != '.github/workflows/runtime-core-release.yml' or run.get('event') != 'workflow_dispatch':
+              raise SystemExit('original upload run does not match the release workflow')
+          jobs = json.load(open(os.environ['RUNNER_TEMP'] + '/original-jobs.json', encoding='utf-8'))
+          if not any(step.get('name') == 'Publish exact frozen tarball' and step.get('status') == 'completed' and step.get('conclusion') in ('success', 'failure') for job in jobs.get('jobs', []) for step in job.get('steps', [])):
+              raise SystemExit('original run did not execute the frozen tarball upload step')
           PY
       - name: Download original frozen candidate
         if: inputs.finalize_run_id != ''
@@ -120,12 +124,37 @@ jobs:
           run-id: ${{ inputs.finalize_run_id }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}
-      - name: Verify original frozen candidate checksum
+      - name: Verify original frozen candidate checksum and exact source
         if: inputs.finalize_run_id != ''
         run: |
-          set -euo pipefail
-          expected="$(awk 'NR==1 {print $1}' "$RUNNER_TEMP/runtime-core-candidate/SHA256SUMS")"
-          printf '%s  %s\n' "$expected" "$RUNNER_TEMP/runtime-core.tgz" | sha256sum --check -
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, tarfile
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          tarball = root / 'runtime-core.tgz'
+          expected = (root / 'runtime-core-candidate/SHA256SUMS').read_text().split()[0]
+          if hashlib.sha256(tarball.read_bytes()).hexdigest() != expected:
+              raise SystemExit('original frozen candidate checksum mismatch')
+          source = pathlib.Path('packages/runtime-core')
+          expected_files = {'package.json', 'README.md'} | {str(path.relative_to(source)) for path in (source / 'src').rglob('*') if path.is_file()}
+          seen = set()
+          with tarfile.open(tarball, 'r:gz') as archive:
+              for member in archive.getmembers():
+                  parts = pathlib.PurePosixPath(member.name).parts
+                  if not member.isfile() or not parts or parts[0] != 'package' or '..' in parts:
+                      raise SystemExit('unexpected frozen candidate member')
+                  relative = '/'.join(parts[1:])
+                  if relative not in expected_files or relative in seen:
+                      raise SystemExit('unexpected or duplicate frozen candidate file')
+                  actual = archive.extractfile(member).read()
+                  wanted = (source / relative).read_bytes()
+                  if relative == 'package.json':
+                      actual, wanted = json.loads(actual), json.loads(wanted)
+                  if actual != wanted:
+                      raise SystemExit('frozen candidate does not match the exact source checkout')
+                  seen.add(relative)
+          if seen != expected_files:
+              raise SystemExit('frozen candidate omits exact source files')
+          PY
       - name: Upload candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
