@@ -680,7 +680,7 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
         "Task already has a dispatch claim",
         4,
       );
-      if (ledger.contract_version === 3) {
+      if (ledger.contract_version >= 3) {
         const readyEvent = ledger.events.findLast(
           (event) =>
             event.type === "task_ready" &&

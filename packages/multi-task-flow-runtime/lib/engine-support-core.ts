@@ -199,7 +199,7 @@ export function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: stri
   const task = ledger.tasks.find((candidate) => candidate.id === taskId);
   if (!nodes.length && !edges.length)
     return !(
-      ledger.contract_version === 3 && task?.atoms.some((atom) => atom.status !== "completed")
+      ledger.contract_version >= 3 && task?.atoms.some((atom) => atom.status !== "completed")
     );
   if (!nodes.length) return false;
   const targets = nodes.filter(

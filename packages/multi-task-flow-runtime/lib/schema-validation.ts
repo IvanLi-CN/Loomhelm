@@ -5,6 +5,7 @@ import {
   validateAtomicGraph,
 } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
+import { sameRunIdentity } from "./orchestration-identity";
 import { collectCutAssignmentEvidence } from "./schema-cut";
 import { canonicalJson, validateDevPlanHandoff, validatePlan } from "./schema-handoff";
 import { type Ledger, ledgerSchema, type Task } from "./schema-models";
@@ -72,6 +73,35 @@ function validateDeliveryUnits(ledger: Ledger): void {
 
 export function validateLedger(value: unknown): Ledger {
   const parsed = parseLedger(value);
+  if (parsed.contract_version === 4) {
+    requireCondition(
+      Boolean(parsed.runtime_identity),
+      "RUN_IDENTITY_REQUIRED",
+      "Contract 4 requires an immutable run identity",
+      4,
+    );
+    const upgrade = parsed.upgrade;
+    const expected = upgrade?.phase === "prepared" ? upgrade.source : upgrade?.target;
+    requireCondition(
+      !expected || sameRunIdentity(parsed.runtime_identity, expected),
+      "UPGRADE_STATE_CONFLICT",
+      "Upgrade phase and ledger identity disagree",
+      4,
+    );
+    requireCondition(
+      upgrade?.phase === "prepared" || parsed.runtime_identity?.ledger_contract === 4,
+      "INCOMPATIBLE_LEDGER",
+      "Runtime identity must implement the ledger contract",
+      4,
+    );
+  } else {
+    requireCondition(
+      !parsed.runtime_identity && !parsed.upgrade,
+      "INCOMPATIBLE_LEDGER",
+      "Lifecycle fields require contract 4",
+      4,
+    );
+  }
   validateDeliveryUnits(parsed);
   if (parsed.atomic_nodes.length || parsed.atomic_edges.some((edge) => "from_node_id" in edge)) {
     requireCondition(

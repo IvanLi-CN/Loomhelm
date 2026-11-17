@@ -6,6 +6,8 @@ import {
   writeAtomic,
 } from "../lib/store-io";
 import { readStoredLedger } from "../lib/store-ledger";
+import { callerIdentity, requireRunIdentity } from "./orchestration-identity";
+import { publishUpgradeDirectory } from "./store-upgrade-publication";
 
 export {
   ensureDirectory,
@@ -89,6 +91,8 @@ export class LedgerStore {
   readonly ledgerPath: string;
   readonly lockPath: string;
   private activeRunIdentity: FileIdentity | undefined;
+  private activeBoundary: StoreBoundary | undefined;
+  private maintenanceActive = false;
   constructor(
     root: string,
     runId: string,
@@ -148,6 +152,23 @@ export class LedgerStore {
             undefined,
             stagingIdentity,
           );
+          if ((initial as any)?.contract_version === 4) {
+            const runtimePath = join(stagingPath, "runtime");
+            createDirectoryNoFollow(runtimePath, this.rootPath, 0o700, stagingIdentity);
+            writeExclusiveNoFollow(
+              join(runtimePath, "viewer-binding.json"),
+              JSON.stringify({
+                schema_version: 2,
+                run_id: (initial as any).orchestration_id,
+                ...(initial as any).runtime_identity,
+                revision: 0,
+                request_id: "initialize",
+                updated_at: (initial as any).updated_at,
+              }) + "\n",
+              this.rootPath,
+            );
+            syncDirectoryNoFollow(runtimePath, this.rootPath);
+          }
           syncDirectoryNoFollow(stagingLocksPath, this.rootPath, stagingLocksIdentity);
           syncDirectoryNoFollow(stagingPath, this.rootPath, stagingIdentity);
           try {
@@ -199,12 +220,14 @@ export class LedgerStore {
       () => {
         this.assertBoundary(boundary);
         this.activeRunIdentity = boundary.run;
+        this.activeBoundary = boundary;
         try {
           const result = fn();
-          this.assertBoundary(boundary);
+          this.assertBoundary(this.activeBoundary!);
           return result;
         } finally {
           this.activeRunIdentity = undefined;
+          this.activeBoundary = undefined;
         }
       },
       10_000,
@@ -271,6 +294,7 @@ export class LedgerStore {
           4,
         );
         if (ledger?.schema_version !== undefined) requireLedgerCompatibility(ledger, "write");
+        if (ledger?.contract_version === 4) requireRunIdentity(ledger, callerIdentity());
         const isDomainLedger =
           typeof ledger.orchestration_id === "string" &&
           Array.isArray(ledger.plans) &&
@@ -310,16 +334,50 @@ export class LedgerStore {
   }
   maintain<T>(fn: (context: LockedLedgerMigrationContext) => T): T {
     return withExclusiveLock(join(this.rootPath, ".maintenance.lock"), () =>
-      this.withLock(() =>
-        fn({
+      this.withLock(() => {
+        this.maintenanceActive = true;
+        const context: LockedLedgerMigrationContext = {
           rootPath: this.rootPath,
           runPath: this.runPath,
           ledgerPath: this.ledgerPath,
           runIdentity: this.currentRunIdentity(),
           onStage: this.onStage,
-        }),
-      ),
+        };
+        try {
+          return fn(context);
+        } finally {
+          this.maintenanceActive = false;
+        }
+      }),
     );
+  }
+  /** Only an explicit maintenance transaction may replace the run boundary it has pinned. */
+  publishUpgrade(
+    context: LockedLedgerMigrationContext,
+    ledger: unknown,
+    binding: unknown,
+    snapshotName: string,
+    afterStage?: (phase: string) => void,
+  ): void {
+    requireCondition(
+      this.maintenanceActive && this.activeBoundary,
+      "UNSAFE_PATH",
+      "Upgrade publication requires maintenance and ledger exclusion",
+      5,
+    );
+    this.assertBoundary(this.activeBoundary);
+    publishUpgradeDirectory({
+      root: this.rootPath,
+      runPath: this.runPath,
+      sourceIdentity: this.currentRunIdentity(),
+      snapshotName,
+      ledger,
+      binding,
+      afterStage,
+    });
+    this.activeBoundary = this.captureBoundary();
+    this.activeRunIdentity = this.activeBoundary.run;
+    context.runIdentity = this.activeRunIdentity;
   }
   private captureBoundary(): StoreBoundary {
     requireDirectory(this.runPath);

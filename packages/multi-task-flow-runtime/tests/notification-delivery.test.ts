@@ -10,8 +10,9 @@ import {
   reconcileNotification,
 } from "../lib/notification-delivery";
 import { LedgerStore } from "../lib/store";
+import { fixtureIdentity } from "./cli-identity-fixture";
 
-function fixture() {
+function fixture(current = false) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mtf-delivery-")));
   const ledger = createDemoLedger();
   ledger.contract_version = 2;
@@ -30,6 +31,10 @@ function fixture() {
     },
   });
   const store = new LedgerStore(root, ledger.orchestration_id);
+  if (current) {
+    ledger.contract_version = 4;
+    ledger.runtime_identity = fixtureIdentity;
+  }
   store.create(ledger);
   const id = ledger.notifications[0]!.id;
   const parsed = {
@@ -51,7 +56,7 @@ const sent = {
 };
 
 test("explicit notification-send rejects a stale revision before persisting or delivering", async () => {
-  const f = fixture();
+  const f = fixture(true);
   try {
     const before = JSON.stringify(f.store.read());
     const child = Bun.spawn(
@@ -235,7 +240,7 @@ test("definite pre-delivery failure permits a new attempt without schema convers
 });
 
 test("active sender excludes reconciliation and a second provider call", async () => {
-  const f = fixture();
+  const f = fixture(true);
   try {
     let resolveSend!: (value: typeof sent) => void,
       calls = 0;

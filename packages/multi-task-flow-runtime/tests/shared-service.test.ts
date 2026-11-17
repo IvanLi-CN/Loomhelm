@@ -20,6 +20,7 @@ import { LedgerStore } from "../lib/store";
 import { writeViewerBinding } from "../lib/viewer-binding";
 import { serviceCommand } from "../scripts/service";
 import {
+  bindHistoricalFixture,
   fixtureLegacyRelease,
   fixtureRelease,
   fixtureRun,
@@ -102,7 +103,9 @@ test("multi-run routing has one listener and isolated worker streams", async () 
   const { root, state } = fixture();
   const release = fixtureRelease(root);
   fixtureRun(state.paths.data, "first");
+  bindHistoricalFixture(state, "first", release.manifest);
   fixtureRun(state.paths.data, "second");
+  bindHistoricalFixture(state, "second", release.manifest);
   const viewer = await startSharedViewer(
     state,
     release.manifest,
@@ -140,6 +143,7 @@ test("run service projection exposes the runtime identity used by the version de
   const { root, state } = fixture();
   const release = fixtureRelease(root);
   fixtureRun(state.paths.data, "runtime-identity");
+  bindHistoricalFixture(state, "runtime-identity", release.manifest);
   const viewer = await startSharedViewer(
     state,
     release.manifest,
@@ -372,7 +376,9 @@ test("one worker serves consecutive contract-3 run pages", async () => {
   const { root, state } = fixture();
   const release = fixtureRelease(root);
   fixtureRun(state.paths.data, "contract3-first", 3);
+  bindHistoricalFixture(state, "contract3-first", release.manifest);
   fixtureRun(state.paths.data, "contract3-second", 3);
+  bindHistoricalFixture(state, "contract3-second", release.manifest);
   const viewer = await startSharedViewer(
     state,
     release.manifest,
@@ -465,6 +471,7 @@ test("browser session keeps CSRF checks and credential-free resource links", asy
   const { root, state } = fixture();
   const release = fixtureRelease(root);
   fixtureRun(state.paths.data);
+  bindHistoricalFixture(state, "demo-run", release.manifest);
   const viewer = await startSharedViewer(
     state,
     release.manifest,

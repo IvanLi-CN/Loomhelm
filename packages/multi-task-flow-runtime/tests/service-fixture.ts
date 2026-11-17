@@ -9,6 +9,7 @@ import { servicePaths } from "../lib/service-paths";
 import { buildId, digest, releaseFiles } from "../lib/service-release";
 import { ServiceState } from "../lib/service-state";
 import { LedgerStore } from "../lib/store";
+import { writeViewerBinding } from "../lib/viewer-binding";
 import type { View } from "../web/model";
 
 export function serviceFixture(profile: "test" | "production" = "test") {
@@ -239,4 +240,27 @@ export function emptyBootstrapView(): View {
     actual_milestones: [],
     warnings: [],
   };
+}
+
+export function bindHistoricalFixture(
+  state: ReturnType<typeof serviceFixture>["state"],
+  id: string,
+  manifest: ReturnType<typeof fixtureRelease>["manifest"],
+) {
+  writeViewerBinding(state, {
+    schema_version: 1,
+    run_id: id,
+    package_name: "@loomhelm/multi-task-flow",
+    package_version: manifest.service_version,
+    build_id: manifest.build_id,
+    source_sha: manifest.source_sha,
+    compatibility_line: "compat-v1",
+    ledger_contract: manifest.ledger_contract ?? 3,
+    api_contract: manifest.api_versions[0]!,
+    frontend_contract: manifest.frontend_contracts[0]!,
+    viewer_contract: manifest.viewer_contract,
+    revision: 0,
+    request_id: "historical-fixture",
+    updated_at: new Date().toISOString(),
+  });
 }
