@@ -435,6 +435,7 @@ export const providerReceipt = z
     target_branch: nullableText,
     base_sha: sha.nullable(),
     head_sha: sha.nullable(),
+    merge_sha: sha.nullable().default(null),
     pr: externalRef.nullable(),
     state: z.enum(["exists", "open", "merged", "absent", "unknown"]),
     evidence_ref: text,

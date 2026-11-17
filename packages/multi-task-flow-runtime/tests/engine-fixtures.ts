@@ -392,6 +392,83 @@ export function readyAtomicFixture() {
   return ledger;
 }
 
+export function contract3ChildMergeFixture() {
+  const ledger = readyAtomicFixture();
+  ledger.contract_version = 3;
+  ledger.source_schema_version = null;
+  ledger.groups[0].pr = { state: "unpublished" };
+  ledger.atomic_nodes = structuredClone(ledger.plans[0].atomic_nodes);
+  ledger.atomic_edges = structuredClone(ledger.plans[0].atomic_edges);
+  for (const otherTask of ledger.tasks.slice(1)) otherTask.pr = { state: "unbound" };
+  const task = ledger.tasks[0];
+  const actor = { role: "task", thread_id: "task-a" } as const;
+  const pr = {
+    provider: "github",
+    repository: "example/repo",
+    id: "child-pr",
+    url: "https://github.com/example/repo/pull/child-pr",
+  };
+  const receipt = {
+    ...providerPrReceipt("child-pr", "task-a", base, head),
+    target_branch: "parent",
+  };
+  task.thread_id = actor.thread_id;
+  task.state = "running";
+  task.execution_owner = "task_agent";
+  task.conversation_policy = "task_agent";
+  task.delivery_policy = "child_pr";
+  task.branch = "task-a";
+  task.pr = { state: "open", pr, branch: "task-a", base_branch: "parent" };
+  task.lifecycle.pr_created = "passed";
+  task.atoms[0].status = "completed";
+  task.atoms[1].status = "completed";
+  ledger.events.push(
+    {
+      id: "task-pr-created",
+      type: "lifecycle_recorded",
+      subject_id: task.id,
+      actor_id: actor.thread_id,
+      occurred_at: at,
+      recorded_at: at,
+      data: { target_type: "task", stage: "pr_created", evidence_ref: "child-pr" },
+    },
+    {
+      id: "task-quality-observed",
+      type: "fact_observed",
+      subject_id: task.id,
+      actor_id: actor.thread_id,
+      occurred_at: at,
+      recorded_at: at,
+      data: { fact_id: "task-quality", base_sha: base },
+    },
+  );
+  ledger.facts.push(
+    {
+      id: "child-pr-published",
+      kind: "pr_published",
+      subject_id: task.id,
+      status: "passed",
+      source: "github",
+      observed_at: at,
+      sha: head,
+      evidence_ref: "child-pr",
+      receipt,
+    },
+    {
+      id: "task-quality",
+      kind: "task_quality",
+      subject_id: task.id,
+      status: "passed",
+      source: actor.thread_id,
+      observed_at: at,
+      sha: head,
+      evidence_ref: "task-quality",
+      quality: taskQuality(task.id, actor.thread_id, pr, base, head),
+    },
+  );
+  return { ledger, actor, pr };
+}
+
 export function providerBranchReceipt(branch: string, sha: string) {
   return {
     provider: "github",
