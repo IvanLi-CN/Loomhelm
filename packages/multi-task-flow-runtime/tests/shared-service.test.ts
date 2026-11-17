@@ -15,11 +15,12 @@ import { listRuns, selectAssets, startSharedViewer } from "../lib/service-http";
 import { importRun } from "../lib/service-import";
 import { runDaemon } from "../lib/service-lifecycle";
 import { installRelease, nativeServiceControl, switchRelease } from "../lib/service-maintenance";
-import { verifyRelease } from "../lib/service-release";
+import { buildId, verifyRelease } from "../lib/service-release";
 import { LedgerStore } from "../lib/store";
 import { writeViewerBinding } from "../lib/viewer-binding";
 import { serviceCommand } from "../scripts/service";
 import {
+  bindHistoricalFixture,
   fixtureLegacyRelease,
   fixtureRelease,
   fixtureRun,
@@ -102,7 +103,9 @@ test("multi-run routing has one listener and isolated worker streams", async () 
   const { root, state } = fixture();
   const release = fixtureRelease(root);
   fixtureRun(state.paths.data, "first");
+  bindHistoricalFixture(state, "first", release.manifest);
   fixtureRun(state.paths.data, "second");
+  bindHistoricalFixture(state, "second", release.manifest);
   const viewer = await startSharedViewer(
     state,
     release.manifest,
@@ -140,6 +143,7 @@ test("run service projection exposes the runtime identity used by the version de
   const { root, state } = fixture();
   const release = fixtureRelease(root);
   fixtureRun(state.paths.data, "runtime-identity");
+  bindHistoricalFixture(state, "runtime-identity", release.manifest);
   const viewer = await startSharedViewer(
     state,
     release.manifest,
@@ -372,7 +376,9 @@ test("one worker serves consecutive contract-3 run pages", async () => {
   const { root, state } = fixture();
   const release = fixtureRelease(root);
   fixtureRun(state.paths.data, "contract3-first", 3);
+  bindHistoricalFixture(state, "contract3-first", release.manifest);
   fixtureRun(state.paths.data, "contract3-second", 3);
+  bindHistoricalFixture(state, "contract3-second", release.manifest);
   const viewer = await startSharedViewer(
     state,
     release.manifest,
@@ -465,6 +471,7 @@ test("browser session keeps CSRF checks and credential-free resource links", asy
   const { root, state } = fixture();
   const release = fixtureRelease(root);
   fixtureRun(state.paths.data);
+  bindHistoricalFixture(state, "demo-run", release.manifest);
   const viewer = await startSharedViewer(
     state,
     release.manifest,
@@ -986,4 +993,72 @@ test("daemon update hints expose only confirmed newer daemon candidates", async 
     compatible_version: "0.2.13",
     latest_version: "0.2.14",
   });
+});
+
+test("custom assets cannot select a different executable identity for a contract-4 run", async () => {
+  const { root, state } = fixture();
+  const previous = fixtureRelease(root, "bound-worker");
+  const current = fixtureRelease(root, "gateway-worker");
+  const { build_id: _oldBuild, ...body } = previous.manifest;
+  const boundBody = { ...body, ledger_contract: 4 };
+  const bound = { ...boundBody, build_id: buildId(boundBody) };
+  writeFileSync(join(previous.source, "manifest.json"), JSON.stringify(bound));
+  cpSync(previous.source, join(state.paths.releases, bound.build_id), { recursive: true });
+  const { run } = fixtureRun(state.paths.data, "binding-seed", 3);
+  const identity = {
+    package_name: "@loomhelm/multi-task-flow",
+    package_version: bound.service_version,
+    build_id: bound.build_id,
+    source_sha: bound.source_sha,
+    compatibility_line: "compat-v1",
+    ledger_contract: 4,
+    api_contract: bound.api_versions[0]!,
+    frontend_contract: bound.frontend_contracts[0]!,
+    viewer_contract: bound.viewer_contract,
+  };
+  const store = new LedgerStore(state.paths.data, "bound-custom");
+  store.create({
+    ...run,
+    orchestration_id: "bound-custom",
+    contract_version: 4,
+    runtime_identity: identity,
+  });
+  const custom = join(store.runPath, "view");
+  mkdirSync(custom);
+  cpSync(join(current.source, "skills/multi-task-flow/dist"), custom, { recursive: true });
+  writeFileSync(
+    join(custom, "view.manifest.json"),
+    JSON.stringify({ api_version: 1, frontend_contract: 1 }),
+  );
+  const before = store.readRaw();
+  const viewer = await startSharedViewer(
+    state,
+    current.manifest,
+    join(current.source, "skills/multi-task-flow/dist"),
+    0,
+  );
+  servers.push(viewer);
+  const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
+    throw new Error("fixture stops before starting the selected child");
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${viewer.port}/runs/bound-custom/api/view`, {
+      headers: { authorization: "Bearer " + new ServiceAuth(state).credential() },
+    });
+    expect(response.status).toBe(503);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const [command, options] = spawn.mock.calls[0]!;
+    expect(command).toEqual([
+      process.execPath,
+      join(
+        state.paths.releases,
+        bound.build_id,
+        "skills/multi-task-flow/scripts/viewer-worker-process.ts",
+      ),
+    ]);
+    expect(JSON.parse((options as any).env.LOOMHELM_CALLER_IDENTITY)).toEqual(identity);
+    expect(store.readRaw()).toBe(before);
+  } finally {
+    spawn.mockRestore();
+  }
 });

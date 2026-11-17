@@ -1,3 +1,4 @@
+import { buildInfoFromArtifact } from './runtime-identity.ts';
 import { createHash } from 'node:crypto';
 import { access, lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -216,7 +217,7 @@ export class SkillsRuntime {
   }
   async run(script: string, args: readonly string[], options: ProcessOptions = {}): Promise<ProcessResult> {
     const manifest = await this.manifest();
-    await this.validateArtifact();
+    const artifact = await this.validateArtifact();
     if (!resourceFiles(manifest).some(file => file.path === script) || !/^(skills\/[^/]+\/scripts|skills\/bin)\/.+/.test(script)) throw new Error('Unknown toolkit script');
     const root = await realpath(this.root);
     const target = await realpath(resolve(root, script));
@@ -225,7 +226,13 @@ export class SkillsRuntime {
     const firstLine = (await readFile(target, 'utf8')).split('\n', 1)[0]!;
     const executable = script.endsWith('.ts') ? process.execPath : script.endsWith('.sh') ? '/bin/bash' : script.endsWith('.py') ? 'python3' : /^#!.*\bruby\b/.test(firstLine) ? 'ruby' : /^#!.*\b(bash|sh)\b/.test(firstLine) ? '/bin/bash' : undefined;
     if (!executable) throw new Error('Unsupported toolkit script interpreter');
-    const env = { ...process.env, ...(options.env ?? {}) };
+    const info = buildInfoFromArtifact(artifact);
+    const env: NodeJS.ProcessEnv = { ...process.env, ...(options.env ?? {}), LOOMHELM_CALLER_IDENTITY: JSON.stringify({
+      package_name: info.package_name, package_version: info.version,
+      source_sha: info.source_sha, build_id: info.build_id, compatibility_line: info.compatibility_line,
+      ledger_contract: info.contracts.ledger, api_contract: info.contracts.api,
+      frontend_contract: info.contracts.frontend, viewer_contract: info.contracts.viewer,
+    }) };
     if (options.env?.LOOMHELM_TOOLKIT_ROOT === undefined) env.LOOMHELM_TOOLKIT_ROOT = root;
     return runProcess(executable, [...(script.endsWith('.ts') ? ['--no-install'] : executable === '/bin/bash' ? ['-p'] : []), target, ...args], { ...options, cwd: options.cwd ?? root, env });
   }

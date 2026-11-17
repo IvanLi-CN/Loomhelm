@@ -9,9 +9,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { versionEnvelope } from "../lib/contract";
 import { apply } from "../lib/engine";
 import { validateLedger } from "../lib/schema";
 import { LedgerStore } from "../lib/store";
+import { fixtureIdentity } from "./cli-identity-fixture";
 import { approve, fixture } from "./engine-fixtures";
 
 const createdRoots: string[] = [];
@@ -659,7 +661,8 @@ describe("orchestrate group-base-reconcile", () => {
     const ledger = validateLedger({
       schema_version: 2,
       source_schema_version: null,
-      contract_version: 2,
+      contract_version: 4,
+      runtime_identity: fixtureIdentity,
       orchestration_id: input.run_id,
       revision: 0,
       repository: input.payload.repository,
@@ -783,6 +786,9 @@ test("task-context executes the real CLI, calculates readiness and preserves led
   const root = temporaryRoot();
   const ledger = fixture();
   approve(ledger);
+  ledger.contract_version = 4;
+  ledger.runtime_identity = fixtureIdentity;
+  ledger.version = versionEnvelope;
   const store = new LedgerStore(root, "run");
   ledger.tasks[0].thread_id = "task-a";
   ledger.tasks[2].thread_id = "task-c";

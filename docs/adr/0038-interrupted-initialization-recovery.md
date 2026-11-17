@@ -2,7 +2,7 @@
 
 ## Status
 
-Superseded by [ADR 0039](0039-initialization-recovery-permission-transaction.md)。
+Superseded by [ADR 0040](0040-initialization-recovery-permission-transaction.md)。
 
 ## Context
 

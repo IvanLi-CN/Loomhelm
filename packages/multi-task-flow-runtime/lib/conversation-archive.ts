@@ -11,6 +11,7 @@ import { apply } from "../lib/engine";
 import { ContractError, requireCondition } from "../lib/errors";
 import { type Ledger, validateLedger } from "../lib/schema";
 import type { LedgerStore } from "../lib/store";
+import { withRunCommand } from "./orchestration-lifecycle";
 
 export type ArchiveProvider = {
   archive: typeof archiveCodexThread;
@@ -33,14 +34,18 @@ export async function retryConversationArchive(
   taskId: string,
   api: ArchiveProvider = provider,
 ) {
-  return changeConversationArchive(store, taskId, api, true);
+  return store.read().contract_version === 4
+    ? withRunCommand(store, () => changeConversationArchive(store, taskId, api, true))
+    : changeConversationArchive(store, taskId, api, true);
 }
 export async function retryConversationUnarchive(
   store: LedgerStore,
   taskId: string,
   api: ArchiveProvider = provider,
 ) {
-  return changeConversationArchive(store, taskId, api, false);
+  return store.read().contract_version === 4
+    ? withRunCommand(store, () => changeConversationArchive(store, taskId, api, false))
+    : changeConversationArchive(store, taskId, api, false);
 }
 async function changeConversationArchive(
   store: LedgerStore,

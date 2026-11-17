@@ -45,3 +45,17 @@ CLI 错误必须返回 `{ "ok": false, "code": "...", "revision": null|number, "
 `initialization-recover` 使用标准 mutation envelope，只允许 bound main；payload 严格为 `{ "operation_id": "..." }`，不接收任意 prompt、模型或 thread。首次调用先检查原始 interrupted 握手和独立 worktree，再追加不可重发的 attempt；任务独占 私有 writer 在取得原生写锁后再次检查历史。当前仅支持已验证的 codex-cli 0.169.0，其他版本 fail closed。成功后返回同一 dispatch 的 succeeded 结果与 handoff notification；失败可能已提交 attempt，因此必须重新读取 revision 和 operation 后通过 `creation-reconcile` 对账，不能根据非零退出码重建会话。
 
 `creation-reconcile` 遇到注册的 recovery attempt 时复读 original/recovery 两个 turn 并核验固定提示和 READY；不会发送新消息。只有 intent、没有可证明的 recovery turn 时保持 unknown，需独立审计。旧的 interrupted turn 不会被覆盖。创建与恢复默认预留初始化预算加 200 秒（覆盖两次有界历史读取、Git 身份核验和关闭），显式 processTimeoutMs 不足时在副作用前报告 FLOW_PROCESS_BUDGET_TOO_SHORT。
+
+## 编排版本生命周期
+
+`multi-task-flow orchestration compatibility-check --run-id <run-id>` 是专用只读诊断入口；`multi-task-flow orchestration upgrade --run-id <run-id> [--dry-run] <version|tag>` 是唯一自动升级入口。目标版本 CLI 使用已验证 artifact 的完整身份执行升级；精确指定自身版本使用该 artifact，标签首次解析后必须与调用者一致。编排不接受 `--rollback`，Gateway 的独立升级及回滚合同不变。
+
+普通 `flow`（包括 `show`、`view`）同时核验账本身份和 `runtime/viewer-binding.json`，必须匹配 package/version/build/source、compatibility line 及 ledger/api/frontend/viewer 合同；`flow --help` 和 `flow schema` 不访问编排。新初始化原子发布 contract 4 账本和 schema-2 绑定，不能使用 Gateway 当前安装猜测来源。历史绑定缺失、不同 build 或尚未升级的数据返回 `RUN_VERSION_MISMATCH`；缺少已验证调用者身份返回 `CALLER_IDENTITY_UNAVAILABLE`。使用诊断查明来源，再显式升级，不能手工编辑绑定绕过。
+
+直接支持 schema-2/contract-3 到 contract-4，以及 contract-4 到更新包版本；升级保持完整业务图、owner、operation、claim 和容量，只增加身份与升级审计并推进 revision。历史 schema-1/contract-1/contract-2 继续提供只读诊断和既有存储原语兼容测试；没有已验证的直接迁移链时返回 `MIGRATION_REQUIRED`，不推断业务语义或自动退役历史事实。缺少同编排可信绑定时返回 `SOURCE_IDENTITY_UNAVAILABLE`，不从全局配置补齐。
+
+升级记录在 `ledger.json` 的 `upgrade` 中，包含唯一 operation、冻结 source/target、请求选择器、源 revision/digest、源绑定 revision/digest、源目录快照名和账本备份名。`prepared` 在既有维护、账本与绑定锁内原子交换整个 run 目录，同时发布 contract-4 账本和 schema-2 绑定，源目录保留为 `runs/.upgrade-<uuid>/` 恢复快照；后续依次推进 `migrated`、`binding_switched`、`completed`。`runtime_identity` 在 prepared 保持源身份，migrated 后成为目标身份。未完成时普通命令返回 `UPGRADE_INCOMPLETE`，只能显式 upgrade 续跑登记目标；重试原标签不会重新查询 registry。备份校验失败返回 `UPGRADE_BACKUP_INVALID`，状态或绑定冲突返回 `UPGRADE_STATE_CONFLICT`，均保留现场。备份仅用于独立灾难恢复，没有反向迁移。
+
+CLI 与新版 Worker 用每个 run 的 lifecycle 锁覆盖原生调用的完整等待，并在 `runtime/call.json` 留下开始及安全退出回执。升级同时持有既有维护锁、账本锁和绑定锁，旧 flow 在 contract-4 屏障后拒绝读写，旧维护入口也因 schema-2 绑定而拒绝改写。调用超时、进程消失和 operation 为 unknown 都不等价于原生调用已停止；没有安全退出证据时返回 `RUN_QUIESCENCE_UNPROVEN`，不强杀进程。旧版本没有完整生命周期回执，含 claimed/unknown 操作的历史编排无法仅凭账本证明静止；专用诊断应保留该阻断。新版安全退出后，静止 unknown 及已有 claim 可以原样升级。 CLI 停止回执只覆盖由 CLI 等待并关闭的原生调用；返回给调用方后才执行的桌面通知 `tool_request` 不受其覆盖，unknown attempt 必须先凭精确 provider receipt 对账。自定义静态视图不得改变 contract-4 编排所绑定的可执行 Worker 身份。
+
+原子目录发布前的候选副本不构成已接受升级，原 run 保持原格式；发布后 prepared 记录是唯一续跑依据。平台或文件系统没有原子目录交换能力时返回 `UNSUPPORTED_PLATFORM` 或 `UPGRADE_PUBLICATION_FAILED` 并保留源与候选，不用连续 rename 降级模拟。源快照、符号链接或目录身份异常均阻断，不自动清理历史恢复材料。新版等待者在执行动作前重新核验目录身份，旧账本锁等待者不能穿透已替换的目录边界。

@@ -23,6 +23,7 @@ import {
 import { LedgerStore, safeId } from "../lib/store";
 import { observeTaskRuntime } from "../lib/task-runtime";
 import { buildView } from "../lib/view";
+import { withRunCommand } from "./orchestration-lifecycle";
 
 export { type DashboardOptions, dashboardHeaders } from "../lib/server-contract";
 
@@ -411,7 +412,14 @@ export function createRunDashboard(options: DashboardOptions) {
     }
   };
   return {
-    handle,
+    handle: (
+      request: Request,
+      currentServer: Pick<Awaited<ReturnType<typeof Runtime.serve>>, "timeout">,
+      path: string,
+    ) =>
+      request.method !== "GET" && store.read().contract_version === 4
+        ? withRunCommand(store, () => handle(request, currentServer, path))
+        : handle(request, currentServer, path),
     token,
     get subscriberCount() {
       return subscribers.size;

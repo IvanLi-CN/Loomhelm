@@ -8,6 +8,7 @@ import { servicePaths } from "../lib/service-paths";
 import { ServiceState } from "../lib/service-state";
 import { serviceCommand } from "../scripts/service";
 import {
+  bindHistoricalFixture,
   fixtureLegacyRelease,
   fixtureRelease,
   fixtureRun,
@@ -86,7 +87,7 @@ test.each([
         expect(cookie).toBeTruthy();
         const runUrl = new URL(loginResponse.headers.get("location") ?? "", url.origin);
         const page = await fetch(runUrl, { headers: { cookie: cookie! } });
-        expect(page.status).toBe(200);
+        expect(page.status, page.status === 200 ? undefined : await page.text()).toBe(200);
         expect(await page.text()).toContain("/service-client.js");
         const view = await fetch(new URL(`/runs/${ready.run_id}/api/view`, url.origin), {
           headers: { cookie: cookie! },
@@ -170,6 +171,7 @@ test("source reload uses production authentication and is absent in ordinary vie
   const { root, state } = serviceFixture();
   const release = fixtureRelease(root);
   fixtureRun(state.paths.data);
+  bindHistoricalFixture(state, "demo-run", release.manifest);
   let revision = "first";
   const source = await startSharedViewer(
     state,
@@ -297,6 +299,7 @@ test("isolated single-unit preview projects synthetic conversations through the 
   const release = fixtureRelease(root);
   const ledger = createSingleDeliveryUnitLedger();
   new LedgerStore(state.paths.data, ledger.orchestration_id).create(ledger);
+  bindHistoricalFixture(state, ledger.orchestration_id, release.manifest);
   const viewer = await startSharedViewer(
     state,
     release.manifest,

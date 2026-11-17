@@ -37,6 +37,7 @@ import { parseViewerRoute } from "../scripts/viewer-gateway";
 import { createWorkerGeneration, ViewerWorkerPool } from "../scripts/viewer-runtime";
 import { startUnixViewerWorkerServer, viewerWorkerSocketPath } from "../scripts/viewer-socket";
 import { createUnixViewerWorker, dataVersionOf, workerKeyOf } from "../scripts/viewer-worker";
+import { identityOf, requireRunIdentity } from "./orchestration-identity";
 import {
   agentInput,
   agentLease,
@@ -144,7 +145,7 @@ export async function startSharedViewer(
   >();
   const workerBuilds = new Map<
     string,
-    { build_id: string; package_version: string; release_root: string | null }
+    { build_id: string; package_version: string; release_root: string | null; identity?: unknown }
   >();
   const warnings = new Map<string, string | null>();
   const runtimeConfig = (() => {
@@ -466,6 +467,7 @@ export async function startSharedViewer(
       const child = Bun.spawn(childCommand, {
         env: {
           ...process.env,
+          LOOMHELM_CALLER_IDENTITY: JSON.stringify(selected.identity ?? null),
           MTF_WORKER_SOCKET: socketPath,
           MTF_WORKER_KEY: workerKey,
           MTF_WORKER_GENERATION: generation,
@@ -781,11 +783,18 @@ export async function startSharedViewer(
             frontend_contract: manifest.frontend_contracts[0] ?? 1,
             viewer_contract: manifest.viewer_contract,
           });
+          if (ledger.contract_version === 4) requireRunIdentity(ledger, identityOf(binding) as any);
           getRun(id); // Gateway owns lifecycle observation; the selected Worker owns response rendering.
           const assets = selectAssets(state.paths.data, id, assetsDir);
           const verifiedRelease = verifyBindingIdentity(binding);
           const usesCurrentAssets = Boolean(assets.source || sharedSource);
-          const workerBuildId = usesCurrentAssets ? manifest.build_id : binding.build_id;
+          // Static assets do not select executable identity for a bound contract-4 run.
+          const workerBuildId =
+            ledger.contract_version === 4
+              ? binding.build_id
+              : usesCurrentAssets
+                ? manifest.build_id
+                : binding.build_id;
           const workerPackageVersion =
             workerBuildId === manifest.build_id
               ? (serviceConfig.package_version ?? manifest.service_version)
@@ -793,6 +802,8 @@ export async function startSharedViewer(
           const version = dataVersionOf(ledger, binding.viewer_contract, workerBuildId);
           const workerKey = workerKeyOf(version);
           workerBuilds.set(workerKey, {
+            identity:
+              workerBuildId === manifest.build_id ? currentBindingIdentity : identityOf(binding),
             build_id: workerBuildId,
             package_version: workerPackageVersion,
             release_root:

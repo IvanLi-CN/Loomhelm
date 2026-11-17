@@ -31,11 +31,20 @@ export async function runGatewayCommand(args: string[]): Promise<void> {
 }
 
 export async function runOrchestrationCommand(args: string[]): Promise<void> {
-  if (args[0] !== 'upgrade') throw new Error('ORCHESTRATION_INVALID_ARGUMENTS: use orchestration upgrade --run-id <run-id> [--dry-run|--rollback] <version|tag>');
+  if (args.includes('--help')) {
+    console.log('orchestration compatibility-check --run-id RUN_ID | orchestration upgrade --run-id RUN_ID [--dry-run] VERSION_OR_TAG\nUse the verified target CLI. Upgrades migrate supported ledgers and switch binding forward only; incomplete upgrades resume their frozen target.');
+    return;
+  }
+  if (!['upgrade', 'compatibility-check'].includes(args[0] ?? '')) throw new Error('ORCHESTRATION_INVALID_ARGUMENTS: use orchestration upgrade --run-id <run-id> [--dry-run] <version|tag> or orchestration compatibility-check --run-id <run-id>');
   const runIndex = args.indexOf('--run-id');
   if (runIndex < 0 || !args[runIndex + 1]) throw new Error('ORCHESTRATION_INVALID_ARGUMENTS: --run-id is required');
   const runId = args[runIndex + 1]!;
   const remaining = args.slice(1).filter((_, index) => index !== runIndex - 1 && index !== runIndex);
+  if (args[0] === 'compatibility-check') {
+    if (remaining.length) throw new Error('ORCHESTRATION_INVALID_ARGUMENTS: compatibility-check only accepts --run-id');
+    return invoke('orchestration-compatibility-check', { run_id: runId });
+  }
   const selected = target(remaining, 0);
+  if (selected.mode === 'rollback') throw new Error('DOWNGRADE_FORBIDDEN: orchestration upgrades are forward-only');
   await invoke('orchestration-upgrade', { run_id: runId, target: selected.value, mode: selected.mode });
 }

@@ -7,11 +7,13 @@ import { join } from "node:path";
 import { sendCodexMessage } from "../../lib/codex-agent-api.ts";
 import { initializationPrompt } from "../../lib/codex-cli-initialization.ts";
 import { withRecoveryWriter } from "../../lib/codex-recovery-writer.ts";
+import { versionEnvelope } from "../../lib/contract.ts";
 import { apply } from "../../lib/engine.ts";
 import { recoverInitialization } from "../../lib/initialization-recovery.ts";
 import { recoveryDigest } from "../../lib/initialization-recovery-attempt.ts";
 import { prepareNativeNotification } from "../../lib/notification-delivery.ts";
 import { LedgerStore } from "../../lib/store";
+import { fixtureIdentity } from "../cli-identity-fixture.ts";
 import { approveV2, head, request, v2Fixture } from "../engine-fixtures.ts";
 import { serveFixture } from "./recovery-native.ts";
 
@@ -29,8 +31,15 @@ const saved = Object.fromEntries(
 let server: ReturnType<typeof serveFixture> | undefined;
 try {
   let ledger = v2Fixture();
-  ledger.contract_version = 2;
+  ledger.contract_version = 4;
+  ledger.runtime_identity = fixtureIdentity;
+  ledger.version = versionEnvelope;
   ledger.tasks[0].kind = "verification";
+  for (const task of ledger.tasks.slice(1)) {
+    task.execution_owner = "task_agent";
+    task.conversation_policy = "task_agent";
+    task.delivery_policy = "child_pr";
+  }
   ledger.groups[0].state = "merged";
   ledger.groups[0].merge_sha = head;
   approveV2(ledger);

@@ -12,20 +12,23 @@ import { deliverClaimedNotification, reconcileNotification } from '../resources/
 const accepted = { outcome: 'sent', provider_receipt: { provider: 'codex-app-server', evidence_ref: 'fixture:accepted', message_id: 'fixture-turn' } };
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'loomhelm-notification-')));
+  const previousIdentity = process.env.LOOMHELM_CALLER_IDENTITY;
+  const restoreIdentity = () => { if (previousIdentity === undefined) delete process.env.LOOMHELM_CALLER_IDENTITY; else process.env.LOOMHELM_CALLER_IDENTITY = previousIdentity; };
   try {
     const runtime = new SkillsRuntime();
     const input = await readFile(join(import.meta.dir, '../../../packages/multi-task-flow-runtime/examples/ledger-initialization/initial.json'), 'utf8');
     const result = await runtime.run('skills/multi-task-flow/scripts/orchestrate.ts', ['init', '--input', '-'], { input, env: { ...process.env, TASK_ORCHESTRATION_DATA_ROOT: join(root, 'seed') } });
     assert.equal(result.code, 0, result.stdout + result.stderr);
     const ledger = JSON.parse(await readFile(join(root, 'seed/runs/example-run/ledger.json'), 'utf8'));
+    process.env.LOOMHELM_CALLER_IDENTITY = JSON.stringify(ledger.runtime_identity);
     // Synthetic unit fixture, never a host conversation or real old run.
     const task = ledger.tasks[0]; task.state = 'starting'; task.thread_id = 'fixture-notification-sender';
     const actor = { role: 'task', thread_id: task.thread_id };
     apply(ledger, 'task-update', { run_id: ledger.orchestration_id, actor, request_id: 'fixture-notice', expected_revision: ledger.revision, payload: { task_id: task.id, state: 'waiting', detail: 'Fixture notice', notification: { mode: 'deliver', recipient: 'owner' } } });
     const store = new LedgerStore(join(root, 'delivery'), ledger.orchestration_id); store.create(ledger);
     const id = ledger.notifications[0].id;
-    return { root, store, id, request: { run_id: ledger.orchestration_id, actor, request_id: 'fixture-send', expected_revision: ledger.revision, payload: { notification_id: id } }, cleanup: () => rm(root, { recursive: true, force: true }) };
-  } catch (error) { await rm(root, { recursive: true, force: true }); throw error; }
+    return { root, store, id, request: { run_id: ledger.orchestration_id, actor, request_id: 'fixture-send', expected_revision: ledger.revision, payload: { notification_id: id } }, cleanup: () => { restoreIdentity(); return rm(root, { recursive: true, force: true }); } };
+  } catch (error) { restoreIdentity(); await rm(root, { recursive: true, force: true }); throw error; }
 }
 
 function cli(f, command, request) {

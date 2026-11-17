@@ -10,6 +10,15 @@ const manifest = JSON.parse(readFileSync(path, "utf8"));
 const hash = (data) => createHash("sha256").update(data).digest("hex");
 const refresh = process.argv.includes("--write");
 const additional = [
+  "skills/multi-task-flow/tests/orchestration-upgrade-compatibility.test.ts",
+  "skills/multi-task-flow/lib/store-upgrade-publication.ts",
+  "skills/multi-task-flow/tests/orchestration-upgrade-worker.ts",
+  "skills/multi-task-flow/tests/cli-identity-fixture.ts",
+  "skills/multi-task-flow/tests/historical-migration-cli.ts",
+  "skills/multi-task-flow/lib/orchestration-identity.ts",
+  "skills/multi-task-flow/lib/orchestration-upgrade.ts",
+  "skills/multi-task-flow/lib/orchestration-lifecycle.ts",
+  "skills/multi-task-flow/tests/orchestration-upgrade.test.ts",
   ...JSON.parse(readFileSync(resolve(root, "skills/support-manifest.json"), "utf8")),
   "skills/multi-task-flow/lib/codex-cli-initialization.ts",
   "skills/multi-task-flow/tests/service-release.test.ts",

@@ -107,7 +107,7 @@ export function executeTaskIntegrationCommand(context: CommandContext): unknown 
         "Task PR must be bound to a successful provider publication receipt",
         4,
       );
-      if (ledger.contract_version !== 3) target.pr = pr;
+      if (ledger.contract_version < 3) target.pr = pr;
       else {
         const owner = find(ledger.groups, (item) => item.id === target.group_id, "DeliveryUnit");
         requireCondition(

@@ -7,10 +7,10 @@
     "version_impact": "patch"
   },
   "durable_state": {
-    "description": "Flow Ledger schema-2/contract-2 and schema-2/contract-3 operation.request and existing event data",
+    "description": "Flow Ledger schema-2 contracts 2/3 historical records and contract 4 operation.request and existing event data; current CLI preserves the mainline run-identity and explicit-upgrade gates",
     "storage_implementation": "LedgerStore atomic JSON journal with request/revision fencing",
     "source_compatibility_range": {
-      "from_program_versions": "0.2.53–0.2.55; attempts without permissions remain readable but cannot auto-recover",
+      "from_program_versions": "0.2.53–0.3.0; attempts without permissions remain readable but cannot auto-recover; current CLI commands require the existing contract-4 bound identity",
       "to_program_version": "current candidate source; package version unchanged until separately approved release",
       "direct_major_skips_supported": false
     }
