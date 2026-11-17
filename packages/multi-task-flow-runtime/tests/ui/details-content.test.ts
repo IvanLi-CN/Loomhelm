@@ -98,7 +98,7 @@ describe("dashboard details content", () => {
       time: () => "",
       safeExternal: () => null,
     });
-    details.showGroup(group);
+    details.showGroup(group, "prepare");
     const owner = document.querySelector(".detail-pane-owner")!;
     const agent = document.querySelector(".detail-pane-agent")!;
     expect(
@@ -136,10 +136,12 @@ describe("dashboard details content", () => {
     expect(relations.open).toBe(false);
     relations.open = true;
     relations.dispatchEvent(new Event("toggle"));
-    details.showGroup(group);
+    details.showGroup(group, "prepare");
     expect(document.querySelector<HTMLDetailsElement>(".atom-relations-disclosure")?.open).toBe(
       true,
     );
+    expect(document.querySelector(".detail-atom-title")?.textContent).toBe("合并");
+    details.showGroup(group, "merge");
     expect(document.querySelector(".detail-atom-title")?.textContent).toBe("合并");
     document
       .querySelector<HTMLElement>('[data-context-id="prepare"]')!
@@ -152,6 +154,43 @@ describe("dashboard details content", () => {
     expect(
       document.querySelector(".detail-atom-heading .dependency-tooltip.is-open")?.textContent,
     ).toBe("原子任务状态：已完成");
+  });
+  test("bootstrap Agent controls use the orchestration main conversation binding", () => {
+    const threadId = "01a1e411-512e-71d3-8377-0af9ab0dc8e8";
+    const group = {
+      id: "bootstrap",
+      title: "Bootstrap",
+      state: "active",
+      delivery_unit_kind: "bootstrap",
+      agent_thread_id: null,
+      parent_pr: { url: null },
+      atoms: [],
+      latest_agent_output: { thread_title: "Main conversation", text: "Owner output" },
+    } as unknown as Group;
+    const view = {
+      orchestration: { owner_thread_id: threadId },
+      groups: [group],
+      tasks: [],
+      actual_intervals: [],
+    } as unknown as View;
+    const details = createDetailContent({
+      getData: () => view,
+      labels: {},
+      labelTask: () => "",
+      time: () => "",
+      safeExternal: () => null,
+    });
+    details.showGroup(group);
+    const heading = document.querySelector<HTMLElement>(".detail-agent-header h3")!;
+    expect(heading.dataset.agentThreadId).toBe(threadId);
+    expect(heading.textContent).toBe("Agent：Main conversation");
+    expect(document.querySelector(".detail-agent-header a")?.getAttribute("href")).toContain(
+      threadId,
+    );
+    expect(
+      document.querySelector('.detail-agent-header button[aria-label="复制对话 ID"]'),
+    ).not.toBeNull();
+    expect(document.querySelector(".detail-pane-agent")?.textContent).toContain("Owner output");
   });
   test("group details and previews use only group execution times", () => {
     const group = {

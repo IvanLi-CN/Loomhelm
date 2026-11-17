@@ -62,35 +62,58 @@ function floatProfilePanel(
     panel.style.top = `${Math.max(8, placeAbove ? anchor.top - panel.offsetHeight - 6 : anchor.bottom + 6)}px`;
   };
   let bindings: AbortController | undefined;
+  let observer: MutationObserver | undefined;
+  const close = () => {
+    bindings?.abort();
+    observer?.disconnect();
+    dropdown.open = false;
+    trigger.setAttribute("aria-expanded", "false");
+    if (nativePopover && panel.isConnected && panel.matches(":popover-open")) panel.hidePopover();
+    if (!nativePopover) dropdown.append(panel);
+  };
   dropdown.addEventListener("toggle", () => {
     bindings?.abort();
+    observer?.disconnect();
     trigger.setAttribute("aria-expanded", String(dropdown.open));
-    if (!dropdown.open) {
-      if (nativePopover && panel.matches(":popover-open")) panel.hidePopover();
+    if (!dropdown.open || !dropdown.isConnected) {
+      close();
       return;
     }
     if (nativePopover && !panel.matches(":popover-open")) panel.showPopover();
+    if (!nativePopover) document.body.append(panel);
     position();
     bindings = new AbortController();
     const { signal } = bindings;
+    observer = new window.MutationObserver(() => {
+      if (!dropdown.isConnected) close();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("resize", position, { signal });
     window.addEventListener("scroll", position, { capture: true, signal });
     document.addEventListener(
       "pointerdown",
       (event) => {
-        if (event.target instanceof Node && !dropdown.contains(event.target)) dropdown.open = false;
+        if (
+          event.target instanceof Node &&
+          !dropdown.contains(event.target) &&
+          !panel.contains(event.target)
+        )
+          close();
       },
       { signal },
     );
     document.addEventListener(
       "keydown",
       (event) => {
+        if (!dropdown.isConnected) {
+          close();
+          return;
+        }
         if (event.key !== "Escape" || panel.querySelector('.profile-model[aria-expanded="true"]'))
           return;
         event.preventDefault();
         event.stopPropagation();
-        dropdown.open = false;
-        if (nativePopover && panel.matches(":popover-open")) panel.hidePopover();
+        close();
         trigger.focus({ preventScroll: true });
       },
       { capture: true, signal },
@@ -169,7 +192,10 @@ export function createProfileEditor(
   }
   const panel = document.createElement("div");
   panel.className = "profile-panel";
-  if (compact) floatProfilePanel(dropdown, trigger, panel);
+  if (compact) {
+    panel.classList.add("profile-panel-floating");
+    floatProfilePanel(dropdown, trigger, panel);
+  }
   const caption = document.createElement("p");
   caption.className = "profile-caption";
   caption.textContent =
@@ -283,6 +309,7 @@ export function createProfileEditor(
         reapply,
       );
       dropdown.open = false;
+      if (compact && trigger.isConnected) trigger.focus({ preventScroll: true });
     } catch (cause) {
       error.textContent = cause instanceof Error ? cause.message : String(cause);
     } finally {

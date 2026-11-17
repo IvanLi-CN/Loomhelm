@@ -394,10 +394,21 @@ export function createDetailContent(context: DetailContentContext) {
     const prWrapper = text("span", "", "detail-pr-link");
     prWrapper.append(prAction, attachTooltip(prAction, prLabel, prLabel));
     document.querySelector("#details-summary .detail-title")?.after(prWrapper);
-    const threadId = "thread_id" in owner ? owner.thread_id : owner.agent_thread_id;
+    const bootstrap = !isTask && owner.delivery_unit_kind === "bootstrap";
+    const threadId =
+      "thread_id" in owner
+        ? owner.thread_id
+        : bootstrap
+          ? (data.orchestration.owner_thread_id ?? null)
+          : owner.agent_thread_id;
     agent
       .querySelector(".detail-pane-heading")!
-      .replaceWith(agentHeader(threadId, owner.latest_agent_output?.thread_title));
+      .replaceWith(
+        agentHeader(
+          threadId,
+          owner.latest_agent_output?.thread_title || (bootstrap ? "Main Agent" : null),
+        ),
+      );
     const agentFacts = text("div", "", "detail-agent-facts");
     const diagnostics = document.createElement("details");
     diagnostics.className = "detail-agent-diagnostics";
@@ -495,14 +506,19 @@ export function createDetailContent(context: DetailContentContext) {
         }
       });
     }
-    const selected = focusedAtomId ?? container.dataset.atomSelection;
+    const newFocus = focusedAtomId && focusedAtomId !== container.dataset.atomFocusRequest;
+    const selected = newFocus ? focusedAtomId : container.dataset.atomSelection;
+    container.dataset.atomFocusRequest = focusedAtomId ?? "";
     selectAtom(atoms.some((atom) => atom.id === selected) ? selected! : (atoms[0]?.id ?? null));
   }
   function begin(kind: "task" | "group", id: string, title: string, state: string) {
     const container = document.getElementById("details-content")!;
     const selection = `${kind}:${id}`;
     const sameSelection = container.dataset.selection === selection;
-    if (!sameSelection) delete container.dataset.atomSelection;
+    if (!sameSelection) {
+      delete container.dataset.atomSelection;
+      delete container.dataset.atomFocusRequest;
+    }
     const top = sameSelection ? container.scrollTop : 0;
     container.dataset.selection = selection;
     container.dataset.detailKind = kind;

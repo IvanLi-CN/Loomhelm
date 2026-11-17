@@ -321,10 +321,25 @@ try {
     await demo.locator("#close-plan-info").click();
     await demo.getByRole("tab", { name: "任务与交付单元依赖", exact: true }).click();
     await demo.locator('#graph [data-context-task="model"]').click();
-    const relations = demo.locator(".detail-relations");
+    await demo.locator('.detail-pane-atoms [data-context-id="atom-model"]').click();
+    const relations = demo.locator(".detail-pane-atom .atom-relations-disclosure");
     await relations.waitFor();
     if ((await relations.getAttribute("open")) !== null)
       throw new Error("Relationships should be collapsed by default");
+    if (await demo.locator(".detail-pane-owner .detail-relations").count())
+      throw new Error("Owner details must not duplicate atomic relationships");
+    await relations.locator("summary").click();
+    await relations.getByRole("group", { name: "原子任务关系图", exact: true }).waitFor();
+    await relations.locator('[data-atom-id="atom-model"][data-current="true"]').waitFor();
+    await relations
+      .getByRole("list", { name: "前驱", exact: true })
+      .getByText("无前驱", { exact: true })
+      .waitFor();
+    await relations
+      .getByRole("list", { name: "后继", exact: true })
+      .getByText("无后继", { exact: true })
+      .waitFor();
+    await relations.locator("summary").click();
     if (await demo.locator(".detail-relations-trigger, .detail-relations-tooltip").count())
       throw new Error("Relationship details must not use the version tooltip surface");
     await context.clearCookies();

@@ -880,8 +880,8 @@ time[data-local-timestamp] { cursor: help; font-variant-numeric: tabular-nums; }
 .is-compact .profile-dropdown[open] > .profile-trigger svg { transform: none; }
 .is-compact .profile-trigger:hover, .profile-info-button:hover { background: var(--active); color: var(--text); }
 .profile-info-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.is-compact .profile-panel { position: fixed; inset: auto; z-index: 1000; width: 280px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; margin: 0; box-shadow: var(--shadow); }
-.is-compact .profile-panel[popover]:not(:popover-open) { display: none; }
+.profile-panel-floating { position: fixed; inset: auto; z-index: 1000; width: 280px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; margin: 0; box-shadow: var(--shadow); }
+.profile-panel-floating[popover]:not(:popover-open) { display: none; }
 .detail-pane-agent > .detail-field { display: block; }
 .detail-pane-agent > .detail-field > .detail-label { margin-bottom: 8px; }
 .detail-pane-agent .agent-output-text { font-size: 12px; line-height: 1.7; }
