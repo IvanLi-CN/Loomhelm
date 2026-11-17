@@ -11,6 +11,7 @@ const hash = (data) => createHash("sha256").update(data).digest("hex");
 const refresh = process.argv.includes("--write");
 const additional = [
   ...JSON.parse(readFileSync(resolve(root, "skills/support-manifest.json"), "utf8")),
+  "skills/multi-task-flow/lib/codex-cli-initialization.ts",
   "skills/multi-task-flow/tests/service-release.test.ts",
   "skills/multi-task-flow/lib/notification-delivery.ts",
   "skills/multi-task-flow/tests/notification-delivery.test.ts",
