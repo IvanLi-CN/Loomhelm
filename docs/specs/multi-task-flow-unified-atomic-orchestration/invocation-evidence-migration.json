@@ -10,7 +10,7 @@
     "description": "Immutable runtime/invocations/<uuid> events; runtime/call.json projection; ledger contract 5 and viewer binding schema 3",
     "storage_implementation": "Per-run native lifecycle lock, existing maintenance/ledger/binding locks, no-follow run snapshot, atomic directory exchange and durable source backup",
     "source_compatibility_range": {
-      "from_program_versions": "Validated schema-2/contract-3 and contract-4 sources with trusted same-run bindings; contract-5 forward repair",
+      "from_program_versions": "Validated schema-2/contract-3/4/5 sources with trusted same-run bindings; contract-5 schema-2/3 forward upgrade preserving unresolved calls",
       "to_program_version": "candidate; release version is not selected by this record",
       "direct_major_skips_supported": false
     }

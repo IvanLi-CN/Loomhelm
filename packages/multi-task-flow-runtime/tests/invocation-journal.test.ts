@@ -23,7 +23,7 @@ import {
   registerInvocationResource,
 } from "../lib/invocation-journal";
 import type { RunIdentity } from "../lib/orchestration-identity";
-import { requireQuiescentRun, withRunLifecycle } from "../lib/orchestration-lifecycle";
+import { withRunLifecycle } from "../lib/orchestration-lifecycle";
 import { upgradeOrchestration } from "../lib/orchestration-upgrade";
 import { fixtureRun, serviceFixture } from "./service-fixture";
 
@@ -64,7 +64,7 @@ function fixture() {
       updated_at: new Date().toISOString(),
     }),
   );
-  upgradeOrchestration(store, target, target, { withQuiescentRun: (_ledger, action) => action() });
+  upgradeOrchestration(store, target, target, {});
   process.env.LOOMHELM_CALLER_IDENTITY = JSON.stringify(target);
   return store;
 }
@@ -352,9 +352,7 @@ for (const contract of [3, 4]) {
     expect(inspected.output.source.ledger_contract).toBe(contract);
     expect(inspected.output.executor.ledger_contract).toBe(5);
     expect(invoke("invocation-reconcile", input).code).toBe(0);
-    upgradeOrchestration(store, target, target, {
-      withQuiescentRun: (ledger, action) => requireQuiescentRun(store, ledger, action),
-    });
+    upgradeOrchestration(store, target, target);
     expect(store.read().contract_version).toBe(5);
     expect(inspectInvocation(store)?.quiescent).toBe(true);
   });

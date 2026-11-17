@@ -24,7 +24,10 @@ export const migrationAudit = z
     business_digest: digest,
     unresolved_digest: digest,
     unresolved: z.array(unresolvedCall),
-    writer_barrier: z.literal("ledger-contract-5-and-binding-schema-2"),
+    writer_barrier: z.enum([
+      "ledger-contract-5-and-binding-schema-2",
+      "ledger-contract-5-and-binding-schema-3",
+    ]),
     native_quiescence: z.literal("not_asserted"),
   })
   .strict();

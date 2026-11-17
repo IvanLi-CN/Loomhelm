@@ -15,9 +15,11 @@ REQ-INVOCATION-001 至 REQ-INVOCATION-006 的候选实现已接入客户端、�
 | REQ-INVOCATION-001 | `clients/typescript/src/runtime/process.ts`、`clients/typescript/src/cli/flow.ts`、`clients/typescript/src/toolkit.ts` | `flow-process.ts` 使用 runtime-core 0.2.0 的异步输出接收器、零累计捕获和独立 IPC；80 MiB 慢消费者、显式预算、EPIPE 与通用 1 MiB 默认值有回归覆盖 |
 | REQ-INVOCATION-002 | `packages/multi-task-flow-runtime/scripts/orchestrate.ts`、`lib/orchestration-lifecycle.ts`、`lib/store.ts` | show/view（含 task-context）在已有账本锁内读取 ledger、binding 与 invocation 一致快照，输出前释放锁；持有 lifecycle 锁时的零写入与 actor/build 拒绝已覆盖 |
 | REQ-INVOCATION-003、REQ-INVOCATION-004 | `packages/multi-task-flow-runtime/lib/orchestration-lifecycle.ts` 及原生调用适配器 | `invocation-journal.ts` 统一记录资源意图与终态、执行结束和停止事实；初始化、恢复 writer 与 RPC 适配器登记资源；恢复 writer 仅在既有 history 校验确认匹配终态 turn 后登记凭证，observe/RPC 失败不构成终态；错误 turn、断线、协作停止和强杀有回归覆盖 |
-| REQ-INVOCATION-005、REQ-INVOCATION-006 | 编排 CLI/help/schema、生命周期与升级边界 | `invocation-inspect` / `invocation-reconcile` 接入 help/schema；contract 3/4 的显式对账后升级至 contract 5/schema-3 绑定已覆盖，已发布 0.3.0 CLI/Worker 在隔离 contract 5 运行上拒绝访问且持久文件保持不变；真实原生取消与 IPC 断连缺少终态凭证时保持 running/unknown 并阻断副作用；前向升级先严格解析绑定，未知格式在原子发布前拒绝 |
+| REQ-INVOCATION-005、REQ-INVOCATION-006 | 编排 CLI/help/schema、生命周期与升级边界 | `invocation-inspect` / `invocation-reconcile` 接入 help/schema；contract 3/4 的显式停止对账及独立机械迁移至 contract 5/schema-3 绑定已覆盖；主线 0.4.0 的 contract-5/schema-2 来源可按机械迁移保留未知调用，升级后新调用未停止仍拒绝重入，已发布 0.3.0 CLI/Worker 在隔离 contract 5 运行上拒绝访问且持久文件保持不变；真实原生取消与 IPC 断连缺少终态凭证时保持 running/unknown 并阻断副作用；前向升级先严格解析绑定，未知格式在原子发布前拒绝 |
 
-候选包版本已由主人指定为 `0.4.0`，保留 `compat-v1`；这里只准备版本元数据，实际合并和手动 CI 发布仍由主人控制。
+机械迁移沿用 ADR 0041 与 SPEC 第 16 节的共享评估器，不把旧 receipt 改为 stopped；只有冻结审计中精确匹配的旧调用摘要可由目标身份建立新 journal。schema-3 绑定拒绝旧维护 writer；新调用仍依赖不可变资源终态凭证。当前候选必须重做受影响的包验收、审查与 CI，历史 SHA 的通过结果不可替代。
+
+候选包版本已由主人指定为 `0.5.0`，保留 `compat-v1`；这里只准备版本元数据，实际合并和手动 CI 发布仍由主人控制。
 
 `@loomhelm/multi-task-flow@0.3.0` 的通用执行器默认合计捕获 stdout/stderr 上限为 1 MiB；超限后先 SIGTERM，250 ms 后 SIGKILL。编排子进程在 action 前写 running，在 finally 写 stopped；终止可能阻止 finally 完成。当前 LedgerStore 读取预算为 256 MiB，传输先于支持的数据容量失败。
 

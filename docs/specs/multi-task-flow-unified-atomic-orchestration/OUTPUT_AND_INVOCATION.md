@@ -69,7 +69,7 @@ flowchart TD
 
 提供专用 invocation inspect 与 invocation reconcile：inspect 只读报告缺失项；reconcile 核验绑定 main、request_id、expected_revision、invocation_id、原 marker digest 和证据摘要。按仓库既有锁顺序取得此次写入必需的排斥，锁内重新核验目录与版本身份。相同 canonical input 幂等，不同输入或并发状态变化拒绝。先持久化不可变恢复结果，再发布 stopped 投影；任一写入点崩溃后按同一恢复身份续跑，不允许出现无审计的放行窗口。读取时发现 journal 与投影不一致必须核验或重建投影，不能只相信 stopped 投影而放行。
 
-恢复入口必须解决版本自锁：由经过验证的修复版本提供显式、范围受限的历史源读取和停止对账能力，冻结并记录源/执行者身份；普通 flow 的 exact-version 门禁不放宽。恢复阶段不切换 run binding；停止证明成立后，另行执行正式前向升级。不得要求先成功 upgrade 才能对账一个正因缺少停止证明而无法 upgrade 的 run。
+恢复入口必须解决版本自锁：由经过验证的修复版本提供显式、范围受限的历史源读取和停止对账能力，冻结并记录源/执行者身份；普通 flow 的 exact-version 门禁不放宽。恢复阶段不切换 run binding；停止对账与正式前向升级是独立入口。机械迁移按 SPEC 第 16 节保留结果不确定的旧调用，不要求先证明停止，也不得把迁移成功视为静止。当前身份新调用仍须满足精确停止门禁；不得要求先成功 upgrade 才能进行历史停止对账。
 
 旧 running 缺少 command、input 或进程实例身份时，不自动补造。仅当可信外部执行记录能唯一关联到该 invocation 并证明其能力范围及停止事实时允许登记历史恢复证据；否则保持阻断。绑定主对话提供精确调用记录，执行宿主提供进程和控制通道事实，原生 provider 提供匹配的调用终结证据，维护者核验历史版本代码能力。owner 批准恢复动作本身不能代替停止事实。
 

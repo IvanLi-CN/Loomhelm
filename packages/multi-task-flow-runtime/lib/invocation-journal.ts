@@ -421,7 +421,9 @@ export function recoverySource(
     [3, 4, 5].includes(ledger.contract_version) &&
       ledger.schema_version === 2 &&
       source.ledger_contract === ledger.contract_version &&
-      binding.schema_version === (ledger.contract_version === 5 ? 3 : 2) &&
+      (ledger.contract_version === 5
+        ? [2, 3].includes(binding.schema_version)
+        : binding.schema_version === 2) &&
       binding.run_id === ledger.orchestration_id &&
       sameRunIdentity(source, identityOf(binding)),
     "RUN_VERSION_MISMATCH",

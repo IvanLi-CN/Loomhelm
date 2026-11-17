@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   fstatSync,
@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { inspectInvocation, registerInvocationResource } from "../lib/invocation-journal";
 import { businessDigest } from "../lib/migration-audit";
 import { type RunIdentity, requireRunBinding } from "../lib/orchestration-identity";
 import { withRunCommand } from "../lib/orchestration-lifecycle";
@@ -285,3 +286,60 @@ for (const phase of ["migrated", "binding_switched"]) {
     );
   });
 }
+
+test("0.4 contract-5 source upgrades behind schema-3 barrier without proving old stop, while new calls remain fenced", async () => {
+  const store = fixture(5);
+  const oldIdentity = { ...source, package_version: "0.4.0", ledger_contract: 5 };
+  const nextIdentity = { ...target, package_version: "0.5.0" };
+  const raw = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+  raw.runtime_identity = oldIdentity;
+  writeFileSync(store.ledgerPath, JSON.stringify(raw));
+  const bindingPath = join(store.runPath, "runtime/viewer-binding.json");
+  const binding = JSON.parse(readFileSync(bindingPath, "utf8"));
+  writeFileSync(bindingPath, JSON.stringify({ ...binding, ...oldIdentity }));
+  const callPath = join(store.runPath, "runtime/call.json");
+  const oldCall = JSON.stringify({
+    invocation_id: randomUUID(),
+    identity: oldIdentity,
+    state: "running",
+  });
+  writeFileSync(callPath, oldCall);
+  const before = businessDigest(raw);
+  process.env.LOOMHELM_CALLER_IDENTITY = JSON.stringify(nextIdentity);
+  const report = checkMigration(store, nextIdentity);
+  expect(report.migration_ready).toBe(true);
+  expect(report.native_quiescence).toBe("not_asserted");
+  upgradeOrchestration(store, nextIdentity, nextIdentity);
+  expect(JSON.parse(readFileSync(bindingPath, "utf8")).schema_version).toBe(3);
+  expect(store.read().upgrade.migration_audit.writer_barrier).toBe(
+    "ledger-contract-5-and-binding-schema-3",
+  );
+  expect(readFileSync(callPath, "utf8")).toBe(oldCall);
+  expect(inspectInvocation(store)?.quiescent).toBe(false);
+  requireRunBinding(store.rootPath, "migration-run", store.read(), nextIdentity);
+  expect(() =>
+    requireRunBinding(store.rootPath, "migration-run", store.read(), oldIdentity),
+  ).toThrow();
+  let actions = 0;
+  await withRunCommand(store, async () => {
+    actions++;
+    registerInvocationResource("test-native", { request_id: "new-call" }).unknown();
+  });
+  expect(inspectInvocation(store)?.quiescent).toBe(false);
+  await expect(
+    withRunCommand(store, async () => {
+      actions++;
+    }),
+  ).rejects.toThrow("safe-stop receipt");
+  expect(actions).toBe(1);
+  expect(businessDigest(JSON.parse(readFileSync(store.ledgerPath, "utf8")))).toBe(before);
+  expect(
+    readFileSync(
+      join(store.rootPath, "runs", store.read().upgrade.source_directory, "runtime/call.json"),
+      "utf8",
+    ),
+  ).toBe(oldCall);
+  expect(checkMigration(store, { ...nextIdentity, package_version: "0.6.0" }).migration_ready).toBe(
+    true,
+  );
+});

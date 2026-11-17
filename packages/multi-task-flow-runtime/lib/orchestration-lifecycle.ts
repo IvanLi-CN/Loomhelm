@@ -7,8 +7,8 @@ import {
   writeExclusiveNoFollow,
 } from "@loomhelm/runtime-core/modules/visual/secure_io";
 import { ContractError, requireCondition } from "./errors";
-import { migrationDigest } from "./migration-audit";
 import { executeInvocation, inspectInvocation } from "./invocation-journal";
+import { migrationDigest } from "./migration-audit";
 import { callerIdentity, requireRunBinding } from "./orchestration-identity";
 import { validateLedger } from "./schema";
 import type { LedgerStore } from "./store";

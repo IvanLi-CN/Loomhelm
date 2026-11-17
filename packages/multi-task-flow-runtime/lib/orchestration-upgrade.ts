@@ -243,7 +243,7 @@ export function upgradeOrchestration(
               business_digest: report.business_digest,
               unresolved_digest: report.unresolved_digest,
               unresolved: report.unresolved,
-              writer_barrier: "ledger-contract-5-and-binding-schema-2",
+              writer_barrier: "ledger-contract-5-and-binding-schema-3",
               native_quiescence: "not_asserted",
             }),
           };
