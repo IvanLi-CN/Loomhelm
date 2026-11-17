@@ -8,7 +8,7 @@
   },
   "durable_state": {
     "description": "invocation journal 与 stopped proof",
-    "storage_implementation": "immutable JSON events and atomic call.json projection",
+    "storage_implementation": "immutable JSON file journal and atomic call.json projection; append derived proof, reconcile and stopped receipts in order without modifying the business ledger",
     "source_compatibility_range": {
       "from_program_versions": "audited 0.5.0 exact build/source; current executor scoped v1; existing supported complete journals unchanged",
       "to_program_version": "candidate selected by release policy",
@@ -19,21 +19,16 @@
     "applicable": false,
     "ddl_structural_changes": [],
     "dml_changes": [],
-    "historical_data_backfill_or_transformation": [
-      {
-        "id": "initialize-proof-v1",
-        "description": "验证原始证据，依次追加派生凭证、reconcile、stopped，再原子发布 marker；不改业务 ledger",
-        "order": 1,
-        "observable": true,
-        "pauseable": true
-      }
-    ]
+    "historical_data_backfill_or_transformation": []
   },
   "rollout_observability": {
     "operations_must_remain_separate": true,
     "operation_sequence": [
-      "inspect",
-      "initialize-proof-v1",
+      "inspect original file evidence",
+      "append initialize-recovery.json after capability validation",
+      "append reconcile.json with exact request identity",
+      "append stopped.json after shared proof validation",
+      "atomically publish call.json stopped projection",
       "explicit-forward-upgrade"
     ],
     "progress_signals": [

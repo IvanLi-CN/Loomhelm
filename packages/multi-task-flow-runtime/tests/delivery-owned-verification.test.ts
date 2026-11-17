@@ -148,3 +148,83 @@ test("modern delivery verification requires its prepared workspace and accepts a
   start();
   expect(ledger.tasks[0].state).toBe("running");
 });
+
+test("delivery verification rejects task dispatch and resolution of an older task claim", () => {
+  const ledger = verification();
+  ledger.groups[0].state = "merged";
+  ledger.groups[0].merge_sha = "c".repeat(40);
+  expect(() =>
+    apply(
+      ledger,
+      "dispatch-claim",
+      request(ledger, "no-task-conversation", { task_id: "a", operation_id: "new-dispatch" }),
+    ),
+  ).toThrow("delivery verification");
+  expect(ledger.tasks[0].thread_id).toBeNull();
+
+  // Represent a claim written by an older reader before this policy was enforced.
+  const pending = verification();
+  pending.groups[0].state = "merged";
+  pending.groups[0].merge_sha = "c".repeat(40);
+  pending.tasks[0].execution_owner = "task_agent";
+  pending.tasks[0].conversation_policy = "task_agent";
+  apply(
+    pending,
+    "dispatch-claim",
+    request(pending, "old-claim", { task_id: "a", operation_id: "old-dispatch" }),
+  );
+  pending.tasks[0].execution_owner = "delivery_agent";
+  pending.tasks[0].conversation_policy = "delivery_owned";
+  const operation = pending.operations.find((item) => item.kind === "dispatch")!;
+  expect(() =>
+    apply(
+      pending,
+      "dispatch-resolve",
+      request(pending, "old-resolve", {
+        operation_id: operation.id,
+        outcome: "succeeded",
+        thread_id: "unexpected-task-thread",
+      }),
+    ),
+  ).toThrow("delivery verification");
+  expect(pending.tasks[0].thread_id).toBeNull();
+});
+
+test("an unexpected task binding cannot disable delivery verification owner checks", () => {
+  for (const role of ["main", "task", "group"] as const) {
+    const ledger = verification();
+    ledger.tasks[0].thread_id = "unexpected-task-thread";
+    ledger.tasks[0].state = "starting";
+    const actor =
+      role === "main"
+        ? main
+        : role === "group"
+          ? groupActor
+          : { role, thread_id: "unexpected-task-thread" };
+    expect(() =>
+      apply(
+        ledger,
+        "task-update",
+        request(
+          ledger,
+          "wrong-owner-start",
+          { task_id: "a", state: "running", occurred_at: at },
+          actor,
+        ),
+      ),
+    ).toThrow("bound delivery agent");
+    ledger.tasks[0].state = "running";
+    expect(() =>
+      apply(
+        ledger,
+        "atom-update",
+        request(
+          ledger,
+          "wrong-owner-atom",
+          { task_id: "a", atom_id: "verify", state: "running" },
+          actor,
+        ),
+      ),
+    ).toThrow("bound delivery agent");
+  }
+});

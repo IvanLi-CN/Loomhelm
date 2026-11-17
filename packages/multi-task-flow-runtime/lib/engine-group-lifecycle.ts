@@ -94,6 +94,13 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
       const taskId = parse(id, payload.task_id);
       ownerOfTask(ledger, request, taskId);
       const target = find(ledger.tasks, (item) => item.id === taskId, "Task");
+      if (core.isDeliveryVerification(target))
+        requireCondition(
+          core.ownsDeliveryVerification(ledger, target, request.actor),
+          "FORBIDDEN",
+          "Only the bound delivery agent owns verification",
+          3,
+        );
       const mainOwned =
         target.execution_owner === "main" &&
         target.conversation_policy === "main_owned" &&

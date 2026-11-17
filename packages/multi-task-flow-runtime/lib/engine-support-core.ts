@@ -312,8 +312,7 @@ export function isDeliveryVerification(task: Task): boolean {
     task.kind === "verification" &&
     task.execution_owner === "delivery_agent" &&
     task.conversation_policy === "delivery_owned" &&
-    task.delivery_policy === "evidence" &&
-    task.thread_id === null
+    task.delivery_policy === "evidence"
   );
 }
 export function ownsDeliveryVerification(
@@ -323,6 +322,7 @@ export function ownsDeliveryVerification(
 ): boolean {
   return (
     isDeliveryVerification(task) &&
+    task.thread_id === null &&
     actor.role === "group" &&
     ledger.groups.some(
       (group) => group.id === task.group_id && group.agent_thread_id === actor.thread_id,
