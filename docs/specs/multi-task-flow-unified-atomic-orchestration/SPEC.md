@@ -111,7 +111,7 @@ DeliveryUnit 的 `closed` 业务状态 MUST 保留已经验证的 `pr_merged` �
 ### VER-VIEWER-ATOMIC-002
 
 - covers: `REQ-VIEWER-ATOMIC-004`, `REQ-VIEWER-ATOMIC-005`, `REQ-VIEWER-ATOMIC-006`
-- Method: 详情内容、原子关系、Agent 操作、配置浮层、PR 提示及空状态 UI 测试；组合状态穷举测试与领域校验交叉验证；源码预览人工视觉验收。回归同时覆盖快照刷新后的原子选择保持、Bootstrap 主对话绑定、配置保存及快照替换后的焦点恢复和不支持 Popover API 时的浮层卸载。浏览器服务回归以实际投影的 canonical 原子边为断言依据。
+- Method: 详情内容、原子关系、Agent 操作、配置浮层、PR 提示及空状态 UI 测试；组合状态穷举测试与领域校验交叉验证；源码预览人工视觉验收。回归同时覆盖快照刷新后的原子选择保持、Bootstrap 主对话绑定、配置保存及快照替换后的焦点恢复和不支持 Popover API 时的浮层卸载。浏览器服务回归以实际投影的 canonical 原子边为断言依据，并覆盖短中等视口的抽屉打开行为；同时符合桌面宽度与抽屉断点时，抽屉策略优先，鼠标和键盘选择均必须打开可见详情。
 - Pass condition: 两栏上下堆叠，原子选择与 Agent 上下文边界正确；所有 chip 和图标与值匹配并可聚焦查看原始值；异常组合明确兜底；折叠、浮层与空状态不导致布局空白或误报未关联 PR。
 
 ### VER-VIEWER-RECOVERY-001
@@ -396,3 +396,7 @@ Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，�
 详情面板在当前工作区源码预览中验收；图中归属 chip 将两个原始字段合并展示，悬浮提示保留各自原值，交付方式使用独立图标加文本 chip。
 
 ![详情面板与归属 chip](assets/detail-inspector-policy-chips.png)
+
+短视口（1440×900）的详情使用不透明底部抽屉，位于遮罩上方；内部保持两栏及各栏上下堆叠。
+
+![短视口详情抽屉](assets/detail-inspector-short-viewport.png)

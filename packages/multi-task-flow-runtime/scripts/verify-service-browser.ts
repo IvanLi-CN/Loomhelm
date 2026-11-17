@@ -321,6 +321,21 @@ try {
     await demo.locator("#close-plan-info").click();
     await demo.getByRole("tab", { name: "任务与交付单元依赖", exact: true }).click();
     await demo.locator('#graph [data-context-task="model"]').click();
+    if (viewport.width <= 1444 && viewport.height <= 960) {
+      const drawer = await demo.locator(".details").evaluate((element) => {
+        const style = getComputedStyle(element);
+        const backdrop = document.querySelector(".details-backdrop")!;
+        return {
+          open: element.classList.contains("open"),
+          background: style.backgroundColor,
+          aboveBackdrop: Number(style.zIndex) > Number(getComputedStyle(backdrop).zIndex),
+        };
+      });
+      if (!drawer.open || !drawer.aboveBackdrop || drawer.background === "rgba(0, 0, 0, 0)")
+        throw new Error(
+          `Detail drawer must be opaque and above its backdrop: ${JSON.stringify(drawer)}`,
+        );
+    }
     await demo.locator('.detail-pane-atoms [data-context-id="atom-model"]').click();
     const relations = demo.locator(".detail-pane-atom .atom-relations-disclosure");
     await relations.waitFor();
