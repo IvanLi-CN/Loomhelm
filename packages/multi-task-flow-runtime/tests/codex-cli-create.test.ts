@@ -121,6 +121,25 @@ test("initialization prompt gives the creation phase enough context without auth
   expect(INITIALIZATION_PROMPT).not.toContain("请简短回复");
 });
 
+test("completed strict historical initialization remains readable for both roles", () => {
+  for (const role of ["Delivery Agent", "Task Agent"] as const) {
+    const turn = handshakeTurn("completed", role);
+    turn.items[0] = {
+      type: "userMessage",
+      content: [
+        {
+          type: "text",
+          text: `$multi-task-flow\n\n你是本次运行中的 ${role}，由主 Agent 委派到独立工作区。主 Agent 稍后会发送正式派发消息；收到后按本 Skill 读取任务上下文并推进自己的任务。正式派发前不要开始正式任务，也不要调用工具、读取或修改文件、执行命令。`,
+        },
+      ],
+    };
+    expect(() => verifyInitializationTurn(turn, role)).not.toThrow();
+    expect(() =>
+      verifyInitializationTurn(turn, role === "Task Agent" ? "Delivery Agent" : "Task Agent"),
+    ).toThrow("prompt does not match");
+  }
+});
+
 test("initialization ignores the known multi-agent deprecation diagnostic", () => {
   expect(() =>
     verifyInitializationTurn(

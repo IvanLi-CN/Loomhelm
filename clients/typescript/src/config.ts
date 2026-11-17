@@ -7,6 +7,7 @@ export interface ClientConfig {
   mode: 'local';
   stateDir: string;
   processTimeoutMs: number;
+  processTimeoutExplicit?: boolean;
   maxOutputBytes: number;
   codexAppServerSocket?: string;
 }
@@ -35,6 +36,7 @@ export async function loadConfig(path?: string): Promise<ClientConfig> {
     mode: 'local',
     stateDir: value.stateDir ? resolve(base, value.stateDir as string) : resolve(homedir(), '.loomhelm'),
     processTimeoutMs: timeout,
+    ...(value.processTimeoutMs !== undefined ? { processTimeoutExplicit: true } : {}),
     maxOutputBytes,
   };
 }

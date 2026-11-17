@@ -9,9 +9,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { versionEnvelope } from "../lib/contract";
 import { apply } from "../lib/engine";
 import { validateLedger } from "../lib/schema";
 import { LedgerStore } from "../lib/store";
+import { fixtureIdentity } from "./cli-identity-fixture";
+import { approve, fixture } from "./engine-fixtures";
 
 const createdRoots: string[] = [];
 const initialInput = JSON.parse(
@@ -658,7 +661,8 @@ describe("orchestrate group-base-reconcile", () => {
     const ledger = validateLedger({
       schema_version: 2,
       source_schema_version: null,
-      contract_version: 2,
+      contract_version: 4,
+      runtime_identity: fixtureIdentity,
       orchestration_id: input.run_id,
       revision: 0,
       repository: input.payload.repository,
@@ -776,4 +780,41 @@ describe("orchestrate show actor binding", () => {
     expect(denied.exitCode).toBe(3);
     expect(denied.output).toMatchObject({ ok: false, code: "ACTOR_MISMATCH" });
   });
+});
+
+test("task-context executes the real CLI, calculates readiness and preserves ledger bytes", async () => {
+  const root = temporaryRoot();
+  const ledger = fixture();
+  approve(ledger);
+  ledger.contract_version = 4;
+  ledger.runtime_identity = fixtureIdentity;
+  ledger.version = versionEnvelope;
+  const store = new LedgerStore(root, "run");
+  ledger.tasks[0].thread_id = "task-a";
+  ledger.tasks[2].thread_id = "task-c";
+  store.create(ledger);
+  const before = readFileSync(store.ledgerPath, "utf8");
+  for (const taskId of ["a", "c"]) {
+    const result = await runCommand(root, "show", {
+      run_id: "run",
+      section: "task-context",
+      task_id: taskId,
+      actor: { role: "task", thread_id: `task-${taskId}` },
+    });
+    expect(result.exitCode, JSON.stringify(result.output)).toBe(0);
+    expect(result.output).toMatchObject({
+      ok: true,
+      code: "OK",
+      result: { task: { id: taskId }, ready: taskId === "a" },
+    });
+  }
+  const denied = await runCommand(root, "show", {
+    run_id: "run",
+    section: "task-context",
+    task_id: "a",
+    actor: { role: "main", thread_id: "unbound" },
+  });
+  expect(denied.exitCode).not.toBe(0);
+  expect(denied.output.code).toBe("ACTOR_MISMATCH");
+  expect(readFileSync(store.ledgerPath, "utf8")).toBe(before);
 });

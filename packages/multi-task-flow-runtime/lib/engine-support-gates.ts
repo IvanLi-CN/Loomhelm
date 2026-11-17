@@ -381,7 +381,7 @@ export function factSatisfied(
         item.request.mode === "child" &&
         item.request.task_id === subjectId,
     );
-    if (operationSatisfied || ledger.contract_version !== 3) return operationSatisfied;
+    if (operationSatisfied || ledger.contract_version < 3) return operationSatisfied;
     const binding = task.pr && "state" in task.pr && task.pr.state === "merged" ? task.pr : null;
     const receipt = latest.receipt;
     return Boolean(
@@ -507,6 +507,10 @@ export function deliveryUnitPrMergedFromLedger(
   ledger: Ledger,
   group: Ledger["groups"][number],
 ): boolean {
+  const reconciliation = ledger.events.findLast(
+    (event) => event.subject_id === group.id && event.data.operation === "closeout-reconcile",
+  );
+  if (reconciliation?.data.outcome === "unknown") return false;
   if (legacyLedger(ledger)) return deliveryUnitPrMerged(group);
   const latest = latestFact(ledger, group.id, "pr_merged");
   const canonicalPr = group.pr && "state" in group.pr ? group.pr.pr : group.pr;
@@ -525,7 +529,11 @@ export function deliveryUnitPrMergedFromLedger(
           item.status === "succeeded" &&
           item.receipt_fact_id === latest.id,
       ) &&
-      (!canonicalPr || stable(canonicalPr) === stable(canonicalPr)),
+      canonicalPr &&
+      latest.receipt?.resource_type === "pr" &&
+      latest.receipt.resource_id === canonicalPr.id &&
+      latest.receipt.pr &&
+      stable(canonicalPr) === stable(latest.receipt.pr),
   );
 }
 
@@ -659,7 +667,7 @@ function lifecycleAtomEventId(requestId: string, atomId: string): string {
 
 export function taskMergePrerequisitesComplete(ledger: Ledger, task: Task): boolean {
   if (legacyLedger(ledger)) return true;
-  if (ledger.contract_version !== 3) return task.atoms.every((atom) => atom.status === "completed");
+  if (ledger.contract_version < 3) return task.atoms.every((atom) => atom.status === "completed");
   const mergeIndex = task.atoms.findIndex((atom) => atom.lifecycle_stage === "pr_merged");
   if (mergeIndex < 0 || ["blocked", "completed"].includes(task.atoms[mergeIndex]?.status ?? ""))
     return false;
@@ -727,7 +735,7 @@ export function completeTaskLifecycleAtom(
   lifecycleStage: "pr_merged",
   evidence: { fact_id: string; evidence_ref: string | null; occurred_at: string },
 ): void {
-  if (ledger.contract_version !== 3) return;
+  if (ledger.contract_version < 3) return;
   const index = task.atoms.findIndex((atom) => atom.lifecycle_stage === lifecycleStage);
   requireCondition(index >= 0, "ATOMS_PENDING", "Contract 3 task must declare a pr_merged atom", 4);
   const atom = task.atoms[index]!;
@@ -774,7 +782,7 @@ export function completeTaskLifecycleAtom(
 export function taskCanUpdateAtoms(ledger: Ledger, task: Task): boolean {
   return (
     taskExecutionState(task) === "running" ||
-    (ledger.contract_version === 3 &&
+    (ledger.contract_version >= 3 &&
       task.state === "integrated" &&
       task.lifecycle.pr_merged === "passed")
   );

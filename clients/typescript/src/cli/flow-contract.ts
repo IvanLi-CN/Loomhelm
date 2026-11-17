@@ -937,6 +937,11 @@ const specialCommands: Record<string, JsonSchema> = {
 			optionalResult: ["thread_id", "notification_delivery", "reason"],
 		},
 	),
+	"initialization-recover": command(
+		["operation_id"],
+		["operation_id", "outcome", "thread_id", "notification_delivery", "reason"],
+		{ access: "external-write", optionalResult: ["thread_id", "notification_delivery", "reason"] },
+	),
 	"notification-prepare": command(
 		["notification_id"],
 		["notification_id", "delivery_attempt_id"],
@@ -1048,7 +1053,10 @@ const specialCommands: Record<string, JsonSchema> = {
 
 Object.assign(entries, specialCommands);
 
-for (const name of ["dispatch-bind-request", "dispatch-resolve"]) {
+add("initialization-recovery-claim", ["operation_id", "attempt"], ["operation_id", "attempt_id"], { payloadOverrides: { attempt: objectValue } });
+add("initialization-recovery-observe", ["operation_id", "attempt_id", "turn_id"], ["operation_id", "turn_id"]);
+
+for (const name of ["dispatch-bind-request", "dispatch-resolve", "initialization-recovery-claim", "initialization-recovery-observe"]) {
 	entries[name] = { ...entries[name], access: "internal", availability: "cli-only" };
 }
 for (const name of ["notification-prepare", "notification-send"]) {
@@ -1062,12 +1070,17 @@ export const FLOW_CONTRACT = Object.freeze({
 	$schema: "https://json-schema.org/draft/2020-12/schema",
 	$id: "https://loomhelm.dev/schemas/multi-task-flow/flow-contract.schema.json",
 	schema_version: 2,
-	contract_version: 3,
+	contract_version: 4,
 	content_type: "application/json",
 	invocation:
 		"bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --input -",
 	commands: entries,
 	error_codes: [
+    "CALLER_IDENTITY_UNAVAILABLE",
+    "RUN_VERSION_MISMATCH",
+    "RUN_BOUNDARY_CHANGED",
+    "RUN_QUIESCENCE_UNPROVEN",
+    "UPGRADE_INCOMPLETE",
 		"ACTION_NOT_APPROVED",
 		"ACTION_NOT_PLANNED",
 		"ACTIVE_GROUP_IDLE",

@@ -18,6 +18,8 @@ Worker recovery follows the existing three-restarts-per-sixty-seconds policy. A 
 
 The browser stops its refresh and SSE retry loop on `RUN_WORKER_UNAVAILABLE`, shows a copyable diagnostic card, preserves the run and tab identity, and offers a controlled reconnect that obtains a new login session and returns to the original view. It never performs unlimited automatic refreshes.
 
+浏览器首次打开编排页而 Worker 不可用时，Gateway 自行返回 HTTP 503 HTML 故障页，页面及其脚本和样式不得依赖 Worker 资源。页面明确区分展示连接故障与任务执行失败，提供返回列表、复制诊断和折叠技术详情；重试按钮按 Worker pool 的实际剩余窗口倒计时，等待结束后仅允许手动刷新当前完整 URL，保留 run、plan、tab 和 fragment。刷新不得重派业务操作、清空失败计数或绕过重启限制。API、资源和非 HTML 请求继续返回 JSON 错误合同；响应以 `retry_after_ms` 和可用时的 `Retry-After` 表达等待时间。
+
 ## Consequences
 
 Operators can correlate a browser error, HTTP response, runtime state and daemon log without exposing host secrets. The viewer gains a small runtime state machine and a recovery UI, while Ledger compatibility and business revision semantics remain unchanged. Worker lifecycle failures become explicit API behavior rather than opaque 503s.

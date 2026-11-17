@@ -159,7 +159,7 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
           "Creation baseline is immutable; use the explicit synchronization workflow",
           4,
         );
-        if (ledger.contract_version === 3)
+        if (ledger.contract_version >= 3)
           requireCondition(
             !!cliDispatch.request.development_baseline,
             "BASELINE_REQUIRED",
@@ -174,14 +174,14 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
             "Group baseline requires a fresh remote fetch receipt after dispatch",
             4,
           );
-          if (ledger.contract_version === 3)
+          if (ledger.contract_version >= 3)
             requireCondition(
               target.current_sha === baseline.sha,
               "BASELINE_NOT_VERIFIED",
               "Workspace baseline no longer matches the current group lineage",
               4,
             );
-          if (!cliDispatch.request.development_baseline && ledger.contract_version !== 3)
+          if (!cliDispatch.request.development_baseline && ledger.contract_version < 3)
             target.current_sha = baseline.sha;
         } else {
           const group = find(ledger.groups, (g) => g.id === target.group_id, "Group");
@@ -198,7 +198,7 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
           );
           target.base_sha = baseline.sha;
         }
-        if (ledger.contract_version !== 3) cliDispatch.request.development_baseline = baseline;
+        if (ledger.contract_version < 3) cliDispatch.request.development_baseline = baseline;
       }
       if (targetType === "group") target.parent_branch ??= branch;
       else target.branch ??= branch;
@@ -553,7 +553,7 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
           5,
         );
         if (targetType === "group") {
-          if (ledger.contract_version !== 3) target.parent_pr = receipt.pr;
+          if (ledger.contract_version < 3) target.parent_pr = receipt.pr;
           else
             target.pr = {
               state: "published",
@@ -571,7 +571,7 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
             4,
           );
           target.pr =
-            ledger.contract_version !== 3
+            ledger.contract_version < 3
               ? receipt.pr
               : {
                   state: "open",

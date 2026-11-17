@@ -10,6 +10,10 @@ import {
 } from "./engine-evidence-delivery";
 import { executeExecutionCommand, executionCommands } from "./engine-execution";
 import { executeGroupLifecycleCommand, groupLifecycleCommands } from "./engine-group-lifecycle";
+import {
+  executeInitializationRecoveryCommand,
+  initializationRecoveryCommands,
+} from "./engine-initialization-recovery";
 import { executeMergeCutCommand, mergeCutCommands } from "./engine-merge-cut";
 import type { Request } from "./engine-support-core";
 import * as core from "./engine-support-core";
@@ -40,6 +44,7 @@ export { authorize, ready };
 const domains: CommandDomain[] = [
   { commands: coordinationCommands, handle: executeCoordinationCommand },
   { commands: executionCommands, handle: executeExecutionCommand },
+  { commands: initializationRecoveryCommands, handle: executeInitializationRecoveryCommand },
   { commands: taskLifecycleCommands, handle: executeTaskLifecycleCommand },
   { commands: groupLifecycleCommands, handle: executeGroupLifecycleCommand },
   { commands: workspacePublicationCommands, handle: executeWorkspacePublicationCommand },
@@ -164,13 +169,7 @@ export function apply(ledger: Ledger, command: string, request: Request): unknow
       { notification: { mode: "auto", recipient: "owner" } },
       true,
     );
-    if (
-      notice.enabled &&
-      typeof result === "object" &&
-      result !== null &&
-      !Array.isArray(result) &&
-      !("notification_request" in result)
-    ) {
+    if (notice.enabled && typeof result === "object" && result !== null && !Array.isArray(result)) {
       const notification = addNotificationIntent(
         candidate,
         { ...request, request_id: eventId },

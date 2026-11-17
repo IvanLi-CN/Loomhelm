@@ -2,9 +2,9 @@ import { z } from "zod";
 import { deriveExecutionPhase } from "../lib/revisions";
 import { type Ledger, ledgerSchema, type PlanRevision } from "../lib/schema";
 
-export const CONTRACT_VERSION = 3 as const;
+export const CONTRACT_VERSION = 4 as const;
 export const SKILL_ID = "multi-task-flow" as const;
-export const SKILL_VERSION = "2.7.10" as const;
+export const SKILL_VERSION = "3.0.0" as const;
 export const VIEWER_CONTRACT = 5 as const;
 export const versionEnvelope = {
   skill_id: SKILL_ID,

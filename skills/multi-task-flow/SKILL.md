@@ -1,7 +1,7 @@
 ---
 name: multi-task-flow
 description: 通过隔离的 JSON 账本、按需创建的交付单元和任务对话、PR 协调及已认证的本地仪表板，编排依赖驱动的 Codex 任务。
-version: 2.7.10
+version: 3.0.0
 ---
 
 # Multi-task flow
@@ -46,7 +46,7 @@ version: 2.7.10
 
 主 Agent 在调用 `init` 前 MUST 形成完整 canonical plan：每个 contribution Task 都必须有自己的原子任务；原子图 MUST 明确声明开始节点、结束节点、里程碑节点和全部 `atomic_edges`。系统预设的交付单元生命周期原子只提供节点定义，不提供依赖关系；生命周期关系必须由 Agent 在 plan 中显式声明。运行时不得从任务图、交付单元数组顺序、原子数组顺序或名称推导任何原子依赖。
 
-对话创建只有一条正式路径：`dispatch-claim`/`dispatch-group-claim` → exact-version CLI `conversation-create` → native evidence reconcile → formal dispatch。Contract 3 下任何 Agent 都不得直接调用 `mcp__codex_app__create_thread`、裸 `thread/start`、`codex://threads/...` 或 `thread/resume + turn/start` 创建或启动交付对话；这些结果不能绑定到账本。发现绕过路径时必须记录 `orphan thread / orchestration violation`，保持 claim 和容量占用并停止调度，不能释放 claim 后静默重试或伪造成功。
+对话创建只有一条正式路径：`dispatch-claim`/`dispatch-group-claim` → exact-version CLI `conversation-create` → native evidence reconcile → formal dispatch。Contract 3 下任何 Agent 都不得直接调用 `mcp__codex_app__create_thread`、裸 `thread/start`、`codex://threads/...` 或 `thread/resume + turn/start` 创建或启动交付对话；这些结果不能绑定到账本。唯一例外是由 CLI `initialization-recover` 按 ADR 0038 在同一已观察 thread/worktree 内执行的受审计固定握手恢复，仍不得裸调用原生 API。发现绕过路径时必须记录 `orphan thread / orchestration violation`，保持 claim 和容量占用并停止调度，不能释放 claim 后静默重试或伪造成功。
 
 Delivery Unit 的四个预设生命周期原子必须按 `prepare-parent → create-pr → merge-pr → closeout` 保持可达顺序；Contribution Task 的四个预设生命周期原子必须按 `prepare-branch → create-pr → merge-pr → closeout` 保持可达顺序。两层原子不得混用；不再预设 `verify-integration` 或 `verify-task-pr`。两节点之间允许插入 Agent 创建的 work、milestone 和并行分支，但只能使用 Agent 声明的边形成路径；缺失、逆序、无关或自动补出的关系都必须使计划拒绝。
 
@@ -146,6 +146,12 @@ The explicitly installed shared user service uses the system-service exception f
 
 显式安装的共享用户服务使用系统服务例外管理后台生命周期。固定端口所有权、兼容性、维护和迁移恢复见 `references/shared-viewer.md`。
 
+## 编排版本与显式升级
+
+普通 flow（包括只读）必须使用与该编排账本及运行绑定完全一致的包版本、build、source 和合同集合。版本不匹配时先用 `multi-task-flow orchestration compatibility-check --run-id <run-id>` 诊断；只有主人明确授权升级该正式编排后，才使用目标版本 CLI 执行 `orchestration upgrade --run-id <run-id> --dry-run <version|tag>` 和不带 dry-run 的相同命令。安装新 CLI 或阅读本 Skill 不授权迁移已有正式运行。
+
+新初始化原子发布 contract 4 和 schema-2 版本绑定，保留 Contract 3 的原子编排及初始化恢复语义。显式升级通过整个 run 目录的原子发布迁移受支持账本并切换绑定，保留源目录恢复快照，CLI 侧不可逆，不提供编排 rollback。升级中断只续跑登记的冻结目标；普通 flow 不得修复或跳过升级阶段。缺少可信历史身份、没有机械迁移链或无法证明原生调用已停止时保持阻断；不要改账本、释放 claim、强杀进程或按全局 Gateway 版本猜测。专用诊断与 dry-run 不产生业务写入或绑定切换。完整阶段及错误码见 canonical CLI 合同。
+
 ## Contract 3 强制边界
 
 Contract 3 下任何 Agent 都不得直接调用 `mcp__codex_app__create_thread`、`fork_thread` 或其他原生 thread-create/fork 工具创建 group/task 对话；`conversation-create` 是唯一入口。宿主无法保证普通 Agent 不具备上述原生创建能力时，必须在 dispatch 前报告 capability gap 并阻塞运行，不能用提示词约定替代工具授权。
@@ -153,3 +159,7 @@ Contract 3 下任何 Agent 都不得直接调用 `mcp__codex_app__create_thread`
 发现未由 `conversation-create` 产生、未绑定 dispatch operation 或未经过 native evidence 核验的 `codex://threads/<thread-id>` 时，将其标记为 orphan thread / orchestration violation；不得绑定、resolve、handoff、释放 claim 或容量，也不得把它作为依赖事实，暂停受影响运行并交给主人复核。
 
 regular 贡献任务必须先有 workspace ready 和已创建且验证为 open 的 parent PR；只有 main-owned bootstrap 在 workspace ready 且 provider 明确证明 parent PR `absent` 时可例外，pending、unknown、closed 或缺少证据都不满足例外。
+
+## 中断初始化恢复
+
+创建超时或连接中断后先用 `flow creation-reconcile` 对账；如果明确是原始初始化握手 interrupted，可由绑定 main 使用标准 envelope 调用 `flow initialization-recover`，payload 仅包含 `operation_id`。它只在原 thread/worktree 上执行一次固定 READY 握手，不能传正式任务、替换执行配置或创建新会话；仅支持已验证 writer 排斥的 codex-cli 0.169.0。已保存 attempt 后无论退出码如何都不得重发：读取当前 revision，以 `creation-reconcile` 验证注册的 original/recovery turn 链。只有 intent 而无法证明 turn 是否启动时保持 unknown 并报告审计阻塞，不能释放 claim。该入口是受审计的恢复例外，不授权 Agent 裸用 resume/start 操作正式对话。

@@ -1,6 +1,8 @@
 import { join } from "node:path";
+import { callerIdentity, requireRunBinding } from "../lib/orchestration-identity";
 import { createRunDashboard } from "../lib/server";
 import { selectAssets } from "../lib/service-http";
+import { LedgerStore } from "../lib/store";
 import { parseViewerRoute } from "./viewer-gateway";
 import { startUnixViewerWorkerServer } from "./viewer-socket";
 
@@ -46,6 +48,9 @@ const server = await startUnixViewerWorkerServer({
       new URL(request.url).pathname.startsWith("/api/v1/") && !route.path.startsWith("/api/")
         ? "/api" + route.path
         : route.path;
+    const ledger = new LedgerStore(dataRoot!, context.runId).read();
+    if (ledger.contract_version === 4)
+      requireRunBinding(dataRoot!, context.runId, ledger, callerIdentity());
     return getRun(context.runId).handle(request, { timeout() {} }, path);
   },
 });

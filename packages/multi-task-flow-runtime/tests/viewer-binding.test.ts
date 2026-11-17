@@ -8,7 +8,7 @@ import {
 } from "../lib/viewer-binding";
 import { fixtureRun, serviceFixture } from "./service-fixture";
 
-test("run viewer binding bootstraps outside the ledger and survives a fresh state instance", () => {
+test("missing historical binding never bootstraps from current Gateway or fallback identity", () => {
   const { root, state } = serviceFixture();
   const { store } = fixtureRun(state.paths.data, "binding-run", 3);
   const ledgerBefore = store.readRaw();
@@ -23,9 +23,10 @@ test("run viewer binding bootstraps outside the ledger and survives a fresh stat
     frontend_contract: 1,
     viewer_contract: 5,
   };
-  const first = ensureViewerBinding(state, "binding-run", manifest);
-  expect(first.run_id).toBe("binding-run");
-  expect(readViewerBinding(state, "binding-run")?.package_version).toBe("0.2.31");
+  expect(() => ensureViewerBinding(state, "binding-run", manifest)).toThrow(
+    "Historical run identity is missing",
+  );
+  expect(readViewerBinding(state, "binding-run")).toBeNull();
   expect(store.readRaw()).toBe(ledgerBefore);
   expect(join(root, "data/runs/binding-run/runtime/viewer-binding.json")).toBe(
     viewerBindingPath(state, "binding-run"),
@@ -35,7 +36,12 @@ test("run viewer binding bootstraps outside the ledger and survives a fresh stat
 test("viewer binding writes increment its runtime revision without changing ledger", () => {
   const { state } = serviceFixture();
   fixtureRun(state.paths.data, "binding-run", 3);
-  const base = ensureViewerBinding(state, "binding-run", {
+  const base = writeViewerBinding(state, {
+    schema_version: 1,
+    run_id: "binding-run",
+    revision: 0,
+    request_id: "historical-fixture",
+    updated_at: new Date().toISOString(),
     package_name: "@loomhelm/multi-task-flow",
     package_version: "0.2.31",
     build_id: "a".repeat(64),

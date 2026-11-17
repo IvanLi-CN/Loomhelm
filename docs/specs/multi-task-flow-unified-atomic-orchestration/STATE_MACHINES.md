@@ -415,3 +415,7 @@ stateDiagram-v2
 界面使用一个“图标 + 文本”归属 chip，悬浮或键盘聚焦显示 `execution_owner`、`conversation_policy` 两个字段的原始值；异常状态另附原因。`null`、缺失字段 `undefined` 和未知字符串明确区分，不通过猜测自动纠正。独立交付 chip 同样使用图标加文本，并在 tooltip 保留原始 `delivery_policy`；`parent_pr` / `child_pr` 显示父 PR / 子 PR，`shared_delivery_unit` 显示共享交付，`evidence` 显示验收证据，`none` 显示无交付产物。
 
 `web/execution-policy-model.ts` 实现纯投影，`web/execution-policy-chip.ts` 实现可聚焦 chip。`tests/execution-policy.test.ts` 穷举 20 对并与领域校验器核对四组保留状态，同时覆盖缺失与未来枚举；`tests/ui/execution-policy-chip.test.ts` 验证单图标、文本、两个原始字段及异常说明。修改领域对应关系时必须同步更新本表、投影和测试。
+
+## Interrupted initialization
+
+unknown CLI dispatch → exact interrupted handshake preflight → durable recovery attempt → native exclusive writer → locked history preflight → fixed READY turn → registered native turn observation → full original/recovery chain verification → dispatch succeeded + one handoff intent。任一步骤未知或失败时保留 unknown 与所有已登记身份；intent 不过期，重入只对账。无登记 recovery、failed/active 或额外业务 turn 均不得绕过此路径绑定成功。

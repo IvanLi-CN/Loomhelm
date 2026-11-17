@@ -4,7 +4,7 @@
 
 ## Documentation map
 
-`SPEC.md` 记录需求、验收和兼容合同；`DATA_MODEL.md` 记录 canonical schema、投影和外部事实；`STATE_MACHINES.md` 记录各对象的正常状态机、异常恢复状态机和范围修订；本文件记录实现入口与验证映射。
+[SPEC.md](./SPEC.md) 记录长期需求、验收和兼容合同；[AGENT_INTERACTIONS.md](./AGENT_INTERACTIONS.md) 记录角色职责、交互顺序和时序图；[DATA_MODEL.md](./DATA_MODEL.md) 记录 canonical schema、投影和外部事实；[STATE_MACHINES.md](./STATE_MACHINES.md) 记录各对象的正常状态机、异常恢复状态机和范围修订；[CLI_CONTRACT.md](./CLI_CONTRACT.md) 记录命令接口；本文件记录实现入口、验证映射与已知偏差。
 
 ## Canonical persistence
 
@@ -56,7 +56,7 @@ Viewer 的架构名称是 **Stable Gateway + Per-Run Versioned Workers**：daemo
 
 Gateway 更新就是 daemon/Gateway package 更新：候选 staging、停止并排空当前 daemon、固定端口重启和公共 API/资源健康检查；Worker 更新采用 release 并存和 run-scoped version mapping，只有显式 run 版本切换通过兼容性预检后才路由新请求，旧 worker 排空后才能回收。Gateway rollback 与单 run Worker rollback 独立执行，候选失败不得改变固定端口或既有 run 版本映射。
 
-维护动作必须只暴露两个精确 CLI 命令：`multi-task-flow gateway upgrade <version|tag>` 与 `multi-task-flow orchestration upgrade --run-id <run-id> <version|tag>`。两者都支持 `--dry-run [version|tag]` 执行版本发现、完整性和兼容性检查，支持 `--rollback [version|tag]` 回退到已验证版本；两个 flag 互斥。Gateway 命令只改变公共入口；编排命令由 CLI 在目标 run sidecar 锁下直接更新版本绑定，revision、digest 和 request identity 由 CLI 内部生成与校验，daemon 不参与事务，成功后只可被动或主动刷新映射并按映射管理 worker。
+维护动作必须只暴露两个精确 CLI 命令：`multi-task-flow gateway upgrade <version|tag>` 与 `multi-task-flow orchestration upgrade --run-id <run-id> <version|tag>`。两者都支持 `--dry-run <version|tag>` 执行版本发现、完整性和兼容性检查；只有 Gateway 保留 `--rollback`。编排升级遵循 ADR 0039 的前向事务。Gateway 命令只改变公共入口；编排命令由 CLI 在目标 run sidecar 锁下直接更新版本绑定，revision、digest 和 request identity 由 CLI 内部生成与校验，daemon 不参与事务，成功后只可被动或主动刷新映射并按映射管理 worker。
 
 版本更新发现由 `multi-task-flow` CLI 提供，与 daemon 或 Gateway 的运行形式无关。CLI 读取节流本地缓存，缓存过期时安排异步 registry 检查并立即返回上次提示；index 或编排页只能展示 CLI 返回的对应提示，不直接访问 registry，也不能从 daemon 状态推断版本。提示提供对应的 `gateway upgrade` 或 `orchestration upgrade` 命令，`--dry-run` 仍是升级前检查。
 
@@ -67,6 +67,10 @@ Gateway 更新就是 daemon/Gateway package 更新：候选 staging、停止并�
 聚合依赖图保持默认入口；原子依赖图由同一 `atomic_nodes`/`atomic_edges` 生成。`packages/multi-task-flow-runtime/web/atomic-graph-view.tsx` 使用 React Flow 与 ELK，展示节点范围、状态、条件边并支持缩放、平移、方向切换、节点选择、任务详情联动和可访问节点列表。任务图与交付单元图是读取投影，不是第二份依赖真相。
 
 Viewer worker 诊断遵循 [ADR 0033](../../adr/0033-viewer-worker-diagnostics-and-reconnect.md)：worker 生命周期失败写入独立 runtime 诊断状态，不写 Ledger，不推进业务 revision；gateway、HTTP 响应、daemon 日志和浏览器诊断卡片共享 `diagnostic_id`、run、worker generation、阶段、稳定错误码和恢复状态。`observed`、`retrying`、`degraded`、`recovered` 状态沿用 worker pool 的三次/六十秒重启窗口；浏览器在 `RUN_WORKER_UNAVAILABLE` 后停止无限刷新，保留 run/tab 定位并通过新登录会话受控重连。
+
+Worker 页面尚未加载时由 `packages/multi-task-flow-runtime/lib/gateway-recovery-page.ts` 独立提供 HTML 故障页；`service-http.ts` 区分浏览器编排入口与 JSON 请求，`viewer-runtime.ts` 从已有失败窗口计算剩余等待时间。页面仅刷新当前完整 URL，保留计划、标签页与 fragment，不依赖 Worker 资产、不修改 Ledger 或诊断持久化格式。HTTP 故障注入、限流和页面交互覆盖位于 `tests/gateway-recovery.test.ts`、`tests/viewer-runtime.test.ts` 与 `tests/ui/gateway-recovery.test.ts`；隔离视觉入口为 `dev:demo`（兼容 `preview:gateway-recovery`），`build:demo` 生成独立静态产物；浏览器控制区和 `demo` / `d_*` URL 参数可指定场景、主题、编排 ID 与等待时间，模拟状态仅在浏览器内运行。
+
+故障页复用 Viewer 的 Tailwind/DaisyUI 按钮、文本框与 Lucide 图标；`web/viewer-theme.css` 为正常 Viewer 与 Gateway 共享主题变量，`web/gateway-ui.css` 只包含故障页所需组件和布局。`scripts/build-gateway-ui.ts` 编译为受资源清单保护的 `lib/gateway-ui.generated.ts`，由 Gateway 内嵌到 HTML；运行时不需要 Worker 资源、CDN 或开发依赖。`check:gateway-ui` 验证生成产物与源码一致。编排 ID 提供独立复制入口与权限受限时的选中文本兜底；重试数字使用等宽字体和固定数字槽，折叠诊断区保持紧凑。编排 ID 与复制按钮保留独立的原生键盘导航，键盘操作时统一在组合容器显示焦点，指针操作时不显示焦点框，文字选区仍保留。
 
 ## Verification
 
@@ -95,3 +99,58 @@ Schema、迁移、评估、图投影和网页交互分别由 `packages/multi-tas
 原子任务关系默认折叠为文本摘要：未完成状态显示直接前驱，完成状态显示直接后继，无关联时显示“无前驱”或“无后继”。展开后显示完整的前驱、当前任务和后继图；同一页面内按原子任务保留展开状态，切换选择与数据刷新不重置用户选择。
 
 Agent 归属展示由 `web/execution-policy-model.ts` 将 `execution_owner` 与 `conversation_policy` 合成为一个配置状态，`web/execution-policy-chip.ts` 以图标加文本展示并保留两个原始字段的 tooltip；交付策略独立显示图标加文本。三张状态机图、20 对组合的剪枝矩阵和异常兜底见 [STATE_MACHINES.md](STATE_MACHINES.md) 第 6 节。`tests/execution-policy.test.ts` 与领域校验器交叉验证全部组合，`tests/ui/execution-policy-chip.test.ts` 覆盖键盘聚焦与原值展示。
+
+## Interrupted initialization recovery
+
+`initialization-recovery.ts` 实现只限绑定 main 的单次恢复与注册链对账；`engine-initialization-recovery.ts` 追加冻结 intent 和原生 turn 观察；`codex-recovery-writer.ts` 用受监管的独占私有 server 封住历史检查与发送间的竞态。初始化验证器精确识别历史文本并允许 prompt-only interruption。回归覆盖重入不重发、异常历史、revision fencing、证据绑定和 handoff 幂等；原生验收仅使用隔离测试资源。兼容和停止发布修复路径见 `initialization-recovery-migration.json`。
+
+## Agent 角色交互的实现与验证
+
+测试使用隔离的临时账本和独立 CLI 子进程，仅 mock Codex 平台的创建、初始化观察、工作区核验及对账结果；不创建真实 Codex 对话、PR、release 或 deployment。公开 CLI、账本存储、权限、revision fencing、通知 attempt/receipt/recipient acknowledgement 与生命周期均执行真实实现。
+
+验证入口为 `agent-role-completion-flow.test.ts`、`agent-role-cli.test.ts`、`dispatch-readiness-ack.test.ts` 和 `engine-core.test.ts`。在 `packages/multi-task-flow-runtime/` 执行 `bun run test`、`bun run test:ui` 和 `bun run build`。结果必须绑定实际候选，不能用历史结果证明后续候选。
+
+### 时序图与 mock 测试的对应范围
+
+| 图 | mock 已覆盖的部分 | 尚不能据此宣称的覆盖 |
+| - | - | - |
+| S1、S12 | revision/request/actor 拒绝 | proposal、init 与所有 plan revision 路径的完整完成流 |
+| S2、S6 | 公开 conversation-create/creation-reconcile、初始化角色证据、unknown 身份保留与禁止重建 | 真实 Codex 外部平台可用性 |
+| S3、S4 | bootstrap ownership、shared-delivery 拓扑及权限边界 | bootstrap/shared-delivery 全部外部副作用的完成流 |
+| S5、S8、S10 | 三个 Task 分别经 CLI 完成基线、原子、发布、quality、merge receipt、Task closeout，再合并父 PR 并关闭 DeliveryUnit | 所有 TaskKind、所有拓扑与 canonical 原子根图同步的端到端证明 |
+| S7、S13 | 通知 intent/attempt/receipt/recipient ack、ready 代次门禁、重放、foreign actor、旧 revision | 真实消息平台投递 |
+| S9、S11 | receipt 驱动 merge、CI 门禁、unknown closeout 下游冻结与 valid 恢复、PR identity 拒绝 | release/deployment/verification 外部流程 |
+
+### 审计问题与修复证据
+
+以下记录对照 [SPEC](./SPEC.md)、[交互设计](./AGENT_INTERACTIONS.md)、[状态机](./STATE_MACHINES.md) 与 [CLI 契约](./CLI_CONTRACT.md)，保留问题身份与修复后的验证入口。五项审计问题已补充针对性修复或测试；实际候选的 CI/review 仍需独立收敛，不能仅据此宣称 `merge-ready / Step 5C Ready`。
+
+| 证据 ID | 原问题 | 修复与回归证据 |
+| - | - | - |
+| MTF-AUDIT-001 | unknown closeout 后仍满足下游 merge gate | `engine-core.test.ts` 验证业务状态保留 closed，最新 unknown 冻结下游 dispatch，仅匹配 provider merged 状态和原 merge SHA 的 valid 对账恢复 capability；矛盾证据拒绝且账本不变。 |
+| MTF-AUDIT-002 | 完成流绕过公开 conversation-create CLI | `agent-role-cli.test.ts` 与完成流通过隔离进程执行公开 CLI；验证正常创建、unknown/reconcile、重复 request、foreign actor、旧 revision 和 CLI_ONLY_DISPATCH。 |
+| MTF-AUDIT-003 | 直接构造 Task/DeliveryUnit merge facts 和完成状态 | 每个 child PR 都经 publish、quality、merge claim/resolve 与 Task closeout，再合并父 PR 并关闭 DeliveryUnit；无 receipt、closed receipt 均拒绝且账本不变，unknown merge 阻止提前 closeout。 |
+| MTF-AUDIT-004 | 未确认的 task-ready 通知允许 claim | `dispatch-readiness-ack.test.ts` 验证 pending/failed/sent/unknown 未确认时拒绝；只接受最新 ready 代次和当前 owner 的确认。初始 ready 直接发现路径不要求补建通知；一旦产生 ready 事件，其通知必须确认。同一命令的普通通知和 ready 通知分别持久化 intent。 |
+| MTF-AUDIT-005 | canonical PR 与自身比较 | `engine-core.test.ts` 验证缺失 receipt、resource ID、PR identity 或仓库不匹配时 merge capability 与下游 dispatch 均拒绝；viewer 的 `pr_merged_availability` 和 `merge_capability.status` 复用同一账本判定；`view.test.ts` 同时验证两个投影在缺失/不匹配 receipt、unknown closeout 和 valid 恢复时保持一致。 |
+
+修复保持账本 schema、角色、TaskKind 和状态集合不变；更严格的派发/证据门禁落实已有设计。全局安装资源未在源码修复中更新。
+
+### 通知投递职责的来源差异
+
+[ADR 0035](../../adr/0035-task-agent-ledger-driven-progression-and-dispatch-notifications.md) 描述事件产生的 Task Agent 使用返回的 `tool_request` 通知 main；现有 Agent 执行指引描述由主对话协调原生消息发送。交互图 S7 分开表示事件产生者、投递协调者和收件者，共同边界为 intent、唯一 attempt、provider receipt 与 recipient ack。此处保留来源差异供后续同步，不以执行指引代替项目设计依据，也不通过文档迁移改变 CLI 权限。
+
+权限恢复使用版本化 `permissions.original`、不可变追加命令和原生 settings 通知核验；异常后保留 unknown 与快照，重入不再限制权限或发送新 turn。缺少快照的历史 attempt 与命名 profile 拒绝自动恢复。回归包含真实私有 writer、持久化 LedgerStore、dispatch-resolution、handoff 请求、两次正式 sender adapter turn 与实际 `show task-context` CLI；native 持久化在该回归中由状态化 fixture 模拟，不等同于 Desktop 工具或真实 OS sandbox 验收。当前 contract-4 与完整运行身份的回归在恢复前用完整、可由账本构造的证据调用真实 `dispatch-resolve` CLI，验证拒绝且账本和原生只读策略不变；只有 writer 核验恢复后才能提交成功。兼容路径另见 `recovery-permissions-migration.json`。
+
+原生配置验收入口为 `python3 packages/multi-task-flow-runtime/tests/fixtures/native-permissions.py`：使用空 CODEX_HOME、禁用 daemon auto-start，验证原生 writer 排斥、权限限制及 effective-settings 恢复、与只读全局默认不同的冷 resume 结果。该探测没有凭据，使用本地确定性模型 fixture 完成原生 turn，并核对两个正式 turn 的原权限上下文；不验证外部模型、工具执行或 Desktop 控制。CLI 上下文及成功绑定链由隔离状态化回归覆盖。权限事务的后继决策为 ADR 0040。
+
+## 编排版本绑定与前向升级
+
+ADR 0039 与 REQ-UPGRADE-001 至 REQ-UPGRADE-006 的候选实现位于 `orchestration-identity.ts`、`orchestration-upgrade.ts` 和 `orchestration-lifecycle.ts`：contract 4 保存完整运行身份与升级阶段，既有维护事务同步迁移账本并切换绑定；CLI 与 Worker 核验身份并围绕原生调用保留生命周期回执。直接迁移支持 contract 3/4；更早格式保留诊断，缺少已验证机械链时拒绝自动迁移。`orchestration-upgrade.test.ts` 覆盖基础阶段、重入、冻结目标和备份拒绝；独立 TypeScript CLI 的生命周期测试覆盖实际打包资源的身份传播、普通读取拒绝、只读诊断、dry-run、显式升级、重放和降级拒绝。正式 PR 质量证据仍待收敛，不能视作 merge-ready。
+
+中断初始化恢复复用已合并的 PR #310；本主题不重复实现恢复，也不要求其可选审计字段必然改变 ledger contract。本地未合并的 deadline 与超时诊断增强不属于本次升级实现范围。正式账本、服务与安装版本未变更。
+
+隔离验证确认 0.2.53 的 orchestration-upgrade 不读取 ledger contract，可以改写 schema-1 绑定；主人已批准原子目录发布方案。`store-upgrade-publication.ts` 在既有维护锁下原子交换 run 目录，同时发布 prepared 账本与 schema-2 绑定，并保留源目录快照。实际 0.2.53 的 reader、普通 writer 和仅修改绑定的维护 writer 均拒绝发布后的屏障；测试覆盖交换前中断、交换后 SIGKILL、各后续阶段、并发升级、原生调用等待和旧目录锁等待者。正式 PR/CI/review 仍待收敛。
+
+Gateway 不再为缺失历史绑定的账本使用当前安装或 fallback 身份补建来源；隔离源码预览只为本次新建的临时副本显式登记预览身份，不能作为历史编排来源证据。
+
+回归覆盖自定义视图下 Worker 的真实执行身份、CLI 外桌面通知的静止证据、原子交换期间原生锁获取拒绝后的安全重试，以及空 init 输入的既有错误码。历史 schema-1/contract-1 与 contract-2 的公开只读诊断保持源文件字节不变，并拒绝缺少已验证迁移链的升级。

@@ -33,6 +33,8 @@ LOOMHELM_CONNECTOR_BASE_URL=https://loomhelm.ivanli.cc "$HOME/.local/loomhelm/lo
 
 客户端不会启动替代的 `codex app-server`，而是连接当前用户的 managed daemon socket。Codex 登录凭据不会上传到 Loomhelm；客户端与 Codex CLI 使用同一 Host 运行时。
 
+Multi-task Flow 的系统设计与行为契约见 [主题设计规格](docs/specs/README.md#multi-task-flow-设计入口)，包括角色交互时序、数据模型、状态机和 CLI 契约；实现覆盖与已知偏差单独记录。
+
 ## Development
 
 工具版本见 [tools/versions.env](tools/versions.env)。在仓库根目录运行 `scripts/setup` 检查 Git、固定版本的 Go/Bun/sqlc 和 Python 3.9+，准备 Markdown 工具、补齐缺失的 `.env.local` 并安装前端依赖；缺失、版本不匹配或安装失败会汇总后以非零状态退出。重复执行保留已有环境配置和 Git 钩子，linked worktree 与自定义 Git common directory 均受支持。Docker/Compose 在初始化时可选，运行数据库工作流时必需；sqlc 下载与摘要校验方式见 [开发说明](docs/development.md)。

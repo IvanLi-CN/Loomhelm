@@ -387,6 +387,15 @@ export function executeCloseoutCommand(context: CommandContext): unknown | undef
         "Closeout evidence source does not match the bound repository",
         5,
       );
+      if (outcome === "valid")
+        requireCondition(
+          observation.provider_state === "merged" &&
+            !!owner.merge_sha &&
+            observation.merge_sha === owner.merge_sha,
+          "EVIDENCE_MISMATCH",
+          "Valid closeout reconciliation requires the recorded provider merge SHA",
+          5,
+        );
       const closeoutEventId = parse(id, payload.closeout_event_id);
       requireCondition(
         ledger.events.some(

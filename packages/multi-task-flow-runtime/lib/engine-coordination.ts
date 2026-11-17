@@ -24,6 +24,7 @@ import {
 import type { CommandContext } from "./engine-command-context";
 import * as core from "./engine-support-core";
 import * as support from "./engine-support-gates";
+import { recoveryDigest } from "./initialization-recovery-attempt";
 
 const {
   parse,
@@ -680,6 +681,31 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
         "Task already has a dispatch claim",
         4,
       );
+      if (ledger.contract_version >= 3) {
+        const readyEvent = ledger.events.findLast(
+          (event) =>
+            event.type === "task_ready" &&
+            Array.isArray(event.data.task_ids) &&
+            event.data.task_ids.includes(target.id),
+        );
+        // Initially ready tasks may be discovered directly by the coordinator.
+        // Once a readiness transition emits an intent, only its recipient can release it.
+        if (readyEvent)
+          requireCondition(
+            ledger.notifications.some(
+              (notice) =>
+                notice.event_id === readyEvent.id &&
+                notice.recipient_thread_id === ledger.control.owner_thread_id &&
+                notice.ledger_status === "committed" &&
+                notice.delivery_status === "sent" &&
+                notice.status === "acknowledged" &&
+                notice.ack_status === "acknowledged",
+            ),
+            "READINESS_ACK_REQUIRED",
+            "The latest task-ready notification requires recipient acknowledgement before dispatch",
+            4,
+          );
+      }
       const running = ledger.tasks.filter((item) =>
         ["starting", "running", "agent_idle"].includes(item.state),
       ).length;
@@ -827,6 +853,35 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
           5,
         );
       if (evidence.native_tool_name === "codex exec" && outcome === "succeeded") {
+        if (op.request.initialization_recovery) {
+          const attempt = object(op.request.initialization_recovery);
+          const recovery = object(evidence.initialization_recovery ?? {});
+          requireCondition(
+            evidence.source === "multi-task-flow-reconcile" &&
+              recovery.attempt_id === attempt.attempt_id &&
+              recovery.original_turn_id === attempt.original_turn_id &&
+              evidence.initialization_turn_id === attempt.original_turn_id &&
+              typeof attempt.recovery_turn_id === "string" &&
+              recovery.recovery_turn_id === attempt.recovery_turn_id &&
+              recovery.prompt_digest === attempt.prompt_digest &&
+              recovery.transport === "codex-app-server-private-unix" &&
+              recovery.native_version === "0.169.0" &&
+              !!object(attempt.permissions ?? {}).original &&
+              recovery.restored_permissions_digest ===
+                recoveryDigest(object(attempt.permissions).original) &&
+              evidence.workspace_path === attempt.workspace_path &&
+              evidence.initial_head === attempt.initial_head,
+            "EVIDENCE_REQUIRED",
+            "Recovery requires the registered original and completed recovery turn chain",
+            5,
+          );
+        } else
+          requireCondition(
+            !evidence.initialization_recovery,
+            "EVIDENCE_REQUIRED",
+            "Unregistered recovery evidence",
+            5,
+          );
         const reconciled = evidence.source === "multi-task-flow-reconcile";
         requireCondition(
           (reconciled || evidence.exit_code === 0) &&

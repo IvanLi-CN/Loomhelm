@@ -75,7 +75,7 @@ export function initializationPrompt(role: AgentRole): string {
   return `$multi-task-flow\n\n你是本次运行中的 ${role}，由主 Agent 委派到独立工作区。当前只是初始化握手：正式派发前只回复 READY，不要开始正式任务，也不要读取或修改文件、调用工具或执行命令。主 Agent 稍后会发送正式派发消息；收到后再按本 Skill 读取任务上下文并推进自己的任务。`;
 }
 function legacyInitializationPrompt(role: AgentRole): string {
-  return initializationPrompt(role).replace("，也不要调用工具、读取或修改文件、执行命令。", "。");
+  return `$multi-task-flow\n\n你是本次运行中的 ${role}，由主 Agent 委派到独立工作区。主 Agent 稍后会发送正式派发消息；收到后按本 Skill 读取任务上下文并推进自己的任务。正式派发前不要开始正式任务，也不要调用工具、读取或修改文件、执行命令。`;
 }
 function historicalInitializationPrompt(role: AgentRole): string {
   return `$multi-task-flow\n\n你是本次运行中的 ${role}，由主 Agent 委派到独立工作区。主 Agent 稍后会发送正式派发消息；收到后按本 Skill 读取任务上下文并推进自己的任务。正式派发前不要开始正式任务。`;
@@ -130,7 +130,7 @@ function itemText(item: Record<string, unknown>): string {
     .join("");
 }
 
-function verifyInitializationItems(turn: unknown, role: AgentRole): void {
+function verifyInitializationItems(turn: unknown, role: AgentRole, interrupted = false): void {
   const value = record(turn);
   if (!Array.isArray(value.items)) throw new Error("Initialization items are unavailable");
   const items = value.items.map((item) => {
@@ -151,6 +151,7 @@ function verifyInitializationItems(turn: unknown, role: AgentRole): void {
   )
     throw new Error("Initialization prompt does not match the expected agent role");
   if (
+    !interrupted &&
     !items.some(
       (item) =>
         normalizedItemType(item.type) === "agent_message" && itemText(item).trim().length > 0,
@@ -167,9 +168,34 @@ export function verifyInterruptedInitializationTurn(
   role: AgentRole = "Task Agent",
 ): void {
   const value = record(turn);
-  if (value?.status !== "interrupted" && value?.status !== "failed")
-    throw new Error("Initialization turn is not interrupted");
-  verifyInitializationItems(turn, role);
+  if (value?.status !== "interrupted") throw new Error("Initialization turn is not interrupted");
+  verifyInitializationItems(turn, role, true);
+}
+
+export function initializationRecoveryPrompt(
+  role: AgentRole,
+  attemptId: string,
+  originalTurnId: string,
+): string {
+  return `${initializationPrompt(role)}\n\n初始化恢复审计：attempt=${attemptId}; original_turn=${originalTurnId}。这仍然只是握手，不是正式派发。仅回复 READY。`;
+}
+
+export function verifyRecoveryTurn(turn: unknown, prompt: string): void {
+  const value = record(turn);
+  if (value?.status !== "completed" || !Array.isArray(value.items))
+    throw new Error("Recovery handshake is not completed");
+  const items = value.items.map(record);
+  if (items.some((item) => !item || isWorkItem(item)))
+    throw new Error("Recovery handshake recorded work or malformed evidence");
+  const users = items.filter((item) => normalizedItemType(item?.type) === "user_message");
+  const agents = items.filter((item) => normalizedItemType(item?.type) === "agent_message");
+  if (
+    users.length !== 1 ||
+    itemText(users[0]!) !== prompt ||
+    agents.length !== 1 ||
+    itemText(agents[0]!).trim() !== "READY"
+  )
+    throw new Error("Recovery handshake prompt or READY response mismatch");
 }
 
 export type InitializationEvent = {

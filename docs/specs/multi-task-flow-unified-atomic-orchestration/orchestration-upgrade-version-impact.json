@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "kind": "version-impact-record",
+  "usage": {
+    "scope": "optional-compatibility-governance",
+    "required_for_manual_release": false,
+    "per_pr_release_evidence": false,
+    "target_selection": "out-of-scope"
+  },
+  "change": {
+    "description": "Strict immutable CLI/run identity, explicit automatic forward migration and removal of orchestration rollback",
+    "release_unit_description": "@loomhelm/multi-task-flow",
+    "affected_contracts": [
+      "public-api",
+      "persistent-state"
+    ]
+  },
+  "compatibility_evidence": {
+    "public_api": {
+      "change": "breaking",
+      "impact": "major",
+      "supported_consumer_range": "Ordinary commands require exact identity; legacy callers must use bound CLI or explicit upgrade",
+      "evidence": [
+        "ADR 0039",
+        "CLI_CONTRACT.md orchestration lifecycle"
+      ]
+    },
+    "persistent_state": {
+      "applicable": true,
+      "impact": "minor",
+      "state_description": "Contract-4 rejection barrier deliberately fences prior writers; retained source backup and registered upgrade allow forward repair",
+      "source_program_compatibility_range": "Direct schema-2/contract-3 and contract-4; earlier formats diagnostic-only without a verified mechanical chain",
+      "evidence": [
+        "orchestration-upgrade-migration.json",
+        "orchestration-upgrade.test.ts"
+      ]
+    }
+  },
+  "release_unit": {
+    "maximum_assessed_impact": "major",
+    "target_version": null,
+    "reason": "API and state impacts are assessed independently; exact version and publish decision belong to the repository release policy"
+  }
+}

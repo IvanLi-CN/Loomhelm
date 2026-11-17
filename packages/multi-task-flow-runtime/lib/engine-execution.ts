@@ -346,7 +346,7 @@ export function executeExecutionCommand(context: CommandContext): unknown | unde
     }
     case "development-baseline-sync": {
       requireCondition(
-        ledger.contract_version === 3,
+        ledger.contract_version >= 3,
         "INCOMPATIBLE_LEDGER",
         "Baseline synchronization requires an explicit contract-3 migration",
         4,

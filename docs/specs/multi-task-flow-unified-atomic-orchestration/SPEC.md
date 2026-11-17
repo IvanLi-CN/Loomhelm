@@ -50,6 +50,10 @@ planned work、milestone、Task 状态和 DeliveryUnit 状态 MUST 通过统一 
 
 Agent 信息 MUST 集中在右栏 Agent 区域：标题显示对话标题或未关联，打开对话与复制对话 ID 使用标题右端图标按钮，执行配置编辑器使用浮层且不得撑开信息行，运行时观察与诊断默认折叠。所有详情字段 MUST 提供明确空状态。PR 绑定事实与详情查询结果 MUST 区分：已有绑定但暂未获取详情时保留 PR identity、链接及刷新能力，不得误显示尚未关联。
 
+### REQ-VIEWER-RECOVERY-001
+
+Gateway MUST 在 Worker 完全不可用时独立提供编排入口的 HTML 故障页，清楚区分页面连接失败与任务失败，提供手动重试、返回列表、复制诊断和可展开技术详情。重试 MUST 尊重实际剩余重启窗口并保留当前完整 URL，不得重新派发任务或重复业务副作用；非页面请求 MUST 保持 JSON 错误合同。
+
 ### REQ-SCHEDULE-001
 
 计划在批准前 MUST 通过完整理论排期校验；任一可执行节点缺少可计算的正确定时、存在悬空依赖、循环依赖、未批准计划或其他导致开始/结束偏移不可确定的情况时，批准和 scheduled 状态转换 MUST 被拒绝。
@@ -110,6 +114,12 @@ DeliveryUnit 的 `closed` 业务状态 MUST 保留已经验证的 `pr_merged` �
 - Method: 详情内容、原子关系、Agent 操作、配置浮层、PR 提示及空状态 UI 测试；组合状态穷举测试与领域校验交叉验证；源码预览人工视觉验收。
 - Pass condition: 两栏上下堆叠，原子选择与 Agent 上下文边界正确；所有 chip 和图标与值匹配并可聚焦查看原始值；异常组合明确兜底；折叠、浮层与空状态不导致布局空白或误报未关联 PR。
 
+### VER-VIEWER-RECOVERY-001
+
+- covers: `REQ-VIEWER-RECOVERY-001`
+- Method: Gateway HTTP 故障注入、Worker pool 限流和页面交互测试，以及独立 `ui_demo` 的桌面和移动布局核验。
+- Pass condition: Worker 不可用时 HTML 页面无需 Worker 资源即可显示，倒计时结束前不能重试，结束后不自动刷新；手动重试保留 URL，API 保持 JSON，Ledger 内容与业务 revision 不变。
+
 ### VER-SCHEDULE-001
 
 - covers: `REQ-SCHEDULE-001`, `REQ-SCHEDULE-003`
@@ -163,7 +173,7 @@ AtomicNode + AtomicEdge
 Task 与 DeliveryUnit 是平级对象；delivery_unit_id 只是共同的分类、整合和验收范围标记，不表示父子、会话从属或管理权转移。
 ```
 
-状态机图、对象状态归属和异常恢复规则集中记录在 [STATE_MACHINES.md](./STATE_MACHINES.md)，便于单独审查；数据结构和 schema 定义集中记录在 [DATA_MODEL.md](./DATA_MODEL.md)。
+状态机图、对象状态归属和异常恢复规则集中记录在 [STATE_MACHINES.md](./STATE_MACHINES.md)，便于单独审查；数据结构和 schema 定义集中记录在 [DATA_MODEL.md](./DATA_MODEL.md)。角色职责、身份绑定和端到端交互时序集中记录在 [AGENT_INTERACTIONS.md](./AGENT_INTERACTIONS.md)，命令接口集中记录在 [CLI_CONTRACT.md](./CLI_CONTRACT.md)；实现映射、测试覆盖与已知设计偏差见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)。
 
 ## 3. 统一的原因
 
@@ -286,6 +296,8 @@ AtomicNode + AtomicEdge
 - [First delivery unit is bootstrap by default](../../adr/0031-first-delivery-unit-bootstrap-by-default.md)
 - [Multi-task Flow creation reconciliation and standalone Codex reconcile](../../adr/0034-multi-task-flow-creation-reconciliation.md)
 - [Multi-task Flow CLI contract ownership](../../adr/0036-multi-task-flow-cli-contract-ownership.md)
+- [编排版本绑定与前向升级](../../adr/0039-orchestration-version-binding-and-forward-upgrade.md)
+- [初始化恢复的权限事务与原生写锁](../../adr/0040-initialization-recovery-permission-transaction.md)
 
 ## 9. 可行性与风险
 
@@ -326,3 +338,55 @@ Contract 3 的 Flow dispatch operation 在 `conversation-create` 超时、进程
 - Pass condition: unknown operation 可由已知 thread 的完整证据安全恢复；证据不足继续 unknown；明确 pre-creation failure 才能 failed；任何重放不会产生第二个 thread、第二个 operation 或第二条 handoff notification。
 
 创建对账是 Flow Ledger 的恢复动作，不是普通 Codex dispatch 的别名。`codex reconcile` 继续服务独立的 Codex dispatch journal；Flow runtime 必须通过 `flow creation-reconcile` 查询并更新正式运行账本。没有已知 thread identity 时，系统不得按标题、cwd、时间或相似度猜测资源；只有额外的、可验证的 native request 查询证据才能解除该限制。
+
+### REQ-INITIALIZATION-RECOVERY-001
+
+`initialization-recover` MUST 仅恢复绑定 main 所拥有的 unknown codex-exec dispatch，保留创建 native request、thread、worktree 和完整执行配置。原始精确角色握手 MUST 为 interrupted 且没有工作 items；允许没有助手回复。failed、active、未知或额外业务 turn MUST 拒绝。
+
+### REQ-INITIALIZATION-RECOVERY-002
+
+恢复 MUST 在原生副作用前持久化唯一、不自动过期的 attempt；恢复 writer MUST 取得原生独占锁后复核完整历史再发送固定握手。超时、崩溃或冲突后的重入 MUST 仅对账已注册 attempt，不新建会话或重发。成功 MUST 复读并绑定 original interrupted turn 与 registered completed recovery turn，保留摘要、配置、owner、HEAD、清洁状态和一次性 handoff 证据。最终历史核验与 dispatch 成功写入 MUST 保持同一原生 writer 锁；已登记 attempt 的对账同样 MUST 在锁内核验且不发送新 turn，释放后才准备 handoff。具体边界遵循 ADR 0040。
+
+### REQ-INITIALIZATION-RECOVERY-003
+
+恢复 MUST 在中性 resume 取得原生写锁后、首次权限 override 前保存完整原权限快照，禁止以全局默认值替代。固定握手使用只读权限；正式 dispatch 成功 MUST 先在同一锁内恢复原权限并通过原生 effective-settings 通知核验，成功 evidence MUST 绑定快照摘要。恢复失败保持 unknown，不准备 handoff；崩溃后重入只恢复和对账，不能重发握手或覆盖与原始及握手权限均不相同的配置。历史 attempt 缺少快照以及无法无损保存的命名 profile MUST fail closed，不能自动推断或迁移；保留历史账本读取能力。`show task-context` MUST 为已绑定 Task 返回上下文及实际 readiness，拒绝未绑定身份且不改写账本。
+
+## Visual Evidence
+
+Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，由 owner 确认。
+
+![指针选择文字，无焦点框](assets/gateway-focus-pointer.png)
+
+![键盘导航，组合容器统一焦点](assets/gateway-focus-keyboard.png)
+
+## 15. 编排版本绑定与前向升级
+
+### REQ-UPGRADE-001
+
+普通 flow 命令（含只读命令）MUST 核验调用 CLI 与编排绑定的包版本、build ID、source SHA 和合同集合；任一不匹配 MUST 拒绝并给出显式升级入口，不得隐式迁移。专用只读兼容检查和 upgrade dry-run MAY 读取历史信息，但 MUST 不产生业务写入或绑定切换。
+
+### REQ-UPGRADE-002
+
+升级 MUST 仅由显式 orchestration upgrade 触发，并由目标版本 CLI 自动完成必要的机械数据迁移及绑定切换；目标身份 MUST 与执行 CLI 的已验证 artifact 一致。升级入口可读取不匹配的源绑定，但 MUST 不把这一例外扩展为普通命令权限。迁移 MUST 不推断业务语义或改写 owner、对话、工作区及外部事实。
+
+### REQ-UPGRADE-003
+
+编排升级 MUST 仅前向推进，CLI MUST 拒绝降级及编排 rollback，不提供反向迁移。备份 MUST 用于独立灾难恢复，不能作为普通降级入口。Gateway 回滚和其他编排的绑定 MUST 不因单个编排升级而改变。
+
+### REQ-UPGRADE-004
+
+升级 MUST 持久化源身份、首次解析并冻结的不可变目标身份和进度；中断后 MUST 仅由显式 upgrade 续跑同一次升级，不重新跟随标签、不自动回滚或切换目标。账本与版本绑定不一致或升级未完成时，普通命令 MUST 拒绝操作，专用诊断 MUST 能报告状态。锁与恢复记录 MUST 防止 CLI/Worker 进入混合版本可写状态，daemon 通知 MUST 不作为升级正确性的必要条件。
+
+### REQ-UPGRADE-005
+
+升级 MUST 阻止该编排新写入，并等待已执行的 CLI/Worker 写事务与原生副作用调用安全退出；只读连接 MUST 不无限阻塞升级。可证明已静止的 unknown operation、claim 及容量 MUST 原样保留并迁移，不要求任务或结果不确定的操作全部终结。无法证明副作用停止时 MUST 阻断，不得通过强杀并伪造终态推进升级。
+
+### REQ-UPGRADE-006
+
+历史编排缺少可信绑定时，普通命令 MUST 拒绝。只有该编排的可验证历史证据唯一确定源身份时，显式升级入口才 MAY 机械补齐；证据不足 MUST 报告缺失并等待可验证来源，不得按当前 Gateway、全局安装或 latest 猜测。新 CLI MUST 保留支持范围内的历史诊断和前向迁移路径，旧 CLI/Worker MUST 无法写入升级后的编排。
+
+### VER-UPGRADE-001
+
+- covers: `REQ-UPGRADE-001`, `REQ-UPGRADE-002`, `REQ-UPGRADE-003`, `REQ-UPGRADE-004`, `REQ-UPGRADE-005`, `REQ-UPGRADE-006`
+- Method: 隔离历史 ledger 与绑定 fixture、已验证 artifact 身份 fixture、CLI/Worker 并发写入、原生副作用调用观察、升级各落盘边界的崩溃注入及重入测试。
+- Pass condition: 普通命令跨版本或同版本不同 build 均拒绝；专用诊断及 dry-run 不改变业务数据或绑定；目标 CLI 完成迁移和绑定一致切换；中断只续跑冻结目标、不降级；在途副作用未退出时阻断，静止 unknown/claim/容量不丢失；缺失绑定有唯一证据才补齐；旧 writer 不能绕过门禁；Gateway 和其他编排不受影响。
