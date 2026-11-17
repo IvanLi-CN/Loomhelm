@@ -7331,7 +7331,7 @@
     },
     {
       "path": "skills/multi-task-flow/references/cli-contract.md",
-      "sourcePath": "docs/specs/multi-task-flow-unified-atomic-orchestration/CLI-CONTRACT.md",
+      "sourcePath": "docs/specs/multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md",
       "installedSha256": "323ae235d4d54e0b3923e3555a4bb9febb0ded5484374f8cd0b73babc9e8049b"
     },
     {

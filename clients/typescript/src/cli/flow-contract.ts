@@ -1227,7 +1227,7 @@ export const FLOW_CONTRACT = Object.freeze({
 		runtime_validation: "packages/multi-task-flow-runtime/lib/engine.ts",
 		domain_schema: "packages/multi-task-flow-runtime/lib/schema.ts",
 		human_contract:
-			"docs/specs/multi-task-flow-unified-atomic-orchestration/CLI-CONTRACT.md",
+			"docs/specs/multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md",
 	},
 } as const);
 

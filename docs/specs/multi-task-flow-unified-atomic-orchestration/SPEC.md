@@ -145,7 +145,7 @@ AtomicNode + AtomicEdge
 Task 与 DeliveryUnit 是平级对象；delivery_unit_id 只是共同的分类、整合和验收范围标记，不表示父子、会话从属或管理权转移。
 ```
 
-状态机图、对象状态归属和异常恢复规则集中记录在 [STATE-MACHINES.md](./STATE-MACHINES.md)，便于单独审查；数据结构和 schema 定义集中记录在 [DATA-MODEL.md](./DATA-MODEL.md)。
+状态机图、对象状态归属和异常恢复规则集中记录在 [STATE_MACHINES.md](./STATE_MACHINES.md)，便于单独审查；数据结构和 schema 定义集中记录在 [DATA_MODEL.md](./DATA_MODEL.md)。
 
 ## 3. 统一的原因
 
@@ -177,9 +177,9 @@ Task 与 DeliveryUnit 是平级对象；delivery_unit_id 只是共同的分类�
 
 交付单元的准备父分支、创建父 PR、合并父 PR 和收口是交付单元预设 work 原子；它们不得与 Task 原子混用。集成验收不是预设原子；如果计划需要集成检查，应由 Agent 创建实际 work 或 milestone，并声明其 scope 和条件。旧账本中的 coordination task 和 coordination session 只读兼容，不自动猜测业务语义；迁移必须通过显式计划修订，将其转换为 contribution、documentation、verification、release、deployment 或适当的 milestone。
 
-Canonical schema、Task/DeliveryUnit 投影、外部事实和执行策略见 [DATA-MODEL.md](./DATA-MODEL.md)。
+Canonical schema、Task/DeliveryUnit 投影、外部事实和执行策略见 [DATA_MODEL.md](./DATA_MODEL.md)。
 
-状态派生、状态优先级和非正常恢复见 [STATE-MACHINES.md](./STATE-MACHINES.md)。
+状态派生、状态优先级和非正常恢复见 [STATE_MACHINES.md](./STATE_MACHINES.md)。
 
 ## 5. 编排流程
 

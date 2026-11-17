@@ -72,7 +72,7 @@ test("the packaged Skill contract mirrors the canonical repository contract", ()
 	const canonical = readFileSync(
 		resolve(
 			root,
-			"docs/specs/multi-task-flow-unified-atomic-orchestration/CLI-CONTRACT.md",
+			"docs/specs/multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md",
 		),
 		"utf8",
 	);

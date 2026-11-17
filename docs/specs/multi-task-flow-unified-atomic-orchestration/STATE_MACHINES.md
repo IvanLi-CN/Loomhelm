@@ -1,6 +1,6 @@
 # Unified atomic orchestration state machines
 
-本文专门用于审查统一原子编排中的对象状态、正常流程、异常恢复和范围修订。长期规则以同目录的 [SPEC.md](./SPEC.md) 为准，数据结构以 [DATA-MODEL.md](./DATA-MODEL.md) 为准。图中的状态名保留 canonical 英文；标题、转移条件、事件说明和恢复规则使用中文。
+本文专门用于审查统一原子编排中的对象状态、正常流程、异常恢复和范围修订。长期规则以同目录的 [SPEC.md](./SPEC.md) 为准，数据结构以 [DATA_MODEL.md](./DATA_MODEL.md) 为准。图中的状态名保留 canonical 英文；标题、转移条件、事件说明和恢复规则使用中文。
 
 ## 1. 状态归属
 
