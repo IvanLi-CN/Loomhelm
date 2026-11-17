@@ -7,8 +7,6 @@ import {
 import {
   DIRECT_REVIEW_PROFILES,
   SUBAGENT_STARTUP_UNAVAILABLE,
-  reviewModelFallbacks,
-  reviewModelMatchesLane,
 } from "./review";
 
 export interface DirectWaveLaneProfileOptions {
@@ -28,33 +26,11 @@ export function directWaveLaneProfileAuthorized(
   ledger: Record<string, unknown>,
   options: DirectWaveLaneProfileOptions,
 ): boolean {
-  if (
-    !reviewModelMatchesLane(
-      options.declaredModel,
-      options.declaredEffort,
-      options.reviewModel,
-      options.reviewEffort,
-      true,
-    )
-  )
-    return false;
-  if (
-    options.declaredModel === options.reviewModel &&
-    options.declaredEffort === options.reviewEffort
-  )
-    return !hasUnavailableAttempt(
-      ledger,
-      options,
-      options.declaredModel,
-      options.declaredEffort,
-    );
-  const fallback = reviewModelFallbacks(options.declaredModel).some(
-    ([model, effort]) =>
-      model === options.reviewModel && effort === options.reviewEffort,
-  );
   return (
-    fallback &&
-    hasUnavailableAttempt(
+    DIRECT_REVIEW_PROFILES.has(
+      `${options.declaredModel}:${options.declaredEffort}`,
+    ) &&
+    !hasUnavailableAttempt(
       ledger,
       options,
       options.declaredModel,
@@ -94,15 +70,14 @@ function hasUnavailableAttempt(
       item.wave_proof_key === waveProofKey &&
       item.head_sha === options.headSha &&
       item.base_sha === options.baseSha &&
-      item.review_model === model &&
-      item.review_effort === effort &&
-      item.resolved_model === "unavailable" &&
-      item.resolved_effort === "unavailable" &&
-      canonicalProfileResolution(item.profile_resolution, model, effort) &&
-      item.profile_proof_status === "sub-agent-declared" &&
-      item.review_execution_source === "sub-agent" &&
-      item.provenance_boundary === "sub-agent-structured-result" &&
-      item.evidence_source === "sub-agent-structured-result" &&
+      isRecord(item.requested_profile) &&
+      item.requested_profile.model === model &&
+      item.requested_profile.effort === effort &&
+      item.profile_verification === "request_recorded" &&
+      item.effective_profile === null &&
+      item.review_execution_source === "parent-flow-request" &&
+      item.provenance_boundary === "parent-flow-request-and-subagent-result" &&
+      item.evidence_source === "parent-request-and-subagent-result" &&
       item.terminal_state === "unavailable" &&
       item.unavailability_classification === SUBAGENT_STARTUP_UNAVAILABLE &&
       item.wave_id === options.waveId &&
@@ -120,26 +95,6 @@ function hasUnavailableAttempt(
       item.recorded_at.trim().length > 0
     );
   });
-}
-
-function canonicalProfileResolution(
-  value: unknown,
-  model: string,
-  effort: string,
-): boolean {
-  if (!isRecord(value)) return false;
-  const preferred = value.preferred;
-  const resolved = value.resolved;
-  return (
-    isRecord(preferred) &&
-    preferred.model === model &&
-    preferred.effort === effort &&
-    isRecord(resolved) &&
-    resolved.model === "unavailable" &&
-    resolved.effort === "unavailable" &&
-    value.fallback_reason === "sub-agent-unavailable" &&
-    value.attempts === 1
-  );
 }
 
 export function assertDirectProfile(profile: string, role: string): void {

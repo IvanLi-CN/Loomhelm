@@ -152,6 +152,17 @@ export const activeReviewSpecs = {
     reviewSpecCommon,
     reviewSpecRetired,
   ],
+  "formal-review-request-evidence": [
+    "docs/specs/formal-review-request-evidence/SPEC.md",
+    [
+      "requested_profile",
+      "profile_verification=request_recorded",
+      "effective_profile=null",
+      "reported_profile",
+      "reviewer self-report",
+    ],
+    [],
+  ],
 } as const;
 
 export const reviewReadinessRequired = [

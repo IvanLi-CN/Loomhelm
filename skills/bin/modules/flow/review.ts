@@ -8,53 +8,33 @@ import {
   stableHash,
   sortedUnique,
 } from "./common";
+import {
+  DIRECT_REVIEW_POLICY_PROFILES,
+  FORMAL_REVIEW_REQUEST_PROFILE,
+} from "./review-profile-policy";
 
-export const REVIEW_MODEL_LADDER: [string, string][] = [
-  ["gpt-5.6-luna", "medium"],
-  ["gpt-5.6-luna", "xhigh"],
-  ["gpt-5.6-luna", "max"],
-  ["gpt-6.1-sol", "high"],
-];
 export const DIRECT_REVIEW_LANE_PROFILES: Record<string, [string, string]> = {
-  contract: ["gpt-5.6-luna", "medium"],
-  "state-concurrency": ["gpt-5.6-luna", "xhigh"],
-  "failure-data-safety": ["gpt-5.6-luna", "max"],
-  "test-platform": ["gpt-6.1-sol", "high"],
+  contract: [
+    FORMAL_REVIEW_REQUEST_PROFILE.model,
+    FORMAL_REVIEW_REQUEST_PROFILE.effort,
+  ],
+  "state-concurrency": [
+    FORMAL_REVIEW_REQUEST_PROFILE.model,
+    FORMAL_REVIEW_REQUEST_PROFILE.effort,
+  ],
+  "failure-data-safety": [
+    FORMAL_REVIEW_REQUEST_PROFILE.model,
+    FORMAL_REVIEW_REQUEST_PROFILE.effort,
+  ],
+  "test-platform": [
+    FORMAL_REVIEW_REQUEST_PROFILE.model,
+    FORMAL_REVIEW_REQUEST_PROFILE.effort,
+  ],
 };
 export const DIRECT_REVIEW_PROFILES = new Set(
-  REVIEW_MODEL_LADDER.map(([model, effort]) => `${model}:${effort}`),
+  DIRECT_REVIEW_POLICY_PROFILES.map(({ model, effort }) => `${model}:${effort}`),
 );
 export const SUBAGENT_STARTUP_UNAVAILABLE = "startup-unavailable";
-
-export function reviewModelFallbacks(model: string): [string, string][] {
-  return model === "gpt-5.6-luna" ? [["gpt-6.1-sol", "high"]] : [];
-}
-
-export function directReviewProfileResolution(
-  declaredModel: string,
-  declaredEffort: string,
-  resolvedModel: string,
-  resolvedEffort: string,
-): Record<string, unknown> {
-  const preferred = { model: declaredModel, effort: declaredEffort };
-  const resolved = { model: resolvedModel, effort: resolvedEffort };
-  if (declaredModel === resolvedModel && declaredEffort === resolvedEffort)
-    return { preferred, resolved, fallback_reason: null, attempts: 1 };
-  if (
-    declaredModel === "gpt-5.6-luna" &&
-    resolvedModel === "gpt-6.1-sol" &&
-    resolvedEffort === "high"
-  )
-    return {
-      preferred,
-      resolved,
-      fallback_reason: "luna-startup-unavailable",
-      attempts: 2,
-    };
-  throw new FlowError(
-    "direct review profile resolution is not on the allowed fallback ladder",
-  );
-}
 
 export function parseLaneSpec(raw: string): {
   lane: string;
@@ -69,10 +49,7 @@ export function parseLaneSpec(raw: string): {
     string,
     string,
   ];
-  if (
-    ![...DIRECT_REVIEW_PROFILES].includes(`${model}:${effort}`) &&
-    model !== "gpt-5.6-luna"
-  )
+  if (!DIRECT_REVIEW_PROFILES.has(`${model}:${effort}`))
     throw new FlowError(`unsupported review model/effort: ${model}+${effort}`);
   return { lane, model, effort };
 }
@@ -293,45 +270,6 @@ export function reviewSynthesisInput(
       "conflict_dispositions",
       "acceptance",
     ].map((key) => [key, synthesis[key]]),
-  );
-}
-
-export function profileResolutionForReview(
-  declaredModel: string,
-  declaredEffort: string,
-  resolvedModel: string,
-  resolvedEffort: string,
-): Record<string, unknown> {
-  return directReviewProfileResolution(
-    declaredModel,
-    declaredEffort,
-    resolvedModel,
-    resolvedEffort,
-  );
-}
-
-export function reviewModelMatchesLane(
-  declaredModel: string,
-  declaredEffort: string,
-  actualModel: string,
-  actualEffort: string,
-  enforceDirect = false,
-): boolean {
-  if (
-    enforceDirect &&
-    !DIRECT_REVIEW_PROFILES.has(`${declaredModel}:${declaredEffort}`)
-  )
-    return false;
-  if (
-    enforceDirect &&
-    !DIRECT_REVIEW_PROFILES.has(`${actualModel}:${actualEffort}`)
-  )
-    return false;
-  return (
-    (declaredModel === actualModel && declaredEffort === actualEffort) ||
-    reviewModelFallbacks(declaredModel).some(
-      ([model, effort]) => model === actualModel && effort === actualEffort,
-    )
   );
 }
 

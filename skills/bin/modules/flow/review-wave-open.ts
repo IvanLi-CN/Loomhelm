@@ -114,6 +114,10 @@ export function openReviewWaveState(
       {
         model: lane.model,
         effort: lane.effort,
+        requested_profile: {
+          model: lane.model,
+          effort: lane.effort,
+        },
         receipt_id: null,
         state: "pending",
       },

@@ -1,0 +1,9 @@
+# 演进历史
+
+## Current
+
+将 review profile 从 reviewer 自报和 fallback resolution 改为父流程 requested profile；将实际 effective profile 保持为未知；将内容 evidence 与 profile request 分开记录。
+
+## Compatibility
+
+Schema 6 记录保持只读兼容。旧记录中的 `review_model`、`review_effort`、`resolved_model`、`resolved_effort` 和 `profile_proof_status` 继续用于历史解释，但不参与新候选的 profile authorization 或 clear 判定。

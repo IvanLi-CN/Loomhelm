@@ -9,6 +9,11 @@ export const DIRECT_REVIEW_POLICY_PROFILES = [
   { model: "gpt-6.1-sol", effort: "medium" },
 ] as const;
 
+export const FORMAL_REVIEW_REQUEST_PROFILE = {
+  model: "gpt-6-luna",
+  effort: "max",
+} as const;
+
 const COMPLEXITY_INDEX: Record<string, number> = {
   ordinary: 0,
   complex: 2,

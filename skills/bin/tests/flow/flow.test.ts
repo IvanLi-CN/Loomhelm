@@ -25,6 +25,7 @@ import {
 import {
   initialLedger,
   normalizePostMergeEvidence,
+  normalizeLedger,
 } from "../../modules/flow/state";
 import { recordValidationState } from "../../modules/flow/validation";
 import { tryLockFile } from "../../modules/core/security_file";
@@ -405,10 +406,10 @@ describe("acceptance and review state", () => {
       source: "agent-assessment",
     };
     const lanes = [
-      { lane: "contract", model: "gpt-5.6-luna", effort: "medium" },
-      { lane: "state-concurrency", model: "gpt-5.6-luna", effort: "xhigh" },
-      { lane: "failure-data-safety", model: "gpt-5.6-luna", effort: "max" },
-      { lane: "test-platform", model: "gpt-6.1-sol", effort: "high" },
+      { lane: "contract", model: "gpt-6-luna", effort: "max" },
+      { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
+      { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
+      { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
     ];
     const opened = openReviewWaveState(ledger, {
       stage: "initial",
@@ -417,12 +418,35 @@ describe("acceptance and review state", () => {
       laneSpecs: lanes,
     });
     const wave = opened.wave as Record<string, unknown>;
+    expect(() =>
+      openReviewWaveState(ledger, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
     for (const lane of lanes) {
+      if (lane.lane === "contract") {
+        const unavailable = recordSubagentReviewState(ledger, {
+          reviewProfile: "pr-convergence",
+          baseRef: sha,
+          reviewModel: "reported-model-does-not-authorize",
+          reviewEffort: "reported-effort",
+          reviewResultJson: "",
+          terminalState: "unavailable",
+          unavailabilityClassification: "startup-unavailable",
+          waveId: String(wave.wave_id),
+          lane: lane.lane,
+        });
+        expect(unavailable.reused).toBe(false);
+      }
       const result = recordSubagentReviewState(ledger, {
         reviewProfile: "pr-convergence",
         baseRef: sha,
-        reviewModel: lane.model,
-        reviewEffort: lane.effort,
+        reviewModel:
+          lane.lane === "contract" ? "reported-model-does-not-authorize" : undefined,
+        reviewEffort: lane.lane === "contract" ? "reported-effort" : undefined,
         reviewResultJson: JSON.stringify({
           findings: [],
           overall_correctness: "patch is correct",
@@ -435,6 +459,19 @@ describe("acceptance and review state", () => {
       });
       expect(result.reused).toBe(false);
     }
+    const contractReceipt = (ledger.receipts as Record<string, unknown>[]).find(
+      (receipt) => receipt.lane === "contract",
+    );
+    expect(contractReceipt).toMatchObject({
+      review_receipt_schema: 7,
+      requested_profile: { model: "gpt-6-luna", effort: "max" },
+      profile_verification: "request_recorded",
+      effective_profile: null,
+      reported_profile: {
+        model: "reported-model-does-not-authorize",
+        effort: "reported-effort",
+      },
+    });
     const finalized = finalizeReviewWaveState(ledger, String(wave.wave_id), {
       groups: [],
       invariants: ["all lanes covered"],
@@ -444,6 +481,146 @@ describe("acceptance and review state", () => {
     });
     expect(finalized.next).toBe("merge-ready");
     expect((finalized.blockers as unknown[]).length).toBe(0);
+    expect(
+      (ledger.receipts as Record<string, unknown>[]).filter(
+        (receipt) => receipt.kind === "review_attempt",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("keeps schema 6 review receipts historical and blocks fresh clear", () => {
+    const ledger = initialLedger("legacy-review-run", "fast-track", sha, sha, null);
+    ledger.review_assessment = {
+      tier: 3,
+      reason: "historical compatibility",
+      assessed_at: "2026-10-27T00:00:00.000Z",
+      assessed_head_sha: sha,
+      source: "agent-assessment",
+    };
+    const lanes = [
+      { lane: "contract", model: "gpt-6-luna", effort: "max" },
+      { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
+      { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
+      { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
+    ];
+    const opened = openReviewWaveState(ledger, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: sha,
+      laneSpecs: lanes,
+    });
+    const wave = opened.wave as Record<string, unknown>;
+    for (const lane of lanes)
+      recordSubagentReviewState(ledger, {
+        reviewProfile: "pr-convergence",
+        baseRef: sha,
+        reviewResultJson: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation:
+            "Reviewed the historical candidate diff and confirmed the complete result.",
+          overall_confidence_score: 1,
+        }),
+        waveId: String(wave.wave_id),
+        lane: lane.lane,
+      });
+
+    const historical = structuredClone(ledger) as Record<string, unknown>;
+    historical.schema_version = 6;
+    const historicalReceipts = (
+      historical.receipts as Record<string, unknown>[]
+    ).map((receipt) => {
+      const legacy = { ...receipt };
+      if (legacy.kind !== "review") return legacy;
+      for (const key of [
+        "requested_profile",
+        "profile_verification",
+        "effective_profile",
+        "reported_profile",
+      ])
+        delete legacy[key];
+      legacy.review_receipt_schema = 6;
+      legacy.review_model = "legacy-model-self-report";
+      legacy.review_effort = "legacy-effort-self-report";
+      legacy.resolved_model = "legacy-model-self-report";
+      legacy.resolved_effort = "legacy-effort-self-report";
+      legacy.profile_resolution = {
+        preferred: {
+          model: "gpt-6-luna",
+          effort: "max",
+        },
+        resolved: {
+          model: "legacy-model-self-report",
+          effort: "legacy-effort-self-report",
+        },
+        fallback_reason: null,
+        attempts: 1,
+      };
+      legacy.profile_proof_status = "sub-agent-declared";
+      legacy.review_execution_source = "sub-agent";
+      legacy.provenance_boundary = "sub-agent-structured-result";
+      legacy.evidence_source = "sub-agent-structured-result";
+      return legacy;
+    });
+    historical.receipts = historicalReceipts;
+    const historicalSnapshot = structuredClone(historicalReceipts);
+    const normalized = normalizeLedger(historical);
+    expect(normalized.receipts).toEqual(historicalSnapshot);
+    expect(normalized.legacy_schema_version).toBe(6);
+    expect(() =>
+      finalizeReviewWaveState(normalized, String(wave.wave_id), {
+        groups: [],
+        invariants: ["all lanes covered"],
+        coverage: lanes.map(({ lane }) => lane),
+        conflicts: [],
+        acceptance: [],
+      }),
+    ).toThrow("review receipt integrity is invalid");
+
+    const historicalReview = normalized.review as Record<string, unknown>;
+    historicalReview.active_wave_id = null;
+    historicalReview.active_epoch_id = null;
+    const freshHead = "b".repeat(40);
+    const fresh = openReviewWaveState(normalized, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: freshHead,
+      laneSpecs: lanes,
+    });
+    const freshWave = fresh.wave as Record<string, unknown>;
+    expect(freshWave.wave_id).not.toBe(wave.wave_id);
+    expect(freshWave.head_sha).toBe(freshHead);
+    expect(
+      Object.values(freshWave.lanes as Record<string, Record<string, unknown>>).every(
+        (lane) =>
+          canonicalJson(lane.requested_profile) ===
+          canonicalJson({ model: "gpt-6-luna", effort: "max" }),
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects retired fixed lane profiles instead of falling back", () => {
+    const ledger = initialLedger("review-profile-run", "fast-track", sha, sha, null);
+    ledger.review_assessment = {
+      tier: 3,
+      reason: "profile request contract",
+      assessed_at: "2026-10-27T00:00:00.000Z",
+      assessed_head_sha: sha,
+      source: "agent-assessment",
+    };
+    expect(() =>
+      openReviewWaveState(ledger, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: [
+          { lane: "contract", model: "gpt-5.6-luna", effort: "medium" },
+          { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
+          { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
+          { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
+        ],
+      }),
+    ).toThrow("supported Luna/Sol model ladder");
   });
 });
 

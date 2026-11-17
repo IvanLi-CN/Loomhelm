@@ -1,10 +1,5 @@
 import { FlowError, isoNow, isRecord, stableHash } from "./common";
-import {
-  directReviewProfileResolution,
-  reviewModelMatchesLane,
-  SUBAGENT_STARTUP_UNAVAILABLE,
-} from "./review";
-import { directWaveLaneProfileAuthorized } from "./review-profile";
+import { SUBAGENT_STARTUP_UNAVAILABLE } from "./review";
 import {
   parseReviewResultJson,
   validateReviewFindingLocations,
@@ -13,8 +8,8 @@ import {
 export interface SubagentReviewOptions {
   reviewProfile: string;
   baseRef: string;
-  reviewModel: string;
-  reviewEffort: string;
+  reviewModel?: string | undefined;
+  reviewEffort?: string | undefined;
   reviewResultJson: string;
   terminalState?: "completed" | "unavailable" | undefined;
   unavailabilityClassification?: string | undefined;
@@ -49,6 +44,7 @@ export function recordSubagentReviewState(
   if (!isRecord(wave.lanes) || !isRecord(wave.lanes[lane]))
     throw new FlowError(`review lane does not exist: ${lane}`);
   const laneState = wave.lanes[lane];
+  const requestedProfile = laneRequestedProfile(laneState);
   const headSha = options.headSha ?? String(wave.head_sha);
   const baseSha = options.baseSha ?? String(wave.base_sha);
   if (headSha !== wave.head_sha || baseSha !== wave.base_sha)
@@ -60,30 +56,6 @@ export function recordSubagentReviewState(
       "sub-agent review profile does not match its review wave stage",
     );
   const repoPath = options.repoPath ?? "";
-  if (
-    !reviewModelMatchesLane(
-      String(laneState.model),
-      String(laneState.effort),
-      options.reviewModel,
-      options.reviewEffort,
-      true,
-    )
-  )
-    throw new FlowError(
-      "sub-agent review profile does not match its review lane",
-    );
-  const profileOptions = {
-    repoPath,
-    headSha,
-    baseSha,
-    waveId,
-    lane,
-    reviewProfile: options.reviewProfile,
-    declaredModel: String(laneState.model),
-    declaredEffort: String(laneState.effort),
-    reviewModel: options.reviewModel,
-    reviewEffort: options.reviewEffort,
-  };
   const terminal = options.terminalState ?? "completed";
   const receipts = Array.isArray(ledger.receipts)
     ? (ledger.receipts as Record<string, unknown>[])
@@ -99,7 +71,9 @@ export function recordSubagentReviewState(
       lane,
       proofKey,
       waveProofKey,
-      profileOptions,
+      headSha,
+      baseSha,
+      requestedProfile,
     );
   if (terminal !== "completed")
     throw new FlowError(
@@ -111,8 +85,6 @@ export function recordSubagentReviewState(
     );
   if (!options.reviewResultJson.trim())
     throw new FlowError("sub-agent review evidence is missing review result");
-  if (!directWaveLaneProfileAuthorized(ledger, profileOptions) && repoPath)
-    throw new FlowError("sub-agent review lane fallback is not authorized");
   const parsed = parseReviewResultJson(options.reviewResultJson);
   if (repoPath)
     validateReviewFindingLocations(parsed.result, repoPath, baseSha, headSha);
@@ -135,30 +107,22 @@ export function recordSubagentReviewState(
   }
   const existing = receipts.find((receipt) => receipt.receipt_id === receiptId);
   if (existing) return { reused: true, receipt: existing };
-  const resolution = directReviewProfileResolution(
-    String(laneState.model),
-    String(laneState.effort),
-    options.reviewModel,
-    options.reviewEffort,
-  );
   const receipt: Record<string, unknown> = {
     receipt_id: receiptId,
     kind: "review",
-    review_receipt_schema: 6,
+    review_receipt_schema: 7,
     proof_key: proofKey,
     wave_proof_key: waveProofKey,
     head_sha: headSha,
     base_sha: baseSha,
     review_profile: options.reviewProfile,
-    review_model: options.reviewModel,
-    review_effort: options.reviewEffort,
-    resolved_model: options.reviewModel,
-    resolved_effort: options.reviewEffort,
-    profile_resolution: resolution,
-    profile_proof_status: "sub-agent-declared",
-    review_execution_source: "sub-agent",
-    provenance_boundary: "sub-agent-structured-result",
-    evidence_source: "sub-agent-structured-result",
+    requested_profile: requestedProfile,
+    profile_verification: "request_recorded",
+    effective_profile: null,
+    reported_profile: reportedProfile(options),
+    review_execution_source: "parent-flow-request",
+    provenance_boundary: "parent-flow-request-and-subagent-result",
+    evidence_source: "parent-request-and-subagent-result",
     terminal_state: "completed",
     wave_id: waveId,
     lane,
@@ -192,7 +156,9 @@ function recordUnavailable(
   lane: string,
   proofKey: string,
   waveProofKey: string,
-  profileOptions: Parameters<typeof directWaveLaneProfileAuthorized>[1],
+  headSha: string,
+  baseSha: string,
+  requestedProfile: { model: string; effort: string },
 ): Record<string, unknown> {
   if (options.reviewResultJson.trim())
     throw new FlowError(
@@ -205,8 +171,8 @@ function recordUnavailable(
   const identity = stableHash([
     "sub-agent-review-unavailable",
     waveProofKey,
-    options.reviewModel,
-    options.reviewEffort,
+    requestedProfile.model,
+    requestedProfile.effort,
   ]);
   const receiptId = stableHash([
     ledger.run_id,
@@ -215,34 +181,22 @@ function recordUnavailable(
   ]);
   const existing = receipts.find((receipt) => receipt.receipt_id === receiptId);
   if (existing) return { reused: true, receipt: existing };
-  if (!directWaveLaneProfileAuthorized(ledger, profileOptions))
-    throw new FlowError("sub-agent review lane fallback is not authorized");
   const receipt: Record<string, unknown> = {
     receipt_id: receiptId,
     kind: "review_attempt",
-    review_receipt_schema: 6,
+    review_receipt_schema: 7,
     proof_key: proofKey,
     wave_proof_key: waveProofKey,
-    head_sha: profileOptions.headSha,
-    base_sha: profileOptions.baseSha,
+    head_sha: headSha,
+    base_sha: baseSha,
     review_profile: options.reviewProfile,
-    review_model: options.reviewModel,
-    review_effort: options.reviewEffort,
-    resolved_model: "unavailable",
-    resolved_effort: "unavailable",
-    profile_resolution: {
-      preferred: {
-        model: options.reviewModel,
-        effort: options.reviewEffort,
-      },
-      resolved: { model: "unavailable", effort: "unavailable" },
-      fallback_reason: "sub-agent-unavailable",
-      attempts: 1,
-    },
-    profile_proof_status: "sub-agent-declared",
-    review_execution_source: "sub-agent",
-    provenance_boundary: "sub-agent-structured-result",
-    evidence_source: "sub-agent-structured-result",
+    requested_profile: requestedProfile,
+    profile_verification: "request_recorded",
+    effective_profile: null,
+    reported_profile: reportedProfile(options),
+    review_execution_source: "parent-flow-request",
+    provenance_boundary: "parent-flow-request-and-subagent-result",
+    evidence_source: "parent-request-and-subagent-result",
     terminal_state: "unavailable",
     unavailability_classification: SUBAGENT_STARTUP_UNAVAILABLE,
     wave_id: waveId,
@@ -265,6 +219,39 @@ function reviewState(ledger: Record<string, unknown>): Record<string, unknown> {
   if (!isRecord(ledger.review))
     throw new FlowError("ledger review state is invalid");
   return ledger.review;
+}
+
+function laneRequestedProfile(
+  laneState: Record<string, unknown>,
+): { model: string; effort: string } {
+  const requested = laneState.requested_profile;
+  if (
+    isRecord(requested) &&
+    typeof requested.model === "string" &&
+    requested.model.trim() &&
+    typeof requested.effort === "string" &&
+    requested.effort.trim()
+  )
+    return { model: requested.model, effort: requested.effort };
+  if (
+    typeof laneState.model === "string" &&
+    laneState.model.trim() &&
+    typeof laneState.effort === "string" &&
+    laneState.effort.trim()
+  )
+    return { model: laneState.model, effort: laneState.effort };
+  throw new FlowError("review lane requested profile is invalid");
+}
+
+function reportedProfile(
+  options: SubagentReviewOptions,
+): Record<string, string | null> | null {
+  if (options.reviewModel === undefined && options.reviewEffort === undefined)
+    return null;
+  return {
+    model: options.reviewModel ?? null,
+    effort: options.reviewEffort ?? null,
+  };
 }
 
 export { assertReviewReceiptIntegrity } from "./review-receipt-integrity";

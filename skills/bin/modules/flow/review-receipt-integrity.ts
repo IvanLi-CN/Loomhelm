@@ -6,11 +6,6 @@ import {
   stableHash,
 } from "./common";
 import {
-  directReviewProfileResolution,
-  reviewModelMatchesLane,
-} from "./review";
-import { directWaveLaneProfileAuthorized } from "./review-profile";
-import {
   parseReviewResultJson,
   validateReviewFindingLocations,
 } from "./review-result";
@@ -36,10 +31,12 @@ export function assertReviewReceiptIntegrity(
     receipt.evidence_valid !== true ||
     receipt.post_execution_clean !== true ||
     receipt.exit_code !== 0 ||
-    receipt.profile_proof_status !== "sub-agent-declared" ||
-    receipt.review_execution_source !== "sub-agent" ||
-    receipt.provenance_boundary !== "sub-agent-structured-result" ||
-    receipt.evidence_source !== "sub-agent-structured-result"
+    receipt.profile_verification !== "request_recorded" ||
+    receipt.effective_profile !== null ||
+    receipt.review_execution_source !== "parent-flow-request" ||
+    receipt.provenance_boundary !==
+      "parent-flow-request-and-subagent-result" ||
+    receipt.evidence_source !== "parent-request-and-subagent-result"
   )
     throw new FlowError("review receipt integrity is invalid");
   const expectedProfile =
@@ -57,42 +54,20 @@ export function assertReviewReceiptIntegrity(
     receipt.wave_proof_key !== `${receipt.proof_key}:${waveId}:${laneName}`
   )
     throw new FlowError("review receipt provenance integrity is invalid");
-  const declaredModel = String(laneState.model ?? "");
-  const declaredEffort = String(laneState.effort ?? "");
-  const reviewModel = String(receipt.review_model ?? "");
-  const reviewEffort = String(receipt.review_effort ?? "");
+  const requestedProfile = laneRequestedProfile(laneState);
   if (
-    !reviewModelMatchesLane(
-      declaredModel,
-      declaredEffort,
-      reviewModel,
-      reviewEffort,
-      true,
-    )
+    !isRecord(receipt.requested_profile) ||
+    canonicalJson(receipt.requested_profile) !== canonicalJson(requestedProfile)
   )
-    throw new FlowError("review receipt lane profile integrity is invalid");
+    throw new FlowError("review receipt requested profile integrity is invalid");
+  if (!validReportedProfile(receipt.reported_profile))
+    throw new FlowError("review receipt reported profile is invalid");
   if (
     repoPath !== undefined &&
     receipt.proof_key !==
       `${repoPath}:${receipt.head_sha}:${receipt.base_sha}:${expectedProfile}`
   )
     throw new FlowError("review receipt provenance integrity is invalid");
-  if (
-    repoPath !== undefined &&
-    !directWaveLaneProfileAuthorized(ledger, {
-      repoPath,
-      headSha: String(receipt.head_sha),
-      baseSha: String(receipt.base_sha),
-      waveId,
-      lane: laneName,
-      reviewProfile: expectedProfile,
-      declaredModel,
-      declaredEffort,
-      reviewModel,
-      reviewEffort,
-    })
-  )
-    throw new FlowError("review receipt profile authorization is invalid");
   if (!isRecord(receipt.review_result))
     throw new FlowError("review receipt result is invalid");
   let parsed;
@@ -121,25 +96,6 @@ export function assertReviewReceiptIntegrity(
         parsed.result.overall_correctness === "patch is correct")
   )
     throw new FlowError("review receipt result integrity is invalid");
-  let resolution: Record<string, unknown>;
-  try {
-    resolution = directReviewProfileResolution(
-      declaredModel,
-      declaredEffort,
-      reviewModel,
-      reviewEffort,
-    );
-  } catch (error) {
-    throw new FlowError("review receipt profile resolution is invalid", {
-      cause: error,
-    });
-  }
-  if (
-    receipt.resolved_model !== reviewModel ||
-    receipt.resolved_effort !== reviewEffort ||
-    canonicalJson(receipt.profile_resolution) !== canonicalJson(resolution)
-  )
-    throw new FlowError("review receipt profile integrity is invalid");
   const expectedId = stableHash([
     ledger.run_id,
     "sub-agent-review",
@@ -152,4 +108,36 @@ export function assertReviewReceiptIntegrity(
     typeof receipt.wave_proof_key !== "string"
   )
     throw new FlowError("review receipt identity integrity is invalid");
+}
+
+function laneRequestedProfile(
+  laneState: Record<string, unknown>,
+): { model: string; effort: string } {
+  const requested = laneState.requested_profile;
+  if (
+    isRecord(requested) &&
+    typeof requested.model === "string" &&
+    requested.model.trim() &&
+    typeof requested.effort === "string" &&
+    requested.effort.trim()
+  )
+    return { model: requested.model, effort: requested.effort };
+  if (
+    typeof laneState.model === "string" &&
+    laneState.model.trim() &&
+    typeof laneState.effort === "string" &&
+    laneState.effort.trim()
+  )
+    return { model: laneState.model, effort: laneState.effort };
+  throw new FlowError("review lane requested profile is invalid");
+}
+
+function validReportedProfile(value: unknown): boolean {
+  if (value === null) return true;
+  if (!isRecord(value) || Object.keys(value).sort().join(",") !== "effort,model")
+    return false;
+  return (
+    (value.model === null || typeof value.model === "string") &&
+    (value.effort === null || typeof value.effort === "string")
+  );
 }
