@@ -105,7 +105,10 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         ledger.groups.find((item) => item.id === target.group_id)?.agent_thread_id ===
           request.actor.thread_id;
       requireCondition(
-        (request.actor.role === "task" || mainOwned || sharedOwned) &&
+        (request.actor.role === "task" ||
+          mainOwned ||
+          sharedOwned ||
+          core.ownsDeliveryVerification(ledger, target, request.actor)) &&
           taskCanUpdateAtoms(ledger, target),
         "FORBIDDEN",
         "The task owner updates atoms while execution is active or completing closeout",

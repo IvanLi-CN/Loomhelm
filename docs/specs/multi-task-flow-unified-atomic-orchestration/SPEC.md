@@ -306,6 +306,8 @@ AtomicNode + AtomicEdge
 - [初始化恢复的权限事务与原生写锁](../../adr/0040-initialization-recovery-permission-transaction.md)
 - [机械升级保留结果不确定的调用](../../adr/0041-historical-side-effect-quiescence-audit.md)
 
+- [连接初始化的能力停止证明](../../adr/0042-connection-initialize-stop-proof.md)
+
 ## 9. 可行性与风险
 
 可行性高，但这不是局部重命名，会影响 schema、计划校验、初始化和动态切割、运行时事件、merge-claim、group-close、view projection、dashboard 图和历史迁移。
@@ -540,6 +542,8 @@ Gateway 故障页编排 ID 的指针与键盘焦点效果；隔离 `ui_demo`，�
 
 ## 16. 编排输出与调用停止对账
 
+delivery-owned verification/evidence Task MUST 由原绑定 delivery agent 驱动生命周期和 atoms；启动 MUST 满足依赖、容量、group 活跃或 merged 状态及适用 workspace/baseline 门禁，不改变 contribution 拓扑，也不授权 main 冒充或未绑定执行。
+
 ### REQ-INVOCATION-001
 
 Flow 正常结果 MUST 使用有背压的流式传输，默认不限制累计输出字节，不在父进程累计缓存完整结果；传输缓冲、诊断日志捕获与账本容量 MUST 分别约束，不能沿用通用执行器的小型捕获预算限制正常结果。stdout MUST 保持完整结果合同，不静默截断；下游断开时 MUST 报告交付失败，不能据此认定业务失败或自动重做业务。显式配置的输出预算 MUST 有明确适用范围，不能被静默忽略或改义；触发后 MUST 使用统一停止路径。
@@ -551,6 +555,8 @@ Flow 正常结果 MUST 使用有背压的流式传输，默认不限制累计输
 ### REQ-INVOCATION-003
 
 每次副作用编排调用 MUST 在执行前登记可验证的调用身份和实际拥有的执行资源；正常返回、异常、超时与取消 MUST 共用停止核验。停止请求及证明 MUST 独立于 stdout/stderr；只有本调用所拥有的子进程、原生 transport 与已登记在途调用均有可验证终结证据时，才能发布 stopped。进程 close、PID 消失、锁释放或业务 operation 结束 MUST NOT 单独充当安全停止证明；证据不足时 MUST 保持 running。CLI 返回后执行的桌面 tool_request MUST 以独立 delivery attempt 和 provider receipt 对账，不能被 CLI 停止证明覆盖。
+
+连接内 initialize 的能力证明遵循 ADR 0042：仅精确白名单请求、唯一已关闭 transport、执行完成且无其他未终结资源时，可追加版本化派生停止证据；MUST NOT 补造原生响应或宣称业务成功。未审计来源、额外资源和证据不完整 MUST 保持阻断。
 
 ### REQ-INVOCATION-004
 

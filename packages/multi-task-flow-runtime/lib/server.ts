@@ -418,7 +418,11 @@ export function createRunDashboard(options: DashboardOptions) {
       path: string,
     ) =>
       request.method !== "GET" && store.read().contract_version >= 4
-        ? withRunCommand(store, () => handle(request, currentServer, path))
+        ? withRunCommand(store, () => handle(request, currentServer, path), "dashboard-http", {
+            actor: { role: "service", source: "dashboard-http" },
+            method: request.method,
+            path,
+          })
         : handle(request, currentServer, path),
     token,
     get subscriberCount() {

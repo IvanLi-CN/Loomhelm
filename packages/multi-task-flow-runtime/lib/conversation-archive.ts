@@ -11,6 +11,7 @@ import { apply } from "../lib/engine";
 import { ContractError, requireCondition } from "../lib/errors";
 import { type Ledger, validateLedger } from "../lib/schema";
 import type { LedgerStore } from "../lib/store";
+import { withNativeOperation } from "./native-operation-context";
 import { withRunCommand } from "./orchestration-lifecycle";
 
 export type ArchiveProvider = {
@@ -35,7 +36,12 @@ export async function retryConversationArchive(
   api: ArchiveProvider = provider,
 ) {
   return store.read().contract_version >= 4
-    ? withRunCommand(store, () => changeConversationArchive(store, taskId, api, true))
+    ? withRunCommand(
+        store,
+        () => changeConversationArchive(store, taskId, api, true),
+        "conversation-archive",
+        { actor: { role: "service", source: "conversation-archive" }, task_id: taskId },
+      )
     : changeConversationArchive(store, taskId, api, true);
 }
 export async function retryConversationUnarchive(
@@ -44,7 +50,12 @@ export async function retryConversationUnarchive(
   api: ArchiveProvider = provider,
 ) {
   return store.read().contract_version >= 4
-    ? withRunCommand(store, () => changeConversationArchive(store, taskId, api, false))
+    ? withRunCommand(
+        store,
+        () => changeConversationArchive(store, taskId, api, false),
+        "conversation-unarchive",
+        { actor: { role: "service", source: "conversation-unarchive" }, task_id: taskId },
+      )
     : changeConversationArchive(store, taskId, api, false);
 }
 async function changeConversationArchive(
@@ -171,7 +182,12 @@ async function changeConversationArchive(
     // that an earlier request will not complete, so never resend from unknown.
     if (existing?.status === unknown) {
       try {
-        if (await (archived ? api.isArchived(thread) : api.isUnarchived!(thread)))
+        if (
+          await withNativeOperation(
+            { id: operationId, source: archived ? "archive" : "unarchive", task_id: taskId },
+            () => (archived ? api.isArchived(thread) : api.isUnarchived!(thread)),
+          )
+        )
           return write(complete, null, `codex-app-server:${operationId}:reconciled`);
         return write(
           unknown,
@@ -196,9 +212,10 @@ async function changeConversationArchive(
     );
     let result;
     try {
-      result = await (archived
-        ? api.archive(thread, operationId)
-        : api.unarchive!(thread, operationId));
+      result = await withNativeOperation(
+        { id: operationId, source: archived ? "archive" : "unarchive", task_id: taskId },
+        () => (archived ? api.archive(thread, operationId) : api.unarchive!(thread, operationId)),
+      );
     } catch (error) {
       result = {
         outcome: "unknown" as const,

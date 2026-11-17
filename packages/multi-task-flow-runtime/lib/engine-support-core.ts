@@ -306,6 +306,29 @@ export function isSharedDeliveryTask(ledger: Ledger, task: Ledger["tasks"][numbe
     deliveryTopologyForGroup(ledger.tasks, task.group_id) === "shared_delivery"
   );
 }
+/** Evidence verification uses the delivery conversation without becoming a contribution. */
+export function isDeliveryVerification(task: Task): boolean {
+  return (
+    task.kind === "verification" &&
+    task.execution_owner === "delivery_agent" &&
+    task.conversation_policy === "delivery_owned" &&
+    task.delivery_policy === "evidence" &&
+    task.thread_id === null
+  );
+}
+export function ownsDeliveryVerification(
+  ledger: Ledger,
+  task: Task,
+  actor: Request["actor"],
+): boolean {
+  return (
+    isDeliveryVerification(task) &&
+    actor.role === "group" &&
+    ledger.groups.some(
+      (group) => group.id === task.group_id && group.agent_thread_id === actor.thread_id,
+    )
+  );
+}
 export function requireContributionDispatchGate(
   ledger: Ledger,
   owner: Ledger["groups"][number],
