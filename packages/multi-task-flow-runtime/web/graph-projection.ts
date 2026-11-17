@@ -742,6 +742,9 @@ export function buildGraphProjection(
     const paths = dependency.paths;
     const boundaryNodeIds = [...new Set(paths.flatMap((path) => path.boundaryNodeIds))];
     for (const sourceBoundary of boundaryNodeIds) {
+      // Unit boundaries are path provenance, never global entry/exit anchors.
+      const kind = nodeById.get(sourceBoundary)?.kind;
+      if (kind !== (dependency.direction === "incoming" ? "main_start" : "main_end")) continue;
       const boundaryId = boundaryNodeId(sourceBoundary);
       const source = dependency.direction === "incoming" ? boundaryId : dependency.nodeId;
       const target = dependency.direction === "incoming" ? dependency.nodeId : boundaryId;
