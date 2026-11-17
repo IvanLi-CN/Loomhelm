@@ -8157,7 +8157,7 @@
     {
       "path": "skills/multi-task-flow/tests/orchestration-upgrade.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/orchestration-upgrade.test.ts",
-      "installedSha256": "7c5282e1d2aeac76e854ea54045d4008b86fe77cadaaaa10a44c0b6afd469ed7"
+      "installedSha256": "4c814dd89e52523655dafebe801c3f789cb4dcbdb9e6b0ced61f155ae4831395"
     },
     {
       "path": "skills/bin/native-tests/core/ffi_paths.test.ts",
