@@ -507,6 +507,10 @@ export function deliveryUnitPrMergedFromLedger(
   ledger: Ledger,
   group: Ledger["groups"][number],
 ): boolean {
+  const reconciliation = ledger.events.findLast(
+    (event) => event.subject_id === group.id && event.data.operation === "closeout-reconcile",
+  );
+  if (reconciliation?.data.outcome === "unknown") return false;
   if (legacyLedger(ledger)) return deliveryUnitPrMerged(group);
   const latest = latestFact(ledger, group.id, "pr_merged");
   const canonicalPr = group.pr && "state" in group.pr ? group.pr.pr : group.pr;
@@ -525,7 +529,11 @@ export function deliveryUnitPrMergedFromLedger(
           item.status === "succeeded" &&
           item.receipt_fact_id === latest.id,
       ) &&
-      (!canonicalPr || stable(canonicalPr) === stable(canonicalPr)),
+      canonicalPr &&
+      latest.receipt?.resource_type === "pr" &&
+      latest.receipt.resource_id === canonicalPr.id &&
+      latest.receipt.pr &&
+      stable(canonicalPr) === stable(latest.receipt.pr),
   );
 }
 

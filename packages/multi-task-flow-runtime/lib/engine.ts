@@ -164,13 +164,7 @@ export function apply(ledger: Ledger, command: string, request: Request): unknow
       { notification: { mode: "auto", recipient: "owner" } },
       true,
     );
-    if (
-      notice.enabled &&
-      typeof result === "object" &&
-      result !== null &&
-      !Array.isArray(result) &&
-      !("notification_request" in result)
-    ) {
+    if (notice.enabled && typeof result === "object" && result !== null && !Array.isArray(result)) {
       const notification = addNotificationIntent(
         candidate,
         { ...request, request_id: eventId },

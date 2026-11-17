@@ -155,7 +155,7 @@ AtomicNode + AtomicEdge
 Task 与 DeliveryUnit 是平级对象；delivery_unit_id 只是共同的分类、整合和验收范围标记，不表示父子、会话从属或管理权转移。
 ```
 
-状态机图、对象状态归属和异常恢复规则集中记录在 [STATE_MACHINES.md](./STATE_MACHINES.md)，便于单独审查；数据结构和 schema 定义集中记录在 [DATA_MODEL.md](./DATA_MODEL.md)。
+状态机图、对象状态归属和异常恢复规则集中记录在 [STATE_MACHINES.md](./STATE_MACHINES.md)，便于单独审查；数据结构和 schema 定义集中记录在 [DATA_MODEL.md](./DATA_MODEL.md)。角色职责、身份绑定和端到端交互时序集中记录在 [AGENT_INTERACTIONS.md](./AGENT_INTERACTIONS.md)，命令接口集中记录在 [CLI_CONTRACT.md](./CLI_CONTRACT.md)；实现映射、测试覆盖与已知设计偏差见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)。
 
 ## 3. 统一的原因
 

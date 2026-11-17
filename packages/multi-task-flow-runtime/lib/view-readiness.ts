@@ -14,7 +14,8 @@ import {
   type MilestoneEvaluation,
 } from "../lib/atomic-orchestration";
 import { localSemanticProjection, SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
-import { deliveryUnitPrMerged, parentPrReady, ready } from "../lib/engine";
+import { parentPrReady, ready } from "../lib/engine";
+import { deliveryUnitPrMergedFromLedger } from "../lib/engine-support-gates";
 import { ContractError, requireCondition } from "../lib/errors";
 import { profileMigrationWarnings, profileProjection } from "../lib/execution-profile";
 import { deriveExecutionPhase, evidenceRequired, reasonRequired } from "../lib/revisions";
@@ -246,32 +247,25 @@ export function parentPrDefinitivelyAbsent(
 }
 
 export function mergeCapabilityProjection(ledger: Ledger, group: Ledger["groups"][number]) {
-  const pr = deliveryUnitPr(group);
   const latest = ledger.facts
     .filter((fact) => fact.kind === "pr_merged" && fact.subject_id === group.id)
     .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
     .at(-1);
-  const receipt =
-    latest &&
-    ledger.operations.some(
-      (operation) =>
-        operation.kind === "merge" &&
-        operation.target_id === group.id &&
-        operation.status === "succeeded" &&
-        operation.receipt_fact_id === latest.id,
-    );
-  const satisfied = Boolean(
-    (group.state === "merged" || group.state === "closed") &&
-      group.merge_sha &&
-      latest?.status === "passed" &&
-      latest.sha === group.merge_sha &&
-      receipt,
-  );
+  const satisfied = deliveryUnitPrMergedFromLedger(ledger, group);
+  const closeoutUnknown = closeoutReconciliationProjection(ledger, group.id).status === "unknown";
   return {
-    status: satisfied ? "satisfied" : latest?.status === "unknown" ? "unknown" : "blocked",
+    status: satisfied
+      ? "satisfied"
+      : closeoutUnknown || latest?.status === "unknown"
+        ? "unknown"
+        : "blocked",
     merge_sha: group.merge_sha,
     evidence_refs: latest?.evidence_ref ? [latest.evidence_ref] : [],
-    reason: satisfied ? null : "有效 merge fact、SHA 和 merge receipt 尚未全部匹配",
+    reason: satisfied
+      ? null
+      : closeoutUnknown
+        ? "closeout 对账结果未知，合并能力已冻结"
+        : "有效 merge fact、SHA 和 provider PR receipt 尚未全部匹配",
   };
 }
 
