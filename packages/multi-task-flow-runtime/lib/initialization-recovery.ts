@@ -193,6 +193,7 @@ export async function recoverInitialization(
         String(operation.request.observed_thread_id),
       ),
       execution_profile: profile,
+      permissions: { version: 1 },
     });
     verifyRecoveryHistory(history, attempt, source, role, false, () => attempt.initial_head);
     // This durable claim is never expired or reset. A crash before send requires audit, not resend.
@@ -214,99 +215,131 @@ export async function recoverInitialization(
     recoveryDigest(attempt.execution_profile) !== recoveryDigest(profile)
   )
     throw new Error("Recovery attempt binding changed");
-  return dependencies.writer(attempt, async (native) => {
-    if (start) {
-      // The private server now owns the native writer lock: inspect again before sending anything.
-      verifyRecoveryHistory(
-        await readRecoveryHistory(native, attempt.thread_id),
-        attempt,
-        source,
-        role,
-        false,
-        dependencies.verify,
-      );
-      const prompt = initializationRecoveryPrompt(
-        role,
-        attempt.attempt_id,
-        attempt.original_turn_id,
-      );
-      const started = await native("turn/start", {
-        threadId: attempt.thread_id,
-        model: profile.model,
-        effort: profile.thinking,
-        input: [{ type: "text", text: prompt, text_elements: [] }],
-      });
-      const turnId = record(started.turn)?.id;
-      if (typeof turnId !== "string") throw new Error("Native recovery turn identity unavailable");
-      const observed = record(
-        store.update((raw) =>
-          apply(raw, "initialization-recovery-observe", {
-            ...request,
-            expected_revision: revision,
-            request_id: `recovery-turn-${recoveryDigest(request.request_id)}`,
-            payload: { operation_id: operationId, attempt_id: attempt.attempt_id, turn_id: turnId },
-          }),
-        ),
-      );
-      revision = Number(observed?.revision);
-      attempt = { ...attempt, recovery_turn_id: turnId };
-      for (;;) {
-        const history = await readRecoveryHistory(native, attempt.thread_id);
-        if (history.turns[1]?.status === "completed") {
-          verifyRecoveryHistory(history, attempt, source, role, true, dependencies.verify);
-          break;
+  return dependencies.writer(
+    attempt,
+    async (native, restore) => {
+      if (start) {
+        // The private server now owns the native writer lock: inspect again before sending anything.
+        verifyRecoveryHistory(
+          await readRecoveryHistory(native, attempt.thread_id),
+          attempt,
+          source,
+          role,
+          false,
+          dependencies.verify,
+        );
+        const prompt = initializationRecoveryPrompt(
+          role,
+          attempt.attempt_id,
+          attempt.original_turn_id,
+        );
+        const started = await native("turn/start", {
+          threadId: attempt.thread_id,
+          model: profile.model,
+          effort: profile.thinking,
+          input: [{ type: "text", text: prompt, text_elements: [] }],
+        });
+        const turnId = record(started.turn)?.id;
+        if (typeof turnId !== "string")
+          throw new Error("Native recovery turn identity unavailable");
+        const observed = record(
+          store.update((raw) =>
+            apply(raw, "initialization-recovery-observe", {
+              ...request,
+              expected_revision: revision,
+              request_id: `recovery-turn-${recoveryDigest(request.request_id)}`,
+              payload: {
+                operation_id: operationId,
+                attempt_id: attempt.attempt_id,
+                turn_id: turnId,
+              },
+            }),
+          ),
+        );
+        revision = Number(observed?.revision);
+        attempt = { ...attempt, recovery_turn_id: turnId };
+        for (;;) {
+          const history = await readRecoveryHistory(native, attempt.thread_id);
+          if (history.turns[1]?.status === "completed") {
+            verifyRecoveryHistory(history, attempt, source, role, true, dependencies.verify);
+            break;
+          }
+          if (
+            history.turns.length !== 2 ||
+            history.turns[1]?.id !== turnId ||
+            history.turns[1]?.status !== "inProgress"
+          )
+            throw new Error("Recovery handshake stopped without completion");
+          await new Promise((resolve) => setTimeout(resolve, 500));
         }
-        if (
-          history.turns.length !== 2 ||
-          history.turns[1]?.id !== turnId ||
-          history.turns[1]?.status !== "inProgress"
-        )
-          throw new Error("Recovery handshake stopped without completion");
-        await new Promise((resolve) => setTimeout(resolve, 500));
       }
-    }
-    // Keep the native mutation fence through the synchronous ledger resolution, including reentry.
-    const history = await readRecoveryHistory(native, attempt.thread_id);
-    verifyRecoveryHistory(history, attempt, source, role, true, dependencies.verify);
-    const turnId = String(history.turns[1].id);
-    if (!attempt.recovery_turn_id) {
-      const observed = record(
-        store.update((raw) =>
-          apply(raw, "initialization-recovery-observe", {
-            ...request,
-            expected_revision: revision,
-            request_id: `recovery-turn-${recoveryDigest(request.request_id)}`,
-            payload: { operation_id: operationId, attempt_id: attempt.attempt_id, turn_id: turnId },
-          }),
-        ),
-      );
-      revision = Number(observed?.revision);
-    }
-    const result = {
-      revision,
-      reconciliation: {
-        thread_id: attempt.thread_id,
-        workspace_path: attempt.workspace_path,
-        initial_head: attempt.initial_head,
-        model: profile.model,
-        thinking: profile.thinking,
-        turn_completed: true,
-        initialization_turn_id: attempt.original_turn_id,
-        evidence_ref: `codex-initialization-recovery:${attempt.attempt_id}`,
-        created_at: new Date().toISOString(),
-        reconciliation_mode: "app-server",
-        diagnostics: [],
-        initialization_recovery: {
-          attempt_id: attempt.attempt_id,
-          original_turn_id: attempt.original_turn_id,
-          recovery_turn_id: turnId,
-          prompt_digest: attempt.prompt_digest,
-          transport: "codex-app-server-private-unix",
-          native_version: "0.169.0",
+      // Keep the native mutation fence through the synchronous ledger resolution, including reentry.
+      const history = await readRecoveryHistory(native, attempt.thread_id);
+      verifyRecoveryHistory(history, attempt, source, role, true, dependencies.verify);
+      const turnId = String(history.turns[1].id);
+      if (!attempt.recovery_turn_id) {
+        const observed = record(
+          store.update((raw) =>
+            apply(raw, "initialization-recovery-observe", {
+              ...request,
+              expected_revision: revision,
+              request_id: `recovery-turn-${recoveryDigest(request.request_id)}`,
+              payload: {
+                operation_id: operationId,
+                attempt_id: attempt.attempt_id,
+                turn_id: turnId,
+              },
+            }),
+          ),
+        );
+        revision = Number(observed?.revision);
+      }
+      const result = {
+        revision,
+        reconciliation: {
+          thread_id: attempt.thread_id,
+          workspace_path: attempt.workspace_path,
+          initial_head: attempt.initial_head,
+          model: profile.model,
+          thinking: profile.thinking,
+          turn_completed: true,
+          initialization_turn_id: attempt.original_turn_id,
+          evidence_ref: `codex-initialization-recovery:${attempt.attempt_id}`,
+          created_at: new Date().toISOString(),
+          reconciliation_mode: "app-server",
+          diagnostics: [],
+          initialization_recovery: {
+            attempt_id: attempt.attempt_id,
+            original_turn_id: attempt.original_turn_id,
+            recovery_turn_id: turnId,
+            prompt_digest: attempt.prompt_digest,
+            transport: "codex-app-server-private-unix",
+            native_version: "0.169.0",
+            restored_permissions_digest: recoveryDigest(attempt.permissions?.original),
+          },
         },
+      };
+      // The READY turn is only evidence of a handshake. Formal dispatch requires restored permissions.
+      await restore();
+      commit?.(result);
+      return result;
+    },
+    {
+      restrict: start,
+      capture: (original) => {
+        const saved = record(
+          store.update((raw) =>
+            apply(raw, "initialization-recovery-permissions", {
+              ...request,
+              expected_revision: revision,
+              request_id: `recovery-permissions-${recoveryDigest(request.request_id)}`,
+              payload: { operation_id: operationId, attempt_id: attempt.attempt_id, original },
+            }),
+          ),
+        );
+        revision = Number(saved?.revision);
+        attempt = { ...attempt, permissions: { version: 1, original } };
       },
-    };
-    commit?.(result);
-    return result;
-  });
+    },
+  );
 }

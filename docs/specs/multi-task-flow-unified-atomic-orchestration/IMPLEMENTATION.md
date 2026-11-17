@@ -129,6 +129,10 @@ Schema、迁移、评估、图投影和网页交互分别由 `packages/multi-tas
 
 [ADR 0035](../../adr/0035-task-agent-ledger-driven-progression-and-dispatch-notifications.md) 描述事件产生的 Task Agent 使用返回的 `tool_request` 通知 main；现有 Agent 执行指引描述由主对话协调原生消息发送。交互图 S7 分开表示事件产生者、投递协调者和收件者，共同边界为 intent、唯一 attempt、provider receipt 与 recipient ack。此处保留来源差异供后续同步，不以执行指引代替项目设计依据，也不通过文档迁移改变 CLI 权限。
 
+权限恢复使用版本化 `permissions.original`、不可变追加命令和原生 settings 通知核验；异常后保留 unknown 与快照，重入不再限制权限或发送新 turn。缺少快照的历史 attempt 与命名 profile 拒绝自动恢复。回归包含真实私有 writer、持久化 LedgerStore、dispatch-resolution、handoff 请求、两次正式 sender adapter turn 与实际 `show task-context` CLI；native 持久化在该回归中由状态化 fixture 模拟，不等同于 Desktop 工具或真实 OS sandbox 验收。当前 contract-4 与完整运行身份的回归在恢复前用完整、可由账本构造的证据调用真实 `dispatch-resolve` CLI，验证拒绝且账本和原生只读策略不变；只有 writer 核验恢复后才能提交成功。兼容路径另见 `recovery-permissions-migration.json`。
+
+原生配置验收入口为 `python3 packages/multi-task-flow-runtime/tests/fixtures/native-permissions.py`：使用空 CODEX_HOME、禁用 daemon auto-start，验证原生 writer 排斥、权限限制及 effective-settings 恢复、与只读全局默认不同的冷 resume 结果。该探测没有凭据，使用本地确定性模型 fixture 完成原生 turn，并核对两个正式 turn 的原权限上下文；不验证外部模型、工具执行或 Desktop 控制。CLI 上下文及成功绑定链由隔离状态化回归覆盖。权限事务的后继决策为 ADR 0040。
+
 ## 编排版本绑定与前向升级
 
 ADR 0039 与 REQ-UPGRADE-001 至 REQ-UPGRADE-006 的候选实现位于 `orchestration-identity.ts`、`orchestration-upgrade.ts` 和 `orchestration-lifecycle.ts`：contract 4 保存完整运行身份与升级阶段，既有维护事务同步迁移账本并切换绑定；CLI 与 Worker 核验身份并围绕原生调用保留生命周期回执。直接迁移支持 contract 3/4；更早格式保留诊断，缺少已验证机械链时拒绝自动迁移。`orchestration-upgrade.test.ts` 覆盖基础阶段、重入、冻结目标和备份拒绝；独立 TypeScript CLI 的生命周期测试覆盖实际打包资源的身份传播、普通读取拒绝、只读诊断、dry-run、显式升级、重放和降级拒绝。正式 PR 质量证据仍待收敛，不能视作 merge-ready。

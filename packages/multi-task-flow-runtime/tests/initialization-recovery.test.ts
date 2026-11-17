@@ -69,32 +69,41 @@ function setup() {
   const dependencies: RecoveryDependencies = {
     verify: () => head,
     read: async () => structuredClone(history),
-    writer: async (attempt, action) => {
+    writer: async (attempt, action, permissions) => {
       writerCalls++;
-      return await action(async (method, params) => {
-        if (method === "thread/read") return { thread: history.thread };
-        if (method === "thread/turns/list")
-          return { data: structuredClone(history.turns), nextCursor: null };
-        if (method === "turn/start") {
-          starts++;
-          expect(ledger.operations[0].request.initialization_recovery).toBeDefined();
-          expect(JSON.stringify(params)).not.toContain("formal business prompt");
-          const text = (params.input as any[])[0].text;
-          expect(recoveryDigest(text)).toBe(attempt.prompt_digest);
-          const turn = {
-            id: "recovered-turn",
-            status: "completed",
-            itemsView: "full",
-            items: [
-              { type: "userMessage", content: [{ type: "text", text }] },
-              { type: "agentMessage", text: "READY" },
-            ],
-          };
-          history.turns.push(turn);
-          return { turn };
-        }
-        throw new Error(`unexpected ${method}`);
-      });
+      if (!attempt.permissions?.original)
+        permissions.capture({
+          sandboxPolicy: { type: "dangerFullAccess" },
+          approvalPolicy: "never",
+          approvalsReviewer: "user",
+        });
+      return await action(
+        async (method, params) => {
+          if (method === "thread/read") return { thread: history.thread };
+          if (method === "thread/turns/list")
+            return { data: structuredClone(history.turns), nextCursor: null };
+          if (method === "turn/start") {
+            starts++;
+            expect(ledger.operations[0].request.initialization_recovery).toBeDefined();
+            expect(JSON.stringify(params)).not.toContain("formal business prompt");
+            const text = (params.input as any[])[0].text;
+            expect(recoveryDigest(text)).toBe(attempt.prompt_digest);
+            const turn = {
+              id: "recovered-turn",
+              status: "completed",
+              itemsView: "full",
+              items: [
+                { type: "userMessage", content: [{ type: "text", text }] },
+                { type: "agentMessage", text: "READY" },
+              ],
+            };
+            history.turns.push(turn);
+            return { turn };
+          }
+          throw new Error(`unexpected ${method}`);
+        },
+        async () => {},
+      );
     },
   };
   return {
@@ -193,14 +202,14 @@ test("a stopped claim before native send cannot silently retry", async () => {
 test("intervening business turn is caught after acquiring the native writer lock", async () => {
   const s = setup();
   const writer = s.dependencies.writer;
-  s.dependencies.writer = async (attempt, action) => {
+  s.dependencies.writer = async (attempt, action, permissions) => {
     s.getHistory().turns.push({
       id: "business",
       status: "completed",
       itemsView: "full",
       items: [],
     });
-    return writer(attempt, action);
+    return writer(attempt, action, permissions);
   };
   await expect(
     recoverInitialization(s.store, request(s.ledger, "recover", {}), "op", true, s.dependencies),
@@ -337,15 +346,19 @@ test("unsupported native capability is rejected before durable intent", async ()
 test("native completion lost before turn observation is reconciled by exact registered prompt without resending", async () => {
   const s = setup();
   const writer = s.dependencies.writer;
-  s.dependencies.writer = async (attempt, action) =>
-    writer(attempt, async (native) => {
-      const wrapped = async (method: string, params: Record<string, unknown>) => {
-        const result = await native(method, params);
-        if (method === "turn/start") throw new Error("lost native start response");
-        return result;
-      };
-      return action(wrapped);
-    });
+  s.dependencies.writer = async (attempt, action, permissions) =>
+    writer(
+      attempt,
+      async (native, restore) => {
+        const wrapped = async (method: string, params: Record<string, unknown>) => {
+          const result = await native(method, params);
+          if (method === "turn/start") throw new Error("lost native start response");
+          return result;
+        };
+        return action(wrapped, restore);
+      },
+      permissions,
+    );
   await expect(
     recoverInitialization(s.store, request(s.ledger, "lost", {}), "op", true, s.dependencies),
   ).rejects.toThrow("lost native");
@@ -365,8 +378,8 @@ test("native completion lost before turn observation is reconciled by exact regi
 test("concurrent ledger writes after native start are not silently adopted into the caller revision", async () => {
   const s = setup();
   const writer = s.dependencies.writer;
-  s.dependencies.writer = async (attempt, action) => {
-    const result = await writer(attempt, action);
+  s.dependencies.writer = async (attempt, action, permissions) => {
+    const result = await writer(attempt, action, permissions);
     s.ledger.revision++;
     return result;
   };
@@ -394,10 +407,10 @@ test("native writer remains held through final verification and synchronous reso
     let held = false;
     let committed = false;
     const writer = s.dependencies.writer;
-    s.dependencies.writer = async (attempt, action) => {
+    s.dependencies.writer = async (attempt, action, permissions) => {
       held = true;
       try {
-        return await writer(attempt, action);
+        return await writer(attempt, action, permissions);
       } finally {
         held = false;
       }
@@ -429,4 +442,59 @@ test("native writer remains held through final verification and synchronous reso
     expect(s.ledger.notifications).toHaveLength(1);
     expect(s.counts().starts).toBe(1);
   }
+});
+
+test("original permission snapshot is immutable and restoration failure blocks resolution", async () => {
+  const s = setup();
+  const writer = s.dependencies.writer;
+  let committed = false;
+  s.dependencies.writer = async (attempt, action, permissions) =>
+    writer(
+      attempt,
+      (native) =>
+        action(native, async () => {
+          throw new Error("restore failed");
+        }),
+      permissions,
+    );
+  await expect(
+    recoverInitialization(
+      s.store,
+      request(s.ledger, "restore-failure", {}),
+      "op",
+      true,
+      s.dependencies,
+      () => {
+        committed = true;
+      },
+    ),
+  ).rejects.toThrow("restore failed");
+  expect(committed).toBe(false);
+  expect(s.ledger.operations[0].status).toBe("unknown");
+  expect(s.ledger.notifications).toHaveLength(0);
+  const attempt = s.ledger.operations[0].request.initialization_recovery as RecoveryAttempt;
+  expect(() =>
+    apply(
+      s.ledger,
+      "initialization-recovery-permissions",
+      request(s.ledger, "overwrite", {
+        operation_id: "op",
+        attempt_id: attempt.attempt_id,
+        original: {
+          sandboxPolicy: { type: "workspaceWrite" },
+          approvalPolicy: "never",
+          approvalsReviewer: "user",
+        },
+      }),
+    ),
+  ).toThrow("permissions changed");
+  s.dependencies.writer = writer;
+  await recoverInitialization(
+    s.store,
+    request(s.ledger, "restore-reentry", {}),
+    "op",
+    false,
+    s.dependencies,
+  );
+  expect(s.counts().starts).toBe(1);
 });
