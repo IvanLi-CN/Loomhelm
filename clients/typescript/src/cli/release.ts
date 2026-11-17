@@ -1,3 +1,4 @@
+import { printResult } from './output.ts';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
@@ -46,7 +47,7 @@ export async function runReleaseCommand(args: string[]): Promise<void> {
   const artifact = await new SkillsRuntime().validate();
   const buildInfo = buildInfoFromArtifact(artifact);
   if (args[0] === 'identity' && args.length === 1) {
-    console.log(JSON.stringify(buildInfo));
+    await printResult(buildInfo);
     return;
   }
   if (args[0] !== 'validate') throw new Error('Usage: release identity | validate --version VERSION [--dist-tag VERSION|compat-vN] [--compatibility-line compat-vN] [--require-provenance]');
@@ -69,7 +70,7 @@ export async function runReleaseCommand(args: string[]): Promise<void> {
     parseCompatibilityDistTag(declaredLine);
     if (distTag && distTag !== version && distTag !== declaredLine) throw new Error('Publication dist-tag does not match the declared compatibility line');
   }
-  console.log(JSON.stringify({
+  await printResult({
     ...publication,
     packageName: buildInfo.package_name,
     compatibilityLine: declaredLine,
@@ -77,5 +78,5 @@ export async function runReleaseCommand(args: string[]): Promise<void> {
     mergeSha: buildInfo.merge_sha,
     buildId: buildInfo.build_id,
     tarballDigest: buildInfo.tarball_digest,
-  }));
+  });
 }

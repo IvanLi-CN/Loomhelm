@@ -4,7 +4,33 @@
 
 ## Invocation
 
-正式调用使用 `bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --input -`，stdin 必须是一个 JSON 对象；禁止使用 `latest`、裸缓存二进制或仓库源码路径替代精确版本。
+正式调用使用 `bunx --bun @loomhelm/multi-task-flow@<exact-version> flow <command> --output json --input -`，stdin 必须是一个 JSON 对象；禁止使用 `latest`、裸缓存二进制或仓库源码路径替代精确版本。
+
+## 人类与机器输出
+
+全局参数 `--output auto|human|json` 优先于 `MULTI_TASK_FLOW_OUTPUT`，缺省为 `auto`；显式 auto 覆盖环境变量的固定风格。stdout 非 TTY、非空 `CODEX_THREAD_ID`、`MULTI_TASK_FLOW_AGENT=1` 或真值 `CI` / `CONTINUOUS_INTEGRATION` 时自动选择 JSON，其他情况选择 human。CI 真值是去除空白后非空且忽略大小写不等于 `0` 或 `false`。stdin 是否重定向不参与判断；检测不代表身份认证，正式 Agent 调用必须显式指定 JSON。
+
+全局参数可放在子命令前后，支持 `--name=value`，重复、缺值或非法值在副作用前拒绝。`--` 后是透传参数；`skills run SCRIPT` 后的旧式脚本参数也归脚本所有。`--verbose` 增加人类细节；`--color auto|always|never` 独立选择颜色，显式 always/never 优先于 `NO_COLOR`，auto 在 `NO_COLOR` 存在、`TERM=dumb` 或目标流非 TTY 时关闭；JSON 永远无色。
+
+所有公开命令层级提供 `-h`、`--help`、`help` 和命令组帮助；JSON 帮助包含 `schema_version=1`、`command`、`summary`、`usage`、`options`、`examples`、`subcommands`。`schema --format json` 始终输出原机器 Schema。人类帮助按用途显示参数和示例，不直接倾倒 request/response Schema。
+
+human 默认展示关键身份、状态、revision、计数、阻塞及安全的下一步；列表最多显示 20 项，单字段最多 160 字符，省略明确提示；verbose 逐项显示展开路径，单字符串最多 4096 字符，完整结果使用 JSON。人类展示必须区分业务结果、输出交付和调用静止，unknown 不等于失败。JSON 业务字段、错误通道和退出码保留原合同；人类错误写 stderr。响应尚未给出结果标记时使用有界判定缓冲，超限的接收中信息写 stderr，完整成功结果再按 stdout 展示；错误摘要不依赖 JSON 字段顺序。没有顶层 code 的 unknown 状态仍提示先对账。新增全局参数错误沿用顶层 stderr `{code: "CLI_ERROR", error: "..."}` 和退出码 1。
+
+human 和 verbose 的投影路径最多 64 层，超深内容明确提示省略，仍校验全部 JSON；每个有界输入批次让出事件循环，使停止信号可及时处理。含凭据标识的诊断文本保守隐藏，错误码和恢复建议独立保留。
+
+Flow JSON 使用原有背压直通；human 使用增量 UTF-8/JSON 解析及有界展示缓冲，消费并验证全部语法，不缓存完整响应。接收中不宣布最终成功，输出或解析失败沿用停止路径，不重做业务、不追加第二份 JSON。`service daemon`、内部 worker 和 `skills run` 的 raw 输出不改变。
+
+### 常用只读参数
+
+`service status` / `service doctor` 可省略 JSON 输入，内部请求为 `{}`。`flow show/view` 支持 `--run-id`、`--actor-role main|group|task`、`--thread-id`，三项全部必填并经过原 runtime 身份与版本校验。show 另支持 `--section`、`--task-id`，普通参数形式默认 summary；view 支持 `--plan-id`。普通参数与 `--input -` 互斥；旧 JSON 请求的默认 section 仍为 full。
+
+```sh
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output human service status
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output human flow show --run-id RUN_ID --actor-role main --thread-id THREAD_ID --section summary
+bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json flow show --input - < request.json
+```
+
+TTY 默认由 JSON 改为 human 是可观察兼容性变化；机器消费者应显式选择 JSON。业务 JSON 和持久状态合同不变；发布时须按仓库兼容线政策评估该默认行为变化，不能仅凭原 JSON 字段未变宣称终端默认完全兼容。本变更不选择发布版本或更新全局安装。
 
 ## Common mutation envelope
 
@@ -25,12 +51,12 @@
 | `creation-reconcile` | write/reconcile | `operation_id` | 没有完整 thread、初始化 turn、worktree 和执行配置证据时保持 `unknown` |
 | `notification-prepare` / `notification-send` | external write | `notification_id` | 先领取唯一 attempt；pending/unknown 必须 reconcile |
 | `notification-reconcile` | read or write | status 查询，或标准 mutation envelope | 以 provider evidence 为准，不凭错误消息推断成功 |
-| `execution-profile-migrate`, `execution-profile-default-update`, `execution-profile-recommend` | write | 每个命令的字段见 `flow <command> --help` | 发现 profile conflict 时重新读取目标配置 |
+| `execution-profile-migrate`, `execution-profile-default-update`, `execution-profile-recommend` | write | 字段说明见 `flow <command> --help`；完整 schema 见 `flow schema --format json` | 发现 profile conflict 时重新读取目标配置 |
 | 其余 runtime mutation commands | write | 每个命令在 JSON Schema registry 中有独立 request/response 定义；`dispatch-bind-request`、`dispatch-resolve`、`initialization-recovery-claim` 和 `initialization-recovery-observe` 标记为 `internal`/`cli-only`，只能由 `conversation-create`、`creation-reconcile` 或 `initialization-recover` 的相应创建、对账与恢复编排内部调用 | 先检查返回 code、revision 和 operation 状态 |
 
 ## Machine-readable surfaces
 
-registry 当前包含 66 个精确命令；`multi-task-flow flow --help` 输出调用形式和安全边界；`multi-task-flow flow <command> --help` 输出该精确命令的 request/response schema；`multi-task-flow flow schema --format json` 输出符合 JSON Schema Draft 2020-12 的完整 command registry。`dispatch-bind-request` 与 `dispatch-resolve` 是 Contract 3 的内部 CLI-only 命令，直接调用会返回 `CLI_ONLY_DISPATCH`。
+registry 当前包含 66 个精确命令；`multi-task-flow flow --help` 输出调用形式和安全边界；`multi-task-flow flow <command> --help` 输出该命令的用途、参数和示例，完整 request/response schema 由专用 schema 命令提供；`multi-task-flow flow schema --format json` 输出符合 JSON Schema Draft 2020-12 的完整 command registry。`dispatch-bind-request` 与 `dispatch-resolve` 是 Contract 3 的内部 CLI-only 命令，直接调用会返回 `CLI_ONLY_DISPATCH`。
 
 每个 registry command 都包含 `request`、`response.success` 和 `response.error`；request 明确定义 envelope 与 payload 字段，success 明确定义 `{ ok, code, revision, result }`，error 明确定义 `{ ok, code, revision, message, details }`。registry 的 `$defs` 来自 `flow-domain-schemas.json`，其中 `plan`、`group`、`task`、`ledger`、`execution_profile`、`baseline_receipt`、`notification`、`fact`、`resource`、`atomic_node` 和 `atomic_edge` 由 runtime 的 Zod schema 生成 JSON Schema；provider receipt 按 runtime 的严格字段定义，其他外部事实保留 runtime 明确允许的开放对象边界。
 

@@ -6962,7 +6962,7 @@
     },
     {
       "path": "skills/multi-task-flow/SKILL.md",
-      "installedSha256": "aa4accf8fcb0a1504e45726ac45e6aada5e40db3ec5f47f54508eeed060f258f"
+      "installedSha256": "970d74d660905529c8130ba035e2160ae3e85ab016f36e8b3a0a0747268266cf"
     },
     {
       "path": "skills/multi-task-flow/bun.lock",
@@ -7332,11 +7332,11 @@
     {
       "path": "skills/multi-task-flow/references/cli-contract.md",
       "sourcePath": "docs/specs/multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md",
-      "installedSha256": "a60f954e73f4f428733c02c5ed34510d4005ba758c4d275f404b8f57e7dfeca0"
+      "installedSha256": "4034769da328c9d512d69a23539fe0ecad9682fd31c1d8b8fa3702f6bac61b1f"
     },
     {
       "path": "skills/multi-task-flow/references/shared-viewer.md",
-      "installedSha256": "ba8460e446bcabd71c9a4349cddb5487f5642775ac1e507d5bf17b0018c472cb"
+      "installedSha256": "98528a572f4d835cd47b1d05ce784ac4c885942c69b0ca8e5a151baa86e861e2"
     },
     {
       "path": "skills/multi-task-flow/scripts/build-service.ts",
