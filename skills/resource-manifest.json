@@ -8362,7 +8362,7 @@
     {
       "path": "skills/support-manifest.json",
       "sourcePath": "skills/support-manifest.json",
-      "installedSha256": "a4d96aeabc5e97037fe40b688302dd01051d315e6b430fe2e04961ade364dea8"
+      "installedSha256": "444a17a70f01c536650157fd0c1e06ee0c2bd4a0ac7437b9510e1e3b1fd2af61"
     },
     {
       "path": "skills/docs/vendor/dot-codex/specs/multi-task-flow/assets/output-tooltip-boundary.png",
@@ -8838,6 +8838,11 @@
       "path": "skills/multi-task-flow/tests/fixtures/native-permissions.py",
       "sourcePath": "packages/multi-task-flow-runtime/tests/fixtures/native-permissions.py",
       "installedSha256": "2f1f5057f9f85b7a51be17023080bea45bedea0944d799410cbc2738b7113e66"
+    },
+    {
+      "path": "skills/bin/tests/core/runtime_core_process.test.ts",
+      "sourcePath": "skills/bin/tests/core/runtime_core_process.test.ts",
+      "installedSha256": "8e0e25732c1db73bdbebc664b26827d9ac2e9678e78fddb24b049f75d31a3364"
     },
     {
       "path": "skills/multi-task-flow/lib/codex-cli-initialization.ts",

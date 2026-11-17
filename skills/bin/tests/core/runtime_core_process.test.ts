@@ -15,6 +15,27 @@ const child = (script: string) => ({
 });
 
 describe("published runtime process supervision", () => {
+  test("combined startup and IPC failures have no unhandled rejection", async () => {
+    const processModule = import.meta.resolve(
+      "../../../../packages/runtime-core/src/modules/core/process",
+    );
+    const worker =
+      'process.on("SIGTERM",()=>{});process.on("message",()=>process.send("fault"));process.send("ready");setInterval(()=>{},1000);';
+    const supervisor = `
+      import { runProcess } from ${JSON.stringify(processModule)};
+      process.on("unhandledRejection",()=>{console.error("unhandled");process.exitCode=9;});
+      let pid=0;
+      try {
+        await runProcess({command:process.execPath,args:["-e",${JSON.stringify(worker)}],terminationGraceMs:100,
+          onSpawn(control){pid=control.pid;Bun.sleepSync(150);control.send("go");throw Error("startup");},
+          onControlMessage(){throw Error("control");}});
+      } catch(error) { if(error.message!=="startup") throw error; }
+      try { process.kill(pid,0);throw Error("child survived"); } catch(error) { if(error.code!=="ESRCH") throw error; }
+    `;
+    const result = await runProcess({ ...child(supervisor), timeoutMs: 5000 });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+  });
   test("streams 80 MiB without retaining output and awaits each sink", async () => {
     const bytes = 80 * 1024 * 1024;
     let received = 0;

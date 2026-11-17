@@ -214,6 +214,8 @@ export async function runProcess(
   const controlFailure = new Promise<never>((_, reject) => {
     rejectControlFailure = reject;
   });
+  // onSpawn can throw before the main race attaches its rejection observer.
+  void controlFailure.catch(() => {});
   const child = Runtime.spawn([request.command, ...(request.args ?? [])], {
     ...options,
     ...(request.onControlMessage
