@@ -507,6 +507,10 @@ export function deliveryUnitPrMergedFromLedger(
   ledger: Ledger,
   group: Ledger["groups"][number],
 ): boolean {
+  const reconciliation = ledger.events.findLast(
+    (event) => event.subject_id === group.id && event.data.operation === "closeout-reconcile",
+  );
+  if (reconciliation?.data.outcome === "unknown") return false;
   if (legacyLedger(ledger)) return deliveryUnitPrMerged(group);
   const latest = latestFact(ledger, group.id, "pr_merged");
   const canonicalPr = group.pr && "state" in group.pr ? group.pr.pr : group.pr;

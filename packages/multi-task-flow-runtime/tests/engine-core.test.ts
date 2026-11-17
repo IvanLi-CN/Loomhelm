@@ -6,7 +6,10 @@ import {
   ready,
   requireGroupDispatchGate,
 } from "../lib/engine";
-import { taskMergePrerequisitesComplete } from "../lib/engine-support-gates";
+import {
+  deliveryUnitPrMergedFromLedger,
+  taskMergePrerequisitesComplete,
+} from "../lib/engine-support-gates";
 import { deriveExecutionPhase } from "../lib/revisions";
 import {
   type Ledger,
@@ -1441,5 +1444,164 @@ test("contract-3 regular dispatch uses the repository target branch and current 
   } catch (error) {
     expect((error as any).code).toBe("DELIVERY_GATE_PENDING");
     expect((error as any).details.missing).toEqual(["parent_pr"]);
+  }
+});
+
+// MTF-AUDIT-001: business closeout survives uncertainty; dispatch capability does not.
+test("unknown closeout freezes downstream dispatch until a valid reconciliation", () => {
+  const ledger = fixture();
+  approve(ledger);
+  ledger.contract_version = 3;
+  ledger.source_schema_version = null;
+  const upstream = structuredClone(ledger.groups[0]!);
+  const pr = {
+    provider: "github",
+    repository: "example/repo",
+    id: "901",
+    url: "https://github.com/example/repo/pull/901",
+  };
+  Object.assign(upstream, {
+    id: "upstream",
+    delivery_unit_kind: "bootstrap",
+    owner_kind: "main",
+    agent_thread_id: null,
+    state: "closed",
+    merge_sha: merge,
+    parent_pr: pr,
+    pr: { state: "merged", pr, parent_branch: "parent", merge_sha: merge },
+  });
+  upstream.lifecycle.pr_merged = "passed";
+  upstream.lifecycle.closed = "passed";
+  ledger.groups.push(upstream);
+  ledger.facts.push({
+    id: "upstream-merge",
+    kind: "pr_merged",
+    subject_id: upstream.id,
+    status: "passed",
+    source: "github",
+    observed_at: at,
+    sha: merge,
+    evidence_ref: "mock:merge",
+    receipt: {
+      ...providerPrReceipt(pr.id, "parent", base, head),
+      pr,
+      state: "merged",
+      merge_sha: merge,
+    },
+  });
+  ledger.operations.push({
+    id: "upstream-merge-op",
+    kind: "merge",
+    actor_id: main.thread_id,
+    target_id: upstream.id,
+    status: "succeeded",
+    request: {},
+    expected_sha: head,
+    receipt_fact_id: "upstream-merge",
+    created_at: at,
+    updated_at: at,
+  });
+  ledger.events.push({
+    id: "upstream-close",
+    type: "group_updated",
+    subject_id: upstream.id,
+    actor_id: groupActor.thread_id,
+    occurred_at: at,
+    recorded_at: at,
+    data: { state: "closed" },
+  });
+  const plan = ledger.plans[0]!;
+  plan.nodes.push({
+    id: "upstream-node",
+    kind: "milestone",
+    ref_id: null,
+    group_id: upstream.id,
+    label: "Upstream",
+    estimate_minutes: 1,
+    estimate_basis: "mock",
+    estimate_confidence: "high",
+  });
+  plan.edges.push({
+    id: "upstream-a",
+    from_node_id: "upstream-node",
+    to_node_id: "node-a",
+    requires: "completed",
+  });
+  expect(deliveryUnitPrMergedFromLedger(ledger, upstream)).toBe(true);
+  for (const outcome of ["unknown", "valid"] as const) {
+    if (outcome === "valid") {
+      for (const [state, sha] of [
+        ["open", null],
+        ["closed", merge],
+        ["unknown", null],
+        ["merged", head],
+      ] as const) {
+        const before = JSON.stringify(ledger);
+        expect(() =>
+          apply(
+            ledger,
+            "group-closeout-reconcile",
+            request(
+              ledger,
+              `contradictory-${state}`,
+              {
+                group_id: upstream.id,
+                plan_id: "plan",
+                closeout_event_id: "upstream-close",
+                reconciliation_id: `contradictory-${state}`,
+                outcome: "valid",
+                reason: "contradictory observation",
+                evidence_refs: ["mock:provider"],
+                provider_observation: {
+                  pr,
+                  provider_state: state,
+                  merge_sha: sha,
+                  source: "github",
+                  observed_at: at,
+                  evidence_ref: "mock:provider",
+                },
+              },
+              main,
+            ),
+          ),
+        ).toThrow("requires the recorded provider merge SHA");
+        expect(JSON.stringify(ledger)).toBe(before);
+      }
+    }
+    apply(
+      ledger,
+      "group-closeout-reconcile",
+      request(
+        ledger,
+        `reconcile-${outcome}`,
+        {
+          group_id: upstream.id,
+          plan_id: "plan",
+          closeout_event_id: "upstream-close",
+          reconciliation_id: `observation-${outcome}`,
+          outcome,
+          reason: "Provider observation",
+          evidence_refs: ["mock:provider"],
+          provider_observation: {
+            pr,
+            provider_state: outcome === "valid" ? "merged" : "unknown",
+            merge_sha: outcome === "valid" ? merge : null,
+            source: "github",
+            observed_at: at,
+            evidence_ref: "mock:provider",
+          },
+        },
+        main,
+      ),
+    );
+    expect(ledger.groups.find((g) => g.id === upstream.id)!.state).toBe("closed");
+    expect(
+      deliveryUnitPrMergedFromLedger(ledger, ledger.groups.find((g) => g.id === upstream.id)!),
+    ).toBe(outcome === "valid");
+    if (outcome === "unknown")
+      expect(() => requireGroupDispatchGate(ledger, ledger.groups[0]!)).toThrow(
+        "upstream delivery-unit PRs",
+      );
+    else expect(() => requireGroupDispatchGate(ledger, ledger.groups[0]!)).not.toThrow();
   }
 });
