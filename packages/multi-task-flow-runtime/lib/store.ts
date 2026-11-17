@@ -158,7 +158,7 @@ export class LedgerStore {
             writeExclusiveNoFollow(
               join(runtimePath, "viewer-binding.json"),
               JSON.stringify({
-                schema_version: 2,
+                schema_version: (initial as any).contract_version === 5 ? 3 : 2,
                 run_id: (initial as any).orchestration_id,
                 ...(initial as any).runtime_identity,
                 revision: 0,

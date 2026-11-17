@@ -9,6 +9,7 @@ export interface ClientConfig {
   processTimeoutMs: number;
   processTimeoutExplicit?: boolean;
   maxOutputBytes: number;
+  maxOutputBytesExplicit?: boolean;
   codexAppServerSocket?: string;
 }
 
@@ -38,5 +39,6 @@ export async function loadConfig(path?: string): Promise<ClientConfig> {
     processTimeoutMs: timeout,
     ...(value.processTimeoutMs !== undefined ? { processTimeoutExplicit: true } : {}),
     maxOutputBytes,
+    ...(value.maxOutputBytes !== undefined ? { maxOutputBytesExplicit: true } : {}),
   };
 }

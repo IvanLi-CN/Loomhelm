@@ -128,7 +128,7 @@ export function upgradeOrchestration(
       const source = pending?.source ?? runIdentity.parse(raw.runtime_identity ?? bound);
       if (pending) {
         requireCondition(
-          binding.schema_version === 2,
+          binding.schema_version === 3,
           "UPGRADE_STATE_CONFLICT",
           "Prepared upgrade requires the fenced binding format",
           4,
@@ -141,9 +141,11 @@ export function upgradeOrchestration(
         );
         requireCondition(
           sameRunIdentity(bound, source)
-            ? digest(JSON.stringify({ ...binding, schema_version: 1 })) ===
-                pending.source_binding_digest ||
-                digest(JSON.stringify(binding)) === pending.source_binding_digest
+            ? [1, 2, 3].some(
+                (schema_version) =>
+                  digest(JSON.stringify({ ...binding, schema_version })) ===
+                  pending.source_binding_digest,
+              )
             : sameRunIdentity(bound, target) &&
                 binding.request_id === pending.operation_id &&
                 binding.revision === pending.source_binding_revision + 1,
@@ -251,7 +253,7 @@ export function upgradeOrchestration(
           store.publishUpgrade(
             context,
             raw,
-            { ...binding, schema_version: 2 },
+            { ...binding, schema_version: 3 },
             state.source_directory,
             dependencies.afterStage,
           );
@@ -305,7 +307,7 @@ export function upgradeOrchestration(
             write(
               bindingPath,
               JSON.stringify({
-                schema_version: 2,
+                schema_version: 3,
                 run_id: raw.orchestration_id,
                 ...target,
                 revision: state!.source_binding_revision + 1,

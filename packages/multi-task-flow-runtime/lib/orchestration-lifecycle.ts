@@ -1,15 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 import { withExclusiveLockAsync } from "@loomhelm/runtime-core/modules/flow/storage";
 import {
   readRegularNoFollow,
-  writeAtomicNoFollow,
   writeExclusiveNoFollow,
 } from "@loomhelm/runtime-core/modules/visual/secure_io";
 import { ContractError, requireCondition } from "./errors";
 import { migrationDigest } from "./migration-audit";
+import { executeInvocation, inspectInvocation } from "./invocation-journal";
 import { callerIdentity, requireRunBinding } from "./orchestration-identity";
 import type { LedgerStore } from "./store";
 
@@ -76,7 +75,12 @@ export async function withRunLifecycle<T>(
 /** The marker survives a killed parent: PID disappearance alone never proves native-call completion. */
 const executing = new AsyncLocalStorage<string>();
 
-export async function withRunCommand<T>(store: LedgerStore, action: () => Promise<T>): Promise<T> {
+export async function withRunCommand<T>(
+  store: LedgerStore,
+  action: () => Promise<T>,
+  command = "unknown",
+  input: unknown = {},
+): Promise<T> {
   if (executing.getStore() === store.runPath) return action();
   return withRunLifecycle(store, async () => {
     const ledger = store.read();
@@ -93,19 +97,12 @@ export async function withRunCommand<T>(store: LedgerStore, action: () => Promis
         ledger.upgrade.migration_audit?.source_call_digest === migrationDigest(content);
       const previous = carried ? null : JSON.parse(content);
       requireCondition(
-        carried || previous.state === "stopped",
+        carried || (previous.state === "stopped" && inspectInvocation(store)?.quiescent === true),
         "RUN_QUIESCENCE_UNPROVEN",
         "An earlier invocation has no safe-stop receipt; inspect its native calls",
         4,
       );
     }
-    const receipt = { invocation_id: randomUUID(), identity, state: "running" };
-    writeAtomicNoFollow(path, JSON.stringify(receipt), store.rootPath);
-    try {
-      return await executing.run(store.runPath, action);
-    } finally {
-      // Action implementations must join their child processes and close native transports before returning.
-      writeAtomicNoFollow(path, JSON.stringify({ ...receipt, state: "stopped" }), store.rootPath);
-    }
+    return executeInvocation(store, command, input, () => executing.run(store.runPath, action));
   });
 }

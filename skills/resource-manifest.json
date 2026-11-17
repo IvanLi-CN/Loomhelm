@@ -7087,7 +7087,7 @@
     {
       "path": "skills/multi-task-flow/lib/codex-rpc.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/codex-rpc.ts",
-      "installedSha256": "93b699eeb5288ceff0ba30385e0aa950b262947e710425146b750b01faead87b"
+      "installedSha256": "118e5ce38d2f4e104bccaf9a4251e06b5cd96e37e7b5b322d162c8437b1fdd59"
     },
     {
       "path": "skills/multi-task-flow/lib/codex-socket.ts",
@@ -8115,6 +8115,21 @@
       "installedSha256": "c584bbcf6054b17f135e2e5bcc7cb4ca0d90aed5157b25ad5cfaf97c07083ba4"
     },
     {
+      "path": "skills/multi-task-flow/tests/fixtures/invocation-worker.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/tests/fixtures/invocation-worker.ts",
+      "installedSha256": "2b032207fa171f3872cff2a25f1c428b776d8a877f7c16eb28977de8233c2268"
+    },
+    {
+      "path": "skills/multi-task-flow/lib/invocation-journal.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/lib/invocation-journal.ts",
+      "installedSha256": "3577c36b06f0c34ebb9c0e755a2006ab8ac7490cadf477cff1bf5e1691eb8ca7"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/invocation-journal.test.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/tests/invocation-journal.test.ts",
+      "installedSha256": "0d407e2ea4a22531d7df1b859993ac2f4b7b4827742786231469588bccc354a5"
+    },
+    {
       "path": "skills/multi-task-flow/tests/orchestration-upgrade-compatibility.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/orchestration-upgrade-compatibility.test.ts",
       "installedSha256": "c179a312ce573872a134fa0daacaaa23c07d6f2e05fd75749e6014ed0057fb90"
@@ -8247,7 +8262,7 @@
     {
       "path": "skills/multi-task-flow/lib/codex-cli-create.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/codex-cli-create.ts",
-      "installedSha256": "8c6c9c4a317e7959ee8b2f2ad043d14894f9bc846f012a94a9b54e1421525994"
+      "installedSha256": "8d0c4d939f3fe4136dd2ea420344899d624dacb72898f007941fc20a9640a795"
     },
     {
       "path": "skills/multi-task-flow/lib/conversation-eligibility.ts",
@@ -8362,7 +8377,7 @@
     {
       "path": "skills/multi-task-flow/scripts/check-client-skills.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/check-client-skills.ts",
-      "installedSha256": "1175a634b1ad9bccd15d72e6eaeaa0c8421bd3d48d0a25a9e2133ce9848bdbaa"
+      "installedSha256": "deb2229d872de78e346d53f166b60208d182abaff4a3ef0d402f52f983134ea1"
     },
     {
       "path": "skills/multi-task-flow/tests/check-skills-installation.test.ts",
@@ -8847,7 +8862,7 @@
     {
       "path": "skills/multi-task-flow/lib/codex-recovery-writer.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/codex-recovery-writer.ts",
-      "installedSha256": "f1cba2877bde09aae685b51b695837ba253df54b8540177c1376e8c150f596f9"
+      "installedSha256": "280352c16b4d17f287826499c3dc9e6b21bc0a154e540f521eda76a46938230a"
     },
     {
       "path": "skills/multi-task-flow/lib/engine-initialization-recovery.ts",
@@ -9037,12 +9052,12 @@
     {
       "path": "skills/multi-task-flow/lib/viewer-binding.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/viewer-binding.ts",
-      "installedSha256": "8e390ddf1b20ac1f688b70f2cb5fd1c2c2a0409af661e87710fef4ff1a6e45b1"
+      "installedSha256": "7002555e8a85485a689b154d320dba1db57dd5f3ae3e10f568cb1c1145cbfd9d"
     },
     {
       "path": "skills/multi-task-flow/scripts/viewer-worker-process.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/viewer-worker-process.ts",
-      "installedSha256": "385a8947a24c44322ae064f8be5ec6d9efcfaebd6b08e2c7cd8f3726f9ffb3b1"
+      "installedSha256": "afaf7d3256636f6ce75b80669490f37d4d6bb637da9fa824827688ba6a2b16e3"
     },
     {
       "path": "skills/multi-task-flow/lib/engine-closeout.ts",

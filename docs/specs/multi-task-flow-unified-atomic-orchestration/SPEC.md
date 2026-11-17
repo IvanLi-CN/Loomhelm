@@ -10,6 +10,8 @@
 
 本主题定义 Multi-task Flow 的统一原子编排合同，覆盖 AtomicNode、AtomicEdge、Task、DeliveryUnit、外部事实、状态推导、迁移和网页投影。它约束 `skills/multi-task-flow/` 的持久化、运行时门禁、验证器和 viewer，不替代仓库级工程交付流程或外部 provider 的事实来源。
 
+编排输出、纯查询和调用停止对账属于同一主题的运行时边界；配套设计见 [OUTPUT_AND_INVOCATION.md](OUTPUT_AND_INVOCATION.md)，具体实现覆盖与已知差异见 [IMPLEMENTATION.md](IMPLEMENTATION.md#编排输出与调用停止对账)。
+
 ## Requirements
 
 ### REQ-ATOMIC-001
@@ -529,3 +531,65 @@ archive/unarchive 结果不确定的状态 MUST 保留 thread、方向、operati
 短视口（1440×900）的详情使用不透明底部抽屉，位于遮罩上方；内部保持两栏及各栏上下堆叠。
 
 ![短视口详情抽屉](assets/detail-inspector-short-viewport.png)
+
+## 16. 编排输出与调用停止对账
+
+### REQ-INVOCATION-001
+
+Flow 正常结果 MUST 使用有背压的流式传输，默认不限制累计输出字节，不在父进程累计缓存完整结果；传输缓冲、诊断日志捕获与账本容量 MUST 分别约束，不能沿用通用执行器的小型捕获预算限制正常结果。stdout MUST 保持完整结果合同，不静默截断；下游断开时 MUST 报告交付失败，不能据此认定业务失败或自动重做业务。显式配置的输出预算 MUST 有明确适用范围，不能被静默忽略或改义；触发后 MUST 使用统一停止路径。
+
+### REQ-INVOCATION-002
+
+只读命令明确为 show、view（含 task-context 查询视图），MUST 在旧调用未证实停止时仍可读取一致快照，且报告停止状态，不把可读快照当作调度许可。查询 MUST 核验完整版本、绑定、actor 和目录身份，不创建或改写 invocation 标记，不续租、不归档、不通知、不调用原生 provider、不迁移或进行业务写入；不得因残留 invocation 的生命周期锁无限等待。绑定不一致或升级未完成时 MUST 继续拒绝普通查询；其他命令 MUST 通过副作用门禁，在旧调用未证实停止时继续阻断，不得通过调用方声明 read_only 绕过。
+
+### REQ-INVOCATION-003
+
+每次副作用编排调用 MUST 在执行前登记可验证的调用身份和实际拥有的执行资源；正常返回、异常、超时与取消 MUST 共用停止核验。停止请求及证明 MUST 独立于 stdout/stderr；只有本调用所拥有的子进程、原生 transport 与已登记在途调用均有可验证终结证据时，才能发布 stopped。进程 close、PID 消失、锁释放或业务 operation 结束 MUST NOT 单独充当安全停止证明；证据不足时 MUST 保持 running。CLI 返回后执行的桌面 tool_request MUST 以独立 delivery attempt 和 provider receipt 对账，不能被 CLI 停止证明覆盖。
+
+### REQ-INVOCATION-004
+
+调用 journal MUST 追加保留开始、停止请求、必要资源证据和最终停止事实，作为停止事实的唯一来源；call.json MUST 仅为可重建投影。持久调用状态 MUST 仅有 running 和 stopped，不额外枚举恢复中间状态或业务结果、交付结果与停止状态的组合。停止事实 MUST 先于 stopped 投影持久化；崩溃后两者不一致时 MUST 核验或重建，不得仅凭投影放行。查询、停止核验及发布逻辑 MUST 共用实现，复用现有锁与业务凭证，不增加后台恢复服务或第二套业务账本。
+
+### REQ-INVOCATION-005
+
+系统 MUST 提供专用 invocation inspect/reconcile 边界。inspect MUST 只读报告缺失证据；reconcile MUST 核验绑定 main、request_id、expected_revision、invocation_id、原 marker digest 和证据摘要，在既有锁顺序内重验目录、版本及 canonical input；相同请求幂等，不同输入或并发冲突拒绝。恢复 MUST 保留原始 running 事实、业务图、owner、operation、claim、容量和已有外部事实，不重复消息、会话创建或其他原生业务副作用。旧 marker 缺失身份时，仅可信历史记录能唯一关联调用并证明停止才可补记证据；不能补造，也不能以 owner 批准替代事实。
+
+### REQ-INVOCATION-006
+
+专用恢复入口 MUST 允许经验证的修复版本在限定范围读取历史源并进行停止对账，冻结源与执行者身份，不放宽普通命令的 exact-version 门禁。恢复 MUST 不切换 run binding；安全停止成立后才可另行前向升级，不能要求先升级才能解除阻止升级的停止门禁。持久格式、writer 屏障、help、JSON Schema 和精确发布产物 MUST 与合同一致；正式运行恢复、升级与安装发布 MUST 分别取得相应授权。
+
+### VER-INVOCATION-001
+
+- covers: `REQ-INVOCATION-001`
+- Method: 精确发布产物的隔离 summary/full/summary 回归、跨越旧 1 MiB 和 64 MiB 边界的合成合法结果、慢消费者、断 pipe、大量 stderr 及显式预算测试。
+- Pass condition: 原 5,828,273 字节完整结果交付成功；传输内存不随累计输出线性增长，总进程内存与缓冲分别报告且不隐藏子进程序列化成本；失败不伪装为完整 JSON，也不重做业务。
+
+### VER-INVOCATION-002
+
+- covers: `REQ-INVOCATION-002`
+- Method: running 残留、活跃写者、慢消费者、绑定冲突和升级未完成场景的查询测试。
+- Pass condition: 合法纯查询返回一致快照和停止状态，不改标记、续租或产生副作用；慢输出不持有维护排斥，残留生命周期锁不阻止读取；版本或升级门禁不被绕过，副作用继续阻断。
+
+### VER-INVOCATION-003
+
+- covers: `REQ-INVOCATION-003`
+- Method: 正常结束、异常、取消、超时、父子进程崩溃与原生调用证据缺失的故障注入；分别观察 CLI 内原生调用和 CLI 返回后的桌面投递。
+- Pass condition: 共用收尾路径且只覆盖本调用资源；缺失 provider receipt、未完成 intent、错误 thread/turn/attempt 或仅有死 PID 均不放行；控制通道不受输出故障影响。
+
+### VER-INVOCATION-004
+
+- covers: `REQ-INVOCATION-004`
+- Method: 停止事实落盘与投影发布前后各崩溃点的重启测试，以及状态、事实源和模块边界审查。
+- Pass condition: 不丢原始证据，不出现无审计放行；仅有两种持久状态、一个停止事实源、一套查询和停止核验实现，无新增后台恢复服务或不必要的锁。
+
+### VER-INVOCATION-005
+
+- covers: `REQ-INVOCATION-005`
+- Method: inspect 零写入、reconcile 身份与 revision/digest 冲突、相同请求重放、并发及历史 marker 缺字段测试。
+- Pass condition: 相同恢复请求幂等，冲突拒绝；业务图、claim、容量和既有凭证保留，不重发原生副作用；缺少唯一历史关联或停止事实时保持阻断。
+
+### VER-INVOCATION-006
+
+- covers: `REQ-INVOCATION-006`
+- Method: 隔离历史源停止对账后再前向升级的完整链路、格式兼容及旧 writer 拒绝路径、help/schema 与精确发布产物对照。
+- Pass condition: 无升级与恢复互锁，恢复前后绑定不变；普通版本门禁不放宽，未知格式拒绝；未取得相应授权时不操作正式运行或全局安装。

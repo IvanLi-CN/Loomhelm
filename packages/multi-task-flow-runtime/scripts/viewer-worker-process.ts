@@ -49,7 +49,7 @@ const server = await startUnixViewerWorkerServer({
         ? "/api" + route.path
         : route.path;
     const ledger = new LedgerStore(dataRoot!, context.runId).read();
-    if (ledger.contract_version === 4)
+    if (ledger.contract_version >= 4)
       requireRunBinding(dataRoot!, context.runId, ledger, callerIdentity());
     return getRun(context.runId).handle(request, { timeout() {} }, path);
   },

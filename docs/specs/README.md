@@ -25,4 +25,5 @@
 - [数据模型](multi-task-flow-unified-atomic-orchestration/DATA_MODEL.md)
 - [状态机与恢复](multi-task-flow-unified-atomic-orchestration/STATE_MACHINES.md)
 - [CLI 命令契约](multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md)
+- [编排输出、纯查询与调用停止对账](multi-task-flow-unified-atomic-orchestration/OUTPUT_AND_INVOCATION.md)
 - [实现、测试覆盖与已知偏差](multi-task-flow-unified-atomic-orchestration/IMPLEMENTATION.md)

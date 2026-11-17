@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import type { Writable } from "node:stream";
 import type { ClientConfig } from "../config.ts";
 import { loadConfig } from "../config.ts";
 import type { ProcessOptions } from "../runtime/process.ts";
@@ -10,7 +11,7 @@ import {
 } from "./flow-contract.ts";
 
 export function flowProcessOptions(
-	config: Pick<ClientConfig, "processTimeoutMs" | "maxOutputBytes" | "processTimeoutExplicit">,
+	config: Pick<ClientConfig, "processTimeoutMs" | "maxOutputBytes" | "maxOutputBytesExplicit" | "processTimeoutExplicit">,
 	input: Uint8Array,
 	socket?: string,
 	command?: string,
@@ -29,7 +30,7 @@ export function flowProcessOptions(
 		input,
 		cwd: process.cwd(),
 		timeoutMs,
-		maxOutputBytes: config.maxOutputBytes,
+		...(config.maxOutputBytesExplicit ? { maxOutputBytes: config.maxOutputBytes } : {}),
 		env: {
 			...process.env,
 			...(socket ? { LOOMHELM_CODEX_APP_SERVER_SOCKET: socket } : {}),
@@ -116,12 +117,40 @@ export async function runFlowCommand(
 		chunks.push(data);
 	}
 	const selected = socket ?? config.codexAppServerSocket;
+	const sinks = { stdout: process.stdout, stderr: process.stderr };
+	let outputStarted = false;
+	const options = flowProcessOptions(config, Buffer.concat(chunks), selected, args[0]);
+	options.outputSink = async (stream, bytes) => {
+		if (stream === "stdout") outputStarted = true;
+		const target: Writable = sinks[stream];
+		// Serialize bounded writes and wait for each callback, including EPIPE.
+		for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024) {
+			await new Promise<void>((resolve, reject) => {
+				target.write(bytes.subarray(offset, offset + 64 * 1024), error => error ? reject(error) : resolve());
+			});
+		}
+	};
+	// Writable errors must be handled even after a failed write callback.
+	const sinkError = () => {};
+	process.stdout.on("error", sinkError);
+	process.stderr.on("error", sinkError);
+	try {
 	const result = await new SkillsRuntime().run(
 		"skills/multi-task-flow/scripts/orchestrate.ts",
 		args,
-		flowProcessOptions(config, Buffer.concat(chunks), selected, args[0]),
+		options,
 	);
-	process.stdout.write(result.stdout);
-	process.stderr.write(result.stderr);
+	if (result.stdout) process.stdout.write(result.stdout);
+	if (result.stderr) process.stderr.write(result.stderr);
 	process.exitCode = result.code ?? 1;
+	} catch (error) {
+		if (!outputStarted) throw error;
+		await new Promise<void>(resolve => process.stderr.write(JSON.stringify({ ok: false, code: "FLOW_OUTPUT_FAILED", message: String(error) }) + "\n", () => resolve()));
+		process.exitCode = 1;
+	} finally {
+		// Writable emits an error after its write callback; keep handlers through that turn.
+		await new Promise<void>(resolve => setImmediate(resolve));
+		process.stdout.off("error", sinkError);
+		process.stderr.off("error", sinkError);
+	}
 }

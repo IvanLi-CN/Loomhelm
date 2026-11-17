@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { withExclusiveLockAsync } from "@loomhelm/runtime-core/modules/flow/storage";
+import { executeInvocation } from "../lib/invocation-journal";
 import { callerIdentity, type RunIdentity, requireRunBinding } from "../lib/orchestration-identity";
 import { withRunLifecycle } from "../lib/orchestration-lifecycle";
 import { checkMigration } from "../lib/orchestration-migration";
@@ -144,13 +145,18 @@ function child(
   process.stdin.end();
   return process;
 }
-function markFixtureQuiescent(store: ReturnType<typeof fixture>) {
-  // This fixture never starts a native call. Retain its unknown business operations unchanged.
-  writeFileSync(
-    join(store.runPath, "runtime", "call.json"),
-    JSON.stringify({ state: "stopped", identity: source }),
-  );
+async function markFixtureQuiescent(store: ReturnType<typeof fixture>) {
+  // A joined, resource-free fixture invocation supplies real immutable stop evidence.
+  const previous = process.env.LOOMHELM_CALLER_IDENTITY;
+  process.env.LOOMHELM_CALLER_IDENTITY = JSON.stringify(source);
+  try {
+    await executeInvocation(store, "fixture", {}, async () => {});
+  } finally {
+    if (previous === undefined) delete process.env.LOOMHELM_CALLER_IDENTITY;
+    else process.env.LOOMHELM_CALLER_IDENTITY = previous;
+  }
 }
+
 for (const phase of [
   "directory_exchanged",
   "prepared",
@@ -160,7 +166,7 @@ for (const phase of [
 ]) {
   test(`isolated SIGKILL after ${phase} resumes through a fresh process`, async () => {
     const store = fixture();
-    markFixtureQuiescent(store);
+    await markFixtureQuiescent(store);
     const first = child(store, target, { kill_after: phase });
     expect(await first.exited).not.toBe(0);
     const operation = store.read().upgrade.operation_id;
@@ -174,7 +180,7 @@ for (const phase of [
 test("concurrent upgrades commit one operation and no additional revisions", async () => {
   for (let iteration = 0; iteration < 8; iteration++) {
     const store = fixture();
-    markFixtureQuiescent(store);
+    await markFixtureQuiescent(store);
     const revision = store.read().revision;
     const a = child(store, target),
       b = child(store, target);
@@ -234,7 +240,7 @@ test("native lock acquisition rejection retries only a replaced boundary before 
 
 test("upgrade waits for an actual native-call lifetime to exit without killing it", async () => {
   const store = fixture();
-  markFixtureQuiescent(store);
+  await markFixtureQuiescent(store);
   upgradeOrchestration(store, target, target, dependencies);
   const release = join(store.runPath, "release-fixture");
   const holder = child(store, target, { mode: "hold", release });

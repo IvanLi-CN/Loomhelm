@@ -17,6 +17,7 @@ import { isWorkItem } from "./codex-cli-initialization";
 import { connectSocket, framePayload, parseRpc, record, websocketFrame } from "./codex-rpc";
 import { ContractError } from "./errors";
 import type { RecoveryAttempt } from "./initialization-recovery-attempt";
+import { invocationSignal, registerInvocationResource } from "./invocation-journal";
 import {
   type RecoveryPermissions,
   readPermissions,
@@ -49,6 +50,10 @@ export async function withRecoveryWriter<T>(
       5,
     );
   requireRecoveryCapability();
+  const resource = registerInvocationResource("codex-recovery-writer", {
+    attempt_id: attempt.attempt_id,
+    thread_id: attempt.thread_id,
+  });
   const directory = mkdtempSync(join(realpathSync(tmpdir()), "mfr-"));
   const path = join(directory, "s");
   const directoryIdentity = lstatSync(directory);
@@ -77,6 +82,9 @@ export async function withRecoveryWriter<T>(
     waiting.clear();
     abort.abort();
   };
+  const invocationAbort = () => fail(new Error("Invocation stop requested"));
+  const invocation = invocationSignal();
+  invocation?.addEventListener("abort", invocationAbort, { once: true });
   const configured = Number(process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS ?? 300_000);
   const budget =
     Number.isFinite(configured) && configured >= 1_000 && configured <= 600_000
@@ -268,6 +276,14 @@ export async function withRecoveryWriter<T>(
       abort.abort();
       socket?.destroy();
       await joined;
+      invocation?.removeEventListener("abort", invocationAbort);
+      if (!restoreNeeded && !failure)
+        resource.end({
+          attempt_id: attempt.attempt_id,
+          transport_closed: true,
+          permissions_restored: true,
+        });
+      else resource.unknown();
       // Remove only this invocation's exact socket and empty private directory.
       try {
         const current = lstatSync(directory);

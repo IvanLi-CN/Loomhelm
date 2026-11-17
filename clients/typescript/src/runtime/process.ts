@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 
 export interface ProcessResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }
-export interface ProcessOptions { cwd?: string; timeoutMs?: number; maxOutputBytes?: number; signal?: AbortSignal; env?: NodeJS.ProcessEnv; input?: string | Uint8Array }
+export interface ProcessOptions { cwd?: string; timeoutMs?: number; maxOutputBytes?: number; signal?: AbortSignal; env?: NodeJS.ProcessEnv; input?: string | Uint8Array; outputSink?: (stream: 'stdout' | 'stderr', chunk: Uint8Array) => Promise<void> }
 /** Owns only its direct child; no detached services or shell expansion. */
 export function runProcess(command: string, args: readonly string[], options: ProcessOptions = {}): Promise<ProcessResult> {
   const timeout = options.timeoutMs ?? 30_000;

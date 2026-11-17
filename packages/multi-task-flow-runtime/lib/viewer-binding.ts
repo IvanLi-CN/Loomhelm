@@ -8,7 +8,7 @@ import { safeId, withExclusiveLock, writeAtomic } from "./store";
 
 export const viewerBindingSchema = z
   .object({
-    schema_version: z.union([z.literal(1), z.literal(2)]),
+    schema_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     run_id: z.string().min(1),
     package_name: z.literal("@loomhelm/multi-task-flow"),
     package_version: z.union([
@@ -79,9 +79,9 @@ export function writeViewerBinding(
   return withExclusiveLock(bindingLockPath(state, binding.run_id), () => {
     const previous = readViewerBinding(state, binding.run_id);
     requireCondition(
-      previous?.schema_version !== 2 && binding.schema_version !== 2,
+      (!previous || previous.schema_version === 1) && binding.schema_version === 1,
       "UPGRADE_REQUIRED",
-      "Contract-4 binding changes require the explicit forward upgrade transaction",
+      "Versioned binding changes require the explicit forward upgrade transaction",
       4,
     );
     if (

@@ -11,7 +11,7 @@ import {
   reconcileCliThread,
   verifyRepositoryIdentity,
 } from "../lib/codex-cli-create";
-import { versionEnvelope } from "../lib/contract";
+import { CONTRACT_VERSION, versionEnvelope } from "../lib/contract";
 import { sweepConversationArchives } from "../lib/conversation-archive";
 import { desktopHandoff } from "../lib/desktop-handoff";
 import { actorSchema, apply, authorize, ready, requestSchema } from "../lib/engine";
@@ -22,9 +22,15 @@ import {
   validateProfileCapability,
 } from "../lib/execution-profile";
 import { recoverInitialization } from "../lib/initialization-recovery";
+import {
+  inspectInvocation,
+  inspectRecoveryInvocation,
+  reconcileInvocation,
+  recoverySource,
+} from "../lib/invocation-journal";
 import { prepareNativeNotification, reconcileNotification } from "../lib/notification-delivery";
 import { callerIdentity, requireRunBinding } from "../lib/orchestration-identity";
-import { withRunCommand } from "../lib/orchestration-lifecycle";
+import { withRunCommand, withRunLifecycle } from "../lib/orchestration-lifecycle";
 import { mutateExecutionProfile } from "../lib/profile-mutation";
 import {
   DEFAULT_EXECUTION_PROFILE,
@@ -213,7 +219,7 @@ try {
   safeId(input.run_id);
   const caller = callerIdentity();
   const execute = async () => {
-    if (command !== "init") {
+    if (!["init", "show", "view", "invocation-inspect", "invocation-reconcile"].includes(command)) {
       const store = new LedgerStore(root, input.run_id);
       requireRunBinding(root, input.run_id, store.read(), caller);
     }
@@ -292,7 +298,7 @@ try {
       const ledger = validateLedger({
         schema_version: 2,
         source_schema_version: null,
-        contract_version: 5,
+        contract_version: CONTRACT_VERSION,
         runtime_identity: caller,
         version: versionEnvelope,
         orchestration_id: parsed.run_id,
@@ -716,6 +722,19 @@ try {
               : null,
         }),
       );
+    } else if (command === "invocation-inspect" || command === "invocation-reconcile") {
+      const store = new LedgerStore(root, input.run_id);
+      if (command === "invocation-reconcile") {
+        recoverySource(store, validateLedger(store.read()), input.actor);
+        console.log(
+          JSON.stringify(
+            await withRunLifecycle(store, async () => reconcileInvocation(store, input)),
+          ),
+        );
+      } else {
+        const parsed = z.object({ run_id: id, actor: actorSchema }).strict().parse(input);
+        console.log(JSON.stringify(inspectRecoveryInvocation(store, parsed.actor)));
+      }
     } else if (command === "show" || command === "view") {
       const parsed = z
         .object({
@@ -737,7 +756,13 @@ try {
         })
         .strict()
         .parse(input);
-      const ledger = validateLedger(new LedgerStore(root, parsed.run_id).read());
+      const store = new LedgerStore(root, parsed.run_id);
+      const snapshot = store.withLock(() => {
+        const ledger = validateLedger(store.readUnlocked());
+        requireRunBinding(root, parsed.run_id, ledger, callerIdentity());
+        return { ledger, invocation: inspectInvocation(store) };
+      });
+      const ledger = snapshot.ledger;
       const allowed =
         ledger.control.ownership === "bound" &&
         (parsed.actor.role === "main"
@@ -819,6 +844,7 @@ try {
           ok: true,
           code: "OK",
           revision: ledger.revision,
+          invocation: snapshot.invocation,
           result: command === "view" ? buildView(ledger, parsed.plan_id) : sections[section],
         }),
       );
@@ -884,6 +910,7 @@ try {
     ) {
       await sweepConversationArchives(new LedgerStore(root, input.run_id)).catch(() => {});
     }
+    if (["show", "view", "invocation-inspect", "invocation-reconcile"].includes(command)) return;
     try {
       renewViewerUsage(root, input.run_id);
     } catch {
@@ -895,8 +922,9 @@ try {
       );
     }
   };
-  if (command === "init") await execute();
-  else await withRunCommand(new LedgerStore(root, input.run_id), execute);
+  if (["init", "show", "view", "invocation-inspect", "invocation-reconcile"].includes(command))
+    await execute();
+  else await withRunCommand(new LedgerStore(root, input.run_id), execute, command, input);
 } catch (error) {
   let code = "IO_ERROR",
     exitCode = 6,

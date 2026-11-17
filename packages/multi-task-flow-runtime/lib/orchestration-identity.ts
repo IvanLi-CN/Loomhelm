@@ -90,7 +90,7 @@ export function requireRunBinding(
     );
   }
   if (
-    binding.schema_version !== 2 ||
+    binding.schema_version !== (ledger.contract_version === 5 ? 3 : 2) ||
     binding.run_id !== runId ||
     !sameRunIdentity(identityOf(binding), caller)
   )

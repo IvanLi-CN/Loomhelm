@@ -23,6 +23,10 @@ const additional = [
   "skills/multi-task-flow/web/detail-status.ts",
   "skills/multi-task-flow/web/execution-policy-chip.ts",
   "skills/multi-task-flow/web/execution-policy-model.ts",
+
+  "skills/multi-task-flow/tests/fixtures/invocation-worker.ts",
+  "skills/multi-task-flow/lib/invocation-journal.ts",
+  "skills/multi-task-flow/tests/invocation-journal.test.ts",
   "skills/multi-task-flow/tests/orchestration-upgrade-compatibility.test.ts",
   "skills/multi-task-flow/lib/store-upgrade-publication.ts",
   "skills/multi-task-flow/tests/orchestration-upgrade-worker.ts",
