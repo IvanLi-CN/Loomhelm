@@ -69,11 +69,11 @@ test("flow schema exposes the versioned command contract", () => {
 
 test("the packaged Skill contract mirrors the canonical repository contract", () => {
 	const root = resolve(import.meta.dir, "../..", "..");
+	const canonicalPath =
+		"docs/specs/multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md";
+	assert.equal(FLOW_CONTRACT.sources.human_contract, canonicalPath);
 	const canonical = readFileSync(
-		resolve(
-			root,
-			"docs/specs/multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md",
-		),
+		resolve(root, canonicalPath),
 		"utf8",
 	);
 	const packaged = readFileSync(
