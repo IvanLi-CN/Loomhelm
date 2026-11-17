@@ -28,6 +28,8 @@ Viewer 维护按 [ADR 0026](../../adr/0026-viewer-compatibility-lifecycle.md) �
 
 ## 验证边界
 
+`packages/runtime-core/src/modules/core/process.ts` 提供异步输出接收端、独立 IPC 和有截止时间的可选协作停止，复用既有进程身份、后代跟踪和信号升级。`skills/bin/tests/core/runtime_core_process.test.ts` 直接导入可发布源码，验证 80 MiB 流式输出、捕获预算、IPC 握手、协作停止截止时间和回调异常后的进程回收。此共享能力不自动改变 Flow CLI 的输出策略，也不证明真实 Codex 请求已停止；Flow 接入和原生验收由后续依赖交付承担。
+
 vendor 源码安装仍保留根 `skills/` 作为源 Skill 安装面；Multi-task Flow 的共享执行模块、合同资源、构建和检查支持分别位于 `@loomhelm/runtime-core`、`skills/docs/vendor/dot-codex/` 与 `packages/multi-task-flow-runtime/scripts/`。来源清单允许明确登记的 runtime sourcePath 映射到生成包内的 `skills/multi-task-flow/`，不借用已清退的共享目录、源码 checkout 或用户级全局程序。
 
 原共享脚本回归、原 Multi-task Flow 与网页回归、原生安全回归、客户端双运行时测试及来源隔离测试分别运行。macOS 本地结果不能代替 Linux CI，模拟 socket 不能代替真实宿主接力，已有旧运行的测试副本不能授权写入真实账本。当前候选的精确提交、经验验收和正式审查证据由交付流程保管；没有完整证据时不宣称合并就绪。
