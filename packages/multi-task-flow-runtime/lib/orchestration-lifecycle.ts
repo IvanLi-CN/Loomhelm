@@ -6,6 +6,7 @@ import { withExclusiveLockAsync } from "@loomhelm/runtime-core/modules/flow/stor
 import {
   readRegularNoFollow,
   writeAtomicNoFollow,
+  writeExclusiveNoFollow,
 } from "@loomhelm/runtime-core/modules/visual/secure_io";
 import { ContractError, requireCondition } from "./errors";
 import { callerIdentity, requireRunBinding } from "./orchestration-identity";
@@ -15,7 +16,14 @@ import type { LedgerStore } from "./store";
 export async function withRunLifecycle<T>(
   store: LedgerStore,
   action: () => Promise<T>,
+  acquire: typeof withExclusiveLockAsync = withExclusiveLockAsync,
 ): Promise<T> {
+  // Publish the lock file under the already-established maintenance/ledger
+  // exclusion. Concurrent native openers must never observe its create/chmod window.
+  store.maintain((context) => {
+    const path = join(store.runPath, "locks", "lifecycle.lock");
+    if (!existsSync(path)) writeExclusiveNoFollow(path, "", context.rootPath);
+  });
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     const before = lstatSync(store.runPath);
@@ -25,18 +33,37 @@ export async function withRunLifecycle<T>(
       "Run directory must be a private directory",
       5,
     );
-    const outcome = await withExclusiveLockAsync(
-      join(store.runPath, "locks", "lifecycle.lock"),
-      async () => {
-        const current = lstatSync(store.runPath);
-        if (before.dev !== current.dev || before.ino !== current.ino || current.isSymbolicLink())
-          return { changed: true as const };
-        return { changed: false as const, value: await action() };
-      },
-      Math.max(1, deadline - Date.now()),
-    );
-    // A changed boundary has executed no action and may safely reacquire the current lock.
-    if (!outcome.changed) return outcome.value;
+    let actionStarted = false;
+    try {
+      const outcome = await acquire(
+        join(store.runPath, "locks", "lifecycle.lock"),
+        async () => {
+          const current = lstatSync(store.runPath);
+          if (before.dev !== current.dev || before.ino !== current.ino || current.isSymbolicLink())
+            return { changed: true as const };
+          actionStarted = true;
+          return { changed: false as const, value: await action() };
+        },
+        Math.max(1, deadline - Date.now()),
+      );
+      // A changed boundary has executed no action and may safely reacquire the current lock.
+      if (!outcome.changed) return outcome.value;
+    } catch (error) {
+      const current = lstatSync(store.runPath);
+      // The native opener may detect the exchange before our callback runs.
+      // Reacquire only a changed boundary, never replay an action or hide an unrelated error.
+      if (
+        actionStarted ||
+        !(error instanceof Error) ||
+        ![
+          "secure_lock_parent_rejected",
+          "secure_lock_file_changed",
+          "secure_lock_open_failed",
+        ].includes(error.message) ||
+        (before.dev === current.dev && before.ino === current.ino)
+      )
+        throw error;
+    }
   }
   throw new ContractError(
     "RUN_BOUNDARY_CHANGED",
@@ -83,6 +110,24 @@ export function requireQuiescentRun<T>(store: LedgerStore, ledger: any, action: 
     !receipt || receipt.state === "stopped",
     "RUN_QUIESCENCE_UNPROVEN",
     "A registered invocation has no safe-stop receipt; no process will be killed",
+    4,
+  );
+  const unjoinedNotification = ledger.notifications.some((notification: any) => {
+    if (notification.delivery_status !== "unknown") return false;
+    const intent = ledger.events.find(
+      (event: any) =>
+        event.type === "notification_delivery_resolved" &&
+        event.data?.notification_id === notification.id &&
+        event.data?.delivery_attempt_id === notification.last_attempt_id,
+    );
+    // Desktop tools execute after the CLI returns. Only the joined app-server
+    // path is covered by the CLI stop receipt; absent provenance also fails closed.
+    return intent?.data?.provider !== "codex-app-server";
+  });
+  requireCondition(
+    !unjoinedNotification,
+    "RUN_QUIESCENCE_UNPROVEN",
+    "An external notification attempt has no safe-stop proof; reconcile its exact provider receipt first",
     4,
   );
   // Old releases did not register native invocation lifetimes. Preserve uncertainty, never infer a stop from status or PID.

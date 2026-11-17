@@ -208,6 +208,8 @@ try {
     throw new ContractError("INVALID_ARGUMENTS", "Usage: orchestrate.ts <command> --input -");
   const input = JSON.parse(await Runtime.stdin.text());
   const root = process.env.TASK_ORCHESTRATION_DATA_ROOT ?? defaultRoot();
+  // Preserve init's full input error contract before looking up any run resource.
+  if (command === "init") initialRequest.parse(input);
   safeId(input.run_id);
   const caller = callerIdentity();
   const execute = async () => {

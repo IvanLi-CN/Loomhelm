@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { withExclusiveLockAsync } from "@loomhelm/runtime-core/modules/flow/storage";
 import { callerIdentity, type RunIdentity, requireRunBinding } from "../lib/orchestration-identity";
-import { requireQuiescentRun } from "../lib/orchestration-lifecycle";
+import { requireQuiescentRun, withRunLifecycle } from "../lib/orchestration-lifecycle";
 import { inspectOrchestration, upgradeOrchestration } from "../lib/orchestration-upgrade";
 import { fixtureRun, serviceFixture } from "./service-fixture";
 
@@ -176,13 +177,88 @@ for (const phase of [
   });
 }
 test("concurrent upgrades commit one operation and no additional revisions", async () => {
+  for (let iteration = 0; iteration < 8; iteration++) {
+    const store = fixture();
+    markFixtureQuiescent(store);
+    const revision = store.read().revision;
+    const a = child(store, target),
+      b = child(store, target);
+    const outputs = await Promise.all(
+      [a, b].map(async (child) => ({
+        exit: await child.exited,
+        stdout: await new Response(child.stdout).text(),
+        stderr: await new Response(child.stderr).text(),
+      })),
+    );
+    expect(
+      outputs.map((output) => output.exit),
+      JSON.stringify(outputs),
+    ).toEqual([0, 0]);
+    expect(store.read().revision).toBe(revision + 4);
+  }
+});
+
+test("native lock acquisition rejection retries only a replaced boundary before any action", async () => {
+  for (const nativeError of [
+    "secure_lock_parent_rejected",
+    "secure_lock_file_changed",
+    "secure_lock_open_failed",
+  ]) {
+    const store = fixture();
+    let acquisitions = 0,
+      actions = 0;
+    const value = await withRunLifecycle(
+      store,
+      async () => ++actions,
+      async (path, action, timeout) => {
+        if (++acquisitions === 1) {
+          upgradeOrchestration(store, target, target, dependencies);
+          throw new Error(nativeError);
+        }
+        return withExclusiveLockAsync(path, action, timeout);
+      },
+    );
+    expect({ value, actions, acquisitions }).toEqual({ value: 1, actions: 1, acquisitions: 2 });
+    await expect(
+      withRunLifecycle(
+        store,
+        async () => ++actions,
+        async () => {
+          throw new Error(nativeError);
+        },
+      ),
+    ).rejects.toThrow(nativeError);
+    await expect(
+      withRunLifecycle(store, async () => {
+        throw new Error("action failed");
+      }),
+    ).rejects.toThrow("action failed");
+    expect(actions).toBe(1);
+  }
+});
+
+test("CLI stop receipt never covers an outstanding desktop notification tool", () => {
   const store = fixture();
   markFixtureQuiescent(store);
-  const revision = store.read().revision;
-  const a = child(store, target),
-    b = child(store, target);
-  expect(await Promise.all([a.exited, b.exited])).toEqual([0, 0]);
-  expect(store.read().revision).toBe(revision + 4);
+  const ledger = store.read();
+  ledger.notifications = [{ id: "notice", last_attempt_id: "attempt", delivery_status: "unknown" }];
+  ledger.events = [
+    {
+      type: "notification_delivery_resolved",
+      data: {
+        notification_id: "notice",
+        delivery_attempt_id: "attempt",
+        provider: "codex-app-tools",
+      },
+    },
+  ];
+  expect(() => requireQuiescentRun(store, ledger, () => true)).toThrow("external notification");
+  ledger.events[0].data.provider = "codex-app-server";
+  expect(requireQuiescentRun(store, ledger, () => true)).toBe(true);
+  ledger.events = [];
+  expect(() => requireQuiescentRun(store, ledger, () => true)).toThrow("external notification");
+  ledger.notifications[0].delivery_status = "sent";
+  expect(requireQuiescentRun(store, ledger, () => true)).toBe(true);
 });
 test("upgrade waits for an actual native-call lifetime to exit without killing it", async () => {
   const store = fixture();

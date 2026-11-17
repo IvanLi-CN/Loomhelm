@@ -7227,7 +7227,7 @@
     {
       "path": "skills/multi-task-flow/lib/service-http.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/service-http.ts",
-      "installedSha256": "608c9a257c0136ee598364ebe5c19bba5510aeedf2ca2112f9fe4f5a39bf3372"
+      "installedSha256": "eeac6870de8f0a87890c1642e4f13ec32867282fe257ccb83b53caabc1c4cd4a"
     },
     {
       "path": "skills/multi-task-flow/lib/service-import-recovery.ts",
@@ -7332,7 +7332,7 @@
     {
       "path": "skills/multi-task-flow/references/cli-contract.md",
       "sourcePath": "docs/specs/multi-task-flow-unified-atomic-orchestration/CLI_CONTRACT.md",
-      "installedSha256": "a31ec7a67f2aa00aa43bc9906872ad67973925812452ee269d43a0420ec9fdb8"
+      "installedSha256": "cb12e27cc4cd2e215b6b95c01c9d74de10a417c528c6f31b28543d5b7b0700d0"
     },
     {
       "path": "skills/multi-task-flow/references/shared-viewer.md",
@@ -7361,7 +7361,7 @@
     {
       "path": "skills/multi-task-flow/scripts/orchestrate.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/orchestrate.ts",
-      "installedSha256": "2b7253e883e221a43414abfac00e42591678a86450b08f269c858227088212e8"
+      "installedSha256": "596cc9510a1e163ff242543cf86a24e3e122cc8eebe6fb80550a4cf8a9ac8ff2"
     },
     {
       "path": "skills/multi-task-flow/scripts/service.ts",
@@ -7511,7 +7511,7 @@
     {
       "path": "skills/multi-task-flow/tests/shared-service.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/shared-service.test.ts",
-      "installedSha256": "129ba950d7fe631fcc3626977184a27482bfbcc424beadbe73572220de13a25f"
+      "installedSha256": "408ad092e8265a95687f8a4f95ff8d32c01a33d061ad406c904d25c6f89182ae"
     },
     {
       "path": "skills/multi-task-flow/tests/source-preview.test.ts",
@@ -8087,12 +8087,12 @@
     {
       "path": "skills/multi-task-flow/lib/orchestration-lifecycle.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/orchestration-lifecycle.ts",
-      "installedSha256": "f433d659a0b3d64fadd66b03e2d6b9244efdb80ff7c0367de4f1aa25551b773a"
+      "installedSha256": "108c625755f56f7e48945d994e90eec632d9b7cbc43dc8f6001857451ba85b4a"
     },
     {
       "path": "skills/multi-task-flow/tests/orchestration-upgrade.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/orchestration-upgrade.test.ts",
-      "installedSha256": "f7ca4fd760ab6bec3a4f1ca665261ea1d8114e6ca340c07195f6267bca8f8068"
+      "installedSha256": "7c5282e1d2aeac76e854ea54045d4008b86fe77cadaaaa10a44c0b6afd469ed7"
     },
     {
       "path": "skills/bin/native-tests/core/ffi_paths.test.ts",

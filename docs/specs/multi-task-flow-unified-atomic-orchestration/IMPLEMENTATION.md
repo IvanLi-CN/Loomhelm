@@ -138,3 +138,5 @@ ADR 0039 与 REQ-UPGRADE-001 至 REQ-UPGRADE-006 的候选实现位于 `orchestr
 隔离验证确认 0.2.53 的 orchestration-upgrade 不读取 ledger contract，可以改写 schema-1 绑定；主人已批准原子目录发布方案。`store-upgrade-publication.ts` 在既有维护锁下原子交换 run 目录，同时发布 prepared 账本与 schema-2 绑定，并保留源目录快照。实际 0.2.53 的 reader、普通 writer 和仅修改绑定的维护 writer 均拒绝发布后的屏障；测试覆盖交换前中断、交换后 SIGKILL、各后续阶段、并发升级、原生调用等待和旧目录锁等待者。正式 PR/CI/review 仍待收敛。
 
 Gateway 不再为缺失历史绑定的账本使用当前安装或 fallback 身份补建来源；隔离源码预览只为本次新建的临时副本显式登记预览身份，不能作为历史编排来源证据。
+
+回归覆盖自定义视图下 Worker 的真实执行身份、CLI 外桌面通知的静止证据、原子交换期间原生锁获取拒绝后的安全重试，以及空 init 输入的既有错误码。历史 schema-1/contract-1 与 contract-2 的公开只读诊断保持源文件字节不变，并拒绝缺少已验证迁移链的升级。

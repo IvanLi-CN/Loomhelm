@@ -32,6 +32,20 @@ test('packaged CLI fences old bindings, diagnoses without writes, and explicitly
     await writeFile(ledgerPath, JSON.stringify(ledger)); await writeFile(bindingPath, JSON.stringify(binding));
     const before = [await readFile(ledgerPath, 'utf8'), await readFile(bindingPath, 'utf8')];
     const query = { run_id: 'example-run', actor: { role: 'main', thread_id: 'example-main-thread' } };
+    // Supported historical diagnostics read source bytes without invoking a converter.
+    for (const [schema, contract] of [[1, 1], [2, 2]]) {
+      const historical = { ...ledger, schema_version: schema, contract_version: contract };
+      await writeFile(ledgerPath, JSON.stringify(historical));
+      await writeFile(bindingPath, JSON.stringify({ ...binding, ledger_contract: contract }));
+      const legacyBytes = [await readFile(ledgerPath, 'utf8'), await readFile(bindingPath, 'utf8')];
+      const diagnosis = await invoke(['orchestration', 'compatibility-check', '--run-id', 'example-run']);
+      assert.equal(diagnosis.code, 0, diagnosis.text);
+      assert.equal(JSON.parse(diagnosis.stdout).result.contract, contract);
+      const migration = await invoke(['orchestration', 'upgrade', '--run-id', 'example-run', '--dry-run', version]);
+      assert.notEqual(migration.code, 0); assert.match(migration.text, /MIGRATION_REQUIRED/);
+      assert.deepEqual([await readFile(ledgerPath, 'utf8'), await readFile(bindingPath, 'utf8')], legacyBytes);
+    }
+    await writeFile(ledgerPath, before[0]!); await writeFile(bindingPath, before[1]!);
     const refused = await invoke(['flow', 'show', '--input', '-'], query);
     assert.notEqual(refused.code, 0); assert.match(refused.text, /RUN_VERSION_MISMATCH/);
     const checked = await invoke(['orchestration', 'compatibility-check', '--run-id', 'example-run']);

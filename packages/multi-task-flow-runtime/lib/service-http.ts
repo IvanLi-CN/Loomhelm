@@ -788,7 +788,13 @@ export async function startSharedViewer(
           const assets = selectAssets(state.paths.data, id, assetsDir);
           const verifiedRelease = verifyBindingIdentity(binding);
           const usesCurrentAssets = Boolean(assets.source || sharedSource);
-          const workerBuildId = usesCurrentAssets ? manifest.build_id : binding.build_id;
+          // Static assets do not select executable identity for a bound contract-4 run.
+          const workerBuildId =
+            ledger.contract_version === 4
+              ? binding.build_id
+              : usesCurrentAssets
+                ? manifest.build_id
+                : binding.build_id;
           const workerPackageVersion =
             workerBuildId === manifest.build_id
               ? (serviceConfig.package_version ?? manifest.service_version)
@@ -796,7 +802,8 @@ export async function startSharedViewer(
           const version = dataVersionOf(ledger, binding.viewer_contract, workerBuildId);
           const workerKey = workerKeyOf(version);
           workerBuilds.set(workerKey, {
-            identity: identityOf(binding),
+            identity:
+              workerBuildId === manifest.build_id ? currentBindingIdentity : identityOf(binding),
             build_id: workerBuildId,
             package_version: workerPackageVersion,
             release_root:
