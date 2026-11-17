@@ -490,7 +490,9 @@ export function validateInitialRuntimeState(
   );
 }
 
-export type PlanValidationOptions = LifecycleRoleValidationOptions;
+export type PlanValidationOptions = LifecycleRoleValidationOptions & {
+  requireCanonicalLifecycleGraph?: boolean;
+};
 
 function validateCanonicalLifecycleRoles(candidate: Plan, options: PlanValidationOptions): void {
   const allowLegacyInference = options.allowLegacyLifecycleRoleInference === true;
@@ -573,10 +575,20 @@ export function validatePlan(candidate: Plan, options: PlanValidationOptions = {
       "Plan IDs must be unique within each collection",
     );
   }
-  if (
-    candidate.atomic_nodes.length ||
-    candidate.atomic_edges.some((edge) => "from_node_id" in edge)
-  ) {
+  const hasCanonicalAtomicGraph =
+    candidate.atomic_nodes.length > 0 ||
+    candidate.atomic_edges.some((edge) => "from_node_id" in edge);
+  const hasLegacyAtomicEdges = candidate.atomic_edges.some((edge) => "from_atom_id" in edge);
+  if (options.requireCanonicalLifecycleGraph !== false) {
+    requireCondition(
+      options.allowLegacyLifecycleRoleInference === true ||
+        hasCanonicalAtomicGraph ||
+        !hasLegacyAtomicEdges,
+      "ATOMIC_CONTRACT_REQUIRED",
+      "New plans with lifecycle atoms must use canonical atomic nodes and node-based atomic edges",
+    );
+  }
+  if (hasCanonicalAtomicGraph) {
     requireCondition(
       candidate.atomic_edges.every((edge) => "from_node_id" in edge && "to_node_id" in edge),
       "ATOMIC_CONTRACT_REQUIRED",

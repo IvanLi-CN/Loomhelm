@@ -529,6 +529,17 @@ test("strict plan validation rejects conflicting atom and canonical lifecycle ro
   expect(() => validatePlan(plan)).toThrow("conflicting lifecycle_role declaration");
 });
 
+test("strict plan validation rejects lifecycle atom edges without a canonical graph", () => {
+  const plan = strictTaskLifecyclePlan();
+  plan.atomic_nodes = [];
+  plan.atomic_edges = plan.atomic_edges.map(({ id, from_node_id, to_node_id }: any) => ({
+    id,
+    from_atom_id: from_node_id,
+    to_atom_id: to_node_id,
+  }));
+  expect(() => validatePlan(plan)).toThrow("canonical atomic nodes");
+});
+
 test("does not derive delivery-unit lifecycle order when legacy group atoms have no edges", () => {
   const plan = canonicalizeContract3Plan({
     atoms: [],

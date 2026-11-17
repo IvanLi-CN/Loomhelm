@@ -236,8 +236,14 @@ export function validateLedger(value: unknown): Ledger {
     "APPROVAL_MISMATCH",
     "Control approval must match the execution plan approval",
   );
+  const historicalLifecycleRoleInference =
+    parsed.contract_version < 6 ||
+    (parsed.contract_version === 6 && (parsed.upgrade?.migration_audit?.source_contract ?? 6) < 6);
   for (const item of parsed.plans) {
-    validatePlan(item, { allowLegacyLifecycleRoleInference: parsed.contract_version < 6 });
+    validatePlan(item, {
+      allowLegacyLifecycleRoleInference: historicalLifecycleRoleInference,
+      requireCanonicalLifecycleGraph: false,
+    });
     if (item.lifecycle === "proposed")
       requireCondition(
         item.approval_id === null,

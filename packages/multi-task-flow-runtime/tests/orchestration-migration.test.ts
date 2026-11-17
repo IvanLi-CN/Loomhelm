@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { atomicNode } from "../lib/atomic-orchestration";
 import { inspectInvocation, registerInvocationResource } from "../lib/invocation-journal";
 import { businessDigest } from "../lib/migration-audit";
 import { type RunIdentity, requireRunBinding } from "../lib/orchestration-identity";
@@ -112,6 +113,52 @@ for (const contract of [3, 4, 5]) {
     expect((upgradeOrchestration(store, target, target) as any).changed).toBe(false);
   });
 }
+
+test("legacy canonical lifecycle graphs survive mechanical upgrade to contract 6", () => {
+  const store = fixture(3);
+  const raw = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+  const plan = raw.plans[0];
+  const groupByTask = new Map(raw.tasks.map((task: any) => [task.id, task.group_id]));
+  const definitions = [...plan.atoms, ...plan.group_atoms];
+  plan.atomic_nodes = definitions.map((atom: any) => {
+    const isGroup = typeof atom.group_id === "string";
+    const node = {
+      kind: "work" as const,
+      id: atom.id,
+      title: atom.title,
+      purpose: atom.purpose,
+      output: atom.output,
+      acceptance: [],
+      activity_type: "verification" as const,
+      state: "planned" as const,
+      scope: isGroup
+        ? { kind: "delivery_unit" as const, delivery_unit_id: atom.group_id }
+        : {
+            kind: "task" as const,
+            task_id: atom.task_id,
+            delivery_unit_id: groupByTask.get(atom.task_id) ?? "unknown-group",
+          },
+    };
+    return atomicNode.parse(node);
+  });
+  plan.atomic_edges = raw.groups.flatMap((group: any) => {
+    const atoms = plan.group_atoms.filter((atom: any) => atom.group_id === group.id);
+    return atoms.slice(1).map((atom: any, index: number) => ({
+      id: `${group.id}-legacy-lifecycle-${index}`,
+      from_node_id: atoms[index]!.id,
+      to_node_id: atom.id,
+      requires: { kind: "source_terminal_success" },
+    }));
+  });
+  writeFileSync(store.ledgerPath, JSON.stringify(raw));
+
+  expect(() => upgradeOrchestration(store, target, target)).not.toThrow();
+  const after = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+  expect(after.contract_version).toBe(6);
+  expect(after.upgrade.migration_audit.source_contract).toBe(3);
+  expect(after.plans[0].atomic_nodes.every((node: any) => !node.lifecycle_role)).toBe(true);
+});
+
 test("read-only observation detects a concurrent source change and rejects links", () => {
   const store = fixture();
   const report = checkMigration(store, target, target, () =>
