@@ -211,3 +211,7 @@ Agent 空闲、对话连接、最新输出和观察器断开等信息属于独�
 - 异常流程不得新增 `reconciling`、`reopened` 或其他临时业务状态；恢复动作必须落为追加事件，并重新计算受影响投影。
 - `closed` DeliveryUnit 的下游能力与其自身继续派发的 readiness 必须分别显示和判断。
 - 范围变化必须产生计划修订和 successor DeliveryUnit；原对象的 closeout、事实、结果和副作用记录必须保留。
+
+## Interrupted initialization
+
+unknown CLI dispatch → exact interrupted handshake preflight → durable recovery attempt → native exclusive writer → locked history preflight → fixed READY turn → registered native turn observation → full original/recovery chain verification → dispatch succeeded + one handoff intent。任一步骤未知或失败时保留 unknown 与所有已登记身份；intent 不过期，重入只对账。无登记 recovery、failed/active 或额外业务 turn 均不得绕过此路径绑定成功。

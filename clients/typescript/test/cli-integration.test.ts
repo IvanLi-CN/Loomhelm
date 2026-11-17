@@ -49,6 +49,30 @@ test('flow subprocess inherits the caller repository cwd', () => {
   assert.equal(options.cwd, process.cwd());
 });
 
+test('flow creation reserves the initialization and reconciliation budget before side effects', () => {
+  const config = { processTimeoutMs: 30_000, maxOutputBytes: 1024 };
+  const previous = process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS;
+  delete process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS;
+  try {
+    assert.equal(flowProcessOptions(config, new Uint8Array(), undefined, 'conversation-create').timeoutMs, 500_000);
+    assert.equal(flowProcessOptions(config, new Uint8Array(), undefined, 'show').timeoutMs, 30_000);
+    assert.throws(() => flowProcessOptions({ ...config, processTimeoutExplicit: true }, new Uint8Array(), undefined, 'conversation-create'), /FLOW_PROCESS_BUDGET_TOO_SHORT/);
+  } finally {
+    if (previous === undefined) delete process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS;
+    else process.env.MULTI_TASK_FLOW_CODEX_CREATE_TIMEOUT_MS = previous;
+  }
+});
+
+test('the real flow CLI rejects an explicitly short budget before launching a native process', async () => temporary(async dir => {
+  const { config, env } = await setup(dir);
+  for (const command of ['conversation-create', 'initialization-recover']) {
+    const result = await invoke(config, env, ['flow', command, '--input', '-']);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /FLOW_PROCESS_BUDGET_TOO_SHORT/);
+    assert.deepEqual(await logEntries(env.LOOMHELM_FIXTURE_LOG), []);
+  }
+}));
+
 test('real CLI subprocess dispatch maps current Codex request shapes and waits for completion', async () => temporary(async dir => {
   const { config, env } = await setup(dir, 'slow-complete');
   const started = Date.now();

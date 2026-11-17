@@ -21,3 +21,7 @@
 - 2026-11-17: 修复 MTF-AUDIT-001/004/005 的 closeout uncertainty、ready notification acknowledgement 和 provider PR identity 门禁；补齐 MTF-AUDIT-002/003 的公开 CLI mock 创建、对账及多 Task 完成流。保持持久化 schema 和状态集合不变。
 
 - 2026-11-17: 统一 `merge_capability` 汇总、`pr_merged_availability` 与实际派发门禁的账本判定；closeout 对账 unknown 时汇总保持 unknown，valid 后恢复。补充缺失或不匹配 provider receipt 与恢复路径的双字段一致性回归。
+
+## Interrupted initialization recovery
+
+采用 ADR 0038：显式单次初始化恢复与纯 creation reconciliation 分离；允许只有用户消息的 interrupted 握手，精确兼容历史角色文本，并对创建/恢复增加跨进程预算。恢复 attempt、原始 items 摘要和原生 recovery turn identity 追加保存，重入不重发，不改写旧 turn 或生产账本。

@@ -90,6 +90,10 @@ Viewer 需要分别投影 Run phase、TaskStatus、DeliveryUnitStatus、provider
 
 Schema、迁移、评估、图投影和网页交互分别由 `packages/multi-task-flow-runtime/tests/` 下对应测试覆盖。恢复设计需要新增或补齐以下验证：closed bootstrap 作为上游允许 regular dispatch；provider closed 但无 merge receipt 时拒绝；closed DeliveryUnit 自身仍拒绝 dispatch 和 atom update；closeout reconcile 的有效、无效、未知、权限、幂等和 revision conflict 路径；protected recovery 的 plan/workspace/base/owner 门禁；上游 capability 失效后的新下游阻塞和既有 operation 保留；多对象状态在 viewer 中不互相污染；旧 ledger、旧 viewer 和新 audit event 的兼容读取。任何新增字段、命令、事件或状态语义必须同时更新主题 SPEC、schema/domain 测试、viewer projection 测试和兼容迁移测试；不得只修改临时设计文件或网页文案。
 
+## Interrupted initialization recovery
+
+`initialization-recovery.ts` 实现只限绑定 main 的单次恢复与注册链对账；`engine-initialization-recovery.ts` 追加冻结 intent 和原生 turn 观察；`codex-recovery-writer.ts` 用受监管的独占私有 server 封住历史检查与发送间的竞态。初始化验证器精确识别历史文本并允许 prompt-only interruption。回归覆盖重入不重发、异常历史、revision fencing、证据绑定和 handoff 幂等；原生验收仅使用隔离测试资源。兼容和停止发布修复路径见 `initialization-recovery-migration.json`。
+
 ## Agent 角色交互的实现与验证
 
 测试使用隔离的临时账本和独立 CLI 子进程，仅 mock Codex 平台的创建、初始化观察、工作区核验及对账结果；不创建真实 Codex 对话、PR、release 或 deployment。公开 CLI、账本存储、权限、revision fencing、通知 attempt/receipt/recipient acknowledgement 与生命周期均执行真实实现。
