@@ -9122,7 +9122,7 @@
     {
       "path": "skills/multi-task-flow/lib/engine-task-integration.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/engine-task-integration.ts",
-      "installedSha256": "12d65e41ef4d4b725af147942734e97d6c79003d2984e3dab53cc1bcb07588ec"
+      "installedSha256": "23d398819645d2e8ead6a41fa63cf2d7628e623c172c2e48bc3a5ecd941484b5"
     },
     {
       "path": "skills/multi-task-flow/lib/engine-task-lifecycle.ts",
