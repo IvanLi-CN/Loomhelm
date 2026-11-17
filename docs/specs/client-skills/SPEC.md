@@ -11,6 +11,8 @@
 - 根 `skills/` 源包保留审查后的 29 套客户端 Skills；`@loomhelm/multi-task-flow` 的 npm projection 只发布 `multi-task-flow`，共享运行时通过 `@loomhelm/runtime-core` 依赖提供，不把其他独立 Skill 当作该包的运行时内容。
 - 外部宿主能力包括未迁入的 Skills、原生 Codex 工具及专项 CLI；缺失能力必须明确检测。
 
+共享进程执行的 `outputSink` MUST 支持等待异步接收端，每个输出流顺序消费，stdout/stderr 保持独立；`maxCapturedOutputBytes` MUST 继续仅表示每个流的返回值捕获预算。可选 IPC MUST 与正文输出分离。可选协作停止 MUST 至多执行一次，默认截止时间为 200 秒，可配置范围为 1 至 200000 毫秒，结束后复用原有进程树信号回收；接收端或同步控制回调失败 MUST 回收本次子进程后拒绝调用。本地停止 MUST NOT 替代远端停止证据。
+
 ## Requirements
 
 ### REQ-SKILLS-001
