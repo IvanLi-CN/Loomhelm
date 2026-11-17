@@ -315,23 +315,177 @@ export async function upgradePackageRelease(state: ServiceState, version: string
   });
 }
 
-export async function upgradePackageReleaseAndStart(state: ServiceState, version: string) {
-  const oldVersion = state.config().package_version;
-  const result = await upgradePackageRelease(state, version);
+export interface PackageUpgradeControl {
+  upgrade: typeof upgradePackageRelease;
+  start: typeof startUserService;
+  status: typeof serviceStatus;
+  waitForHealth: typeof waitForServiceHealth;
+  startupTimeoutMs?: number;
+}
+
+type GatewayFailureCode =
+  | "GATEWAY_START_FAILED"
+  | "GATEWAY_HEALTH_TIMEOUT"
+  | "GATEWAY_ROLLBACK_FAILED";
+type GatewayFailureDetails = {
+  phase: "lease" | "start" | "health" | "rollback";
+  target_version: string;
+  previous_version: string | null;
+  last_health_code: string | null;
+  rollback_status: "not_attempted" | "restored" | "failed";
+  upgrade_code?: string;
+  rollback_code?: string;
+};
+
+const PACKAGE_MAINTENANCE_LEASE_ID = "maintenance";
+const PACKAGE_MAINTENANCE_LEASE_EXTRA_MS = 30_000;
+
+function safeFailureCode(error: unknown): string {
+  if (error instanceof ContractError && /^[A-Z0-9_]+$/.test(error.code)) return error.code;
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && /^[A-Z0-9_]+$/.test(code)) return code;
+  }
+  return "SERVICE_ERROR";
+}
+
+function gatewayFailure(
+  code: GatewayFailureCode,
+  message: string,
+  details: GatewayFailureDetails,
+): ContractError {
+  return new ContractError(code, message, 2, details);
+}
+
+function renewPackageMaintenanceLease(state: ServiceState, timeoutMs: number): void {
+  state.renew(
+    { id: PACKAGE_MAINTENANCE_LEASE_ID, kind: "agent", thread_id: null, run_id: null },
+    timeoutMs + PACKAGE_MAINTENANCE_LEASE_EXTRA_MS,
+  );
+}
+
+async function startAndWaitForPackageGateway(
+  state: ServiceState,
+  control: PackageUpgradeControl,
+  targetVersion: string,
+  previousVersion: string | null,
+  timeoutMs: number,
+): Promise<Awaited<ReturnType<typeof serviceStatus>>> {
   try {
-    startUserService(state);
-    const health = await serviceStatus(state);
-    return { ...result, started: true, health };
+    control.start(state);
+    renewPackageMaintenanceLease(state, timeoutMs);
   } catch (error) {
-    if (oldVersion && oldVersion !== version) {
-      try {
-        await upgradePackageRelease(state, oldVersion);
-        startUserService(state);
-      } catch {
-        /* preserve the original health failure */
-      }
+    throw gatewayFailure("GATEWAY_START_FAILED", "Gateway did not start", {
+      phase: "start",
+      target_version: targetVersion,
+      previous_version: previousVersion,
+      last_health_code: safeFailureCode(error),
+      rollback_status: "not_attempted",
+    });
+  }
+  try {
+    return await control.waitForHealth(() => control.status(state), timeoutMs);
+  } catch (error) {
+    throw gatewayFailure(
+      "GATEWAY_HEALTH_TIMEOUT",
+      "Gateway did not become healthy before the startup deadline",
+      {
+        phase: "health",
+        target_version: targetVersion,
+        previous_version: previousVersion,
+        last_health_code: safeFailureCode(error),
+        rollback_status: "not_attempted",
+      },
+    );
+  }
+}
+
+export const packageUpgradeControl: PackageUpgradeControl = {
+  upgrade: upgradePackageRelease,
+  start: startUserService,
+  status: serviceStatus,
+  waitForHealth: waitForServiceHealth,
+};
+
+export async function upgradePackageReleaseAndStart(
+  state: ServiceState,
+  version: string,
+  control: PackageUpgradeControl = packageUpgradeControl,
+) {
+  const oldVersion = state.config().package_version ?? null;
+  const timeoutMs = control.startupTimeoutMs ?? SERVICE_STARTUP_TIMEOUT_MS;
+  requireCondition(
+    Number.isFinite(timeoutMs) && timeoutMs > 0,
+    "INVALID_TIMEOUT",
+    "Startup timeout must be finite and positive",
+  );
+  const result = await control.upgrade(state, version);
+  let maintenanceLease = false;
+  try {
+    try {
+      renewPackageMaintenanceLease(state, timeoutMs);
+      maintenanceLease = true;
+    } catch (error) {
+      throw gatewayFailure(
+        "GATEWAY_START_FAILED",
+        "Gateway startup lease could not be established",
+        {
+          phase: "lease",
+          target_version: version,
+          previous_version: oldVersion,
+          last_health_code: safeFailureCode(error),
+          rollback_status: "not_attempted",
+        },
+      );
     }
-    throw error;
+    try {
+      const health = await startAndWaitForPackageGateway(
+        state,
+        control,
+        version,
+        oldVersion,
+        timeoutMs,
+      );
+      return { ...result, started: true, health };
+    } catch (error) {
+      const failure =
+        error instanceof ContractError &&
+        (error.code === "GATEWAY_START_FAILED" || error.code === "GATEWAY_HEALTH_TIMEOUT")
+          ? error
+          : gatewayFailure("GATEWAY_START_FAILED", "Gateway startup failed", {
+              phase: "start",
+              target_version: version,
+              previous_version: oldVersion,
+              last_health_code: safeFailureCode(error),
+              rollback_status: "not_attempted",
+            });
+      if (!oldVersion || oldVersion === version) throw failure;
+      try {
+        renewPackageMaintenanceLease(state, timeoutMs);
+        await control.upgrade(state, oldVersion);
+        await startAndWaitForPackageGateway(state, control, oldVersion, null, timeoutMs);
+      } catch (rollbackError) {
+        throw gatewayFailure(
+          "GATEWAY_ROLLBACK_FAILED",
+          "Gateway upgrade failed and the previous build could not be restored",
+          {
+            phase: "rollback",
+            target_version: version,
+            previous_version: oldVersion,
+            last_health_code: safeFailureCode(rollbackError),
+            rollback_status: "failed",
+            upgrade_code: failure.code,
+            rollback_code: safeFailureCode(rollbackError),
+          },
+        );
+      }
+      throw new ContractError(failure.code, failure.message, failure.exitCode, {
+        ...(failure.details as GatewayFailureDetails),
+        rollback_status: "restored",
+      });
+    }
+  } finally {
+    if (maintenanceLease) state.release(PACKAGE_MAINTENANCE_LEASE_ID);
   }
 }
 

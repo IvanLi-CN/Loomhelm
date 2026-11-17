@@ -121,6 +121,11 @@ export async function serviceStatus(state: ServiceState) {
     "SERVICE_IDENTITY_MISMATCH",
     "Running daemon package identity mismatch",
   );
+  requireCondition(
+    !config.source_sha || result.source_sha === config.source_sha,
+    "SERVICE_IDENTITY_MISMATCH",
+    "Running daemon source identity mismatch",
+  );
   return result;
 }
 export async function ensureService(
