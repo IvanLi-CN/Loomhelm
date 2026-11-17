@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  unlinkSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Runtime } from "@loomhelm/runtime-core/modules/core/runtime";
@@ -40,7 +41,7 @@ import {
 } from "../lib/service-lifecycle";
 import { requireSourceRelease, verifyRelease } from "../lib/service-release";
 import type { ServiceState } from "../lib/service-state";
-import { ensureDirectory, readRegular } from "../lib/store";
+import { ensureDirectory, readRegular, writeAtomic } from "../lib/store";
 
 export const PACKAGE_NAME = "@loomhelm/multi-task-flow";
 export interface PackageIdentity {
@@ -269,70 +270,335 @@ export async function installPackageRelease(
   });
 }
 
-export async function upgradePackageRelease(state: ServiceState, version: string) {
-  state.initialize();
-  return withExclusiveLockAsync(join(state.paths.state, "startup.lock"), async () => {
-    const old = state.config();
-    const identity = resolvePackageIdentity(version);
-    requireCondition(
-      old.package_version !== version || old.package_name !== PACKAGE_NAME,
-      "ALREADY_CURRENT",
-      "The requested package version is already installed",
-    );
-    assertPackageUpgradeCompatible(old, identity);
-    const oldPlistPath = join(state.paths.config, "viewer.plist");
-    const oldPlist = existsSync(oldPlistPath) ? readFileSync(oldPlistPath, "utf8") : null;
-    const wasRunning = state.runtime().phase === "running";
-    const nextConfig = { ...packageConfig(old, identity, old.registry_dir), port: old.port };
-    try {
-      state.saveConfig(nextConfig);
-      writeLaunchdDefinition(state);
-      unloadUserService(state);
-      state.transaction((runtime) => {
-        runtime.phase = "stopped";
-        runtime.pid = null;
-      });
-      return {
-        package_name: PACKAGE_NAME,
-        version: identity.version,
-        build_id: identity.build_id,
-        port: old.port,
-        root: state.paths.root,
-        started: false,
-      };
-    } catch (error) {
-      state.saveConfig(old);
-      if (oldPlist !== null) writeAtomic(oldPlistPath, oldPlist);
-      if (wasRunning) {
-        try {
-          startUserService(state);
-        } catch {
-          /* Preserve the original failure and runtime evidence. */
-        }
-      }
-      throw error;
-    }
-  });
-}
-
-export async function upgradePackageReleaseAndStart(state: ServiceState, version: string) {
-  const oldVersion = state.config().package_version;
-  const result = await upgradePackageRelease(state, version);
+async function upgradePackageReleaseLocked(state: ServiceState, version: string) {
+  const old = state.config();
+  const identity = resolvePackageIdentity(version);
+  requireCondition(
+    old.package_version !== version || old.package_name !== PACKAGE_NAME,
+    "ALREADY_CURRENT",
+    "The requested package version is already installed",
+  );
+  assertPackageUpgradeCompatible(old, identity);
+  const oldPlistPath = join(state.paths.config, "viewer.plist");
+  const oldPlist = existsSync(oldPlistPath) ? readFileSync(oldPlistPath, "utf8") : null;
+  const wasRunning = state.runtime().phase === "running";
+  const nextConfig = { ...packageConfig(old, identity, old.registry_dir), port: old.port };
   try {
-    startUserService(state);
-    const health = await serviceStatus(state);
-    return { ...result, started: true, health };
+    state.saveConfig(nextConfig);
+    writeLaunchdDefinition(state);
+    unloadUserService(state);
+    state.transaction((runtime) => {
+      runtime.phase = "stopped";
+      runtime.pid = null;
+    });
+    return {
+      package_name: PACKAGE_NAME,
+      version: identity.version,
+      build_id: identity.build_id,
+      port: old.port,
+      root: state.paths.root,
+      started: false,
+    };
   } catch (error) {
-    if (oldVersion && oldVersion !== version) {
+    state.saveConfig(old);
+    if (oldPlist !== null) writeAtomic(oldPlistPath, oldPlist);
+    if (wasRunning) {
       try {
-        await upgradePackageRelease(state, oldVersion);
         startUserService(state);
       } catch {
-        /* preserve the original health failure */
+        /* Preserve the original failure and runtime evidence. */
       }
     }
     throw error;
   }
+}
+
+export async function upgradePackageRelease(state: ServiceState, version: string) {
+  state.initialize();
+  return withExclusiveLockAsync(join(state.paths.state, "startup.lock"), () =>
+    upgradePackageReleaseLocked(state, version),
+  );
+}
+
+export interface PackageUpgradeControl {
+  upgrade: typeof upgradePackageRelease;
+  start: typeof startUserService;
+  unload?: typeof unloadUserService;
+  status: typeof serviceStatus;
+  waitForHealth: typeof waitForServiceHealth;
+  startupTimeoutMs?: number;
+}
+
+type GatewayFailureCode =
+  | "GATEWAY_START_FAILED"
+  | "GATEWAY_HEALTH_TIMEOUT"
+  | "GATEWAY_ROLLBACK_FAILED";
+type GatewayFailureDetails = {
+  phase: "lease" | "start" | "health" | "rollback";
+  target_version: string;
+  previous_version: string | null;
+  last_health_code: string | null;
+  rollback_status: "not_attempted" | "restored" | "failed";
+  upgrade_code?: string;
+  upgrade_health_code?: string;
+  rollback_code?: string;
+  rollback_health_code?: string;
+};
+
+const PACKAGE_MAINTENANCE_LEASE_ID = "maintenance";
+const PACKAGE_MAINTENANCE_LEASE_EXTRA_MS = 30_000;
+
+function safeFailureCode(error: unknown): string {
+  if (error instanceof ContractError && /^[A-Z0-9_]+$/.test(error.code)) return error.code;
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && /^[A-Z0-9_]+$/.test(code)) return code;
+  }
+  return "SERVICE_ERROR";
+}
+
+function gatewayFailure(
+  code: GatewayFailureCode,
+  message: string,
+  details: GatewayFailureDetails,
+): ContractError {
+  return new ContractError(code, message, 2, details);
+}
+
+function renewPackageMaintenanceLease(state: ServiceState, timeoutMs: number): void {
+  state.renew(
+    { id: PACKAGE_MAINTENANCE_LEASE_ID, kind: "agent", thread_id: null, run_id: null },
+    timeoutMs + PACKAGE_MAINTENANCE_LEASE_EXTRA_MS,
+  );
+}
+
+async function startAndWaitForPackageGateway(
+  state: ServiceState,
+  control: PackageUpgradeControl,
+  targetVersion: string,
+  previousVersion: string | null,
+  timeoutMs: number,
+): Promise<Awaited<ReturnType<typeof serviceStatus>>> {
+  try {
+    control.start(state);
+    renewPackageMaintenanceLease(state, timeoutMs);
+  } catch (error) {
+    throw gatewayFailure("GATEWAY_START_FAILED", "Gateway did not start", {
+      phase: "start",
+      target_version: targetVersion,
+      previous_version: previousVersion,
+      last_health_code: safeFailureCode(error),
+      rollback_status: "not_attempted",
+    });
+  }
+  try {
+    return await control.waitForHealth(() => control.status(state), timeoutMs);
+  } catch (error) {
+    throw gatewayFailure(
+      "GATEWAY_HEALTH_TIMEOUT",
+      "Gateway did not become healthy before the startup deadline",
+      {
+        phase: "health",
+        target_version: targetVersion,
+        previous_version: previousVersion,
+        last_health_code: safeFailureCode(error),
+        rollback_status: "not_attempted",
+      },
+    );
+  }
+}
+
+async function rollbackPackageGateway(
+  state: ServiceState,
+  control: PackageUpgradeControl,
+  previousVersion: string,
+  timeoutMs: number,
+  leaseHeld: boolean,
+  onLeaseEstablished: () => void,
+): Promise<void> {
+  if (leaseHeld) renewPackageMaintenanceLease(state, timeoutMs);
+  await control.upgrade(state, previousVersion);
+  if (!leaseHeld) {
+    renewPackageMaintenanceLease(state, timeoutMs);
+    onLeaseEstablished();
+  }
+  await startAndWaitForPackageGateway(state, control, previousVersion, null, timeoutMs);
+}
+
+function gatewayRollbackFailure(
+  failure: ContractError,
+  rollbackError: unknown,
+  targetVersion: string,
+  previousVersion: string | null,
+): ContractError {
+  const rollbackDetails =
+    rollbackError instanceof ContractError &&
+    typeof rollbackError.details === "object" &&
+    rollbackError.details !== null
+      ? (rollbackError.details as Partial<GatewayFailureDetails>)
+      : {};
+  const failureDetails =
+    typeof failure.details === "object" && failure.details !== null
+      ? (failure.details as Partial<GatewayFailureDetails>)
+      : {};
+  return gatewayFailure(
+    "GATEWAY_ROLLBACK_FAILED",
+    "Gateway upgrade failed and the previous build could not be restored",
+    {
+      phase: "rollback",
+      target_version: targetVersion,
+      previous_version: previousVersion,
+      last_health_code: failureDetails.last_health_code ?? null,
+      rollback_status: "failed",
+      upgrade_code: failure.code,
+      upgrade_health_code: failureDetails.last_health_code,
+      rollback_code: safeFailureCode(rollbackError),
+      rollback_health_code: rollbackDetails.last_health_code,
+    },
+  );
+}
+
+export const packageUpgradeControl: PackageUpgradeControl = {
+  upgrade: upgradePackageReleaseLocked,
+  start: startUserService,
+  unload: unloadUserService,
+  status: serviceStatus,
+  waitForHealth: waitForServiceHealth,
+};
+
+type PreviousGatewayProfile = {
+  config: ServiceConfig;
+  plist: string | null;
+};
+
+function restorePreviousGatewayProfile(state: ServiceState, profile: PreviousGatewayProfile): void {
+  state.saveConfig(profile.config);
+  const plistPath = join(state.paths.config, "viewer.plist");
+  if (profile.plist === null) {
+    if (existsSync(plistPath)) unlinkSync(plistPath);
+  } else {
+    writeAtomic(plistPath, profile.plist);
+  }
+  state.transaction((runtime) => {
+    runtime.phase = "stopped";
+    runtime.pid = null;
+  });
+}
+
+async function rollbackSourceGateway(
+  state: ServiceState,
+  control: PackageUpgradeControl,
+  profile: PreviousGatewayProfile,
+  timeoutMs: number,
+  leaseHeld: boolean,
+  onLeaseEstablished: () => void,
+): Promise<void> {
+  if (leaseHeld) renewPackageMaintenanceLease(state, timeoutMs);
+  control.unload?.(state);
+  restorePreviousGatewayProfile(state, profile);
+  if (!leaseHeld) {
+    renewPackageMaintenanceLease(state, timeoutMs);
+    onLeaseEstablished();
+  }
+  await startAndWaitForPackageGateway(state, control, "source", null, timeoutMs);
+}
+
+export async function upgradePackageReleaseAndStart(
+  state: ServiceState,
+  version: string,
+  control: PackageUpgradeControl = packageUpgradeControl,
+) {
+  state.initialize();
+  return withExclusiveLockAsync(join(state.paths.state, "startup.lock"), async () => {
+    const previousProfile: PreviousGatewayProfile = {
+      config: state.config(),
+      plist: (() => {
+        const path = join(state.paths.config, "viewer.plist");
+        return existsSync(path) ? readFileSync(path, "utf8") : null;
+      })(),
+    };
+    const oldVersion = previousProfile.config.package_version ?? null;
+    const timeoutMs = control.startupTimeoutMs ?? SERVICE_STARTUP_TIMEOUT_MS;
+    requireCondition(
+      Number.isFinite(timeoutMs) && timeoutMs > 0,
+      "INVALID_TIMEOUT",
+      "Startup timeout must be finite and positive",
+    );
+    const result = await control.upgrade(state, version);
+    let maintenanceLease = false;
+    try {
+      try {
+        renewPackageMaintenanceLease(state, timeoutMs);
+        maintenanceLease = true;
+      } catch (error) {
+        const failure = gatewayFailure(
+          "GATEWAY_START_FAILED",
+          "Gateway startup lease could not be established",
+          {
+            phase: "lease",
+            target_version: version,
+            previous_version: oldVersion,
+            last_health_code: safeFailureCode(error),
+            rollback_status: "not_attempted",
+          },
+        );
+        try {
+          if (oldVersion && oldVersion !== version) {
+            await rollbackPackageGateway(state, control, oldVersion, timeoutMs, false, () => {
+              maintenanceLease = true;
+            });
+          } else {
+            await rollbackSourceGateway(state, control, previousProfile, timeoutMs, false, () => {
+              maintenanceLease = true;
+            });
+          }
+        } catch (rollbackError) {
+          throw gatewayRollbackFailure(failure, rollbackError, version, oldVersion);
+        }
+        throw new ContractError(failure.code, failure.message, failure.exitCode, {
+          ...(failure.details as GatewayFailureDetails),
+          rollback_status: "restored",
+        });
+      }
+      try {
+        const health = await startAndWaitForPackageGateway(
+          state,
+          control,
+          version,
+          oldVersion,
+          timeoutMs,
+        );
+        return { ...result, started: true, health };
+      } catch (error) {
+        const failure =
+          error instanceof ContractError &&
+          (error.code === "GATEWAY_START_FAILED" || error.code === "GATEWAY_HEALTH_TIMEOUT")
+            ? error
+            : gatewayFailure("GATEWAY_START_FAILED", "Gateway startup failed", {
+                phase: "start",
+                target_version: version,
+                previous_version: oldVersion,
+                last_health_code: safeFailureCode(error),
+                rollback_status: "not_attempted",
+              });
+        try {
+          if (oldVersion && oldVersion !== version) {
+            await rollbackPackageGateway(state, control, oldVersion, timeoutMs, true, () => {});
+          } else {
+            await rollbackSourceGateway(state, control, previousProfile, timeoutMs, true, () => {});
+          }
+        } catch (rollbackError) {
+          throw gatewayRollbackFailure(failure, rollbackError, version, oldVersion);
+        }
+        throw new ContractError(failure.code, failure.message, failure.exitCode, {
+          ...(failure.details as GatewayFailureDetails),
+          rollback_status: "restored",
+        });
+      }
+    } finally {
+      if (maintenanceLease) state.release(PACKAGE_MAINTENANCE_LEASE_ID);
+    }
+  });
 }
 
 export function stageRelease(state: ServiceState, source: string): ReleaseManifest {
