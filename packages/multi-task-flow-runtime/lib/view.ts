@@ -14,7 +14,8 @@ import {
   type MilestoneEvaluation,
 } from "../lib/atomic-orchestration";
 import { localSemanticProjection, SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
-import { deliveryUnitPrMerged, parentPrReady, ready } from "../lib/engine";
+import { parentPrReady, ready } from "../lib/engine";
+import { deliveryUnitPrMergedFromLedger } from "../lib/engine-support-gates";
 import { ContractError, requireCondition } from "../lib/errors";
 import { profileMigrationWarnings, profileProjection } from "../lib/execution-profile";
 import { deriveExecutionPhase, evidenceRequired, reasonRequired } from "../lib/revisions";
@@ -628,7 +629,9 @@ export function buildView(
     semantic_context: localSemanticProjection(ledger, "dashboard_view"),
     groups: atomProjection.groups.map((item) => ({
       ...item,
-      pr_merged_availability: deliveryUnitPrMerged(item) ? "available" : "unavailable",
+      pr_merged_availability: deliveryUnitPrMergedFromLedger(ledger, item)
+        ? "available"
+        : "unavailable",
       derived_status: deriveBusinessStatus(
         canonicalAtomicNodes,
         { kind: "delivery_unit", delivery_unit_id: item.id },

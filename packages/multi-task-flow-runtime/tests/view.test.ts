@@ -884,10 +884,74 @@ test("projects closed delivery-unit state separately from merged upstream capabi
     observed_at: ledger.updated_at,
     sha: group.merge_sha,
     evidence_ref: "dashboard:merged",
+    receipt: {
+      provider: "github",
+      repository: "example/repo",
+      resource_type: "pr",
+      resource_id: "1",
+      pr: group.pr.pr,
+      branch: "dashboard",
+      target_branch: "main",
+      base_sha: "a".repeat(40),
+      head_sha: "b".repeat(40),
+      merge_sha: group.merge_sha,
+      state: "merged",
+      evidence_ref: "dashboard:merged",
+    },
+  });
+  ledger.operations.push({
+    id: "dashboard-merge-op",
+    kind: "merge",
+    target_id: group.id,
+    actor_id: ledger.control.owner_thread_id!,
+    status: "succeeded",
+    request: {},
+    expected_sha: "b".repeat(40),
+    receipt_fact_id: "dashboard-merged",
+    created_at: at,
+    updated_at: at,
   });
   const projected = (buildView(ledger) as any).groups.find((item: any) => item.id === group.id);
   expect(projected.state).toBe("closed");
   expect(projected.pr_merged_availability).toBe("available");
+  expect(projected.merge_capability.status).toBe("satisfied");
+  const fact = ledger.facts.find((f) => f.id === "dashboard-merged")!;
+  const receipt = structuredClone(fact.receipt!);
+  for (const invalid of [
+    null,
+    { ...receipt, resource_id: "999" },
+    { ...receipt, pr: { ...receipt.pr!, id: "999" } },
+    { ...receipt, pr: { ...receipt.pr!, repository: "other/repo" } },
+  ]) {
+    fact.receipt = invalid;
+    const unavailable = buildView(ledger).groups.find((g) => g.id === group.id)!;
+    expect(unavailable.pr_merged_availability).toBe("unavailable");
+    expect(unavailable.merge_capability.status).toBe("blocked");
+  }
+  fact.receipt = receipt;
+  ledger.events.push({
+    id: "uncertain-closeout",
+    type: "group_updated",
+    subject_id: group.id,
+    actor_id: ledger.control.owner_thread_id!,
+    occurred_at: at,
+    recorded_at: at,
+    data: { operation: "closeout-reconcile", outcome: "unknown" },
+  });
+  const uncertain = buildView(ledger).groups.find((g) => g.id === group.id)!;
+  expect(uncertain.state).toBe("closed");
+  expect(uncertain.pr_merged_availability).toBe("unavailable");
+  expect(uncertain.merge_capability.status).toBe("unknown");
+  expect(uncertain.merge_capability.reason).not.toBeNull();
+  ledger.events.push({
+    ...ledger.events.at(-1)!,
+    id: "verified-closeout",
+    data: { operation: "closeout-reconcile", outcome: "valid" },
+  });
+  const recovered = buildView(ledger).groups.find((g) => g.id === group.id)!;
+  expect(recovered.pr_merged_availability).toBe("available");
+  expect(recovered.merge_capability.status).toBe("satisfied");
+  expect(recovered.merge_capability.reason).toBeNull();
 });
 
 test("group timing uses its own events and output binding, never contribution intervals", () => {

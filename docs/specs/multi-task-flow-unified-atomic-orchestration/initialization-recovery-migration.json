@@ -10,8 +10,8 @@
     "description": "Flow Ledger schema-2/contract-2 and schema-2/contract-3 operation.request and existing event data",
     "storage_implementation": "LedgerStore atomic JSON journal with request/revision fencing",
     "source_compatibility_range": {
-      "from_program_versions": "0.2.53 current supported runtime; historical schema readers retained by repository regression suite",
-      "to_program_version": "0.2.54",
+      "from_program_versions": "0.2.53–0.2.54 supported runtimes; historical schema readers retained by repository regression suite",
+      "to_program_version": "0.2.55",
       "direct_major_skips_supported": false
     }
   },
