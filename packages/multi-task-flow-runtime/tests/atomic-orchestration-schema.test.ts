@@ -13,6 +13,7 @@ import {
   validateDeliveryUnitLifecycleEdges,
   validateTaskLifecycleEdges,
 } from "../lib/atomic-orchestration";
+import { validatePlan } from "../lib/schema-handoff";
 
 const ref = {
   provider: "github",
@@ -436,6 +437,96 @@ test("uses explicit lifecycle roles for arbitrary atom IDs and bounds legacy inf
   expect(() => validateTaskLifecycleEdges(atoms, edges)).not.toThrow();
   expect(lifecycleRoleOf({ id: "task-1-closeout", task_id: "task-1" })).toBe("closeout");
   expect(lifecycleRoleOf({ id: "unrelated-closeout", task_id: "task-1" })).toBeNull();
+});
+
+test("strict lifecycle validation rejects legacy stage and ID inference", () => {
+  const atoms = ["prepare-branch", "create-pr", "merge-pr", "closeout"].map((suffix) => ({
+    id: `task-1-${suffix}`,
+    task_id: "task-1",
+  }));
+  const edges = atoms.slice(1).map((atom, index) => ({
+    from_node_id: atoms[index]!.id,
+    to_node_id: atom.id,
+  }));
+  expect(() =>
+    validateTaskLifecycleEdges(atoms, edges, { allowLegacyLifecycleRoleInference: false }),
+  ).toThrow("must declare lifecycle_role explicitly");
+});
+
+function strictTaskLifecyclePlan(
+  atomRoleOverrides: Record<string, string | undefined> = {},
+  nodeRoleOverrides: Record<string, string | undefined> = {},
+) {
+  const roles = ["prepare-branch", "create-pr", "merge-pr", "closeout"];
+  const atoms = roles.map((role) => ({
+    id: `node-${role}`,
+    task_id: "task-1",
+    title: role,
+    purpose: role,
+    output: role,
+    ...(Object.hasOwn(atomRoleOverrides, role)
+      ? atomRoleOverrides[role]
+        ? { lifecycle_role: atomRoleOverrides[role] }
+        : {}
+      : { lifecycle_role: role }),
+  }));
+  const atomic_nodes = atoms.map((atom, index) => ({
+    kind: "work",
+    id: atom.id,
+    title: atom.title,
+    purpose: atom.purpose,
+    output: atom.output,
+    acceptance: [],
+    activity_type: "contribution",
+    state: "planned",
+    scope: { kind: "task", task_id: "task-1", delivery_unit_id: "group-1" },
+    ...(Object.hasOwn(nodeRoleOverrides, roles[index]!)
+      ? nodeRoleOverrides[roles[index]!]
+        ? { lifecycle_role: nodeRoleOverrides[roles[index]!] }
+        : {}
+      : { lifecycle_role: roles[index] }),
+  }));
+  return {
+    id: "plan",
+    supersedes_id: null,
+    approval_id: null,
+    created_at: "2026-01-01T00:00:00.000Z",
+    start_at: null,
+    atoms,
+    group_atoms: [],
+    atomic_nodes,
+    atomic_edges: roles.slice(1).map((role, index) => ({
+      id: `edge-${role}`,
+      from_node_id: `node-${roles[index]}`,
+      to_node_id: `node-${role}`,
+      requires: { kind: "source_terminal_success" },
+    })),
+    nodes: [
+      {
+        id: "task-node",
+        kind: "task",
+        ref_id: "task-1",
+        group_id: "group-1",
+        label: "Task",
+        estimate_minutes: null,
+        estimate_basis: null,
+        estimate_confidence: null,
+      },
+    ],
+    edges: [],
+    cut_rules: [],
+    actions: [],
+  } as any;
+}
+
+test("strict plan validation requires lifecycle roles on both atom and canonical node", () => {
+  const plan = strictTaskLifecyclePlan({ "prepare-branch": undefined });
+  expect(() => validatePlan(plan)).toThrow("must both declare lifecycle_role");
+});
+
+test("strict plan validation rejects conflicting atom and canonical lifecycle roles", () => {
+  const plan = strictTaskLifecyclePlan({}, { "prepare-branch": "create-pr" });
+  expect(() => validatePlan(plan)).toThrow("conflicting lifecycle_role declaration");
 });
 
 test("does not derive delivery-unit lifecycle order when legacy group atoms have no edges", () => {

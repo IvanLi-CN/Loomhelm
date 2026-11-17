@@ -54,18 +54,30 @@ function legacyRoleFromId(
   return null;
 }
 
-export function lifecycleRoleOf(atom: {
-  id?: unknown;
+function lifecycleScopeOf(atom: {
+  task_id?: unknown;
+  group_id?: unknown;
+  scope?: { kind?: unknown };
+}): "task" | "delivery_unit" {
+  return atom.scope?.kind === "task" || typeof atom.task_id === "string" ? "task" : "delivery_unit";
+}
+
+export function explicitLifecycleRoleOf(atom: {
   lifecycle_role?: unknown;
+}): AtomicLifecycleRole | null {
+  const explicit = atomicLifecycleRole.safeParse(atom.lifecycle_role);
+  return explicit.success ? explicit.data : null;
+}
+
+/** Resolve only the bounded legacy stage/ID representation used by historical ledgers. */
+export function inferredLifecycleRoleOf(atom: {
+  id?: unknown;
   lifecycle_stage?: unknown;
   task_id?: unknown;
   group_id?: unknown;
   scope?: { kind?: unknown; task_id?: unknown; delivery_unit_id?: unknown };
 }): AtomicLifecycleRole | null {
-  const explicit = atomicLifecycleRole.safeParse(atom.lifecycle_role);
-  if (explicit.success) return explicit.data;
-  const scope =
-    atom.scope?.kind === "task" || typeof atom.task_id === "string" ? "task" : "delivery_unit";
+  const scope = lifecycleScopeOf(atom);
   const stage = lifecycleRoleFromStage(
     typeof atom.lifecycle_stage === "string"
       ? (atom.lifecycle_stage as LegacyLifecycleStage)
@@ -82,6 +94,17 @@ export function lifecycleRoleOf(atom: {
       scope,
     )
   );
+}
+
+export function lifecycleRoleOf(atom: {
+  id?: unknown;
+  lifecycle_role?: unknown;
+  lifecycle_stage?: unknown;
+  task_id?: unknown;
+  group_id?: unknown;
+  scope?: { kind?: unknown; task_id?: unknown; delivery_unit_id?: unknown };
+}): AtomicLifecycleRole | null {
+  return explicitLifecycleRoleOf(atom) ?? inferredLifecycleRoleOf(atom);
 }
 
 export const atomicExternalRef = z
@@ -583,12 +606,18 @@ const deliveryUnitLifecycleSuffixes = [
 ] as const;
 const taskLifecycleSuffixes = ["prepare-branch", "create-pr", "merge-pr", "closeout"] as const;
 
+export type LifecycleRoleValidationOptions = {
+  /** Allow stage/owner-scoped ID fallback for contract-3/4/5 historical reads. */
+  allowLegacyLifecycleRoleInference?: boolean;
+};
+
 function validatePresetLifecycleEdges(
   atoms: readonly any[],
   edges: readonly any[],
   suffixes: readonly string[],
   ownerLabel: string,
   ownerKey: "group_id" | "task_id",
+  options: LifecycleRoleValidationOptions = { allowLegacyLifecycleRoleInference: true },
 ): void {
   const owners = new Map<string, any[]>();
   for (const atom of atoms) {
@@ -596,7 +625,24 @@ function validatePresetLifecycleEdges(
       atom[ownerKey] ??
       (ownerKey === "task_id" ? atom.scope?.task_id : atom.scope?.delivery_unit_id);
     if (typeof ownerId !== "string") continue;
-    const role = lifecycleRoleOf(atom);
+    const explicitRole = explicitLifecycleRoleOf(atom);
+    const inferredRole = inferredLifecycleRoleOf(atom);
+    if (!options.allowLegacyLifecycleRoleInference && inferredRole && !explicitRole)
+      throw new Error(
+        `${ownerLabel} ${ownerId} lifecycle atom ${String(atom.id)} must declare lifecycle_role explicitly`,
+      );
+    if (
+      !options.allowLegacyLifecycleRoleInference &&
+      explicitRole &&
+      inferredRole &&
+      explicitRole !== inferredRole
+    )
+      throw new Error(
+        `${ownerLabel} ${ownerId} lifecycle atom ${String(atom.id)} has conflicting lifecycle_role and legacy lifecycle identity`,
+      );
+    const role = options.allowLegacyLifecycleRoleInference
+      ? (explicitRole ?? inferredRole)
+      : explicitRole;
     if (
       role &&
       ((ownerKey === "task_id" && role === "prepare-parent") ||
@@ -653,6 +699,7 @@ function validatePresetLifecycleEdges(
 export function validateDeliveryUnitLifecycleEdges(
   groupAtoms: readonly any[],
   edges: readonly any[],
+  options: LifecycleRoleValidationOptions = { allowLegacyLifecycleRoleInference: true },
 ): void {
   validatePresetLifecycleEdges(
     groupAtoms,
@@ -660,12 +707,17 @@ export function validateDeliveryUnitLifecycleEdges(
     deliveryUnitLifecycleSuffixes,
     "Delivery unit",
     "group_id",
+    options,
   );
 }
 
 /** Require Agent-declared task lifecycle ordering without inferring edges from atom names. */
-export function validateTaskLifecycleEdges(taskAtoms: readonly any[], edges: readonly any[]): void {
-  validatePresetLifecycleEdges(taskAtoms, edges, taskLifecycleSuffixes, "Task", "task_id");
+export function validateTaskLifecycleEdges(
+  taskAtoms: readonly any[],
+  edges: readonly any[],
+  options: LifecycleRoleValidationOptions = { allowLegacyLifecycleRoleInference: true },
+): void {
+  validatePresetLifecycleEdges(taskAtoms, edges, taskLifecycleSuffixes, "Task", "task_id", options);
 }
 
 /** Materialize the canonical graph for a contract-3 ledger without inventing

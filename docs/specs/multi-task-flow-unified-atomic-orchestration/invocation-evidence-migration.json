@@ -55,7 +55,8 @@
   "validation": {
     "minor": {
       "required_test_evidence": [
-        "Source contract 3/4 business graph and journal facts survive atomic upgrade unchanged",
+        "Source contract 3/4/5 business graph and journal facts survive atomic upgrade unchanged",
+        "A contract-6 source with schema-4 binding is accepted as an already-compatible same-contract upgrade",
         "Actual earlier CLI and Worker reject contract 6; earlier binding writers reject schema 4",
         "Every durable phase survives interruption and same-target re-entry",
         "Query inspection is zero-write under a held lifecycle lock",

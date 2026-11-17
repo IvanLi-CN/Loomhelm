@@ -229,6 +229,8 @@ export function modernFixture(): Ledger {
       task_id: task.id,
       purpose: "mock task atom",
       output: "mock task output",
+      lifecycle_stage: atom.lifecycle_stage,
+      lifecycle_role: atom.lifecycle_role,
     })),
   );
   const groupEdges = group.atoms.slice(1).map((atom, index) => ({

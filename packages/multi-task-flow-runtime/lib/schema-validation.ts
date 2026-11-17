@@ -237,7 +237,7 @@ export function validateLedger(value: unknown): Ledger {
     "Control approval must match the execution plan approval",
   );
   for (const item of parsed.plans) {
-    validatePlan(item);
+    validatePlan(item, { allowLegacyLifecycleRoleInference: parsed.contract_version < 6 });
     if (item.lifecycle === "proposed")
       requireCondition(
         item.approval_id === null,

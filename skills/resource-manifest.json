@@ -6987,7 +6987,7 @@
     {
       "path": "skills/multi-task-flow/examples/ledger-initialization/initial.json",
       "sourcePath": "packages/multi-task-flow-runtime/examples/ledger-initialization/initial.json",
-      "installedSha256": "b17c854b66ca8fef428599ff8b9726c31403f9334ddde65808076ec1ef620029"
+      "installedSha256": "917abf8216a30bc9a822b3635006583eb21b157a9ea0780074ff6c8b0c0f7831"
     },
     {
       "path": "skills/multi-task-flow/examples/orchestration-viewer/README.md",
@@ -8187,7 +8187,7 @@
     {
       "path": "skills/multi-task-flow/tests/orchestration-upgrade.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/orchestration-upgrade.test.ts",
-      "installedSha256": "a0d4c2bd5f4ac62f6b9a9fe46b554b52c25ca8a344988d51af48f130b258bfac"
+      "installedSha256": "d2c7f04673228d34e4f7f3f523b71b2ce62dabdef343d6bea9db8e4d07ab9c74"
     },
     {
       "path": "skills/bin/native-tests/core/ffi_paths.test.ts",
@@ -8992,12 +8992,12 @@
     {
       "path": "skills/multi-task-flow/lib/atomic-orchestration.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/atomic-orchestration.ts",
-      "installedSha256": "626f3df21dea85cf5f887c3cf36bf4aa7f8c5cf3669bde0da3b3ca972b55e95b"
+      "installedSha256": "87002e19b5d03fdc7297ab40a99eea57438293a540ce51b46a2cb79b1ed524e8"
     },
     {
       "path": "skills/multi-task-flow/tests/atomic-orchestration-schema.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/atomic-orchestration-schema.test.ts",
-      "installedSha256": "51ffa45c0882f327c25fce8f103ff54a526729459975b5f2102c7ee61d477e99"
+      "installedSha256": "90972d0b12d5fc0420d416620b659f78db4ca821af52527085a59ba1bab38ca7"
     },
     {
       "path": "skills/multi-task-flow/tests/task-kind.test.ts",
@@ -9142,7 +9142,7 @@
     {
       "path": "skills/multi-task-flow/lib/schema-handoff.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/schema-handoff.ts",
-      "installedSha256": "6a86b2b098ab219d8eb8be489cfb7ebdaee308b4bc1808131ea883d65e1dc8c4"
+      "installedSha256": "021d7a0d843097e44f178f7cc69595dcb668fa5a5ddff5fc9028abe39b9a66a0"
     },
     {
       "path": "skills/multi-task-flow/lib/schema-models.ts",
@@ -9162,7 +9162,7 @@
     {
       "path": "skills/multi-task-flow/lib/schema-validation.ts",
       "sourcePath": "packages/multi-task-flow-runtime/lib/schema-validation.ts",
-      "installedSha256": "b440a87939e82a852cf2dde89568f9ef88238cf130a7fe5602b7ff0711acbbf7"
+      "installedSha256": "f46080cb0708f65da27849370fffabaf28b4c91602ccbb437facc60032b0d640"
     },
     {
       "path": "skills/multi-task-flow/lib/service-http-helpers.ts",
@@ -9222,7 +9222,7 @@
     {
       "path": "skills/multi-task-flow/tests/role-flow-fixtures.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/role-flow-fixtures.ts",
-      "installedSha256": "bd566a4fb118d6c796e3dce5e4ef366beee300a5303f85e09d72681ca7bd0b5d"
+      "installedSha256": "0016cb01a1550bb9490364925f1c0cae09c6986246c8e256067e4043c1faed26"
     },
     {
       "path": "skills/multi-task-flow/tests/engine-command-routing.test.ts",

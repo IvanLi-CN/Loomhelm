@@ -88,6 +88,25 @@ test("explicit migration preserves business state and is idempotent", () => {
   expect((upgradeOrchestration(store, target, target, dependencies) as any).changed).toBe(false);
   expect(store.read().revision).toBe(after.revision);
 });
+
+test("contract-6 source with schema-4 binding is already compatible", () => {
+  const store = fixture();
+  const raw = JSON.parse(store.readRaw());
+  raw.contract_version = 6;
+  raw.runtime_identity = target;
+  writeFileSync(store.ledgerPath, JSON.stringify(raw));
+  const bindingPath = join(store.runPath, "runtime", "viewer-binding.json");
+  const binding = JSON.parse(readFileSync(bindingPath, "utf8"));
+  writeFileSync(bindingPath, JSON.stringify({ ...binding, ...target, schema_version: 4 }));
+  const beforeLedger = store.readRaw();
+  const beforeBinding = readFileSync(bindingPath, "utf8");
+
+  expect(checkMigration(store, target).migration_ready).toBe(true);
+  expect((upgradeOrchestration(store, target, target) as any).changed).toBe(false);
+  expect(store.readRaw()).toBe(beforeLedger);
+  expect(readFileSync(bindingPath, "utf8")).toBe(beforeBinding);
+});
+
 for (const phase of ["prepared", "migrated", "binding_switched", "completed"]) {
   test(`resume after persisted ${phase} without changing target or business state`, () => {
     const store = fixture();
