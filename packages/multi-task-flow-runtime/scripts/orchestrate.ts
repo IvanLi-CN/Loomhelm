@@ -805,7 +805,15 @@ try {
     const parsed = requestSchema.parse(input);
     const store = new LedgerStore(root, parsed.run_id);
     const commandLedger = validateLedger(store.read());
+    const recoveryResolution =
+      command === "dispatch-resolve" &&
+      commandLedger.operations.some(
+        (operation) =>
+          operation.id === parsed.payload.operation_id &&
+          !!operation.request.initialization_recovery,
+      );
     if (
+      recoveryResolution ||
       (commandLedger.contract_version >= 3 &&
         ["dispatch-bind-request", "dispatch-resolve"].includes(command)) ||
       [

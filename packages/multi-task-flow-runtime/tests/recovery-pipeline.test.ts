@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-test("recovery restores sticky policy before dispatch, two formal turns and CLI task-context", () => {
+test("legacy CLI cannot bypass restoration; recovery, two formal turns and task-context succeed", () => {
   const result = spawnSync(
     process.execPath,
     [join(import.meta.dir, "fixtures/recovery-pipeline.ts")],
