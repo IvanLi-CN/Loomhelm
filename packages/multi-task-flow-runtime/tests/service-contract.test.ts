@@ -210,3 +210,13 @@ test("readiness tolerates delayed health but stops at a finite elapsed-time budg
   expect(performance.now() - deadlineStarted).toBeLessThan(500);
   await expect(waitForServiceHealth(async () => "healthy", Infinity)).rejects.toThrow("finite");
 });
+
+test("readiness rejects a probe that succeeds after the startup deadline", async () => {
+  const { waitForServiceHealth } = await import("../lib/service-lifecycle");
+  await expect(
+    waitForServiceHealth(async () => {
+      await Bun.sleep(20);
+      return "healthy";
+    }, 5),
+  ).rejects.toMatchObject({ code: "SERVICE_STARTUP_TIMEOUT" });
+});

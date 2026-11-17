@@ -66,7 +66,12 @@ export async function waitForServiceHealth<T>(
   let failure: unknown;
   do {
     try {
-      return await check();
+      const result = await check();
+      if (performance.now() <= deadline) return result;
+      failure = new ContractError(
+        "SERVICE_STARTUP_TIMEOUT",
+        "Service health check completed after the startup deadline",
+      );
     } catch (error) {
       failure = error;
     }
@@ -120,6 +125,11 @@ export async function serviceStatus(state: ServiceState) {
     !configIdentity || configIdentity === actualIdentity,
     "SERVICE_IDENTITY_MISMATCH",
     "Running daemon package identity mismatch",
+  );
+  requireCondition(
+    !config.source_sha || result.source_sha === config.source_sha,
+    "SERVICE_IDENTITY_MISMATCH",
+    "Running daemon source identity mismatch",
   );
   return result;
 }
