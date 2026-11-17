@@ -73,6 +73,8 @@ flowchart TD
 
 旧 running 缺少 command、input 或进程实例身份时，不自动补造。仅当可信外部执行记录能唯一关联到该 invocation 并证明其能力范围及停止事实时允许登记历史恢复证据；否则保持阻断。绑定主对话提供精确调用记录，执行宿主提供进程和控制通道事实，原生 provider 提供匹配的调用终结证据，维护者核验历史版本代码能力。owner 批准恢复动作本身不能代替停止事实。
 
+连接初始化的严格能力证明、受支持历史来源、派生凭证、evidence refs 与发布后恢复步骤见 [INITIALIZE_RECOVERY.md](INITIALIZE_RECOVERY.md)。它保留未知 command/actor 与未确认的 RPC 结果，仅证明该连接不能继续业务；不能代替任意业务请求的 provider terminal。
+
 ## 验收入口
 
 验收条件统一定义于 [SPEC.md](SPEC.md) 的 VER-INVOCATION-001 至 VER-INVOCATION-006；本文只展开实现必须满足的设计边界，不维护第二套验收清单。

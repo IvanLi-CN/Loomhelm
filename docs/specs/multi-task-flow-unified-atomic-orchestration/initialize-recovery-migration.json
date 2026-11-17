@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "kind": "persistent-state-migration-record",
+  "migration": {
+    "description": "追加精确 initialize 的能力停止凭证，不补造原生响应",
+    "release_unit_description": "Multi-task Flow runtime",
+    "version_impact": "minor"
+  },
+  "durable_state": {
+    "description": "invocation journal 与 stopped proof",
+    "storage_implementation": "immutable JSON file journal and atomic call.json projection; append derived proof, reconcile and stopped receipts in order without modifying the business ledger",
+    "source_compatibility_range": {
+      "from_program_versions": "audited 0.5.0 exact build/source; current executor scoped v1; existing supported complete journals unchanged",
+      "to_program_version": "candidate selected by release policy",
+      "direct_major_skips_supported": false
+    }
+  },
+  "database_migration": {
+    "applicable": false,
+    "ddl_structural_changes": [],
+    "dml_changes": [],
+    "historical_data_backfill_or_transformation": []
+  },
+  "rollout_observability": {
+    "operations_must_remain_separate": true,
+    "operation_sequence": [
+      "inspect original file evidence",
+      "append initialize-recovery.json after capability validation",
+      "append reconcile.json with exact request identity",
+      "append stopped.json after shared proof validation",
+      "atomically publish call.json stopped projection",
+      "explicit-forward-upgrade"
+    ],
+    "progress_signals": [
+      "recovery.eligible",
+      "recovery.receipt_valid",
+      "quiescent"
+    ],
+    "pause_points": [
+      "before reconcile",
+      "after each immutable receipt publication",
+      "before upgrade"
+    ]
+  },
+  "recovery": {
+    "deployed_migrations_immutable": true,
+    "program_rollback_state_behavior": "does-not-automatically-reverse-compensate-or-down-migrate",
+    "faulty_release_recovery": "forward-repair-by-a-new-program-version",
+    "backup_restore_role": "separate-disaster-recovery"
+  },
+  "validation": {
+    "public_api": {
+      "impact": "patch",
+      "evidence": [
+        "unchanged reconcile mutation envelope",
+        "additive inspect recovery fields"
+      ]
+    },
+    "persistent_state": {
+      "impact": "minor",
+      "evidence": [
+        "initialize-recovery.test.ts: audited source and interrupted publication replay",
+        "initialize-rpc.test.ts: close/error/timeout/business-unknown",
+        "invocation-journal.test.ts: supported complete historical journals",
+        "packaged CLI exact scene copy; old reader remains blocked"
+      ]
+    }
+  }
+}

@@ -78,3 +78,7 @@ Flow 的流式输出、纯查询和新调用停止证明与保留结果不确定
 ## 前置核验合同对齐
 
 修正 Skill 对 npm package-backed 安装继续要求旧 release manifest 的残留说明，并将原生创建能力门禁限定为正式路径可用性与实际绕过证据，避免仅因宿主列出 create/fork 工具而阻断调度。服务维护、Skill 安装升级与正式运行迁移仍分别授权。
+
+## verification 生命周期与连接初始化恢复
+
+修复 verification/evidence 配置合法但缺少 delivery-owned 执行路径的问题；以 ADR 0042 记录连接初始化能力证明与旧 reader 拒绝边界。正式现场保持只读，发布、安装、服务维护和恢复写入不从源码修复或 PR 合并推导授权。

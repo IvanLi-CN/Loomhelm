@@ -144,11 +144,21 @@ export function executeTaskLifecycleCommand(context: CommandContext): unknown | 
         request.actor.role === "group" &&
         ledger.groups.find((item) => item.id === target.group_id)?.agent_thread_id ===
           request.actor.thread_id;
+      const deliveryVerification = core.isDeliveryVerification(target);
+      const verificationOwned = core.ownsDeliveryVerification(ledger, target, request.actor);
+      if (deliveryVerification)
+        requireCondition(
+          verificationOwned,
+          "FORBIDDEN",
+          "Only the bound delivery agent owns verification",
+          3,
+        );
       const state = z
         .enum(["running", "waiting", "blocked", "completed", "closed"])
         .parse(payload.state);
       const allowed: Record<string, string[]> = {
-        planned: mainOwned || sharedOwned ? ["running", "waiting", "blocked"] : [],
+        planned:
+          mainOwned || sharedOwned || verificationOwned ? ["running", "waiting", "blocked"] : [],
         starting: ["running", "waiting", "blocked"],
         running: ["waiting", "blocked"],
         agent_idle: ["running", "waiting", "blocked"],
@@ -203,6 +213,21 @@ export function executeTaskLifecycleCommand(context: CommandContext): unknown | 
       }
       const previousState = taskExecutionState(target);
       const occupiedSlot = target.state === "agent_idle";
+      if (state === "running" && verificationOwned) {
+        const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
+        requireCondition(
+          ["active", "merged"].includes(owner.state),
+          "GROUP_NOT_READY",
+          "Verification group is not active or merged",
+          4,
+        );
+        requireCondition(
+          legacyLedger(ledger) || owner.lifecycle.workspace_ready === "passed",
+          "BASELINE_REQUIRED",
+          "Verify the delivery workspace before running verification",
+          4,
+        );
+      }
       if (state === "running" && isContributionKind(target.kind)) {
         const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
         const bootstrapMainOwnedStart =
@@ -240,7 +265,7 @@ export function executeTaskLifecycleCommand(context: CommandContext): unknown | 
       }
       if (state === "running" && previousState === "planned")
         requireCondition(
-          (mainOwned || sharedOwned) && ready(ledger, target.id),
+          (mainOwned || sharedOwned || verificationOwned) && ready(ledger, target.id),
           "MAIN_TASK_REQUIRED",
           "Only the task owner can start a planned task directly",
           3,
