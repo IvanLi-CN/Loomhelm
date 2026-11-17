@@ -8125,6 +8125,21 @@
       "installedSha256": "01fede147cf9026e98bfad12a947ef875ac3f1d1732620439abb3901fb0d7eb5"
     },
     {
+      "path": "skills/multi-task-flow/lib/migration-audit.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/lib/migration-audit.ts",
+      "installedSha256": "c8d0ffcb1d259fc3a43ff3c194e1d3da97dafc073f6cdddeae9ea13b12aa09f6"
+    },
+    {
+      "path": "skills/multi-task-flow/lib/orchestration-migration.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/lib/orchestration-migration.ts",
+      "installedSha256": "136a1bbc3db9301f212026c4d18644e275d613a0194d9a1cad3ad751f2a956a2"
+    },
+    {
+      "path": "skills/multi-task-flow/tests/orchestration-migration.test.ts",
+      "sourcePath": "packages/multi-task-flow-runtime/tests/orchestration-migration.test.ts",
+      "installedSha256": "ea0b1d58dfb83e63bfe39f1a7efb8e27235bc75e5321d313d0df84edf6fb490c"
+    },
+    {
       "path": "skills/multi-task-flow/tests/invocation-journal.test.ts",
       "sourcePath": "packages/multi-task-flow-runtime/tests/invocation-journal.test.ts",
       "installedSha256": "10cfce7accfe5adcddc6479f092d8826b3d406245358ef36a204941ac6ee721c"
@@ -8377,7 +8392,7 @@
     {
       "path": "skills/multi-task-flow/scripts/check-client-skills.ts",
       "sourcePath": "packages/multi-task-flow-runtime/scripts/check-client-skills.ts",
-      "installedSha256": "deb2229d872de78e346d53f166b60208d182abaff4a3ef0d402f52f983134ea1"
+      "installedSha256": "5287f6fd2d0db19b304f553e7b568e8c417c5768b3da7c958bd85f88c561a70a"
     },
     {
       "path": "skills/multi-task-flow/tests/check-skills-installation.test.ts",

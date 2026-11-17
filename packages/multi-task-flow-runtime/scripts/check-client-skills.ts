@@ -26,6 +26,9 @@ const additional = [
 
   "skills/multi-task-flow/tests/fixtures/invocation-worker.ts",
   "skills/multi-task-flow/lib/invocation-journal.ts",
+  "skills/multi-task-flow/lib/migration-audit.ts",
+  "skills/multi-task-flow/lib/orchestration-migration.ts",
+  "skills/multi-task-flow/tests/orchestration-migration.test.ts",
   "skills/multi-task-flow/tests/invocation-journal.test.ts",
   "skills/multi-task-flow/tests/orchestration-upgrade-compatibility.test.ts",
   "skills/multi-task-flow/lib/store-upgrade-publication.ts",
