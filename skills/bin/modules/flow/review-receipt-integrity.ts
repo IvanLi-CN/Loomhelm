@@ -11,10 +11,6 @@ import {
   validateReviewFindingLocations,
 } from "./review-result";
 import { isFormalReviewRequestProfile } from "./review-profile-policy";
-import {
-  assertReviewWaveIdentity,
-  reviewAttemptIdentity,
-} from "./review-wave-identity";
 
 export function assertReviewReceiptIntegrity(
   ledger: Record<string, unknown>,
@@ -27,7 +23,6 @@ export function assertReviewReceiptIntegrity(
   const review = isRecord(ledger.review) ? ledger.review : undefined;
   const waves = review && isRecord(review.waves) ? review.waves : undefined;
   const wave = waves && isRecord(waves[waveId]) ? waves[waveId] : undefined;
-  if (wave) assertReviewWaveIdentity(ledger, wave, waveId);
   if (
     !wave ||
     receipt.kind !== "review" ||
@@ -63,12 +58,6 @@ export function assertReviewReceiptIntegrity(
     receipt.wave_proof_key !== `${receipt.proof_key}:${waveId}:${laneName}`
   )
     throw new FlowError("review receipt provenance integrity is invalid");
-  if (
-    typeof wave.scope_class !== "string" ||
-    !REVIEW_SCOPE_CLASSES.has(wave.scope_class) ||
-    receipt.scope_class !== wave.scope_class
-  )
-    throw new FlowError("review receipt scope integrity is invalid");
   const requestedProfile = laneRequestedProfile(laneState);
   if (!isFormalReviewRequestProfile(requestedProfile))
     throw new FlowError(
@@ -79,17 +68,14 @@ export function assertReviewReceiptIntegrity(
     canonicalJson(receipt.requested_profile) !== canonicalJson(requestedProfile)
   )
     throw new FlowError("review receipt requested profile integrity is invalid");
+  if (
+    typeof wave.scope_class !== "string" ||
+    !REVIEW_SCOPE_CLASSES.has(wave.scope_class) ||
+    receipt.scope_class !== wave.scope_class
+  )
+    throw new FlowError("review receipt scope integrity is invalid");
   if (!validReportedProfile(receipt.reported_profile))
     throw new FlowError("review receipt reported profile is invalid");
-  const expectedAttemptIdentity = reviewAttemptIdentity(
-    String(ledger.run_id),
-    receipt.wave_proof_key,
-    String(receipt.scope_class),
-    requestedProfile,
-    receipt.attempt_key,
-  );
-  if (receipt.attempt_identity !== expectedAttemptIdentity)
-    throw new FlowError("review receipt attempt identity integrity is invalid");
   if (
     repoPath !== undefined &&
     receipt.proof_key !==
@@ -155,8 +141,7 @@ function laneRequestedProfile(
     if (
       typeof legacy.model !== "string" ||
       typeof legacy.effort !== "string" ||
-      canonicalJson({ model: requested.model, effort: requested.effort }) !==
-        canonicalJson(legacy)
+      canonicalJson(requested) !== canonicalJson(legacy)
     )
       throw new FlowError("review lane requested profile is inconsistent");
     return { model: requested.model, effort: requested.effort };

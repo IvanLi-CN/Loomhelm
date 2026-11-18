@@ -1,11 +1,10 @@
 import { FlowError, isoNow, isRecord, stableHash } from "./common";
-import { normalizeReviewSynthesis } from "./review";
+import { normalizeReviewSynthesis, validateLaneSpecs } from "./review";
 import { recordReviewHistory } from "./review-history";
 import { canonicalList, deriveReviewSynthesis } from "./review-wave-utils";
 import { assertReviewReceiptIntegrity } from "./review-receipt-integrity";
 import { validateReviewSynthesisAcceptance } from "./review-synthesis";
 import { activeWave, reviewState } from "./review-wave-support";
-import { assertReviewWaveTopology } from "./review-wave-identity";
 
 export function finalizeReviewWaveState(
   ledger: Record<string, unknown>,
@@ -16,7 +15,22 @@ export function finalizeReviewWaveState(
   const wave = activeWave(ledger, waveId);
   if (wave.state !== "open" || !isRecord(wave.lanes))
     throw new FlowError("review wave is not open");
-  assertReviewWaveTopology(wave);
+  const assessment = isRecord(ledger.review_assessment)
+    ? ledger.review_assessment
+    : undefined;
+  const tier = assessment?.tier;
+  if (tier !== 3 && tier !== 4)
+    throw new FlowError("review wave necessity tier is invalid");
+  if (ledger.legacy_compatibility !== true)
+    validateLaneSpecs(
+      String(wave.stage),
+      Object.entries(wave.lanes).map(([lane, rawLane]) => ({
+        lane,
+        model: isRecord(rawLane) ? String(rawLane.model ?? "") : "",
+        effort: isRecord(rawLane) ? String(rawLane.effort ?? "") : "",
+      })),
+      tier,
+    );
   const receipts = Array.isArray(ledger.receipts)
     ? (ledger.receipts as Record<string, unknown>[])
     : [];

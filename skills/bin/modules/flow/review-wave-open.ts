@@ -13,7 +13,6 @@ import { validateLaneSpecs } from "./review";
 import { sortedStrings } from "./review-wave-utils";
 import { prepareReviewWaveState } from "./review-open-guards";
 import { reviewState } from "./review-wave-support";
-import { reviewWaveIdentity } from "./review-wave-identity";
 
 export function openReviewWaveState(
   ledger: Record<string, unknown>,
@@ -114,30 +113,21 @@ export function openReviewWaveState(
   );
   if (!Array.isArray(epoch.waves)) epoch.waves = [];
   if (!Array.isArray(epoch.permits)) epoch.permits = [];
-  const waves = isRecord(review.waves) ? review.waves : {};
-  let waveGeneration = 0;
-  let waveId = reviewWaveIdentity(
-    String(ledger.run_id),
-    String(epoch.epoch_id),
+  const waveSeed = [
+    ledger.run_id,
+    epoch.epoch_id,
     options.stage,
     options.headSha,
     options.baseSha,
     scopeClass,
     options.laneSpecs,
-    waveGeneration,
-  );
+  ];
+  const waves = isRecord(review.waves) ? review.waves : {};
+  let generation = 0;
+  let waveId = stableHash([...waveSeed, generation]).slice(0, 20);
   while (Object.hasOwn(waves, waveId)) {
-    waveGeneration += 1;
-    waveId = reviewWaveIdentity(
-      String(ledger.run_id),
-      String(epoch.epoch_id),
-      options.stage,
-      options.headSha,
-      options.baseSha,
-      scopeClass,
-      options.laneSpecs,
-      waveGeneration,
-    );
+    generation += 1;
+    waveId = stableHash([...waveSeed, generation]).slice(0, 20);
   }
   const lanes = Object.fromEntries(
     options.laneSpecs.map((lane) => [
@@ -166,7 +156,6 @@ export function openReviewWaveState(
       ? stableHash(normalizeAcceptanceManifest(ledger.acceptance_manifest))
       : null,
     lanes,
-    required_lane_names: options.laneSpecs.map(({ lane }) => lane).sort(),
     blockers: [],
     blocker_fingerprints: [],
     scope_class: scopeClass,
@@ -178,7 +167,6 @@ export function openReviewWaveState(
         : null,
     arbitration_conflicts: arbitrationConflicts,
     arbitration_blocker_fingerprints: arbitrationBlockerFingerprints,
-    wave_generation: waveGeneration,
     opened_at: isoNow(),
   };
   waves[waveId] = wave;
@@ -196,94 +184,71 @@ function isLegacyReviewWave(
   ledger: Record<string, unknown>,
   wave: Record<string, unknown>,
 ): boolean {
-  if (!isRecord(wave.lanes)) return false;
+  if (
+    !(
+      (ledger.legacy_compatibility === true &&
+        ledger.legacy_schema_version === 6) ||
+      ledger.schema_version === FLOW_SCHEMA_VERSION
+    ) ||
+    !isRecord(wave.lanes)
+  )
+    return false;
+  const lanes = Object.entries(wave.lanes);
+  if (!lanes.length || !legacyLaneTopologyMatches(ledger, wave, lanes))
+    return false;
   const receipts = Array.isArray(ledger.receipts)
     ? (ledger.receipts as unknown[])
     : [];
-  const migratedSchemaSix =
-    (ledger.legacy_compatibility === true &&
-      ledger.legacy_schema_version === 6) ||
-    ledger.schema_version === FLOW_SCHEMA_VERSION;
-  const lanes = Object.entries(wave.lanes);
-  if (!lanes.length) return false;
-  const legacyLaneShape = lanes.every(
-    ([, rawLane]) =>
-      isRecord(rawLane) && !Object.hasOwn(rawLane, "requested_profile"),
-  );
-  if (!legacyLaneShape) return false;
-  if (!legacyLaneTopologyMatches(ledger, wave, lanes.map(([lane]) => lane)))
-    return false;
-  for (const [laneName, rawLane] of lanes) {
+  return lanes.every(([laneName, rawLane]) => {
     if (
       !isRecord(rawLane) ||
+      Object.hasOwn(rawLane, "requested_profile") ||
       typeof rawLane.model !== "string" ||
       !rawLane.model.trim() ||
       typeof rawLane.effort !== "string" ||
-      !rawLane.effort.trim()
+      !rawLane.effort.trim() ||
+      typeof rawLane.receipt_id !== "string"
     )
       return false;
-    if (typeof rawLane.receipt_id !== "string") return false;
     const receipt = receipts.find(
       (candidate) =>
         isRecord(candidate) && candidate.receipt_id === rawLane.receipt_id,
     );
-    if (
-      !isRecord(receipt) ||
-      receipt.review_receipt_schema !== 6 ||
-      receipt.terminal_state !== "completed" ||
-      receipt.evidence_valid !== true ||
-      receipt.post_execution_clean !== true ||
-      receipt.exit_code !== 0 ||
-      !receiptBindsToWave(receipt, wave, laneName)
-    )
-      return false;
-  }
-  return migratedSchemaSix;
+    return (
+      isRecord(receipt) &&
+      receipt.review_receipt_schema === 6 &&
+      receipt.kind === "review" &&
+      receipt.terminal_state === "completed" &&
+      receipt.evidence_valid === true &&
+      receipt.post_execution_clean === true &&
+      receipt.exit_code === 0 &&
+      receipt.wave_id === wave.wave_id &&
+      receipt.lane === laneName &&
+      receipt.head_sha === wave.head_sha &&
+      receipt.base_sha === wave.base_sha
+    );
+  });
 }
 
 function legacyLaneTopologyMatches(
   ledger: Record<string, unknown>,
   wave: Record<string, unknown>,
-  laneNames: string[],
+  lanes: [string, unknown][],
 ): boolean {
-  if (Object.hasOwn(wave, "required_lane_names")) {
-    if (!Array.isArray(wave.required_lane_names)) return false;
-    const required = wave.required_lane_names;
-    if (
-      required.some((lane) => typeof lane !== "string") ||
-      new Set(required).size !== required.length ||
-      JSON.stringify([...required].sort()) !==
-        JSON.stringify([...laneNames].sort())
-    )
-      return false;
-    return true;
-  }
+  const names = new Set(lanes.map(([lane]) => lane));
   const assessment = isRecord(ledger.review_assessment)
     ? ledger.review_assessment
     : undefined;
-  const tier = assessment?.tier;
   if (wave.stage === "risk-arbitration")
-    return laneNames.length === 1 && laneNames[0] === "risk-arbitration";
-  const names = new Set(laneNames);
+    return names.size === 1 && names.has("risk-arbitration");
   const fixed = [...FIXED_REVIEW_LANES].every((lane) => names.has(lane));
-  const dynamic = laneNames.filter((lane) => !FIXED_REVIEW_LANES.has(lane));
+  const dynamic = [...names].filter((lane) => !FIXED_REVIEW_LANES.has(lane));
   return (
     fixed &&
     dynamic.length <= 2 &&
     dynamic.every((lane) => DYNAMIC_REVIEW_LANES.has(lane)) &&
-    (tier === 3 ? dynamic.length === 0 : tier === 4 && dynamic.length >= 1)
-  );
-}
-
-function receiptBindsToWave(
-  receipt: Record<string, unknown>,
-  wave: Record<string, unknown>,
-  laneName: string,
-): boolean {
-  return (
-    receipt.wave_id === wave.wave_id &&
-    receipt.lane === laneName &&
-    receipt.head_sha === wave.head_sha &&
-    receipt.base_sha === wave.base_sha
+    (assessment?.tier === 3
+      ? dynamic.length === 0
+      : assessment?.tier === 4 && dynamic.length >= 1)
   );
 }

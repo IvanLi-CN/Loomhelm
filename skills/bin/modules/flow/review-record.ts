@@ -12,10 +12,6 @@ import {
   validateReviewFindingLocations,
 } from "./review-result";
 import { isFormalReviewRequestProfile } from "./review-profile-policy";
-import {
-  assertReviewWaveTopology,
-  reviewAttemptIdentity,
-} from "./review-wave-identity";
 
 export interface SubagentReviewOptions {
   reviewProfile: string;
@@ -53,7 +49,6 @@ export function recordSubagentReviewState(
   const waves = isRecord(review.waves) ? review.waves : {};
   const wave = waveId && isRecord(waves[waveId]) ? waves[waveId] : undefined;
   if (!wave) throw new FlowError(`review wave does not exist: ${waveId}`);
-  assertReviewWaveTopology(wave);
   const lane = options.lane ?? "";
   if (!isRecord(wave.lanes) || !isRecord(wave.lanes[lane]))
     throw new FlowError(`review lane does not exist: ${lane}`);
@@ -83,14 +78,7 @@ export function recordSubagentReviewState(
     : [];
   const proofKey = `${repoPath}:${headSha}:${baseSha}:${options.reviewProfile}`;
   const waveProofKey = `${proofKey}:${waveId}:${lane}`;
-  const attemptKey = reviewAttemptKey(options, true);
-  const attemptIdentity = reviewAttemptIdentity(
-    String(ledger.run_id),
-    waveProofKey,
-    scopeClass,
-    requestedProfile,
-    attemptKey,
-  );
+  const attemptKey = reviewAttemptKey(options);
   if (terminal === "unavailable")
     return recordUnavailable(
       ledger,
@@ -105,7 +93,6 @@ export function recordSubagentReviewState(
       requestedProfile,
       scopeClass,
       attemptKey,
-      attemptIdentity,
     );
   if (terminal !== "completed")
     throw new FlowError(
@@ -130,17 +117,12 @@ export function recordSubagentReviewState(
   ]);
   const existingAttempt = findAttemptReceipt(
     receipts,
-    attemptIdentity,
     attemptKey,
     waveProofKey,
     scopeClass,
-    requestedProfile,
   );
   if (existingAttempt) {
-    if (
-      existingAttempt.kind !== "review" ||
-      existingAttempt.terminal_state !== "completed"
-    )
+    if (existingAttempt.terminal_state !== "completed")
       throw new FlowError(
         "review attempt id is already recorded with a different terminal state",
       );
@@ -173,9 +155,8 @@ export function recordSubagentReviewState(
     base_sha: baseSha,
     review_profile: options.reviewProfile,
     attempt_key: attemptKey,
-    attempt_identity: attemptIdentity,
-    requested_profile: requestedProfile,
     scope_class: scopeClass,
+    requested_profile: requestedProfile,
     profile_verification: "request_recorded",
     effective_profile: null,
     reported_profile: reportedProfile(options),
@@ -220,7 +201,6 @@ function recordUnavailable(
   requestedProfile: { model: string; effort: string },
   scopeClass: string,
   attemptKey: string,
-  attemptIdentity: string,
 ): Record<string, unknown> {
   if (options.reviewResultJson.trim())
     throw new FlowError(
@@ -230,31 +210,54 @@ function recordUnavailable(
     throw new FlowError(
       "unavailable sub-agent review requires explicit startup-unavailable classification",
     );
-  const existingAttempt = findAttemptReceipt(
-    receipts,
-    attemptIdentity,
-    attemptKey,
+  const identity = stableHash([
+    "sub-agent-review-unavailable",
     waveProofKey,
-    scopeClass,
-    requestedProfile,
-  );
-  if (existingAttempt) {
-    if (
-      existingAttempt.kind !== "review_attempt" ||
-      existingAttempt.terminal_state !== "unavailable"
-    )
-      throw new FlowError(
-        "review attempt id is already recorded with a different terminal state",
-      );
-    return { reused: true, receipt: existingAttempt };
-  }
+    requestedProfile.model,
+    requestedProfile.effort,
+    attemptKey,
+  ]);
   const receiptId = stableHash([
     ledger.run_id,
     "sub-agent-review-unavailable",
-    attemptIdentity,
+    identity,
   ]);
-  const existing = receipts.find((receipt) => receipt.receipt_id === receiptId);
-  if (existing) return { reused: true, receipt: existing };
+  const existingAttempt = findAttemptReceipt(
+    receipts,
+    attemptKey,
+    waveProofKey,
+    scopeClass,
+  );
+  if (existingAttempt) {
+    if (existingAttempt.terminal_state !== "unavailable")
+      throw new FlowError(
+        "review attempt id is already recorded with a different terminal state",
+      );
+    if (
+      existingAttempt.kind !== "review_attempt" ||
+      existingAttempt.receipt_id !== receiptId ||
+      existingAttempt.proof_key !== proofKey ||
+      existingAttempt.wave_proof_key !== waveProofKey ||
+      existingAttempt.head_sha !== headSha ||
+      existingAttempt.base_sha !== baseSha ||
+      existingAttempt.review_profile !== options.reviewProfile ||
+      existingAttempt.wave_id !== waveId ||
+      existingAttempt.lane !== lane ||
+      !isRecord(existingAttempt.requested_profile) ||
+      canonicalJson(existingAttempt.requested_profile) !==
+        canonicalJson(requestedProfile) ||
+      existingAttempt.profile_verification !== "request_recorded" ||
+      existingAttempt.effective_profile !== null ||
+      existingAttempt.terminal_state !== "unavailable" ||
+      existingAttempt.unavailability_classification !==
+        SUBAGENT_STARTUP_UNAVAILABLE ||
+      existingAttempt.evidence_valid !== false ||
+      existingAttempt.post_execution_clean !== true ||
+      existingAttempt.exit_code !== 75
+    )
+      throw new FlowError("review attempt receipt integrity is invalid");
+    return { reused: true, receipt: existingAttempt };
+  }
   const receipt: Record<string, unknown> = {
     receipt_id: receiptId,
     kind: "review_attempt",
@@ -265,9 +268,8 @@ function recordUnavailable(
     base_sha: baseSha,
     review_profile: options.reviewProfile,
     attempt_key: attemptKey,
-    attempt_identity: attemptIdentity,
-    requested_profile: requestedProfile,
     scope_class: scopeClass,
+    requested_profile: requestedProfile,
     profile_verification: "request_recorded",
     effective_profile: null,
     reported_profile: reportedProfile(options),
@@ -294,23 +296,16 @@ function recordUnavailable(
 
 function findAttemptReceipt(
   receipts: Record<string, unknown>[],
-  attemptIdentity: string,
   attemptKey: string,
   waveProofKey: string,
   scopeClass: string,
-  requestedProfile: { model: string; effort: string },
 ): Record<string, unknown> | undefined {
   return receipts.find(
     (receipt) =>
-      receipt.attempt_identity === attemptIdentity ||
-      (!Object.hasOwn(receipt, "attempt_identity") &&
-        receipt.review_receipt_schema === 7 &&
-        receipt.attempt_key === attemptKey &&
-        receipt.wave_proof_key === waveProofKey &&
-        receipt.scope_class === scopeClass &&
-        isRecord(receipt.requested_profile) &&
-        canonicalJson(receipt.requested_profile) ===
-          canonicalJson(requestedProfile)),
+      receipt.review_receipt_schema === 7 &&
+      receipt.attempt_key === attemptKey &&
+      receipt.wave_proof_key === waveProofKey &&
+      receipt.scope_class === scopeClass,
   );
 }
 
@@ -331,15 +326,11 @@ function laneRequestedProfile(
     typeof requested.effort === "string" &&
     requested.effort.trim()
   ) {
-    const legacy = {
-      model: laneState.model,
-      effort: laneState.effort,
-    };
+    const legacy = { model: laneState.model, effort: laneState.effort };
     if (
       typeof legacy.model !== "string" ||
       typeof legacy.effort !== "string" ||
-      canonicalJson({ model: requested.model, effort: requested.effort }) !==
-        canonicalJson(legacy)
+      canonicalJson(requested) !== canonicalJson(legacy)
     )
       throw new FlowError("review lane requested profile is inconsistent");
     return { model: requested.model, effort: requested.effort };
@@ -349,20 +340,12 @@ function laneRequestedProfile(
   );
 }
 
-function reviewAttemptKey(
-  options: SubagentReviewOptions,
-  required = false,
-): string {
-  if (options.reviewAttemptId === undefined) {
-    if (required)
-      throw new FlowError(
-        "sub-agent review requires a parent-supplied review attempt id",
-      );
-    return "default";
-  }
-  const value = options.reviewAttemptId.trim();
-  if (!value) throw new FlowError("review attempt id must be non-empty");
-  return value;
+function reviewAttemptKey(options: SubagentReviewOptions): string {
+  if (typeof options.reviewAttemptId !== "string" || !options.reviewAttemptId.trim())
+    throw new FlowError(
+      "sub-agent review requires a parent-supplied review attempt id",
+    );
+  return options.reviewAttemptId.trim();
 }
 
 function reportedProfile(
