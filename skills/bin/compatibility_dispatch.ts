@@ -51,8 +51,6 @@ const workspaceCommands = new Set([
   "local_merge_closeout_gate",
   "merge_preflight",
   "port_registry",
-  "candidate_context",
-  "context",
 ]);
 
 export async function dispatch(name: string, argv: string[]): Promise<number> {
@@ -112,12 +110,7 @@ export async function dispatch(name: string, argv: string[]): Promise<number> {
   }
   if (docCommands.has(name)) return docs(name, argv);
   if (workspaceCommands.has(name))
-    return workspace(
-      name === "context"
-        ? "candidate_context"
-        : (name as Parameters<typeof workspace>[0]),
-      argv,
-    );
+    return workspace(name as Parameters<typeof workspace>[0], argv);
   if (name === "instruction_behavior_replay") {
     return runInstructionBehaviorReplay(argv);
   }
@@ -130,6 +123,5 @@ export async function dispatch(name: string, argv: string[]): Promise<number> {
     }
     return exitCode;
   }
-  if (name === "context") return workspace("candidate_context", argv);
   return 2;
 }

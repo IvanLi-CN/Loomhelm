@@ -252,10 +252,8 @@ Agent 接管正在运行的测试、review、CI 或发布任务后，只要下�
 
 交付报告区分已完成结果、未完成事实和下一步：本地可开 PR、PR 合并前就绪、已合并、已发布及已清理各有自己的证据。预算耗尽须明确说明；有发布或清理遗留时不能宣称全部交付结束。长任务的责任边界见[持续任务契约](../skills/project-engineering-workflow/references/active-long-task-short-contract.md)。
 
-## 在 dot-codex 中维护这套流程
+## 运行配置边界
 
-dot-codex 同时包含配置源码与运行时集成，开发时必须区分候选 worktree 和启动当前 Codex 的 runtime home。修改、提交与验证位于候选工作区；运行中的 `CODEX_HOME` 默认只读。合并源码、对齐本地主分支与把配置应用到运行环境是不同的事实，不能自动互相推导。
-
-[dot-codex-development](../skills/dot-codex-development/SKILL.md) 的上下文检查负责确认候选位置和写入边界。修改后既要运行与变更相关的验证，也要完成该 Skill 的固定候选检查；这些检查不会部署配置或替代任务验收。运行目录中的已有本地改动须保留，安全对齐或其他会影响它们的操作按具体事实和授权执行。
+修改、提交和验证在候选工作区进行。运行中的 `CODEX_HOME` 默认只读；将源码变更应用到运行环境需要单独授权。
 
 本仓库的私有 Skills 维护 Codex 集成；独立可复用 Skills 的公共源由 agent-toolkit 维护。相关实现见[私有 Skills 索引](../skills/README.md)，项目文档与主题规格见[文档总览](README.md)。

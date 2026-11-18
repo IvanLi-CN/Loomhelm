@@ -8,6 +8,8 @@ Flow 输出与调用安全修复拆为先共享层、后消费者的依赖交付
 
 主人确认迁入 dot-codex 自有的 29 套源包，排除 `~/.agents` 的外部源包，保留本地编排网页，并直接兼容现有 schema2/contract2 运行。旧运行的读取、合法写入与所有权是独立边界，不以强制导入代替兼容。
 
+停止维护 dot-codex 后，退役专用于维护该仓库的 `dot-codex-development` Skill 及其候选检查入口。现行源包范围以 `skills/catalog.json` 为准。
+
 共享支持曾位于根 `bin/`，导致 vendor 仅检出 `skills/` 后缺失运行模块。当前源代码边界将可发布 Skill 与内部 runtime 分离：`skills/` 只保留安装面，`packages/multi-task-flow-runtime/` 承载构建、viewer/service、测试和运行依赖；发布构建负责将后者映射进 npm 包的 `skills/multi-task-flow/` 路径。历史运行格式、真实账本与用户服务不变。
 
 编排网页由 Cytoscape/Dagre 切换为 React Flow/ELK，以正交路由与可读 HTML 卡片改善复杂依赖追踪。保留账本 schema2/contract2、任务投影、原生对话链接和服务鉴权合同；单交付单元任务视图改为默认网格，显式 URL 布局仍优先。独立 example 以全新合成领域、标识、时间与回执复现多分支汇聚及发布链，不提交真实运行账本。

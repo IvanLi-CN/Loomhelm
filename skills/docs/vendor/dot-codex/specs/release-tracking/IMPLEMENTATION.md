@@ -21,7 +21,6 @@ Owner reports for an explicit Publication Identity require the fixed full origin
 
 ## Validation
 
-- Fixed candidate checks: `python3 /Users/ivan/.codex/skills/dot-codex-development/scripts/context.py validate --cwd <candidate-root>`; repository contract tests and skill index checks.
 - Task-specific tests: `python3 -m unittest bin.test_pr_skill_replay_check`; release lineage/deployment test methods include negative variants for malformed declarations and deployment identifiers.
 - Tracking behavior replay: `python3 bin/release_tracking_replay_check.py --cases docs/specs/release-tracking/replay/cases.txt` rejects tracking heartbeat/cron launches, validates manual recovery anchors, and preserves unrelated automation compatibility.
 - The focused replay schema uses `recovery_operation=none|authorized` to represent the existing operation receipt for the 30-minute/one-hour budget. A separate `tracking_scope_boundary` audit record distinguishes unrelated operations; tool arguments and assistant prose cannot erase an active tracking context. These normalized replay records are test inputs, not a runtime tool interface or a substitute for external authorization evidence.

@@ -1,6 +1,6 @@
 # 客户端 Skills 资源索引
 
-本目录包含本地运行所需的 29 套 Skill 资源；依赖与脚本发现见 `catalog.json`。资源从仓库源码目录发现，构建时生成产物清单与摘要。
+本目录包含本地运行所需的 Skill 资源；依赖与脚本发现见 `catalog.json`。资源从仓库源码目录发现，构建时生成产物清单与摘要。
 
 生产仅支持 Bun 1.4.4；`bun clients/typescript/src/cli.ts skills list/check/run` 直接执行 TS。`skills run <资源相对路径>` 不改写脚本后缀；`LOOMHELM_TOOLKIT_ROOT` 指向包内 `toolkit/` 或本仓库资源根。vendor 仅检出 `skills/` 后，使用 Bun 和锁文件准备声明依赖即可运行脚本；浏览器资产单独构建，不要求本机 TS 编译、Node 或项目原生模块。专项操作仍需要原授权、外部工具和宿主能力。
 
@@ -20,7 +20,6 @@ bun test skills/bin/test_skills_index_check.ts
 | `cn-ecommerce-data-collection` | Uses the configured browser/task-space tool route. | `skills/cn-ecommerce-data-collection/` |
 | `dev-plan` | Codex Plan Mode contract and flow lock. | `skills/dev-plan/` |
 | `docs-migrate` | Consumer-specific docs/worktree lifecycle. | `skills/docs-migrate/` |
-| `dot-codex-development` | Manages this dot-codex runtime home and worktrees. | `skills/dot-codex-development/` |
 | `fast-flow` | Codex delivery flow and PR convergence. | `skills/fast-flow/` |
 | `find-next-plan` | Reads this consumer's local planning layout. | `skills/find-next-plan/` |
 | `flow-continue` | Restores Codex flow state and hard gates. | `skills/flow-continue/` |

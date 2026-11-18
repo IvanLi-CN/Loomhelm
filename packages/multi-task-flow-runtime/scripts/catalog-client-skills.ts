@@ -36,7 +36,6 @@ const cliRequirements = (name) => {
       "topic-spec",
       "solution-sync",
       "project-doc-promote",
-      "dot-codex-development",
       "rust-crate-release",
       "srv-101-ops",
     ].includes(name)
