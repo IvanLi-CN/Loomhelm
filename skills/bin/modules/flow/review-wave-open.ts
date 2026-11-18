@@ -3,12 +3,14 @@ import {
   FIXED_REVIEW_LANES,
   FlowError,
   REVIEW_SCOPE_CLASSES,
+  canonicalJson,
   isoNow,
   isRecord,
   stableHash,
 } from "./common";
 import { normalizeAcceptanceManifest } from "./acceptance";
 import { validateLaneSpecs } from "./review";
+import { parseReviewResultJson } from "./review-result";
 import { sortedStrings } from "./review-wave-utils";
 import { prepareReviewWaveState } from "./review-open-guards";
 import { assertReviewReceiptIntegrity } from "./review-receipt-integrity";
@@ -203,7 +205,7 @@ function isLegacyReviewWave(
   const receipts = Array.isArray(ledger.receipts)
     ? ledger.receipts.filter(isRecord)
     : [];
-  return lanes.every(([, rawLane]) => {
+  return lanes.every(([laneName, rawLane]) => {
     if (
       !isRecord(rawLane) ||
       Object.hasOwn(rawLane, "requested_profile") ||
@@ -215,19 +217,22 @@ function isLegacyReviewWave(
       return false;
     return (
       typeof rawLane.receipt_id === "string" &&
-      receipts.some(
-        (receipt) =>
-          receipt.receipt_id === rawLane.receipt_id &&
-          isHistoricalReviewReceipt(receipt),
+      receipts.some((receipt) =>
+        receipt.receipt_id === rawLane.receipt_id
+          ? isHistoricalReviewReceipt(ledger, wave, laneName, receipt)
+          : false,
       )
     );
   });
 }
 
 function isHistoricalReviewReceipt(
+  ledger: Record<string, unknown>,
+  wave: Record<string, unknown>,
+  laneName: string,
   receipt: Record<string, unknown>,
 ): boolean {
-  return (
+  if (
     receipt.review_receipt_schema === 6 &&
     typeof receipt.review_model === "string" &&
     receipt.review_model.trim().length > 0 &&
@@ -245,7 +250,46 @@ function isHistoricalReviewReceipt(
     !Object.hasOwn(receipt, "effective_profile") &&
     !Object.hasOwn(receipt, "attempt_key") &&
     !Object.hasOwn(receipt, "scope_class")
-  );
+  ) {
+    let parsed;
+    try {
+      parsed = parseReviewResultJson(JSON.stringify(receipt.review_result));
+    } catch {
+      return false;
+    }
+    const expectedProfile =
+      wave.stage === "risk-arbitration"
+        ? "risk-arbitration"
+        : "pr-convergence";
+    const expectedId = stableHash([
+      ledger.run_id,
+      "sub-agent-review",
+      receipt.wave_proof_key,
+      receipt.review_result_sha256,
+    ]);
+    return (
+      receipt.kind === "review" &&
+      receipt.review_profile === expectedProfile &&
+      receipt.wave_id === wave.wave_id &&
+      receipt.lane === laneName &&
+      receipt.head_sha === wave.head_sha &&
+      receipt.base_sha === wave.base_sha &&
+      receipt.receipt_id === expectedId &&
+      receipt.review_result_sha256 === parsed.resultSha256 &&
+      Array.isArray(receipt.finding_fingerprints) &&
+      Array.isArray(receipt.review_findings) &&
+      canonicalJson(receipt.finding_fingerprints) ===
+        canonicalJson(parsed.fingerprints) &&
+      canonicalJson(receipt.review_findings) ===
+        canonicalJson(parsed.result.findings) &&
+      receipt.overall_correctness === parsed.result.overall_correctness &&
+      receipt.overall_explanation === parsed.result.overall_explanation &&
+      receipt.review_clear ===
+        (parsed.fingerprints.length === 0 &&
+          parsed.result.overall_correctness === "patch is correct")
+    );
+  }
+  return false;
 }
 
 function reviewWaveIsTerminal(
@@ -282,6 +326,11 @@ function reviewWaveIsTerminal(
       receipt.lane !== laneName ||
       receipt.base_sha !== wave.base_sha ||
       receipt.head_sha !== wave.head_sha
+    )
+      return false;
+    if (
+      legacy &&
+      !isHistoricalReviewReceipt(ledger, wave, laneName, receipt)
     )
       return false;
     if (!legacy) {

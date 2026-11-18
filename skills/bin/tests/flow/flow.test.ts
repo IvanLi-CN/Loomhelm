@@ -873,13 +873,65 @@ describe("acceptance and review state", () => {
       legacy.review_execution_source = "sub-agent";
       legacy.provenance_boundary = "sub-agent-structured-result";
       legacy.evidence_source = "sub-agent-structured-result";
+      legacy.receipt_id = stableHash([
+        String(historical.run_id),
+        "sub-agent-review",
+        legacy.wave_proof_key,
+        legacy.review_result_sha256,
+      ]);
       return legacy;
     });
     historical.receipts = historicalReceipts;
+    const malformedHistorical = structuredClone(historical) as Record<
+      string,
+      unknown
+    >;
+    const malformedHistoricalReview = malformedHistorical.review as Record<
+      string,
+      unknown
+    >;
+    const malformedHistoricalWave = (
+      malformedHistoricalReview.waves as Record<
+        string,
+        Record<string, unknown>
+      >
+    )[String(wave.wave_id)];
+    delete malformedHistoricalWave.scope_binding;
+    for (const [laneName, lane] of Object.entries(
+      malformedHistoricalWave.lanes as Record<string, Record<string, unknown>>,
+    )) {
+      delete lane.requested_profile;
+      const receipt = (
+        malformedHistorical.receipts as Record<string, unknown>[]
+      ).find((candidate) => candidate.lane === laneName);
+      if (receipt) lane.receipt_id = receipt.receipt_id;
+    }
+    const malformedHistoricalReceipt = (
+      malformedHistorical.receipts as Record<string, unknown>[]
+    ).find((receipt) => receipt.kind === "review");
+    if (!malformedHistoricalReceipt)
+      throw new Error("malformed historical receipt is missing");
+    delete malformedHistoricalReceipt.review_result;
+    expect(() =>
+      openReviewWaveState(malformedHistorical, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "b".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
     const historicalReview = historical.review as Record<string, unknown>;
     const historicalWave = (
       historicalReview.waves as Record<string, Record<string, unknown>>
     )[String(wave.wave_id)];
+    for (const [laneName, lane] of Object.entries(
+      historicalWave.lanes as Record<string, Record<string, unknown>>,
+    )) {
+      const receipt = historicalReceipts.find(
+        (candidate) => candidate.lane === laneName,
+      );
+      if (receipt) lane.receipt_id = receipt.receipt_id;
+    }
     delete historicalWave.scope_binding;
     for (const lane of Object.values(
       historicalWave.lanes as Record<string, Record<string, unknown>>,
