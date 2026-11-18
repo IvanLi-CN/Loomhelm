@@ -160,6 +160,42 @@ describe("flow receipt CLI replay", () => {
         ],
         "missing required option --review-attempt-id",
       );
+
+      for (const [lane, attempt] of [
+        ["state-concurrency", "cli-state"],
+        ["failure-data-safety", "cli-failure"],
+        ["test-platform", "cli-test"],
+      ])
+        runCli(root, [
+          "record",
+          "--repo",
+          root,
+          "--kind",
+          "review",
+          "--base-ref",
+          "base",
+          "--head-sha",
+          head,
+          "--review-profile",
+          "pr-convergence",
+          "--review-attempt-id",
+          attempt,
+          "--review-result-json",
+          result,
+          "--wave-id",
+          waveId,
+          "--lane",
+          lane,
+        ]);
+      const finalized = runCli(root, [
+        "review-wave",
+        "finalize",
+        "--repo",
+        root,
+        "--wave-id",
+        waveId,
+      ]);
+      expect(finalized.next).toBe("merge-ready");
     });
   });
 });

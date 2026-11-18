@@ -529,6 +529,22 @@ describe("acceptance and review state", () => {
             lane: lane.lane,
           }).reused,
         ).toBe(true);
+        expect(() =>
+          recordSubagentReviewState(ledger, {
+            reviewProfile: "pr-convergence",
+            baseRef: sha,
+            reviewAttemptId: "attempt-1",
+            reviewResultJson: JSON.stringify({
+              findings: [],
+              overall_correctness: "patch is correct",
+              overall_explanation:
+                "Inspected the candidate diff and confirmed the complete result.",
+              overall_confidence_score: 1,
+            }),
+            waveId: String(wave.wave_id),
+            lane: lane.lane,
+          }),
+        ).toThrow("different terminal state");
         expect(
           recordSubagentReviewState(ledger, {
             reviewProfile: "pr-convergence",
@@ -800,6 +816,35 @@ describe("acceptance and review state", () => {
         acceptance: [],
       }),
     ).toThrow("review receipt integrity is invalid");
+
+    const schemaSevenLedgerWithLegacyReceipts = structuredClone(
+      normalized,
+    ) as Record<string, unknown>;
+    delete schemaSevenLedgerWithLegacyReceipts.legacy_compatibility;
+    delete schemaSevenLedgerWithLegacyReceipts.legacy_schema_version;
+    schemaSevenLedgerWithLegacyReceipts.schema_version = 7;
+    const schemaSevenLegacyReceiptWave = openReviewWaveState(
+      schemaSevenLedgerWithLegacyReceipts,
+      {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "j".repeat(40),
+        laneSpecs: lanes,
+      },
+    );
+    expect(
+      (schemaSevenLegacyReceiptWave.wave as Record<string, unknown>).head_sha,
+    ).toBe("j".repeat(40));
+    expect(
+      (
+        schemaSevenLedgerWithLegacyReceipts.review as Record<string, unknown>
+      ).waves,
+    ).toMatchObject({
+      [String(wave.wave_id)]: {
+        state: "retired",
+        retirement_reason: "legacy-review-receipt-schema",
+      },
+    });
 
     const schemaSevenLegacy = structuredClone(normalized) as Record<
       string,

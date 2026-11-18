@@ -6,6 +6,24 @@ export interface ReviewWaveLaneSpec {
   effort: string;
 }
 
+export function reviewAttemptIdentity(
+  runId: string,
+  waveProofKey: string,
+  scopeClass: string,
+  requestedProfile: { model: string; effort: string },
+  attemptKey: string,
+): string {
+  return stableHash([
+    runId,
+    "sub-agent-review-attempt",
+    waveProofKey,
+    scopeClass,
+    requestedProfile.model,
+    requestedProfile.effort,
+    attemptKey,
+  ]);
+}
+
 export function reviewWaveIdentity(
   runId: string,
   epochId: string,
@@ -16,6 +34,7 @@ export function reviewWaveIdentity(
   laneSpecs: ReviewWaveLaneSpec[],
   generation: number,
 ): string {
+  const canonicalLaneSpecs = [...laneSpecs].sort(compareLaneSpecs);
   const seed = [
     runId,
     epochId,
@@ -23,7 +42,7 @@ export function reviewWaveIdentity(
     headSha,
     baseSha,
     scopeClass,
-    laneSpecs,
+    canonicalLaneSpecs,
   ];
   return stableHash(
     generation === 0
@@ -37,7 +56,9 @@ export function reviewWaveLaneSpecs(
 ): ReviewWaveLaneSpec[] {
   if (!isRecord(wave.lanes))
     throw new FlowError("review wave lane topology is invalid");
-  return Object.entries(wave.lanes).map(([lane, rawLane]) => {
+  return Object.entries(wave.lanes)
+    .sort(([left], [right]) => compareLaneNames(left, right))
+    .map(([lane, rawLane]) => {
     if (
       !isRecord(rawLane) ||
       typeof rawLane.model !== "string" ||
@@ -46,8 +67,19 @@ export function reviewWaveLaneSpecs(
       !rawLane.effort.trim()
     )
       throw new FlowError("review wave lane topology is invalid");
-    return { lane, model: rawLane.model, effort: rawLane.effort };
-  });
+      return { lane, model: rawLane.model, effort: rawLane.effort };
+    });
+}
+
+function compareLaneSpecs(
+  left: ReviewWaveLaneSpec,
+  right: ReviewWaveLaneSpec,
+): number {
+  return compareLaneNames(left.lane, right.lane);
+}
+
+function compareLaneNames(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export function assertReviewWaveTopology(

@@ -24,4 +24,4 @@ Schema 7 新增请求与结果证据分离字段；schema 6 历史记录保持�
 
 Schema 7 receipt 同时绑定 review scope 和 parent attempt identity；历史 wave 的退休要求所有 lane 形状与绑定 receipt 都完整合法，不能因单个 lane 的旧 receipt 而放行混合损坏状态。
 
-Schema 7 completed 与 unavailable receipt 均要求父流程提供非空 attempt ID；wave 保存 required lane topology，并以 scope、lane specs 和 generation 重算 wave identity。缺失 required lane、成对 scope 篡改、pending/null pointer 或 schema 7 mixed pointer 均保持阻塞，只有完整合法的 schema 6 历史 wave 才能退休并生成 fresh wave。
+Schema 7 completed 与 unavailable receipt 均要求父流程提供非空 attempt ID 和共用的 `attempt_identity`；同一 attempt 不得跨 terminal state 或不同结果复用。Wave identity 对 lane specs 做稳定排序，并以 scope、lane specs 和 generation 重算。缺失 required lane、成对 scope 篡改、pending/null pointer 或 schema 7 mixed pointer 均保持阻塞；flow ledger schema 7 中完整合法的 schema 6 历史 wave 也可受控退休并生成 fresh wave。

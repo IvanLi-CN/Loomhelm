@@ -17,3 +17,5 @@ Repair Batch 补充了父流程 formal pair 的 record/integrity 双重校验，
 后续完整性收紧补充 scope 与 attempt identity 绑定，并拒绝带有任一 malformed lane profile 的 mixed legacy wave；单一合法 schema 6 receipt 不再足以退休损坏的 active wave。
 
 当前实现进一步要求 completed receipt 也必须有父流程 attempt ID，绑定并重算 required lane topology 与 wave scope identity，并通过 CLI replay、缺失 lane、成对 scope 篡改和 mixed schema 7 恢复测试固定失败边界。
+
+第四轮修复统一 completed/unavailable 的 attempt identity，稳定 lane 排序以避免落盘重排破坏 wave identity，并支持 schema 7 flow ledger 中完整 schema 6 receipt wave 的安全恢复；CLI finalize 与跨 terminal attempt 冲突测试覆盖这些边界。

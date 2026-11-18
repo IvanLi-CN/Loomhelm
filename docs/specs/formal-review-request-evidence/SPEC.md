@@ -20,7 +20,7 @@
 
 ### REQ-FRPE-003：结果不证明实际模型
 
-Review 结果 MUST NOT 授权、否决或覆盖父流程的 requested profile；每个新的 completed 或 unavailable receipt MUST 写入 schema 7、`profile_verification=request_recorded`、`effective_profile=null`、`scope_class` 和可选 `reported_profile`，并要求非空的父流程 `review-attempt-id` 纳入 receipt identity。Receipt integrity MUST 同时重新校验 scope、attempt identity 和 wave/lane topology；Reviewer self-report MUST NOT 被解释为 provider 的 effective model 证明。
+Review 结果 MUST NOT 授权、否决或覆盖父流程的 requested profile；每个新的 completed 或 unavailable receipt MUST 写入 schema 7、`profile_verification=request_recorded`、`effective_profile=null`、`scope_class`、稳定的 `attempt_identity` 和可选 `reported_profile`，并要求非空的父流程 `review-attempt-id` 纳入 receipt identity。同一 wave/lane/pair 的同一 attempt ID 跨 terminal state 或不同结果 MUST 被拒绝，只有相同 terminal result 才能幂等回放。Receipt integrity MUST 同时重新校验 scope、attempt identity 和 wave/lane topology；Reviewer self-report MUST NOT 被解释为 provider 的 effective model 证明。
 
 ### REQ-FRPE-004：内容和完整性门禁保持有效
 
@@ -28,7 +28,7 @@ Review 结果 MUST NOT 授权、否决或覆盖父流程的 requested profile；
 
 ### REQ-FRPE-005：历史 schema 兼容不升级事实
 
-Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 self-reported profile MUST NOT 转换为 schema 7 的启动事实，也 MUST NOT 满足新候选 clear gate。新候选 MUST 通过 fresh review wave 恢复，旧 active wave 只有在所有 lane 都仍是旧形状、required lane topology 完整、每个 lane 都有明确绑定当前 wave、lane、base 和 head 的 completed schema 6 receipt 且没有 pending/null pointer 或 schema 7 mixed pointer 时才可由运行时标记 retired；即使另一个 lane 有合法 schema 6 receipt，混合 malformed lane、跨 wave receipt 或未绑定 receipt MUST 继续阻塞。退休过程 MUST 保留既有 active epoch 和 repair budget，并为同一候选重新打开的 fresh wave 分配不重复的 wave identity，确保历史 wave 和 schema 6 receipt 不被覆盖或复用。失败重试 MUST 使用同一 requested pair 和父流程 `review-attempt-id`，保留独立 attempt，且不得重复启动活动 lane。
+Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 self-reported profile MUST NOT 转换为 schema 7 的启动事实，也 MUST NOT 满足新候选 clear gate。无论 flow ledger 当前已是 schema 7 还是由 schema 6 迁移而来，只要 active wave 的全部 lane 都是旧形状、required lane topology 完整、每个 lane 都有明确绑定当前 wave、lane、base 和 head 的 completed schema 6 receipt 且没有 pending/null pointer 或 schema 7 mixed pointer，运行时才可标记 retired；即使另一个 lane 有合法 schema 6 receipt，混合 malformed lane、跨 wave receipt 或未绑定 receipt MUST 继续阻塞。退休过程 MUST 保留既有 active epoch 和 repair budget，并为同一候选重新打开的 fresh wave 分配不重复的 wave identity，确保历史 wave 和 schema 6 receipt 不被覆盖或复用。失败重试 MUST 使用同一 requested pair 和父流程 `review-attempt-id`，保留独立 attempt，且不得重复启动活动 lane。
 
 ## Verification
 
@@ -42,13 +42,13 @@ Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 self-repo
 
 - covers: `REQ-FRPE-003`, `REQ-FRPE-004`
 - Method: review record、receipt integrity、wave finalize 和 required-lane 失败路径测试。
-- Pass condition: 无 self-report 的完整结果可验收；不同 self-report 不改变 clear；缺失 attempt、malformed 结果、任一未完成或被删除的 required lane、候选绑定错误和不完整内容均阻塞。
+- Pass condition: 无 self-report 的完整结果可验收；不同 self-report 不改变 clear；缺失 attempt、跨 terminal state 或不同结果复用 attempt、malformed 结果、任一未完成或被删除的 required lane、候选绑定错误和不完整内容均阻塞。
 
 ### VER-FRPE-003
 
 - covers: `REQ-FRPE-005`
 - Method: schema 6/7 fixture、历史读取、fresh-wave 恢复和 unavailable retry 测试。
-- Pass condition: schema 6 receipt 原样可读但不能 clear；schema 7 写读完整；同一 pair 使用不同 attempt id 重试形成独立 attempt、相同 id 回放幂等，活动或 pending lane 不重复启动，混合 schema 7/未绑定 pointer 的旧 active wave 不退休，合法旧 wave 可受控退休且历史候选不被重写。
+- Pass condition: schema 6 receipt 原样可读但不能 clear；schema 7 写读完整；schema 7 ledger 中的 schema 6 receipts 可恢复；同一 pair 使用不同 attempt id 重试形成独立 attempt、相同 terminal result 使用相同 id 回放幂等、跨 terminal state 或不同结果复用被拒绝，活动或 pending lane 不重复启动，混合 schema 7/未绑定 pointer 的旧 active wave 不退休，合法旧 wave 可受控退休且历史候选不被重写。
 
 ## Related ADRs
 

@@ -12,7 +12,10 @@ import {
   validateReviewFindingLocations,
 } from "./review-result";
 import { isFormalReviewRequestProfile } from "./review-profile-policy";
-import { assertReviewWaveTopology } from "./review-wave-identity";
+import {
+  assertReviewWaveTopology,
+  reviewAttemptIdentity,
+} from "./review-wave-identity";
 
 export interface SubagentReviewOptions {
   reviewProfile: string;
@@ -80,6 +83,14 @@ export function recordSubagentReviewState(
     : [];
   const proofKey = `${repoPath}:${headSha}:${baseSha}:${options.reviewProfile}`;
   const waveProofKey = `${proofKey}:${waveId}:${lane}`;
+  const attemptKey = reviewAttemptKey(options, true);
+  const attemptIdentity = reviewAttemptIdentity(
+    String(ledger.run_id),
+    waveProofKey,
+    scopeClass,
+    requestedProfile,
+    attemptKey,
+  );
   if (terminal === "unavailable")
     return recordUnavailable(
       ledger,
@@ -93,6 +104,8 @@ export function recordSubagentReviewState(
       baseSha,
       requestedProfile,
       scopeClass,
+      attemptKey,
+      attemptIdentity,
     );
   if (terminal !== "completed")
     throw new FlowError(
@@ -107,7 +120,6 @@ export function recordSubagentReviewState(
   const parsed = parseReviewResultJson(options.reviewResultJson);
   if (repoPath)
     validateReviewFindingLocations(parsed.result, repoPath, baseSha, headSha);
-  const attemptKey = reviewAttemptKey(options, true);
   const receiptId = stableHash([
     ledger.run_id,
     "sub-agent-review",
@@ -116,6 +128,28 @@ export function recordSubagentReviewState(
     parsed.resultSha256,
     attemptKey,
   ]);
+  const existingAttempt = findAttemptReceipt(
+    receipts,
+    attemptIdentity,
+    attemptKey,
+    waveProofKey,
+    scopeClass,
+    requestedProfile,
+  );
+  if (existingAttempt) {
+    if (
+      existingAttempt.kind !== "review" ||
+      existingAttempt.terminal_state !== "completed"
+    )
+      throw new FlowError(
+        "review attempt id is already recorded with a different terminal state",
+      );
+    if (existingAttempt.receipt_id !== receiptId)
+      throw new FlowError(
+        "review attempt id is already bound to a different result",
+      );
+    return { reused: true, receipt: existingAttempt };
+  }
   const existingLaneId = laneState.receipt_id;
   if (existingLaneId) {
     const existing = receipts.find(
@@ -139,6 +173,7 @@ export function recordSubagentReviewState(
     base_sha: baseSha,
     review_profile: options.reviewProfile,
     attempt_key: attemptKey,
+    attempt_identity: attemptIdentity,
     requested_profile: requestedProfile,
     scope_class: scopeClass,
     profile_verification: "request_recorded",
@@ -184,6 +219,8 @@ function recordUnavailable(
   baseSha: string,
   requestedProfile: { model: string; effort: string },
   scopeClass: string,
+  attemptKey: string,
+  attemptIdentity: string,
 ): Record<string, unknown> {
   if (options.reviewResultJson.trim())
     throw new FlowError(
@@ -193,19 +230,28 @@ function recordUnavailable(
     throw new FlowError(
       "unavailable sub-agent review requires explicit startup-unavailable classification",
     );
-  const attemptKey = reviewAttemptKey(options, true);
-  const identity = stableHash([
-    "sub-agent-review-unavailable",
+  const existingAttempt = findAttemptReceipt(
+    receipts,
+    attemptIdentity,
+    attemptKey,
     waveProofKey,
     scopeClass,
-    requestedProfile.model,
-    requestedProfile.effort,
-    attemptKey,
-  ]);
+    requestedProfile,
+  );
+  if (existingAttempt) {
+    if (
+      existingAttempt.kind !== "review_attempt" ||
+      existingAttempt.terminal_state !== "unavailable"
+    )
+      throw new FlowError(
+        "review attempt id is already recorded with a different terminal state",
+      );
+    return { reused: true, receipt: existingAttempt };
+  }
   const receiptId = stableHash([
     ledger.run_id,
     "sub-agent-review-unavailable",
-    identity,
+    attemptIdentity,
   ]);
   const existing = receipts.find((receipt) => receipt.receipt_id === receiptId);
   if (existing) return { reused: true, receipt: existing };
@@ -219,6 +265,7 @@ function recordUnavailable(
     base_sha: baseSha,
     review_profile: options.reviewProfile,
     attempt_key: attemptKey,
+    attempt_identity: attemptIdentity,
     requested_profile: requestedProfile,
     scope_class: scopeClass,
     profile_verification: "request_recorded",
@@ -243,6 +290,28 @@ function recordUnavailable(
   receipts.push(receipt);
   ledger.receipts = receipts;
   return { reused: false, receipt };
+}
+
+function findAttemptReceipt(
+  receipts: Record<string, unknown>[],
+  attemptIdentity: string,
+  attemptKey: string,
+  waveProofKey: string,
+  scopeClass: string,
+  requestedProfile: { model: string; effort: string },
+): Record<string, unknown> | undefined {
+  return receipts.find(
+    (receipt) =>
+      receipt.attempt_identity === attemptIdentity ||
+      (!Object.hasOwn(receipt, "attempt_identity") &&
+        receipt.review_receipt_schema === 7 &&
+        receipt.attempt_key === attemptKey &&
+        receipt.wave_proof_key === waveProofKey &&
+        receipt.scope_class === scopeClass &&
+        isRecord(receipt.requested_profile) &&
+        canonicalJson(receipt.requested_profile) ===
+          canonicalJson(requestedProfile)),
+  );
 }
 
 function reviewState(ledger: Record<string, unknown>): Record<string, unknown> {

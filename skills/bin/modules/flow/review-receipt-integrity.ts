@@ -11,7 +11,10 @@ import {
   validateReviewFindingLocations,
 } from "./review-result";
 import { isFormalReviewRequestProfile } from "./review-profile-policy";
-import { assertReviewWaveIdentity } from "./review-wave-identity";
+import {
+  assertReviewWaveIdentity,
+  reviewAttemptIdentity,
+} from "./review-wave-identity";
 
 export function assertReviewReceiptIntegrity(
   ledger: Record<string, unknown>,
@@ -78,6 +81,15 @@ export function assertReviewReceiptIntegrity(
     throw new FlowError("review receipt requested profile integrity is invalid");
   if (!validReportedProfile(receipt.reported_profile))
     throw new FlowError("review receipt reported profile is invalid");
+  const expectedAttemptIdentity = reviewAttemptIdentity(
+    String(ledger.run_id),
+    receipt.wave_proof_key,
+    String(receipt.scope_class),
+    requestedProfile,
+    receipt.attempt_key,
+  );
+  if (receipt.attempt_identity !== expectedAttemptIdentity)
+    throw new FlowError("review receipt attempt identity integrity is invalid");
   if (
     repoPath !== undefined &&
     receipt.proof_key !==

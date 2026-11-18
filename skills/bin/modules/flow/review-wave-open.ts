@@ -1,6 +1,7 @@
 import {
   DYNAMIC_REVIEW_LANES,
   FIXED_REVIEW_LANES,
+  FLOW_SCHEMA_VERSION,
   FlowError,
   REVIEW_SCOPE_CLASSES,
   isoNow,
@@ -200,7 +201,9 @@ function isLegacyReviewWave(
     ? (ledger.receipts as unknown[])
     : [];
   const migratedSchemaSix =
-    ledger.legacy_compatibility === true && ledger.legacy_schema_version === 6;
+    (ledger.legacy_compatibility === true &&
+      ledger.legacy_schema_version === 6) ||
+    ledger.schema_version === FLOW_SCHEMA_VERSION;
   const lanes = Object.entries(wave.lanes);
   if (!lanes.length) return false;
   const legacyLaneShape = lanes.every(
