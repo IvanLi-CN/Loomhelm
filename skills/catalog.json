@@ -69,28 +69,6 @@
       ]
     },
     {
-      "name": "dot-codex-development",
-      "entry": "skills/dot-codex-development/SKILL.md",
-      "files": 4,
-      "internalSkills": [
-        "dev-plan"
-      ],
-      "externalSkills": [],
-      "externalCommands": [
-        {
-          "command": "git",
-          "strength": "required-when-applicable",
-          "condition": "repository inspection or Git operations"
-        }
-      ],
-      "hostCapabilities": [],
-      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
-      "scripts": [
-        "skills/dot-codex-development/scripts/context.ts",
-        "skills/dot-codex-development/scripts/test_context.ts"
-      ]
-    },
-    {
       "name": "fast-flow",
       "entry": "skills/fast-flow/SKILL.md",
       "files": 1,

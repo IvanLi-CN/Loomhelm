@@ -4,7 +4,6 @@ import { main as localCloseoutContext } from "./modules/workspace/local_merge_cl
 import { main as localCloseoutGate } from "./modules/workspace/local_merge_closeout_gate_cli";
 import { main as mergePreflight } from "./modules/workspace/merge_preflight";
 import { main as portRegistry } from "./modules/workspace/port_registry_cli";
-import { main as candidateContext } from "./modules/workspace/candidate_context";
 
 const commands = {
   closeout_context: closeoutContext,
@@ -13,7 +12,6 @@ const commands = {
   local_merge_closeout_gate: localCloseoutGate,
   merge_preflight: mergePreflight,
   port_registry: portRegistry,
-  candidate_context: candidateContext,
 } as const;
 
 export function workspace(

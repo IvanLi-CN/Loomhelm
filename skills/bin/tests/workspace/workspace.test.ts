@@ -1,13 +1,8 @@
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { evaluateCloseoutGate } from "../../modules/workspace/closeout_gate";
-import {
-  inspectContext,
-  validateCandidate,
-  type CandidateRunner,
-} from "../../modules/workspace/candidate_context";
 import { evaluateLocalMergeCloseoutGate } from "../../modules/workspace/local_merge_closeout_gate";
 import { buildLocalMergeCloseoutContext } from "../../modules/workspace/local_merge_closeout_context";
 import {
@@ -445,120 +440,6 @@ describe("workspace port leases", () => {
     );
     expect(first[0]).toBeGreaterThanOrEqual(10000);
     expect(second[1]).not.toBe(first[1]);
-  });
-});
-
-function contextRunner(
-  candidate: string,
-  runtime: string,
-  failure = false,
-): { runner: CandidateRunner; requests: ProcessRequest[] } {
-  const requests: ProcessRequest[] = [];
-  const common = "/repo/.git";
-  const runner: CandidateRunner = async (request) => {
-    requests.push(request);
-    if (request.command !== "git") return result("", failure ? 1 : 0);
-    const args = (request.args ?? []).join(" ");
-    const root = request.cwd === candidate ? candidate : runtime;
-    if (args === "rev-parse --show-toplevel") return result(`${root}\n`);
-    if (args === "rev-parse --git-dir")
-      return result(
-        `${request.cwd === candidate ? `${common}/worktrees/candidate` : common}\n`,
-      );
-    if (args === "rev-parse --git-common-dir") return result(`${common}\n`);
-    if (args === "remote get-url origin")
-      return result("git@github.com:IvanLi-CN/dot-codex.git\n");
-    return result("");
-  };
-  return { runner, requests };
-}
-
-async function makeDotCodexPair(): Promise<{
-  root: string;
-  candidate: string;
-  runtime: string;
-}> {
-  const root = await temporaryDirectory();
-  const candidate = join(root, "candidate");
-  const runtime = join(root, "runtime");
-  for (const directory of [candidate, runtime]) {
-    await mkdir(join(directory, "agents"), { recursive: true });
-    await mkdir(join(directory, "skills"), { recursive: true });
-    await writeFile(join(directory, "config.toml"), "[test]\n");
-  }
-  return { root, candidate, runtime };
-}
-
-describe("candidate context protections", () => {
-  test("allows a linked candidate only with the matching runtime repository", async () => {
-    const pair = await makeDotCodexPair();
-    try {
-      const { runner } = contextRunner(pair.candidate, pair.runtime);
-      const context = await inspectContext(pair.candidate, "write", {
-        runner,
-        environ: { CODEX_HOME: pair.runtime },
-      });
-      expect(context.write_allowed).toBe(true);
-      expect(context.candidate_root).toBe(pair.candidate);
-      expect(context.runtime_home).toBe(pair.runtime);
-      const runtime = await inspectContext(pair.runtime, "read", {
-        runner,
-        environ: { CODEX_HOME: pair.runtime },
-      });
-      expect(runtime.write_allowed).toBe(false);
-    } finally {
-      await rm(pair.root, { recursive: true, force: true });
-    }
-  });
-
-  test("removes runtime and Git context from fixed checks", async () => {
-    const pair = await makeDotCodexPair();
-    try {
-      const { runner, requests } = contextRunner(pair.candidate, pair.runtime);
-      const validation = await validateCandidate(pair.candidate, {
-        runner,
-        environ: { CODEX_HOME: pair.runtime, GIT_DIR: "/foreign" },
-        fixedChecks: () => [{ name: "fixed", argv: ["bun", "test"] }],
-      });
-      expect(validation.ok).toBe(true);
-      const fixed = requests.find((request) => request.command === "bun");
-      expect(fixed?.env?.CODEX_HOME).toBeUndefined();
-      expect(fixed?.env?.GIT_DIR).toBeUndefined();
-      expect(fixed?.env?.HOME).not.toBe(pair.runtime);
-    } finally {
-      await rm(pair.root, { recursive: true, force: true });
-    }
-  });
-
-  test("stops fixed validation at the first failing entrypoint", async () => {
-    const pair = await makeDotCodexPair();
-    try {
-      const { runner: baseRunner } = contextRunner(
-        pair.candidate,
-        pair.runtime,
-      );
-      let calls = 0;
-      const runner: CandidateRunner = async (request) => {
-        if (request.command === "bun") {
-          calls += 1;
-          return result("failure", 7);
-        }
-        return baseRunner(request);
-      };
-      const validation = await validateCandidate(pair.candidate, {
-        runner,
-        environ: { CODEX_HOME: pair.runtime },
-        fixedChecks: () => [
-          { name: "first", argv: ["bun", "first"] },
-          { name: "second", argv: ["bun", "second"] },
-        ],
-      });
-      expect(validation.ok).toBe(false);
-      expect(calls).toBe(1);
-      expect(validation.checks as unknown[]).toHaveLength(1);
-    } finally {
-      await rm(pair.root, { recursive: true, force: true });
-    }
   });
 });
 

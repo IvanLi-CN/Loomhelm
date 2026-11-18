@@ -2,13 +2,13 @@
 
 ## Context and Scope
 
-本主题约束客户端从固定 dot-codex 源版本迁入的 29 套 Skills、执行脚本、共享支持和本地任务网页。它与客户端独立核心并存，不替代 Go 客户端、服务端或 Web App，不代表 Connected mode 已实现。
+本主题约束客户端维护的 Skills、执行脚本、共享支持和本地任务网页。它与客户端独立核心并存，不替代 Go 客户端、服务端或 Web App，不代表 Connected mode 已实现。
 
 ## Terms and Interfaces
 
 - Skill 是命名的指令与资源包，不是一次任务执行，也不授予超出调用者授权的权限。
 - 可发布 Skill 资源以项目根 `skills/` 为源包目录；`packages/multi-task-flow-runtime/` 是独立的内部 runtime、viewer/service、构建与测试源码，不属于 Skill 安装面。构建系统必须把 runtime 映射到 npm 包内的 `skills/multi-task-flow/`，消费者只接收生成后的包资源；不能要求用户 checkout 或构建 `packages/` 源码。
-- 根 `skills/` 源包保留审查后的 29 套客户端 Skills；`@loomhelm/multi-task-flow` 的 npm projection 只发布 `multi-task-flow`，共享运行时通过 `@loomhelm/runtime-core` 依赖提供，不把其他独立 Skill 当作该包的运行时内容。
+- 根 `skills/` 源包保存 `skills/catalog.json` 登记的客户端 Skills；`@loomhelm/multi-task-flow` 的 npm projection 只发布 `multi-task-flow`，共享运行时通过 `@loomhelm/runtime-core` 依赖提供，不把其他独立 Skill 当作该包的运行时内容。
 - 外部宿主能力包括未迁入的 Skills、原生 Codex 工具及专项 CLI；缺失能力必须明确检测。
 
 共享进程执行的 `outputSink` MUST 支持等待异步接收端，每个输出流顺序消费，stdout/stderr 保持独立；`maxCapturedOutputBytes` MUST 继续仅表示每个流的返回值捕获预算。可选 IPC MUST 与正文输出分离。可选协作停止 MUST 至多执行一次，默认截止时间为 200 秒，可配置范围为 1 至 200000 毫秒，结束后复用原有进程树信号回收；接收端或同步控制回调失败 MUST 回收本次子进程后拒绝调用。本地停止 MUST NOT 替代远端停止证据。
@@ -17,7 +17,7 @@
 
 ### REQ-SKILLS-001
 
-客户端 MUST 完整提供已审查的 29 套源包及必要脚本、references、模板、网页资源、测试与共享依赖。发布资源 MUST 可追溯到构建源码提交和构建时生成的文件摘要；源码资源从仓库目录发现，不得隐式依赖全局 dot-codex 执行代码，也不得复制 `~/.agents` 的 Skill 源包。资源 MUST 排除与客户端实际功能及其行为回归无关的提供方历史语言迁移审计资料；来源清单 MUST 明确记录排除范围，重复导入和增量打包不得重新带入这些资料。
+客户端 MUST 完整提供目录登记的源包及必要脚本、references、模板、网页资源、测试与共享依赖。退役 Skill MUST 从源码目录和构建清单移除。发布资源 MUST 可追溯到构建源码提交和构建时生成的文件摘要；源码资源从仓库目录发现，不得隐式依赖全局 dot-codex 执行代码，也不得复制 `~/.agents` 的 Skill 源包。资源 MUST 排除与客户端实际功能及其行为回归无关的提供方历史语言迁移审计资料；来源清单 MUST 明确记录排除范围，重复导入和增量打包不得重新带入这些资料。
 
 ### REQ-SKILLS-002
 
@@ -111,7 +111,7 @@ Viewer compatibility maintenance MUST keep historical format, fallback, migratio
 
 - covers: `REQ-SKILLS-001`
 - Method: 固定来源资源清单、路径闭包和来源隔离产物测试。
-- Pass condition: 29 套资源完整；已跟踪资源均有清单归属，实际 TS 导入闭包缺失必须失败；无全局执行代码回退或外部 Skill 源包混入。
+- Pass condition: 资源发现结果与当前目录一致；已跟踪资源均有清单归属，实际 TS 导入闭包缺失必须失败；无全局执行代码回退或外部 Skill 源包混入。
 
 ### VER-SKILLS-002
 
