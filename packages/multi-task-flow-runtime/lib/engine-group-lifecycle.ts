@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { lifecycleStageOf } from "../lib/atomic-orchestration";
+import { lifecycleRoleOf, lifecycleStageOf } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
 import { externalRef, fact, group, id, isContributionKind, providerReceipt } from "../lib/schema";
 import type { CommandContext } from "./engine-command-context";
@@ -234,6 +234,20 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         "Earlier delivery-unit atoms must complete first",
         4,
       );
+      if (lifecycleRoleOf({ ...atom, group_id: groupId }) === "integrate")
+        requireCondition(
+          ledger.tasks
+            .filter(
+              (task) =>
+                task.group_id === groupId &&
+                task.disposition === "active" &&
+                isContributionKind(task.kind),
+            )
+            .every((task) => task.atoms.every((item) => item.status === "completed")),
+          "ATOMS_PENDING",
+          "Contribution task atoms must complete before delivery-unit integration",
+          4,
+        );
       const allowed: Record<string, string[]> = {
         planned: ["running"],
         running: ["blocked", "completed"],

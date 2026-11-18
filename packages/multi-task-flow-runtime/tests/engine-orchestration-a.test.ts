@@ -15,6 +15,7 @@ import {
   type Task,
   validateLedger,
 } from "../lib/schema";
+import { fixtureIdentity } from "./cli-identity-fixture";
 import {
   approve,
   approveV2,
@@ -266,6 +267,62 @@ describe("orchestration state", () => {
         ),
       ),
     ).toThrow("integrated before parent PR publication");
+    const strictLedger = v2Fixture() as any;
+    strictLedger.contract_version = 6;
+    strictLedger.runtime_identity = { ...fixtureIdentity };
+    apply(
+      strictLedger,
+      "lifecycle-record",
+      request(
+        strictLedger,
+        "strict-group-workspace",
+        {
+          target_type: "group",
+          target_id: "g",
+          stage: "workspace_ready",
+          branch: "parent",
+          resource_ids: ["group-worktree", "group-branch"],
+          evidence_ref: "strict-workspace",
+        },
+        groupActor,
+      ),
+    );
+    expect(() =>
+      apply(
+        strictLedger,
+        "publish-pr-claim",
+        request(
+          strictLedger,
+          "strict-group-pr-before-integration",
+          {
+            action_id: "publish-group-pr",
+            target_type: "group",
+            target_id: "g",
+            branch: "parent",
+            target_branch: "main",
+            expected_base_sha: base,
+            expected_head_sha: base,
+            pr: parentPr.pr,
+            operation_id: "strict-group-pr-before-integration-op",
+          },
+          groupActor,
+        ),
+      ),
+    ).toThrow("must declare an integrate atom");
+    ledger.tasks[1].atoms[0].status = "planned";
+    expect(() =>
+      apply(
+        ledger,
+        "group-atom-update",
+        request(
+          ledger,
+          "group-integrate-before-content",
+          { group_id: "g", atom_id: groupAtom("integrate").id, state: "running" },
+          groupActor,
+        ),
+      ),
+    ).toThrow("Contribution task atoms must complete before delivery-unit integration");
+    ledger.tasks[1].atoms[0].status = "completed";
     for (const state of ["running", "completed"] as const)
       apply(
         ledger,

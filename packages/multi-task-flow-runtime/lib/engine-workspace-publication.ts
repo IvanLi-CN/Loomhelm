@@ -1,15 +1,7 @@
 import { z } from "zod";
 import { lifecycleRoleOf } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
-import {
-  baselineReceipt,
-  externalRef,
-  fact,
-  historicalLifecycleCompatibility,
-  id,
-  milestone,
-  providerReceipt,
-} from "../lib/schema";
+import { baselineReceipt, externalRef, fact, id, milestone, providerReceipt } from "../lib/schema";
 import type { CommandContext } from "./engine-command-context";
 import * as core from "./engine-support-core";
 import * as support from "./engine-support-gates";
@@ -468,19 +460,19 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
         );
       if (targetType === "group") {
         const lifecycleRole = (atom: any) => lifecycleRoleOf({ ...atom, group_id: targetId });
-        const historicalLifecycle = historicalLifecycleCompatibility(ledger);
+        const requiresExplicitLifecycle = ledger.contract_version >= 6;
         const integrationAtom = target.atoms.find(
           (atom: any) => lifecycleRole(atom) === "integrate",
         );
         const parentPrAtom = target.atoms.find((atom: any) => lifecycleRole(atom) === "create-pr");
         requireCondition(
-          historicalLifecycle || !!integrationAtom,
+          !requiresExplicitLifecycle || !!integrationAtom,
           "INTEGRATION_PENDING",
           "Delivery-unit lifecycle must declare an integrate atom before parent PR publication",
           4,
         );
         requireCondition(
-          historicalLifecycle || !!parentPrAtom,
+          !requiresExplicitLifecycle || !!parentPrAtom,
           "INTEGRATION_PENDING",
           "Delivery-unit lifecycle must declare a create-pr atom before parent PR publication",
           4,
