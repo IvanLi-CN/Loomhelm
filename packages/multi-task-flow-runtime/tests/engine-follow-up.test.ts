@@ -664,25 +664,40 @@ test("post-merge follow-up publication waits across continuation revisions", () 
   secondTask.branch = secondTask.id;
   secondTask.atoms = [];
   ledger.tasks.push(secondTask);
+  const invalidTask = structuredClone(secondTask);
+  invalidTask.id = "task-followup-invalid";
+  invalidTask.title = "Invalid post-merge contribution";
+  invalidTask.branch = invalidTask.id;
+  invalidTask.base_sha = "0".repeat(64);
+  ledger.tasks.push(invalidTask);
   const secondNode = {
     ...structuredClone(firstPlan.nodes.find((node) => node.ref_id === firstTask.id)),
     id: "node-followup-2",
     ref_id: secondTask.id,
     label: secondTask.title,
   };
+  const invalidNode = {
+    ...structuredClone(secondNode),
+    id: "node-followup-invalid",
+    ref_id: invalidTask.id,
+    label: invalidTask.title,
+  };
   const secondPlan = structuredClone(firstPlan);
   secondPlan.id = "plan-followup-2";
   secondPlan.supersedes_id = firstPlan.id;
   secondPlan.nodes.push(secondNode);
+  secondPlan.nodes.push(invalidNode);
   secondPlan.revision = {
     ...firstPlan.revision!,
-    affected_task_ids: [secondTask.id],
-    affected_node_ids: [secondNode.id],
+    affected_task_ids: [secondTask.id, invalidTask.id],
+    affected_node_ids: [secondNode.id, invalidNode.id],
     affected_edge_ids: [],
     change_set: {
       added: [
         { path: `tasks[${secondTask.id}]`, new_value: structuredClone(secondTask) },
         { path: `plan.nodes[${secondNode.id}]`, new_value: structuredClone(secondNode) },
+        { path: `tasks[${invalidTask.id}]`, new_value: structuredClone(invalidTask) },
+        { path: `plan.nodes[${invalidNode.id}]`, new_value: structuredClone(invalidNode) },
       ],
       removed: [],
       modified: [],
@@ -701,6 +716,7 @@ test("post-merge follow-up publication waits across continuation revisions", () 
   });
   group.current_sha = followUpHead;
   for (const task of ledger.tasks) task.state = "integrated";
+  for (const atom of firstTask.atoms) atom.status = "completed";
   for (const atom of secondTask.atoms) atom.status = "completed";
 
   apply(

@@ -511,9 +511,14 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
                 task.group_id === targetId &&
                 task.disposition === "active" &&
                 isContributionKind(task.kind) &&
-                (!mergedContinuation || isMergedContributionContinuation(ledger, target, task)),
+                (!mergedContinuation ||
+                  isMergedContributionContinuation(ledger, target, task, false)),
             )
-            .every((task) => task.atoms.every((atom) => atom.status === "completed")),
+            .every(
+              (task) =>
+                (!mergedContinuation || isMergedContributionContinuation(ledger, target, task)) &&
+                task.atoms.every((atom) => atom.status === "completed"),
+            ),
           "INTEGRATION_PENDING",
           "Contribution task atoms must complete before parent PR publication",
           4,

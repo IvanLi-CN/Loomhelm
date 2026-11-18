@@ -615,10 +615,8 @@ function deliveryUnitMergeShas(ledger: Ledger, group: Ledger["groups"][number]):
     )
       continue;
     const fact = ledger.facts.find((item) => item.id === operation.receipt_fact_id);
-    if (fact?.kind === "pr_merged" && fact.status === "passed") {
-      if (fact.sha) shas.add(fact.sha);
-      if (fact.receipt?.head_sha) shas.add(fact.receipt.head_sha);
-    }
+    if (fact?.kind === "pr_merged" && fact.status === "passed")
+      for (const sha of [fact.sha, fact.receipt?.head_sha]) if (sha) shas.add(sha);
   }
   return shas;
 }
@@ -642,14 +640,16 @@ export function isMergedContributionContinuation(
   ledger: Ledger,
   group: Ledger["groups"][number],
   task: Ledger["tasks"][number],
+  requireLineage = true,
 ): boolean {
   return (
     task.group_id === group.id &&
     isContributionKind(task.kind) &&
+    task.disposition === "active" &&
     isMergedGroupContinuation(ledger, group) &&
-    task.base_sha !== null &&
-    deliveryUnitMergeShas(ledger, group).has(task.base_sha) &&
-    planRevisionChainAddsTask(ledger, task.id)
+    planRevisionChainAddsTask(ledger, task.id) &&
+    (!requireLineage ||
+      (task.base_sha !== null && deliveryUnitMergeShas(ledger, group).has(task.base_sha)))
   );
 }
 
