@@ -504,11 +504,14 @@ export function historicalLifecycleCompatibility(value: {
   );
 }
 
-export function historicalLifecycleValidationOptions(value: {
-  contract_version: number;
-  upgrade?: { migration_audit?: { source_contract?: number | null } | null } | null;
-}): LifecycleRoleValidationOptions {
-  const historical = historicalLifecycleCompatibility(value);
+export function historicalLifecycleValidationOptions(
+  value: {
+    contract_version: number;
+    upgrade?: { migration_audit?: { source_contract?: number | null } | null } | null;
+  },
+  strictCurrentContract = false,
+): LifecycleRoleValidationOptions {
+  const historical = historicalLifecycleCompatibility(value) && !strictCurrentContract;
   return {
     allowLegacyLifecycleRoleInference: historical,
     allowLegacyDeliveryUnitLifecycleWithoutIntegration: historical,

@@ -10,9 +10,9 @@ import {
   changeReason,
   collectCutAssignmentEvidence,
   group,
-  historicalLifecycleValidationOptions,
   id,
   isContributionKind,
+  historicalLifecycleValidationOptions as lifecycleValidationOptions,
   plan,
   type Task,
   task,
@@ -229,7 +229,7 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
       validateRevisionReason(revision);
       proposed.revision = revision;
       proposed.lifecycle = "proposed";
-      validatePlan(proposed, historicalLifecycleValidationOptions(ledger));
+      validatePlan(proposed, lifecycleValidationOptions(ledger, ledger.contract_version >= 6));
       if (proposed.plan_handoff) {
         const cutAssignments = previous.plan_handoff
           ? collectCutAssignmentEvidence(ledger, previous)

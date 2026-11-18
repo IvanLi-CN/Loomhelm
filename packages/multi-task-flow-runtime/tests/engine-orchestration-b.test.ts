@@ -850,9 +850,11 @@ describe("orchestration state", () => {
     expect(() => validateLedger(ledger)).not.toThrow();
   });
 
-  test("allows a plan revision for a four-role lifecycle retained through contract migration", () => {
+  test("requires explicit lifecycle roles for a plan revision after contract migration", () => {
     const ledger = v2Fixture() as any;
-    const groupAtoms = defaultGroupAtoms("g").filter((atom) => atom.lifecycle_role !== "integrate");
+    const groupAtoms = defaultGroupAtoms("g")
+      .filter((atom) => atom.lifecycle_role !== "integrate")
+      .map(({ lifecycle_role: _role, ...atom }) => atom);
     ledger.groups[0].atoms = groupAtoms;
     ledger.plans[0].group_atoms = groupAtoms.map(({ status: _status, ...atom }) => ({
       ...atom,
@@ -930,8 +932,8 @@ describe("orchestration state", () => {
           tasks: structuredClone(ledger.tasks),
         }),
       ),
-    ).not.toThrow();
-    expect(ledger.active_plan_id).toBe("historical-revision");
+    ).toThrow("must declare lifecycle_role explicitly in current contracts");
+    expect(ledger.active_plan_id).toBe(ledger.execution_plan_id);
   });
 
   test("rejects delivery-unit ownership rewrites in a plan revision", () => {
