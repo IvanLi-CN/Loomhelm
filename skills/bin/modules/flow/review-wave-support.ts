@@ -25,7 +25,15 @@ export function activeWave(
 export function reviewWaveScopeBindingMatches(
   wave: Record<string, unknown>,
 ): boolean {
-  if (!Object.hasOwn(wave, "scope_binding")) return true;
+  if (!Object.hasOwn(wave, "scope_binding")) {
+    const lanes = wave.lanes;
+    const isCurrentWave =
+      isRecord(lanes) &&
+      Object.values(lanes).some(
+        (lane) => isRecord(lane) && Object.hasOwn(lane, "requested_profile"),
+      );
+    return !isCurrentWave;
+  }
   return (
     typeof wave.scope_class === "string" &&
     typeof wave.scope_binding === "string" &&

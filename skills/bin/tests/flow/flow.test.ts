@@ -427,6 +427,25 @@ describe("acceptance and review state", () => {
       }),
     ).toThrow("another review wave is already active");
     const originalScope = wave.scope_class;
+    const originalBinding = wave.scope_binding;
+    delete wave.scope_binding;
+    expect(() =>
+      recordSubagentReviewState(ledger, {
+        reviewProfile: "pr-convergence",
+        baseRef: sha,
+        reviewAttemptId: "missing-scope-binding",
+        reviewResultJson: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation:
+            "Inspected the candidate diff and confirmed the complete result.",
+          overall_confidence_score: 1,
+        }),
+        waveId: String(wave.wave_id),
+        lane: "contract",
+      }),
+    ).toThrow("review wave scope binding is invalid");
+    wave.scope_binding = originalBinding;
     wave.scope_class = "document";
     expect(() =>
       recordSubagentReviewState(ledger, {
