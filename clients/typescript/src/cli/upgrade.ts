@@ -1,10 +1,15 @@
 import { printCaptured } from './output.ts';
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { loadConfig } from "../config.ts";
 import { SkillsRuntime } from '../toolkit.ts';
 
-async function invoke(command: string, input: unknown): Promise<void> {
-  const result = await new SkillsRuntime().run('skills/multi-task-flow/scripts/service.ts', [command, '--input', '-'], { input: JSON.stringify(input) });
+async function invoke(command: string, input: unknown, configPath?: string): Promise<void> {
+  const config = await loadConfig(configPath);
+  const result = await new SkillsRuntime().run('skills/multi-task-flow/scripts/service.ts', [command, '--input', '-'], {
+    input: JSON.stringify(input),
+    timeoutMs: config.processTimeoutMs,
+  });
   await printCaptured(result.stdout, result.stderr, command);
   if ((result.code ?? 1) !== 0) process.exitCode = result.code ?? 1;
 }
@@ -26,13 +31,13 @@ function target(args: string[], start: number): { value: string; mode: 'normal' 
   return { value, mode };
 }
 
-export async function runGatewayCommand(args: string[]): Promise<void> {
+export async function runGatewayCommand(args: string[], configPath?: string): Promise<void> {
   if (args[0] !== 'upgrade') throw new Error('GATEWAY_INVALID_ARGUMENTS: use gateway upgrade [--dry-run|--rollback] <version|tag>');
   const selected = target(args, 1);
-  await invoke('gateway-upgrade', { target: selected.value, mode: selected.mode });
+  await invoke('gateway-upgrade', { target: selected.value, mode: selected.mode }, configPath);
 }
 
-export async function runOrchestrationCommand(args: string[]): Promise<void> {
+export async function runOrchestrationCommand(args: string[], configPath?: string): Promise<void> {
   if (args.includes('--help')) {
     console.log('orchestration schema --format json | orchestration compatibility-check --run-id RUN_ID | orchestration upgrade-check --run-id RUN_ID | orchestration upgrade --run-id RUN_ID [--dry-run] VERSION_OR_TAG\nUse the verified target CLI. Read-only checks create no locks. Migration readiness does not assert native quiescence; unresolved calls are preserved without retry. Upgrades migrate supported ledgers and switch binding forward only; incomplete upgrades resume their frozen target.');
     return;
@@ -51,9 +56,9 @@ export async function runOrchestrationCommand(args: string[]): Promise<void> {
   const remaining = args.slice(1).filter((_, index) => index !== runIndex - 1 && index !== runIndex);
   if (args[0] === 'compatibility-check' || args[0] === 'upgrade-check') {
     if (remaining.length) throw new Error('ORCHESTRATION_INVALID_ARGUMENTS: checks only accept --run-id');
-    return invoke(`orchestration-${args[0]}`, { run_id: runId });
+    return invoke(`orchestration-${args[0]}`, { run_id: runId }, configPath);
   }
   const selected = target(remaining, 0);
   if (selected.mode === 'rollback') throw new Error('DOWNGRADE_FORBIDDEN: orchestration upgrades are forward-only');
-  await invoke('orchestration-upgrade', { run_id: runId, target: selected.value, mode: selected.mode });
+  await invoke('orchestration-upgrade', { run_id: runId, target: selected.value, mode: selected.mode }, configPath);
 }

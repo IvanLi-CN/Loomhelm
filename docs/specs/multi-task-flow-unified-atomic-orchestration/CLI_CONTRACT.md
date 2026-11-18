@@ -82,7 +82,7 @@ CLI 错误必须返回 `{ "ok": false, "code": "...", "revision": null|number, "
 
 `multi-task-flow orchestration schema --format json` 暴露 schema_version=1 的升级检查报告 schema，不访问 run 或原生资源。
 
-`multi-task-flow orchestration compatibility-check --run-id <run-id>` 只报告兼容性；`multi-task-flow orchestration upgrade-check --run-id <run-id>` 只读评估机械迁移，输出 schema_version=1、源/调用者/目标身份、revision/digest、目录身份、业务与结果不确定的调用摘要、migration_supported、migration_ready、完整 blockers 和 next_action。迁移可行不代表原生静止；native_quiescence 始终为 not_asserted，既有调用可能继续完成，晚回执可能无法写回。只有 `orchestration upgrade --run-id <run-id> [--dry-run] <version|tag>` 执行目标解析或升级，目标必须匹配调用 artifact；不接受编排 rollback。
+`multi-task-flow orchestration compatibility-check --run-id <run-id>` 只报告兼容性；`multi-task-flow orchestration upgrade-check --run-id <run-id>` 只读评估机械迁移，输出 schema_version=1、源/调用者/目标身份、revision/digest、目录身份、业务与结果不确定的调用摘要、snapshot（entries、bytes、max_bytes、within_byte_budget）、migration_supported、migration_ready、完整 blockers 和 next_action。snapshot 是整个 run 目录的只读预算统计，历史条目数不构成阻断，超过 max_bytes 时返回 snapshot_too_large。编排命令遵守全局 `--config` 的 processTimeoutMs，默认仍为 30 秒；大快照需要调用方显式提高进程预算。迁移可行不代表原生静止；native_quiescence 始终为 not_asserted，既有调用可能继续完成，晚回执可能无法写回。只有 `orchestration upgrade --run-id <run-id> [--dry-run] <version|tag>` 执行目标解析或升级，目标必须匹配调用 artifact；不接受编排 rollback。
 
 普通 flow（包括 show/view）继续匹配完整 package/version/build/source 与合同集合，新初始化原子发布 contract 6 和 schema-4 绑定。显式机械迁移支持 schema-2/contract-3/4/5 到 contract 6，业务图、owner、thread/worktree、unknown/attempt/claim 和容量原样保留；生命周期预设以显式 `lifecycle_role` 为准，旧 ID 仅按 owner scope 和完整后缀规则兼容读取，不从标题或任意 ID 猜测角色或依赖边。更早格式维持只读诊断，缺少支持的迁移返回 RUN_MIGRATION_UNSAFE，details 含全部 blocker。普通命令版本不符仍返回 RUN_VERSION_MISMATCH，不从 Gateway 或全局安装猜测来源。
 

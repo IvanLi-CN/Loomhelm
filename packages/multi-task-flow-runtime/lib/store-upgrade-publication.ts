@@ -1,13 +1,5 @@
 import { dlopen, FFIType } from "bun:ffi";
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readdirSync,
-  realpathSync,
-} from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   createDirectoryNoFollow,
@@ -18,17 +10,13 @@ import {
   writeExclusiveNoFollow,
 } from "@loomhelm/runtime-core/modules/visual/secure_io";
 import { requireCondition } from "./errors";
+import { UPGRADE_SNAPSHOT_MAX_BYTES, walkUpgradeSnapshot } from "./upgrade-snapshot";
 
 function same(a: DirectoryIdentity, b: DirectoryIdentity) {
   return a.dev === b.dev && a.ino === b.ino;
 }
 /** Retain a private source snapshot; never follow links or copy live sockets into a candidate. */
-function cloneDirectory(
-  source: string,
-  destination: string,
-  root: string,
-  budget = { bytes: 0, entries: 0 },
-): void {
+function cloneDirectory(source: string, destination: string, root: string): void {
   const sourceIdentity = lstatSync(source);
   requireCondition(
     sourceIdentity.isDirectory() &&
@@ -39,44 +27,38 @@ function cloneDirectory(
     5,
   );
   createDirectoryNoFollow(destination, root);
-  const destinationIdentity = lstatSync(destination);
-  for (const entry of readdirSync(source)) {
-    requireCondition(
-      ++budget.entries <= 10_000,
-      "UPGRADE_SNAPSHOT_TOO_LARGE",
-      "Run snapshot exceeds its entry budget",
-      4,
-    );
-    const from = join(source, entry),
-      to = join(destination, entry);
-    const metadata = lstatSync(from);
-    if (metadata.isDirectory() && !metadata.isSymbolicLink())
-      cloneDirectory(from, to, root, budget);
-    else {
+  walkUpgradeSnapshot(source, root, {
+    onDirectory(relativePath) {
+      if (relativePath) createDirectoryNoFollow(join(destination, relativePath), root);
+    },
+    onDirectoryComplete(relativePath) {
+      const path = relativePath ? join(destination, relativePath) : destination;
+      syncDirectoryNoFollow(path, root, lstatSync(path));
+    },
+    onFile(file, budget) {
       requireCondition(
-        metadata.isFile() && !metadata.isSymbolicLink() && metadata.nlink === 1,
-        "UNSAFE_PATH",
-        "Upgrade snapshots accept only private regular files and directories",
-        5,
-      );
-      const bytes = readRegularNoFollow(from, root, undefined, 256 * 1024 * 1024, sourceIdentity);
-      budget.bytes += bytes.length;
-      requireCondition(
-        budget.bytes <= 256 * 1024 * 1024,
+        budget.within_byte_budget,
         "UPGRADE_SNAPSHOT_TOO_LARGE",
         "Run snapshot exceeds its byte budget",
         4,
       );
-      writeExclusiveNoFollow(to, bytes, root, destinationIdentity);
-    }
-  }
-  requireCondition(
-    same(lstatSync(source), sourceIdentity),
-    "UNSAFE_PATH",
-    "Upgrade source directory changed",
-    5,
-  );
-  syncDirectoryNoFollow(destination, root, destinationIdentity);
+      const to = join(destination, file.relative_path);
+      const bytes = readRegularNoFollow(
+        file.path,
+        root,
+        undefined,
+        UPGRADE_SNAPSHOT_MAX_BYTES,
+        file.parent_identity,
+      );
+      requireCondition(
+        bytes.length === file.metadata.size,
+        "UNSAFE_PATH",
+        "Upgrade source file changed",
+        5,
+      );
+      writeExclusiveNoFollow(to, bytes, root, lstatSync(dirname(to)));
+    },
+  });
 }
 
 /** Same-parent exchange is one atomic OS operation: old callers can see only the source or the fenced candidate. */

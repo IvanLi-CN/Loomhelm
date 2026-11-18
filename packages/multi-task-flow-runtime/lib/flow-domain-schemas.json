@@ -328,6 +328,43 @@
           "additionalProperties": false
         }
       },
+      "snapshot": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "max_bytes": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "within_byte_budget": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "entries",
+              "bytes",
+              "max_bytes",
+              "within_byte_budget"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "migration_supported": {
         "type": "boolean"
       },
@@ -381,6 +418,7 @@
       "business_digest",
       "unresolved_digest",
       "unresolved",
+      "snapshot",
       "migration_supported",
       "migration_ready",
       "native_quiescence",
