@@ -1,7 +1,15 @@
 import { z } from "zod";
 import { lifecycleRoleOf } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
-import { baselineReceipt, externalRef, fact, id, milestone, providerReceipt } from "../lib/schema";
+import {
+  baselineReceipt,
+  externalRef,
+  fact,
+  historicalLifecycleCompatibility,
+  id,
+  milestone,
+  providerReceipt,
+} from "../lib/schema";
 import type { CommandContext } from "./engine-command-context";
 import * as core from "./engine-support-core";
 import * as support from "./engine-support-gates";
@@ -445,10 +453,7 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
         );
       if (targetType === "group") {
         const lifecycleRole = (atom: any) => lifecycleRoleOf({ ...atom, group_id: targetId });
-        const historicalLifecycle =
-          ledger.contract_version < 6 ||
-          (ledger.contract_version === 6 &&
-            (ledger.upgrade?.migration_audit?.source_contract ?? 6) < 6);
+        const historicalLifecycle = historicalLifecycleCompatibility(ledger);
         const integrationAtom = target.atoms.find(
           (atom: any) => lifecycleRole(atom) === "integrate",
         );

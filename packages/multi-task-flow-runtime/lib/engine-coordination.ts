@@ -10,6 +10,7 @@ import {
   changeReason,
   collectCutAssignmentEvidence,
   group,
+  historicalLifecycleValidationOptions,
   id,
   isContributionKind,
   plan,
@@ -229,7 +230,7 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
       validateRevisionReason(revision);
       proposed.revision = revision;
       proposed.lifecycle = "proposed";
-      validatePlan(proposed, { allowLegacyLifecycleRoleInference: ledger.contract_version < 6 });
+      validatePlan(proposed, historicalLifecycleValidationOptions(ledger));
       if (proposed.plan_handoff) {
         const cutAssignments = previous.plan_handoff
           ? collectCutAssignmentEvidence(ledger, previous)
@@ -993,7 +994,6 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
           : {}),
       };
     }
-
     default:
       return undefined;
   }
