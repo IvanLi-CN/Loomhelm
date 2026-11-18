@@ -7,3 +7,5 @@
 `review.ts` 使用通用 policy allowlist 校验可用请求 pair，并为本仓库的四个固定 lane 统一使用 `gpt-6-luna + max`。旧四项 ladder 和自动 fallback 已移除；runtime 拒绝保持 unavailable，不自动替换请求 pair。
 
 验证覆盖 flow receipt、lane topology、完整 required lane、无 reviewer 自报结果、不同 reviewer 自报、malformed/stale/unavailable、schema 6/7 读取、仅对当前 wave/lane/base/head 有明确绑定的旧 active wave 退休、对损坏 schema 7 active wave 保持阻塞、同 pair 独立 retry attempt、历史 fresh-wave 恢复和既有 epoch repair budget 保留。Provider 内部实际 routing 不作测试承诺。
+
+Schema 6 active wave 的恢复按保守条件执行：只有缺少 `requested_profile` 的旧 lane 形状，并且 receipt pointer 明确绑定当前 wave、lane、base 和 head 时，运行时才会退休旧 wave；malformed profile、stale/cross-wave receipt 或未绑定 receipt 保持阻塞。退休会保留既有 active epoch 与 repair budget，fresh schema 7 wave 不能重复启动仍在活动中的 lane。

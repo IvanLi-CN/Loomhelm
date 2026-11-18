@@ -28,7 +28,7 @@ Review 结果 MUST NOT 授权、否决或覆盖父流程的 requested profile；
 
 ### REQ-FRPE-005：历史 schema 兼容不升级事实
 
-Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 self-reported profile MUST NOT 转换为 schema 7 的启动事实，也 MUST NOT 满足新候选 clear gate。新候选 MUST 通过 fresh review wave 恢复，旧 active wave 只能由运行时标记 retired 后保留历史；失败重试 MUST 使用同一 requested pair 和父流程 `review-attempt-id`，保留独立 attempt，且不得重复启动活动 lane。
+Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 self-reported profile MUST NOT 转换为 schema 7 的启动事实，也 MUST NOT 满足新候选 clear gate。新候选 MUST 通过 fresh review wave 恢复，旧 active wave 只有在 lane 仍是旧形状且其 receipt pointer 明确绑定当前 wave、lane、base 和 head 时才可由运行时标记 retired；malformed requested profile、跨 wave receipt 或未绑定 receipt MUST 继续阻塞。退休过程 MUST 保留既有 active epoch 和 repair budget。失败重试 MUST 使用同一 requested pair 和父流程 `review-attempt-id`，保留独立 attempt，且不得重复启动活动 lane。
 
 ## Verification
 
