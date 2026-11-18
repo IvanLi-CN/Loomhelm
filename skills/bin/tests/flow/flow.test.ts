@@ -965,6 +965,20 @@ describe("acceptance and review state", () => {
     const normalized = normalizeLedger(historical);
     expect(normalized.receipts).toEqual(historicalSnapshot);
     expect(normalized.legacy_schema_version).toBe(6);
+    const forgedHistorical = structuredClone(normalized) as Record<
+      string,
+      unknown
+    >;
+    delete forgedHistorical.legacy_compatibility;
+    delete forgedHistorical.legacy_schema_version;
+    expect(() =>
+      openReviewWaveState(forgedHistorical, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
     const malformedHistoricalProof = structuredClone(normalized) as Record<
       string,
       unknown
@@ -1058,18 +1072,14 @@ describe("acceptance and review state", () => {
     delete upgraded.legacy_compatibility;
     delete upgraded.legacy_schema_version;
     const upgradedNormalized = normalizeLedger(upgraded);
-    const upgradedFresh = openReviewWaveState(upgradedNormalized, {
-      stage: "initial",
-      baseSha: sha,
-      headSha: sha,
-      laneSpecs: lanes,
-    });
-    expect(upgradedFresh.next).toBe("record-review");
-    expect(
-      (
-        upgradedNormalized.review as Record<string, unknown>
-      ).active_wave_id,
-    ).toBe((upgradedFresh.wave as Record<string, unknown>).wave_id);
+    expect(() =>
+      openReviewWaveState(upgradedNormalized, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
 
     const freshHead = "b".repeat(40);
     const partial = structuredClone(normalized) as Record<string, unknown>;

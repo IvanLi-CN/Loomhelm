@@ -197,7 +197,12 @@ function isLegacyReviewWave(
   ledger: Record<string, unknown>,
   wave: Record<string, unknown>,
 ): boolean {
-  if (Object.hasOwn(wave, "scope_binding") || !isRecord(wave.lanes))
+  if (
+    ledger.legacy_compatibility !== true ||
+    ledger.legacy_schema_version !== 6 ||
+    Object.hasOwn(wave, "scope_binding") ||
+    !isRecord(wave.lanes)
+  )
     return false;
   const lanes = Object.entries(wave.lanes);
   if (!lanes.length || !reviewLaneTopologyMatches(ledger, wave, lanes))
