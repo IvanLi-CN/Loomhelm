@@ -337,7 +337,9 @@ export function deliveryGateDiagnostics(
       message: "交付单元尚未完成 workspace_ready 原子任务",
     });
   const bootstrapGroupException = !task && allowsBootstrapGroupStart(ledger, group);
+  const parentPrRequired = task?.delivery_policy === "parent_pr";
   if (
+    parentPrRequired &&
     !allowsBootstrapMainOwnedStart(ledger, group, task) &&
     !bootstrapGroupException &&
     !parentPrReady(ledger, group)

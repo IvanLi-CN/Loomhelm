@@ -156,13 +156,15 @@ Use this order whenever an agent starts a local service that keeps listening on 
 8. Before sharing a local preview URL with the user, verify that the URL port matches the current lease or a repo-declared stable preview port owned by the current workspace.
 9. If the URL will appear in an owner-facing reply, require a Codex native background session to keep owning that service after the current turn, and populate `agent_session` on the lease whenever the runtime exposes it.
 
-The port manager owns lease allocation, atomic startup claim, inspection, heartbeat and release only. A service wrapper must atomically claim its preallocated lease before binding, reject an existing owner instead of treating its PID as transfer authorization, and pass its recorded port and expected PID when heartbeating or releasing so a replaced lease cannot be changed by the old process. `pid` remains the value to record; `expected-pid` is the ownership guard for subsequent lifecycle operations. The registry does not create, attach, retain or prove the liveness of a Codex native background session. The Agent must obtain that session from the host and may pass only the host-provided identifier; an `agent_session` value is provenance metadata, not proof that the host session exists. If the host exposes no supported background route, do not substitute a visible terminal or foreground exec and do not hand off the URL.
+The port manager owns lease allocation, atomic startup claim, inspection, heartbeat and release. Before binding, wrappers must claim the preallocated lease and reject an existing owner. Heartbeat and release use the recorded port and `expected-pid` to guard ownership; `pid` records the process.
+
+通过宿主执行工具启动服务：`exec_command` 返回仍运行命令的真实 `session_id` 后，以 `write_stdin` 管理该会话，将原始标识登记为 `agent_session`。宿主负责会话保留，registry 只记录 provenance；服务 PID 或租约不能代替真实会话。按当前工具合同使用即可，无需额外证明能力。
 
 ## Live vs stable preview contract
 
 - `live exec preview`: current-turn-only validation surface backed by the active exec/native background session for the current scope; acceptable for internal browser verification, not for final localhost handoff.
 - `native background handoff preview`: preview runtime backed by the current lease plus an active Codex native background session for the current scope; required before giving the user a localhost URL that should survive past the current foreground exec step.
-- If a preview still depends on the lifetime of the current exec session, it is `live`, even if the port is leased correctly.
+- A preview limited to the blocking call or current turn is `live`; a host-retained execution session supports handoff with the matching lease and healthy service.
 - If `inspect/register/allocate/heartbeat/gc` discovers a pid-backed lease whose `pid` is dead or whose port is no longer listening, treat it as stale and let the registry self-heal instead of waiting for the 24h TTL.
 
 Repo scripts with built-in defaults do not bypass this contract. The default value is only an input to inspect/register/override, not permission to grab that port blindly.
@@ -172,7 +174,7 @@ Repo scripts with built-in defaults do not bypass this contract. The default val
 - `git-worktree` create: call `allocate` right after worktree creation.
 - Worktree-local service flows: call `allocate/register` before starting services and `heartbeat` during long-running sessions.
 - Any long-lived local service (`vite`, `next dev`, `storybook`, backend preview server, docs preview, local admin UI, etc.): call `inspect` on any known/default port first, then `allocate/register` before the process starts.
-- Local preview handoff: only share a localhost URL after confirming that the URL's port belongs to the current scope lease or to a repo-declared stable preview service started from the current workspace; owner-facing handoff must additionally prove that the service is still held by a Codex native background session rather than a foreground live exec. The host session is an Agent/host responsibility, not a port-manager responsibility.
+- Local preview handoff: only share a localhost URL after confirming that the URL's port belongs to the current scope lease or to a repo-declared stable preview service started from the current workspace; owner-facing handoff uses the host-retained execution session and normal lease and health checks described above. The host session is an Agent/host responsibility, not a port-manager responsibility.
 - `git-worktree` remove: call `release-scope` after successful removal.
 - `git-cleanup`: call `release-scope` whenever a PR/Wave/spec worktree is removed.
 - Native Codex task Worktrees keep their lease scope in the Ticket envelope. They may release a service lease when the task stops, but archive/removal of the Worktree itself remains with Codex native task lifecycle.

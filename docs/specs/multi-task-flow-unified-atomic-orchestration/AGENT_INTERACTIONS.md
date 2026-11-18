@@ -28,7 +28,7 @@ Bootstrap DeliveryUnit 是唯一由主 Agent 持有的交付单元：其 `owner_
 
 ### 交付单元准备与派发
 
-主 Agent 按需求结果归纳 `delivery_unit_id`，不能从 PR 数量、Agent 数量或文件重叠推断边界。交付 Agent 负责 regular 单元的父分支、父 PR、集成基线和 closeout；Task Agent 路径在 starting 前通常必须等待已发布且可核验的父 PR。唯一例外是 active、workspace-ready、main-owned 的 bootstrap 单元允许其 main-owned contribution Task 在父 PR definitively absent 时启动；发布中、结果 unknown 或已有非空父 PR 时仍阻塞。
+主 Agent 按需求结果归纳 `delivery_unit_id`，不能从 PR 数量、Agent 数量或文件重叠推断边界。交付 Agent 负责 regular 单元的父分支、内容集成、父 PR、集成基线和 closeout；Task Agent 路径在 parent branch、workspace 和 branch receipt 就绪后即可产出 child PR，不等待尚不存在的父 PR。只有显式 `parent_pr` 策略的任务才在 starting 前等待已发布且可核验的父 PR；发布中、结果 unknown 或 identity 不匹配时仍阻塞。
 
 ### Shared-delivery 拓扑
 
@@ -130,13 +130,18 @@ sequenceDiagram
     C->>L: 注册 active 资源及其 owner
     D->>C: development-baseline-sync；lifecycle-record workspace_ready
     C->>L: 核验 dispatch、资源、owner、SHA 与 lineage
-    D->>C: publish-branch-claim / publish-pr-claim
-    C->>L: 校验计划动作并领取 publication operation
-    D->>P: 发布父分支与集成 PR，查询实际结果
-    P-->>D: branch / PR identity 与 provider evidence
-    D->>C: publish-branch-resolve / publish-pr-resolve
-    C->>L: 记录父分支、父 PR 与发布事实
-    Note over D,L: 按依赖推进对应 group 原子；普通 contribution 开工前父 PR 必须可核验
+    D->>C: publish-branch-claim
+    C->>L: 校验计划动作并领取 branch publication operation
+    D->>P: 发布父分支并查询实际结果
+    P-->>D: branch identity 与 provider evidence
+    D->>C: publish-branch-resolve；派发 contribution
+    C->>L: 记录父分支与 branch receipt
+    D->>P: 将产品、指南、参考正文或已验收 child PR 结果集成到父分支
+    D->>C: group-atom-update integrate completed
+    C->>L: 确认集成原子完成后允许 publish-pr-claim
+    D->>C: publish-pr-claim / publish-pr-resolve
+    D->>P: 发布父 PR，查询实际结果并回写 receipt
+    Note over D,L: 普通 contribution 可在父 PR 创建前开工；显式 parent_pr 策略才额外等待父 PR
 ```
 
 图中 publication 分别执行各自 claim、外部动作和 resolve，不能把两次外部副作用合成一个未对账操作。创建中断转 S6；正式通知的失败、重放和先后关系见 S7。
@@ -158,15 +163,11 @@ sequenceDiagram
     M->>C: resource-update；记录 workspace readiness
     C->>L: bootstrap active、workspace ready
     M->>C: 以 main actor 推进 main-owned contribution
-    C->>L: 检查父 PR 是否 definitively absent
-    alt 父 PR 明确不存在且满足 bootstrap 例外
-        L-->>M: 允许开工
-        M->>C: task-update / atom-update（本任务原子及证据）
-        C->>L: 写入开工与原子完成事实
-    else 父 PR 发布中、unknown 或已存在
-        L-->>M: 不适用无父 PR 例外；按普通父 PR 门禁处理
-    end
-    M->>C: 领取计划内父分支 / 父 PR publication operation
+    M->>C: task-update / atom-update（本任务原子及证据）
+    C->>L: 写入开工与原子完成事实
+    M->>P: 将交付内容集成到父分支
+    M->>C: group-atom-update integrate completed
+    M->>C: 领取计划内父 PR publication operation
     M->>P: 发布并查询真实父 PR
     P-->>M: publication receipt
     M->>C: resolve publication；记录验收证据

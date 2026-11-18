@@ -9,6 +9,18 @@ import { apply } from "../lib/engine";
 import { defaultGroupAtoms, group, validateLedger } from "../lib/schema";
 import { buildView } from "../lib/view";
 
+test("default delivery-unit atoms integrate content before creating the parent PR", () => {
+  expect(
+    defaultGroupAtoms("group").map((atom) =>
+      atom.id.replace(/^.*-(prepare-parent|integrate|create-pr|merge-pr|closeout)$/, "$1"),
+    ),
+  ).toEqual(["prepare-parent", "integrate", "create-pr", "merge-pr", "closeout"]);
+  expect(defaultGroupAtoms("group")[1]).toMatchObject({
+    title: "集成交付内容",
+    lifecycle_stage: null,
+  });
+});
+
 test("rejects runtime group atoms outside the configured stable identity", () => {
   const ledger = createDemoLedger();
   ledger.groups[0]!.atoms[0]!.id = "forged";
@@ -62,9 +74,10 @@ for (const contamination of ["clean", "binding", "atom", "coordination", "lifecy
     const roleOrder = new Map([
       ["prepare-parent", 0],
       ["prepare-branch", 0],
-      ["create-pr", 1],
-      ["merge-pr", 2],
-      ["closeout", 3],
+      ["integrate", 1],
+      ["create-pr", 2],
+      ["merge-pr", 3],
+      ["closeout", 4],
     ]);
     proposed.atoms = proposed.atoms.map(withExplicitRole);
     proposed.group_atoms = proposed.group_atoms.map(withExplicitRole);

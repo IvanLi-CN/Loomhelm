@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { withExclusiveLockAsync } from "@loomhelm/runtime-core/modules/flow/storage";
+import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import { executeInvocation } from "../lib/invocation-journal";
 import { callerIdentity, type RunIdentity, requireRunBinding } from "../lib/orchestration-identity";
 import { withRunLifecycle } from "../lib/orchestration-lifecycle";
@@ -93,11 +94,23 @@ test("contract-6 source with schema-4 binding is already compatible", () => {
   const store = fixture();
   const raw = JSON.parse(store.readRaw());
   for (const plan of raw.plans) {
+    const groupIds = [...new Set(plan.group_atoms.map((atom: any) => atom.group_id))];
+    const lifecycleEdges = groupIds.flatMap((groupId) => {
+      const atoms = plan.group_atoms.filter((atom: any) => atom.group_id === groupId);
+      return atoms.slice(1).map((atom: any, index: number) => ({
+        id: `fixture-${groupId}-lifecycle-${index}`,
+        from_atom_id: atoms[index]!.id,
+        to_atom_id: atom.id,
+      }));
+    });
+    Object.assign(
+      plan,
+      canonicalizeContract3Plan({ ...plan, atomic_edges: lifecycleEdges }, raw.tasks),
+    );
     plan.group_atoms = plan.group_atoms.map(({ lifecycle_stage: _stage, ...atom }) => ({
       ...atom,
       lifecycle_stage: null,
     }));
-    plan.atomic_edges = [];
   }
   for (const group of raw.groups)
     group.atoms = group.atoms.map(({ lifecycle_stage: _stage, ...atom }) => ({

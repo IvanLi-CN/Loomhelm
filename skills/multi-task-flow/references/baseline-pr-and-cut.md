@@ -10,7 +10,7 @@ Agent 提供资源证据，由主对话通过 `resource-update` 注册 active wo
 
 Contract-3 的开发基线由 `development-baseline-sync` 明确提交。首次同步使用 `mode: "initial"`，在 dispatch、native evidence、workspace、branch、owner、resource 和 lineage 均已核验后建立空 baseline；之后每次父分支 lineage 通过 `group-base-reconcile`、合并或 cut 推进，都先使用 `mode: "refresh"` 携带 previous receipt 和匹配的 lineage event，再重新调用 `lifecycle-record`。`initial_head` 只表示 native creation 时的初始 HEAD，development baseline receipt 表示本次 workspace evidence 已对应的可工作 SHA，二者不能互换。同步只记录 Agent 已完成的证据，不 fetch、reset、rebase、更新 provider、创建 PR、改变 owner、替代 task-base 或收口 cut。
 
-regular 贡献任务必须有 workspace ready 和 provider 已核验 open 的 parent PR；仅 main-owned bootstrap 在 workspace ready 且 provider 明确证明 parent PR `absent` 时例外，pending、unknown、closed 或缺少证据均不满足。历史已绑定对话不追加新 CLI dispatch 的基线要求。
+regular 贡献任务必须有 active workspace、parent branch 和成功的 branch receipt；显式 `delivery_policy: "parent_pr"` 的任务还必须有 provider 已核验 open 的 parent PR。main-owned bootstrap 可以在 provider 明确证明 parent PR `absent` 时继续，pending、unknown、closed 或缺少证据均不满足显式 parent PR 门禁。历史已绑定对话不追加新 CLI dispatch 的基线要求。
 
 ## PR、cut 与收口恢复
 
@@ -18,7 +18,9 @@ regular 贡献任务必须有 workspace ready 和 provider 已核验 open 的 pa
 
 收口后的外部事实发生冲突时，调用方使用 `group-closeout-reconcile` 提交原收口事件、计划身份、PR observation、结果和证据引用；`valid` 保持 `closed`，`invalid` 转为 `blocked`，`unknown` 保留业务状态但冻结受影响的下游门禁。不得新增 `reconciling` 等业务状态或覆盖原始事实。只有主 Agent 通过 `protected-approve` 批准 `kind: "delivery_unit_recovery"` 后，交付单元负责人才能使用 `group-reopen` 将同一 DeliveryUnit 从 `blocked` 恢复为 `active`；该命令不会创建 PR、workspace 或 successor。`group-update` 不得绕过这个恢复边界，也不得执行 `closed -> active`。
 
-child PR 出现冲突或检查失败时，任务 Agent 首先判断问题是否由自身变更造成。自身问题留在同一任务和 PR 中修复。确认是外部问题后，向主 Agent 提交诊断证据、影响和候选编排调整；主 Agent 在创建独立修复贡献任务或改变依赖前询问主人。基线变化始终由任务 Agent 负责：rebase、重新验证并刷新任务基线证据后才能重试。普通执行不会在 Agent 之间转移任务工作区或 PR。
+父 PR 的顺序固定为先完成交付内容集成并核对父分支 SHA，再执行 `publish-pr-claim`；不能为了满足派发门禁先创建一个与目标分支没有差异的空父 PR。普通 child PR 和 shared-delivery 内容可以在父 PR 创建前执行，只有显式 `delivery_policy: "parent_pr"` 的任务保留父 PR 前置门禁。
+
+child PR 出现冲突或检查失败时，任务 Agent 首先判断问题是否由自身变更造成。自身问题留在同一任务和 PR 中修复。确认是外部问题后，向主 Agent 提交诊断证据、影响和候选编排调整；主 Agent 在创建独立修复贡献任务或改变依赖前询问主人。基线变化始终由任务 Agent 负责 rebase、重新验证并刷新任务 baseline 后再重试。普通执行不会在 Agent 之间转移任务工作区或 PR。
 
 经批准的动态 cut 使用 `cut-claim` 阻止新合入并等待已有占用，然后使用 `cut-apply` 原子记录当前已核验的父 SHA 和归属变更。已完成的开发工作留在原交付单元；未完成的开发子任务及其已有对话移动到下一个默认交付单元。原交付单元的 release、deployment 和 verification 任务仍留在原单元，并在其 PR 合并后运行。下一个 parent branch 必须包含上一 parent PR 实际合入主干的结果，之后其开发 PR 才能合入。follow PR 继续归属于原交付单元；分支推进时刷新当前 SHA 和检查/审查证据，不改变 cut 归属。外部 provider 的 `update-branch` 只能通过带有匹配前后 SHA、branch、parent PR、provider 和明确 update-branch 证据的 `group-base-reconcile` 记录，不能当作 merge 或 follow PR。拥有 follow PR 的任务 Agent 通知主 Agent，主 Agent 协调受影响未完成任务 Agent 的 rebase。
 

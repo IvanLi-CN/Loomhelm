@@ -4,10 +4,11 @@ const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
 const text = z.string().trim().min(1);
 const timestamp = z.iso.datetime({ offset: false });
 
-/** Stable semantic identity for the four lifecycle atoms plus the shared PR step. */
+/** Stable semantic identity for the five delivery-unit lifecycle atoms and task lifecycle atoms. */
 export const atomicLifecycleRole = z.enum([
   "prepare-parent",
   "prepare-branch",
+  "integrate",
   "create-pr",
   "merge-pr",
   "closeout",
@@ -61,6 +62,7 @@ function legacyRoleFromId(
   const suffix = idValue.slice(ownerPrefix.length);
   if (scope === "task" && suffix === "prepare-branch") return "prepare-branch";
   if (scope === "delivery_unit" && suffix === "prepare-parent") return "prepare-parent";
+  if (scope === "delivery_unit" && suffix === "integrate") return "integrate";
   if (suffix === "create-pr") return "create-pr";
   if (suffix === "merge-pr") return "merge-pr";
   if (suffix === "closeout") return "closeout";
@@ -337,6 +339,7 @@ export type ContributionStartContext = {
   owner_kind?: "main" | "group";
   execution_owner?: "main" | "delivery_agent" | "task_agent";
   conversation_policy?: "main_owned" | "delivery_owned" | "task_agent" | "none";
+  delivery_policy?: "parent_pr" | "child_pr" | "shared_delivery_unit" | "evidence" | "none";
   active?: boolean;
   workspace_ready?: boolean;
   parent_pr_status?: "definitively_absent" | "unknown" | "pending" | "present";
@@ -403,7 +406,9 @@ export function validateContributionStart(
     context.workspace_ready === true &&
     context.parent_pr_status === "definitively_absent" &&
     deliveryUnit.pr.state === "unpublished";
+  const parentPrRequired = context.delivery_policy === "parent_pr";
   if (
+    parentPrRequired &&
     !bootstrapException &&
     deliveryUnit.pr.state !== "published" &&
     deliveryUnit.pr.state !== "merged"
@@ -631,6 +636,7 @@ export function canonicalizeContract3Plan(
 
 const deliveryUnitLifecycleSuffixes = [
   "prepare-parent",
+  "integrate",
   "create-pr",
   "merge-pr",
   "closeout",
@@ -640,8 +646,9 @@ const taskLifecycleSuffixes = ["prepare-branch", "create-pr", "merge-pr", "close
 export type LifecycleRoleValidationOptions = {
   /** Allow stage/owner-scoped ID fallback for contract-3/4/5 historical reads. */
   allowLegacyLifecycleRoleInference?: boolean;
+  /** Keep the four-role Delivery Unit lifecycle readable during contract-3/4/5 migration. */
+  allowLegacyDeliveryUnitLifecycleWithoutIntegration?: boolean;
 };
-
 function validatePresetLifecycleEdges(
   atoms: readonly any[],
   edges: readonly any[],
@@ -711,13 +718,23 @@ function validatePresetLifecycleEdges(
         }),
       ]),
     );
-    if (!suffixes.some((suffix) => bySuffix.get(suffix))) continue;
-    for (const suffix of suffixes)
+    const presentSuffixes = suffixes.filter((suffix) => bySuffix.get(suffix));
+    if (!presentSuffixes.length) {
+      if (ownerKey !== "group_id" || options.allowLegacyLifecycleRoleInference === true) continue;
+      throw new Error(`${ownerLabel} ${ownerId} must declare lifecycle roles`);
+    }
+    const requiredSuffixes = suffixes.filter(
+      (suffix) =>
+        suffix !== "integrate" ||
+        options.allowLegacyDeliveryUnitLifecycleWithoutIntegration !== true,
+    );
+    for (const suffix of requiredSuffixes)
       if (!bySuffix.get(suffix))
         throw new Error(`${ownerLabel} ${ownerId} has an incomplete preset lifecycle atom set`);
-    for (let index = 1; index < suffixes.length; index++) {
-      const from = bySuffix.get(suffixes[index - 1])!.id;
-      const to = bySuffix.get(suffixes[index])!.id;
+    const orderedSuffixes = suffixes.filter((suffix) => bySuffix.get(suffix));
+    for (let index = 1; index < orderedSuffixes.length; index++) {
+      const from = bySuffix.get(orderedSuffixes[index - 1]!)!.id;
+      const to = bySuffix.get(orderedSuffixes[index]!)!.id;
       if (!reachable(from, to))
         throw new Error(
           `${ownerLabel} ${ownerId} lifecycle requires an Agent-declared dependency path from ${from} to ${to}`,

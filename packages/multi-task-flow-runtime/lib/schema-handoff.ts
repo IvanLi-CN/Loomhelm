@@ -494,6 +494,30 @@ export type PlanValidationOptions = LifecycleRoleValidationOptions & {
   requireCanonicalLifecycleGraph?: boolean;
 };
 
+export function historicalLifecycleCompatibility(value: {
+  contract_version: number;
+  upgrade?: { migration_audit?: { source_contract?: number | null } | null } | null;
+}): boolean {
+  return (
+    value.contract_version < 6 ||
+    (value.contract_version === 6 && (value.upgrade?.migration_audit?.source_contract ?? 6) < 6)
+  );
+}
+
+export function historicalLifecycleValidationOptions(
+  value: {
+    contract_version: number;
+    upgrade?: { migration_audit?: { source_contract?: number | null } | null } | null;
+  },
+  strictCurrentContract = false,
+): LifecycleRoleValidationOptions {
+  const historical = historicalLifecycleCompatibility(value) && !strictCurrentContract;
+  return {
+    allowLegacyLifecycleRoleInference: historical,
+    allowLegacyDeliveryUnitLifecycleWithoutIntegration: historical,
+  };
+}
+
 function validateCanonicalLifecycleRoles(candidate: Plan, options: PlanValidationOptions): void {
   const allowLegacyInference = options.allowLegacyLifecycleRoleInference === true;
   const canonicalById = new Map(candidate.atomic_nodes.map((node) => [node.id, node]));
@@ -530,6 +554,13 @@ function validateCanonicalLifecycleRoles(candidate: Plan, options: PlanValidatio
 
 export function validatePlan(candidate: Plan, options: PlanValidationOptions = {}): void {
   validatePlanHandoff(candidate);
+  if (options.allowLegacyLifecycleRoleInference !== true)
+    for (const atom of candidate.group_atoms)
+      requireCondition(
+        explicitLifecycleRoleOf(atom) !== null,
+        "ATOMIC_GRAPH_INCOMPLETE",
+        `Delivery-unit atom ${atom.id} must declare lifecycle_role explicitly in current contracts`,
+      );
   if (candidate.revision) {
     const changeCount =
       candidate.revision.change_set.added.length +
@@ -631,6 +662,8 @@ export function validatePlan(candidate: Plan, options: PlanValidationOptions = {
     validateCanonicalLifecycleRoles(candidate, options);
     const lifecycleOptions = {
       allowLegacyLifecycleRoleInference: options.allowLegacyLifecycleRoleInference === true,
+      allowLegacyDeliveryUnitLifecycleWithoutIntegration:
+        options.allowLegacyDeliveryUnitLifecycleWithoutIntegration === true,
     };
     try {
       validateDeliveryUnitLifecycleEdges(

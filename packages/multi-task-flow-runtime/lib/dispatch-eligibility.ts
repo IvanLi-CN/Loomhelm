@@ -9,9 +9,13 @@ import {
   isDeliveryVerification,
   isSharedDeliveryTask,
   legacyLedger,
-  requireContributionDispatchGate,
 } from "./engine-support-core";
-import { activeOperation, isMergedContributionContinuation, ready } from "./engine-support-gates";
+import {
+  activeOperation,
+  isMergedContributionContinuation,
+  ready,
+  requireContributionTaskDispatchGate,
+} from "./engine-support-gates";
 import { ContractError, requireCondition } from "./errors";
 import type { Ledger, Task } from "./schema";
 import { isContributionKind } from "./schema";
@@ -86,7 +90,7 @@ export function requireTaskDispatch(ledger: Ledger, target: Task): void {
     );
   }
   if (isContributionKind(target.kind)) {
-    requireContributionDispatchGate(ledger, owner, true, "dispatch-claim", mergedContinuation);
+    requireContributionTaskDispatchGate(ledger, owner, target);
     requireCondition(
       owner.parent_branch && target.base_sha && owner.current_sha === target.base_sha,
       "BASE_NOT_READY",

@@ -52,6 +52,7 @@ test("snapshot aligns unit lifecycle, task prerequisites, timestamps and assista
     "completed",
     "planned",
     "planned",
+    "planned",
   ]);
   expect(group.lifecycle).toMatchObject({
     workspace_ready: "passed",

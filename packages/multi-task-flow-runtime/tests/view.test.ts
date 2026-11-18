@@ -419,10 +419,10 @@ describe("timeline projections", () => {
     task.execution_owner = "task_agent";
     task.conversation_policy = "task_agent";
     task.delivery_policy = "child_pr";
-    const blockedView = buildView(ledger) as any;
-    const blocked = blockedView.tasks.find((item: any) => item.id === task.id);
-    expect(blocked.dispatch_readiness).toBe("blocked");
-    expect(blocked.dispatch_diagnostics).toContainEqual(
+    const childPrView = buildView(ledger) as any;
+    const childPr = childPrView.tasks.find((item: any) => item.id === task.id);
+    expect(childPr.dispatch_readiness).toBe("ready");
+    expect(childPr.dispatch_diagnostics).not.toContainEqual(
       expect.objectContaining({ code: "DELIVERY_PARENT_PR_GATE_PENDING" }),
     );
   });
@@ -481,7 +481,7 @@ describe("timeline projections", () => {
     );
   });
 
-  test("does not infer definitive parent PR absence from missing facts", () => {
+  test("does not require a parent PR for delivery-unit dispatch", () => {
     const ledger = structuredClone(createPlanningDemoLedger(1_767_200_000_000));
     const group = ledger.groups.find((item) => item.id === "core")!;
     group.delivery_unit_kind = "bootstrap";
@@ -505,19 +505,25 @@ describe("timeline projections", () => {
     });
     const view = buildView(ledger) as any;
     const projected = view.groups.find((item: any) => item.id === group.id);
-    expect(projected.dispatch_readiness).toBe("blocked");
-    expect(projected.dispatch_diagnostics).toContainEqual(
+    expect(projected.dispatch_readiness).toBe("ready");
+    expect(projected.dispatch_diagnostics).not.toContainEqual(
       expect.objectContaining({ code: "DELIVERY_PARENT_PR_GATE_PENDING" }),
     );
   });
 
-  test("does not project a closed parent PR as ready", () => {
+  test("does not project a closed parent PR as ready for explicit parent PR work", () => {
     const ledger = withRuntimeEvidence(
       structuredClone(createPlanningDemoLedger(1_767_200_000_000)),
     );
     ledger.contract_version = 2;
     ledger.source_schema_version = null;
     const group = ledger.groups.find((item) => item.id === "dashboard")!;
+    const task = ledger.tasks.find(
+      (item) => item.group_id === group.id && item.kind === "contribution",
+    )!;
+    task.execution_owner = "main";
+    task.conversation_policy = "main_owned";
+    task.delivery_policy = "parent_pr";
     group.parent_pr = {
       provider: "github",
       repository: "example/repo",
@@ -565,7 +571,7 @@ describe("timeline projections", () => {
       },
     });
     const view = buildView(ledger) as any;
-    const projected = view.groups.find((item: any) => item.id === group.id);
+    const projected = view.tasks.find((item: any) => item.id === task.id);
     expect(projected.dispatch_readiness).toBe("blocked");
     expect(projected.dispatch_diagnostics).toContainEqual(
       expect.objectContaining({ code: "DELIVERY_PARENT_PR_GATE_PENDING" }),
@@ -579,6 +585,12 @@ describe("timeline projections", () => {
     ledger.contract_version = 3;
     ledger.source_schema_version = null;
     const group = ledger.groups.find((item) => item.id === "dashboard")!;
+    const task = ledger.tasks.find(
+      (item) => item.group_id === group.id && item.kind === "contribution",
+    )!;
+    task.execution_owner = "main";
+    task.conversation_policy = "main_owned";
+    task.delivery_policy = "parent_pr";
     const parentPr = {
       provider: "github",
       repository: "sample/multi-task-flow",
@@ -631,7 +643,7 @@ describe("timeline projections", () => {
     });
 
     const readyView = buildView(ledger) as any;
-    expect(readyView.groups.find((item: any) => item.id === group.id).dispatch_readiness).toBe(
+    expect(readyView.tasks.find((item: any) => item.id === task.id).dispatch_readiness).toBe(
       "ready",
     );
 
@@ -639,43 +651,52 @@ describe("timeline projections", () => {
     for (const phase of ["planned", "blocked", "closed"] as const) {
       const changed = structuredClone(ledger);
       changed.groups.find((item) => item.id === group.id)!.state = phase;
-      const projected = (buildView(changed) as any).groups.find(
+      const projectedTask = (buildView(changed) as any).tasks.find(
+        (item: any) => item.id === task.id,
+      );
+      const projectedGroup = (buildView(changed) as any).groups.find(
         (item: any) => item.id === group.id,
       );
-      expect(projected.dispatch_readiness).toBe("blocked");
-      expect(projected.runtime_readiness.status).toBe("blocked");
+      expect(projectedTask.dispatch_readiness).toBe("blocked");
+      expect(projectedGroup.runtime_readiness.status).toBe("blocked");
     }
     const lostWorkspace = structuredClone(ledger);
     lostWorkspace.resources = lostWorkspace.resources.filter(
       (resource) => !(resource.kind === "worktree" && resource.target === group.id),
     );
-    const unavailable = (buildView(lostWorkspace) as any).groups.find(
+    const unavailableTask = (buildView(lostWorkspace) as any).tasks.find(
+      (item: any) => item.id === task.id,
+    );
+    const unavailableGroup = (buildView(lostWorkspace) as any).groups.find(
       (item: any) => item.id === group.id,
     );
-    expect(unavailable.dispatch_readiness).toBe("ready");
-    expect(unavailable.runtime_readiness.status).toBe("blocked");
+    expect(unavailableTask.dispatch_readiness).toBe("ready");
+    expect(unavailableGroup.runtime_readiness.status).toBe("blocked");
     const uncertainControl = structuredClone(ledger);
     uncertainControl.control.ownership = "uncertain";
-    const uncertain = (buildView(uncertainControl) as any).groups.find(
+    const uncertainTask = (buildView(uncertainControl) as any).tasks.find(
+      (item: any) => item.id === task.id,
+    );
+    const uncertainGroup = (buildView(uncertainControl) as any).groups.find(
       (item: any) => item.id === group.id,
     );
-    expect(uncertain.dispatch_readiness).toBe("ready");
-    expect(uncertain.runtime_readiness.status).toBe("unknown");
+    expect(uncertainTask.dispatch_readiness).toBe("ready");
+    expect(uncertainGroup.runtime_readiness.status).toBe("unknown");
 
     receipt.target_branch = group.parent_branch!;
     const wrongTargetView = buildView(ledger) as any;
-    const wrongTargetGroup = wrongTargetView.groups.find((item: any) => item.id === group.id);
-    expect(wrongTargetGroup.dispatch_readiness).toBe("blocked");
-    expect(wrongTargetGroup.dispatch_diagnostics).toContainEqual(
+    const wrongTargetTask = wrongTargetView.tasks.find((item: any) => item.id === task.id);
+    expect(wrongTargetTask.dispatch_readiness).toBe("blocked");
+    expect(wrongTargetTask.dispatch_diagnostics).toContainEqual(
       expect.objectContaining({ code: "DELIVERY_PARENT_PR_GATE_PENDING" }),
     );
 
     receipt.target_branch = ledger.repository.target_branch;
     receipt.head_sha = "b".repeat(40);
     const staleHeadView = buildView(ledger) as any;
-    const staleHeadGroup = staleHeadView.groups.find((item: any) => item.id === group.id);
-    expect(staleHeadGroup.dispatch_readiness).toBe("blocked");
-    expect(staleHeadGroup.dispatch_diagnostics).toContainEqual(
+    const staleHeadTask = staleHeadView.tasks.find((item: any) => item.id === task.id);
+    expect(staleHeadTask.dispatch_readiness).toBe("blocked");
+    expect(staleHeadTask.dispatch_diagnostics).toContainEqual(
       expect.objectContaining({ code: "DELIVERY_PARENT_PR_GATE_PENDING" }),
     );
   });

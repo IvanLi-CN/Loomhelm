@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
   existsSync,
   fstatSync,
+  ftruncateSync,
   linkSync,
   mkdirSync,
   openSync,
@@ -12,7 +14,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { atomicNode } from "../lib/atomic-orchestration";
 import { inspectInvocation, registerInvocationResource } from "../lib/invocation-journal";
 import { businessDigest } from "../lib/migration-audit";
@@ -24,6 +26,7 @@ import {
   readMigrationInput,
 } from "../lib/orchestration-migration";
 import { upgradeOrchestration } from "../lib/orchestration-upgrade";
+import { UPGRADE_SNAPSHOT_MAX_BYTES } from "../lib/upgrade-snapshot";
 import { fixtureRun, serviceFixture } from "./service-fixture";
 
 const originalCaller = process.env.LOOMHELM_CALLER_IDENTITY;
@@ -86,6 +89,74 @@ function tree(path: string): unknown {
             .digest("hex"),
     ]);
 }
+
+function addSyntheticInvocationEvidence(store: ReturnType<typeof fixture>, count: number): void {
+  const root = join(store.runPath, "runtime", "invocations");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(
+    join(store.runPath, "runtime", "call.json"),
+    JSON.stringify({
+      schema_version: 2,
+      invocation_id: "00000000-0000-4000-8000-000000000001",
+      identity: { ...source, ledger_contract: 5 },
+      state: "running",
+    }),
+  );
+  for (let index = 0; index < count; index += 1) {
+    const id = `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
+    const directory = join(root, id);
+    mkdirSync(directory);
+    writeFileSync(
+      join(directory, "start.json"),
+      JSON.stringify({ invocation_id: id, state: "running", source: "synthetic-fixture" }),
+    );
+  }
+}
+
+test("large runtime snapshots remain lossless beyond the historical entry budget", {
+  timeout: 20_000,
+}, () => {
+  const store = fixture(5);
+  addSyntheticInvocationEvidence(store, 5_001);
+  const beforeRuntime = tree(join(store.runPath, "runtime"));
+  const beforeInvocations = tree(join(store.runPath, "runtime", "invocations"));
+  const beforeCall = readFileSync(join(store.runPath, "runtime", "call.json"), "utf8");
+
+  const report = checkMigration(store, target);
+  expect(report.migration_ready).toBe(true);
+  expect(report.snapshot?.entries).toBeGreaterThan(10_000);
+  expect(report.snapshot?.within_byte_budget).toBe(true);
+  expect(() => upgradeOrchestration(store, target, target)).not.toThrow();
+
+  const after = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+  const retainedSource = join(dirname(store.runPath), after.upgrade.source_directory);
+  expect(after.upgrade.phase).toBe("completed");
+  expect(tree(join(store.runPath, "runtime", "invocations"))).toEqual(beforeInvocations);
+  expect(tree(join(retainedSource, "runtime"))).toEqual(beforeRuntime);
+  expect(tree(join(retainedSource, "runtime", "invocations"))).toEqual(beforeInvocations);
+  expect(readFileSync(join(store.runPath, "runtime", "call.json"), "utf8")).toBe(beforeCall);
+  expect(readFileSync(join(retainedSource, "runtime", "call.json"), "utf8")).toBe(beforeCall);
+  requireRunBinding(store.rootPath, "migration-run", store.read(), target);
+});
+
+test("dry-run rejects a run snapshot beyond the byte budget without writing", () => {
+  const store = fixture(5);
+  const oversized = join(store.runPath, "runtime", "oversized.bin");
+  const descriptor = openSync(oversized, "w");
+  ftruncateSync(descriptor, UPGRADE_SNAPSHOT_MAX_BYTES + 1);
+  closeSync(descriptor);
+  const before = readdirSync(join(store.runPath, "runtime")).sort();
+
+  const report = checkMigration(store, target);
+  expect(report.migration_ready).toBe(false);
+  expect(report.snapshot?.within_byte_budget).toBe(false);
+  expect(report.blockers).toContainEqual(expect.objectContaining({ code: "snapshot_too_large" }));
+  expect(() => upgradeOrchestration(store, target, target, {}, true)).toThrow(
+    "Mechanical migration checks failed",
+  );
+  expect(readdirSync(join(store.runPath, "runtime")).sort()).toEqual(before);
+});
+
 test("upgrade-check and dry-run preserve all files, including absent lock files", () => {
   const store = fixture();
   unlinkSync(store.lockPath);
@@ -168,6 +239,62 @@ test("legacy canonical lifecycle graphs survive mechanical upgrade to contract 6
   expect(() => upgradeOrchestration(store, nextTarget, nextTarget)).not.toThrow();
   const upgradedAgain = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
   expect(upgradedAgain.upgrade.migration_audit.source_contract).toBe(3);
+});
+
+test("historical four-role canonical lifecycle graphs remain mechanically migratable", () => {
+  const store = fixture(3);
+  const raw = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+  const plan = raw.plans[0];
+  const isIntegration = (atom: any) => atom.lifecycle_role === "integrate";
+  plan.group_atoms = plan.group_atoms.filter((atom: any) => !isIntegration(atom));
+  for (const group of raw.groups)
+    group.atoms = group.atoms.filter((atom: any) => !isIntegration(atom));
+  for (const event of raw.events) {
+    for (const field of ["old_group_snapshot", "group_snapshot"] as const) {
+      const snapshot = event.data?.[field];
+      if (snapshot?.atoms)
+        snapshot.atoms = snapshot.atoms.filter((atom: any) => !isIntegration(atom));
+    }
+  }
+  const groupByTask = new Map(raw.tasks.map((task: any) => [task.id, task.group_id]));
+  const definitions = [...plan.atoms, ...plan.group_atoms];
+  plan.atomic_nodes = definitions.map((atom: any) =>
+    atomicNode.parse({
+      kind: "work" as const,
+      id: atom.id,
+      title: atom.title,
+      purpose: atom.purpose,
+      output: atom.output,
+      acceptance: [],
+      activity_type: "verification" as const,
+      state: "planned" as const,
+      scope:
+        typeof atom.group_id === "string"
+          ? { kind: "delivery_unit" as const, delivery_unit_id: atom.group_id }
+          : {
+              kind: "task" as const,
+              task_id: atom.task_id,
+              delivery_unit_id: groupByTask.get(atom.task_id) ?? "unknown-group",
+            },
+    }),
+  );
+  plan.atomic_edges = raw.groups.flatMap((group: any) => {
+    const atoms = plan.group_atoms.filter((atom: any) => atom.group_id === group.id);
+    return atoms.slice(1).map((atom: any, index: number) => ({
+      id: `${group.id}-legacy-four-role-${index}`,
+      from_node_id: atoms[index]!.id,
+      to_node_id: atom.id,
+      requires: { kind: "source_terminal_success" },
+    }));
+  });
+  writeFileSync(store.ledgerPath, JSON.stringify(raw));
+
+  expect(checkMigration(store, target).migration_ready).toBe(true);
+  expect(() => upgradeOrchestration(store, target, target)).not.toThrow();
+  const after = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+  expect(after.contract_version).toBe(6);
+  expect(after.upgrade.migration_audit.source_contract).toBe(3);
+  expect(after.plans[0].group_atoms).toHaveLength(8);
 });
 
 test("read-only observation detects a concurrent source change and rejects links", () => {
