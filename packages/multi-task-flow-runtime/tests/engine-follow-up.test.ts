@@ -2,7 +2,11 @@ import { expect, test } from "bun:test";
 import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import { apply } from "../lib/engine";
 import { protectedActionApproved, protectedActionTargetDigest } from "../lib/engine-support-core";
-import { deliveryUnitPrMergedFromLedger } from "../lib/engine-support-gates";
+import {
+  deliveryUnitPrMergedFromLedger,
+  isMergedContributionContinuation,
+  isMergedGroupContinuation,
+} from "../lib/engine-support-gates";
 import { defaultTaskAtoms } from "../lib/schema";
 import { latestParentPrFact } from "../lib/view-readiness";
 import { approve, at, fixture, groupActor, main, request } from "./engine-fixtures";
@@ -212,7 +216,7 @@ function postMergeContinuationFixture() {
     actor_id: group.agent_thread_id!,
     target_id: group.id,
     status: "succeeded",
-    request: { mode: "parent", pr: parentPr },
+    request: { mode: "parent", pr: parentPr, expected_head_sha: originalMerge },
     expected_sha: originalMerge,
     receipt_fact_id: mergeFactId,
     created_at: "2026-01-01T00:01:00.000Z",
@@ -450,7 +454,10 @@ test("post-merge follow-up publication preserves the original parent PR receipt"
   const { ledger, group, parentPr, originalMerge, followUpPr, followUpHead, followUpMerge } =
     postMergeContinuationFixture();
   group.current_sha = followUpHead;
-  for (const task of ledger.tasks) task.state = "integrated";
+  for (const task of ledger.tasks) {
+    task.state = "integrated";
+    if (task.id === "task-followup") for (const atom of task.atoms) atom.status = "completed";
+  }
 
   apply(
     ledger,
@@ -646,4 +653,259 @@ test("post-merge follow-up publication preserves the original parent PR receipt"
       ),
     ),
   ).toThrow("Protected action delivery_unit_merge approval has already been used");
+});
+
+test("post-merge follow-up publication waits across continuation revisions", () => {
+  const { ledger, group, originalMerge, followUpPr, followUpHead } = postMergeContinuationFixture();
+  const firstPlan = ledger.plans[0]!;
+  const firstTask = ledger.tasks.find((task) => task.id === "task-followup")!;
+  const secondTask = structuredClone(firstTask);
+  secondTask.id = "task-followup-2";
+  secondTask.title = "Second post-merge contribution";
+  secondTask.branch = secondTask.id;
+  secondTask.atoms = [];
+  ledger.tasks.push(secondTask);
+  const invalidTask = structuredClone(secondTask);
+  invalidTask.id = "task-followup-invalid";
+  invalidTask.title = "Invalid post-merge contribution";
+  invalidTask.branch = invalidTask.id;
+  invalidTask.base_sha = "0".repeat(64);
+  ledger.tasks.push(invalidTask);
+  const secondNode = {
+    ...structuredClone(firstPlan.nodes.find((node) => node.ref_id === firstTask.id)),
+    id: "node-followup-2",
+    ref_id: secondTask.id,
+    label: secondTask.title,
+  };
+  const invalidNode = {
+    ...structuredClone(secondNode),
+    id: "node-followup-invalid",
+    ref_id: invalidTask.id,
+    label: invalidTask.title,
+  };
+  const secondPlan = structuredClone(firstPlan);
+  secondPlan.id = "plan-followup-2";
+  secondPlan.supersedes_id = firstPlan.id;
+  secondPlan.nodes.push(secondNode);
+  secondPlan.nodes.push(invalidNode);
+  secondPlan.revision = {
+    ...firstPlan.revision!,
+    affected_task_ids: [secondTask.id, invalidTask.id],
+    affected_node_ids: [secondNode.id, invalidNode.id],
+    affected_edge_ids: [],
+    change_set: {
+      added: [
+        { path: `tasks[${secondTask.id}]`, new_value: structuredClone(secondTask) },
+        { path: `plan.nodes[${secondNode.id}]`, new_value: structuredClone(secondNode) },
+        { path: `tasks[${invalidTask.id}]`, new_value: structuredClone(invalidTask) },
+        { path: `plan.nodes[${invalidNode.id}]`, new_value: structuredClone(invalidNode) },
+      ],
+      removed: [],
+      modified: [],
+    },
+  };
+  firstPlan.lifecycle = "superseded";
+  ledger.plans.push(secondPlan);
+  ledger.active_plan_id = secondPlan.id;
+  ledger.execution_plan_id = secondPlan.id;
+  const approvalEvent = ledger.events.find((event) => event.type === "plan_approved")!;
+  ledger.events.push({
+    ...structuredClone(approvalEvent),
+    id: "plan-followup-2-approved",
+    subject_id: secondPlan.id,
+    data: { ...structuredClone(approvalEvent.data), approval_id: secondPlan.approval_id },
+  });
+  group.current_sha = followUpHead;
+  for (const task of ledger.tasks) task.state = "integrated";
+  for (const atom of firstTask.atoms) atom.status = "completed";
+  for (const atom of secondTask.atoms) atom.status = "completed";
+
+  apply(
+    ledger,
+    "publish-branch-claim",
+    roleRequest(
+      ledger,
+      "follow-up-branch-claim",
+      {
+        operation_id: "follow-up-branch-op",
+        action_id: "publish-followup-branch",
+        target_type: "group",
+        target_id: group.id,
+        branch: group.parent_branch,
+        expected_head_sha: followUpHead,
+      },
+      { role: "group", thread_id: group.agent_thread_id! },
+    ),
+  );
+  apply(
+    ledger,
+    "publish-branch-resolve",
+    roleRequest(
+      ledger,
+      "follow-up-branch-resolve",
+      {
+        operation_id: "follow-up-branch-op",
+        outcome: "succeeded",
+        fact_id: "follow-up-branch-fact",
+        provider_receipt: {
+          provider: "github",
+          repository: "example/loomhelm",
+          resource_type: "branch",
+          resource_id: group.parent_branch,
+          branch: group.parent_branch,
+          target_branch: null,
+          base_sha: null,
+          head_sha: followUpHead,
+          pr: null,
+          state: "exists",
+          evidence_ref: "fixture:follow-up-branch",
+        },
+      },
+      { role: "group", thread_id: group.agent_thread_id! },
+    ),
+  );
+
+  expect(() =>
+    apply(
+      ledger,
+      "publish-pr-claim",
+      roleRequest(
+        ledger,
+        "follow-up-pr-claim",
+        {
+          operation_id: "follow-up-pr-op",
+          action_id: "publish-followup-pr",
+          target_type: "group",
+          target_id: group.id,
+          branch: group.parent_branch,
+          target_branch: "main",
+          expected_base_sha: originalMerge,
+          expected_head_sha: followUpHead,
+          pr: followUpPr,
+        },
+        { role: "group", thread_id: group.agent_thread_id! },
+      ),
+    ),
+  ).toThrow("Contribution task atoms must complete before parent PR publication");
+});
+
+test("a later continuation can use the prior follow-up PR head as its base", () => {
+  const { ledger, group, task, parentPr, originalMerge, followUpPr, followUpHead, followUpMerge } =
+    postMergeContinuationFixture();
+  const nextTask = structuredClone(task);
+  nextTask.id = "task-followup-2";
+  nextTask.base_sha = followUpHead;
+  nextTask.atoms = defaultTaskAtoms(nextTask.id);
+  ledger.tasks.push(nextTask);
+  ledger.plans[0]!.revision!.change_set.added.push({
+    path: `tasks[${nextTask.id}]`,
+    new_value: structuredClone(nextTask),
+  });
+
+  group.current_sha = followUpHead;
+  group.merge_sha = followUpMerge;
+  const parentMergeFact = ledger.facts.find((fact) => fact.id === "group-parent-merge")!;
+  const followUpMergeFact = structuredClone(parentMergeFact);
+  followUpMergeFact.id = "group-follow-up-merge";
+  followUpMergeFact.sha = followUpMerge;
+  followUpMergeFact.evidence_ref = "fixture:follow-up-merge";
+  followUpMergeFact.receipt = {
+    ...parentMergeFact.receipt!,
+    resource_id: followUpPr.id,
+    base_sha: originalMerge,
+    head_sha: followUpHead,
+    merge_sha: followUpMerge,
+    pr: followUpPr,
+    evidence_ref: "fixture:follow-up-merge",
+  };
+  ledger.facts.push(followUpMergeFact);
+  const parentMergeOperation = ledger.operations.find(
+    (operation) => operation.id === "group-parent-merge-op",
+  )!;
+  ledger.operations.push({
+    ...structuredClone(parentMergeOperation),
+    id: "group-follow-up-merge-op",
+    request: {
+      mode: "parent-followup",
+      pr: followUpPr,
+      original_parent_pr: parentPr,
+      original_parent_merge_sha: originalMerge,
+      expected_head_sha: followUpHead,
+    },
+    receipt_fact_id: followUpMergeFact.id,
+  });
+
+  expect(isMergedContributionContinuation(ledger, group, nextTask)).toBe(true);
+});
+
+test("a later plan revision retains an existing continuation task", () => {
+  const { ledger, group, task } = postMergeContinuationFixture();
+  const previousPlan = ledger.plans[0]!;
+  const laterPlan = structuredClone(previousPlan);
+  laterPlan.id = "plan-followup-3";
+  laterPlan.supersedes_id = previousPlan.id;
+  laterPlan.revision = {
+    ...previousPlan.revision!,
+    affected_task_ids: [task.id],
+    affected_node_ids: [],
+    affected_edge_ids: [],
+    change_set: {
+      added: [],
+      removed: [],
+      modified: [{ path: `tasks[${task.id}].atoms`, new_value: structuredClone(task.atoms) }],
+    },
+  };
+  previousPlan.lifecycle = "superseded";
+  ledger.plans.push(laterPlan);
+  ledger.active_plan_id = laterPlan.id;
+  ledger.execution_plan_id = laterPlan.id;
+
+  expect(isMergedGroupContinuation(ledger, group)).toBe(true);
+  expect(isMergedContributionContinuation(ledger, group, task)).toBe(true);
+});
+
+test("an unverified parent merge head cannot authorize continuation lineage", () => {
+  const { ledger, group, task } = postMergeContinuationFixture();
+  const invalidHead = "d".repeat(64);
+  ledger.facts.find((fact) => fact.id === "group-parent-merge")!.receipt!.head_sha = invalidHead;
+  task.base_sha = invalidHead;
+
+  expect(isMergedContributionContinuation(ledger, group, task)).toBe(false);
+});
+
+test("child and follow merge commits cannot authorize continuation lineage", () => {
+  for (const mode of ["child", "follow"] as const) {
+    const { ledger, group, task } = postMergeContinuationFixture();
+    const parentMerge = ledger.operations.find(
+      (operation) => operation.id === "group-parent-merge-op",
+    )!;
+    parentMerge.request.mode = mode;
+
+    expect(isMergedContributionContinuation(ledger, group, task)).toBe(false);
+  }
+});
+
+test("an invalid continuation revision chain never qualifies", () => {
+  for (const [name, supersedesId] of [
+    ["missing predecessor", "plan-missing"],
+    ["cycle", "plan-invalid"],
+  ] as const) {
+    const { ledger, group, task } = postMergeContinuationFixture();
+    const previousPlan = ledger.plans[0]!;
+    const invalidPlan = structuredClone(previousPlan);
+    invalidPlan.id = "plan-invalid";
+    invalidPlan.supersedes_id = supersedesId;
+    invalidPlan.revision = {
+      ...previousPlan.revision!,
+      change_set: {
+        ...previousPlan.revision!.change_set,
+        added: [{ path: `tasks[${task.id}]`, new_value: structuredClone(task) }],
+      },
+    };
+    ledger.plans.push(invalidPlan);
+    ledger.active_plan_id = invalidPlan.id;
+    ledger.execution_plan_id = invalidPlan.id;
+
+    expect(isMergedGroupContinuation(ledger, group), name).toBe(false);
+  }
 });

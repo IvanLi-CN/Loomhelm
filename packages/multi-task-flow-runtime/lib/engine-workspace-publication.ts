@@ -77,6 +77,7 @@ const {
   deliveryUnitPrMerged,
   deliveryUnitPrMergedFromLedger,
   isMergedGroupContinuation,
+  isMergedContributionContinuation,
   requireHandoffAcknowledged,
   requireGroupDispatchGate,
   ownerOfTask,
@@ -563,15 +564,20 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
           4,
         );
         requireCondition(
-          mergedContinuation ||
-            ledger.tasks
-              .filter(
-                (task) =>
-                  task.group_id === targetId &&
-                  task.disposition === "active" &&
-                  isContributionKind(task.kind),
-              )
-              .every((task) => task.atoms.every((atom) => atom.status === "completed")),
+          ledger.tasks
+            .filter(
+              (task) =>
+                task.group_id === targetId &&
+                task.disposition === "active" &&
+                isContributionKind(task.kind) &&
+                (!mergedContinuation ||
+                  isMergedContributionContinuation(ledger, target, task, false)),
+            )
+            .every(
+              (task) =>
+                (!mergedContinuation || isMergedContributionContinuation(ledger, target, task)) &&
+                task.atoms.every((atom) => atom.status === "completed"),
+            ),
           "INTEGRATION_PENDING",
           "Contribution task atoms must complete before parent PR publication",
           4,
