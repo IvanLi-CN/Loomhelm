@@ -63,6 +63,7 @@ export function openReviewWaveState(
     if (
       !active ||
       !reviewWaveIsTerminal(ledger, active) ||
+      (!legacy && !reviewWaveIsClear(ledger, active)) ||
       (sameCandidate && !legacy)
     )
       throw new FlowError("another review wave is already active");
@@ -196,7 +197,7 @@ function isLegacyReviewWave(
   if (Object.hasOwn(wave, "scope_binding") || !isRecord(wave.lanes))
     return false;
   const lanes = Object.entries(wave.lanes);
-  if (!lanes.length || !legacyLaneTopologyMatches(ledger, wave, lanes))
+  if (!lanes.length || !reviewLaneTopologyMatches(ledger, wave, lanes))
     return false;
   return lanes.every(([, rawLane]) => {
     if (
@@ -220,7 +221,9 @@ function reviewWaveIsTerminal(
   const receipts = Array.isArray(ledger.receipts)
     ? ledger.receipts.filter(isRecord)
     : [];
-  return Object.entries(wave.lanes).every(([laneName, lane]) => {
+  const lanes = Object.entries(wave.lanes);
+  if (!reviewLaneTopologyMatches(ledger, wave, lanes)) return false;
+  return lanes.every(([laneName, lane]) => {
     if (
       !isRecord(lane) ||
       lane.state !== "completed" ||
@@ -248,7 +251,30 @@ function reviewWaveIsTerminal(
   });
 }
 
-function legacyLaneTopologyMatches(
+function reviewWaveIsClear(
+  ledger: Record<string, unknown>,
+  wave: Record<string, unknown>,
+): boolean {
+  if (!isRecord(wave.lanes)) return false;
+  const receipts = Array.isArray(ledger.receipts)
+    ? ledger.receipts.filter(isRecord)
+    : [];
+  return Object.values(wave.lanes).every((lane) => {
+    if (!isRecord(lane)) return false;
+    const receipt = receipts.find(
+      (candidate) => candidate.receipt_id === lane.receipt_id,
+    );
+    return (
+      isRecord(receipt) &&
+      receipt.review_clear === true &&
+      receipt.overall_correctness === "patch is correct" &&
+      Array.isArray(receipt.finding_fingerprints) &&
+      receipt.finding_fingerprints.length === 0
+    );
+  });
+}
+
+function reviewLaneTopologyMatches(
   ledger: Record<string, unknown>,
   wave: Record<string, unknown>,
   lanes: [string, unknown][],

@@ -456,6 +456,44 @@ describe("acceptance and review state", () => {
         waveId: String(staleWave.wave_id),
         lane: lane.lane,
       });
+    const findingStale = structuredClone(staleLedger) as Record<string, unknown>;
+    const findingReview = findingStale.review as Record<string, unknown>;
+    const findingWave = (
+      findingReview.waves as Record<string, Record<string, unknown>>
+    )[String(staleWave.wave_id)];
+    const findingReceipt = (
+      findingStale.receipts as Record<string, unknown>[]
+    ).find((receipt) => receipt.lane === "contract");
+    if (!findingReceipt) throw new Error("stale review receipt is missing");
+    findingReceipt.review_clear = false;
+    findingReceipt.overall_correctness = "patch is incorrect";
+    findingReceipt.finding_fingerprints = ["blocking-finding"];
+    expect(() =>
+      openReviewWaveState(findingStale, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "c".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(findingWave.state).toBe("open");
+    const missingLane = structuredClone(staleLedger) as Record<string, unknown>;
+    const missingReview = missingLane.review as Record<string, unknown>;
+    const missingWave = (
+      missingReview.waves as Record<string, Record<string, unknown>>
+    )[String(staleWave.wave_id)];
+    delete (
+      missingWave.lanes as Record<string, Record<string, unknown>>
+    )["test-platform"];
+    expect(() =>
+      openReviewWaveState(missingLane, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "d".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(missingWave.state).toBe("open");
     const refreshed = openReviewWaveState(staleLedger, {
       stage: "initial",
       baseSha: sha,
