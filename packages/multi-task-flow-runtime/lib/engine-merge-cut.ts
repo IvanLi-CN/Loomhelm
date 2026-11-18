@@ -134,7 +134,7 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
         "Merge observation must match the registered PR, branches and provider",
         5,
       );
-      const matching = ledger.operations.find(
+      const candidates = ledger.operations.filter(
         (item) =>
           item.kind === "merge" &&
           item.target_id === group.id &&
@@ -142,6 +142,13 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
           item.request.expected_head_sha === receipt.head_sha &&
           item.expected_sha === receipt.base_sha,
       );
+      const matching =
+        candidates.findLast(activeOperation) ??
+        candidates.findLast((item) => item.status === "succeeded") ??
+        candidates.at(-1);
+      const recorded = matching?.receipt_fact_id
+        ? ledger.facts.find((fact) => fact.id === matching.receipt_fact_id)
+        : null;
       const supersedes = payload.supersedes === undefined ? null : parse(id, payload.supersedes);
       if (supersedes)
         requireCondition(
@@ -164,7 +171,9 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
       const status = matching
         ? activeOperation(matching)
           ? "reconcile_required"
-          : matching.status === "succeeded"
+          : matching.status === "succeeded" &&
+              recorded?.status === "passed" &&
+              recorded.sha === receipt.merge_sha
             ? "already_recorded"
             : "conflict"
         : "unclaimed";

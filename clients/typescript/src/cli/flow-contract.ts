@@ -533,6 +533,7 @@ add(
 	["target_type", "target_id", "stage"],
 	{
 		optionalPayload: ["baseline", "baseline_sync"],
+		payloadIfThen: [{ when: { required: ["baseline_sync"] }, required: ["baseline"] }],
 		payloadOverrides: {
 			branch: stringValue,
 			baseline: domainRef("baseline_receipt"),

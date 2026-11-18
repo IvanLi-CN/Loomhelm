@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { apply } from "../lib/engine";
+import { atomicPredecessorsPending } from "../lib/engine-support-core";
 import { validateLedger } from "../lib/schema";
 import { modernFixture, request } from "./role-flow-fixtures";
 
@@ -62,6 +63,49 @@ test("current contract atom updates follow edges despite reversed storage order"
     );
   expect(() => invoke(second!.id)).toThrow("Earlier atoms");
   expect(invoke(first!.id)).toMatchObject({ code: "APPLIED" });
+});
+
+test("a milestone releases successors only after its work and evidence conditions pass", () => {
+  const ledger = modernFixture();
+  const plan = ledger.plans[0]!;
+  const [source, target] = ledger.tasks[0]!.atoms;
+  const evidence = ledger.tasks[1]!.atoms[0]!;
+  const milestoneId = "evidence-gate";
+  plan.atomic_nodes.push({
+    id: milestoneId,
+    kind: "milestone",
+    title: "Evidence gate",
+    state: "planned",
+    scope: { kind: "delivery_unit", delivery_unit_id: ledger.groups[0]!.id },
+    acceptance: [],
+  });
+  plan.atomic_edges = [
+    {
+      id: "source-to-milestone",
+      from_node_id: source!.id,
+      to_node_id: milestoneId,
+      requires: { kind: "source_terminal_success" },
+    },
+    {
+      id: "evidence-to-milestone",
+      from_node_id: source!.id,
+      to_node_id: milestoneId,
+      requires: {
+        kind: "source_evidence",
+        criterion: { kind: "node_satisfied", node_id: evidence.id },
+      },
+    },
+    {
+      id: "milestone-to-target",
+      from_node_id: milestoneId,
+      to_node_id: target!.id,
+      requires: { kind: "source_terminal_success" },
+    },
+  ];
+  source!.status = "completed";
+  expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([milestoneId]);
+  evidence.status = "completed";
+  expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([]);
 });
 
 test("an unclaimed external merge can be corrected without authorizing integration", () => {
