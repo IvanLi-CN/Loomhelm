@@ -204,6 +204,19 @@ function isLegacyReviewWave(
     !isRecord(wave.lanes)
   )
     return false;
+  const legacyReview = isRecord(ledger.legacy_review)
+    ? ledger.legacy_review
+    : undefined;
+  const legacyWaves =
+    legacyReview && isRecord(legacyReview.waves)
+      ? legacyReview.waves
+      : undefined;
+  const legacyWave =
+    legacyWaves && isRecord(legacyWaves[String(wave.wave_id)])
+      ? legacyWaves[String(wave.wave_id)]
+      : undefined;
+  if (!legacyWave || canonicalJson(legacyWave) !== canonicalJson(wave))
+    return false;
   const lanes = Object.entries(wave.lanes);
   if (!lanes.length || !reviewLaneTopologyMatches(ledger, wave, lanes))
     return false;

@@ -965,14 +965,16 @@ describe("acceptance and review state", () => {
     const normalized = normalizeLedger(historical);
     expect(normalized.receipts).toEqual(historicalSnapshot);
     expect(normalized.legacy_schema_version).toBe(6);
-    const forgedHistorical = structuredClone(normalized) as Record<
+    const forgedSchema7 = structuredClone(historical) as Record<
       string,
       unknown
     >;
-    delete forgedHistorical.legacy_compatibility;
-    delete forgedHistorical.legacy_schema_version;
+    forgedSchema7.schema_version = 7;
+    forgedSchema7.legacy_compatibility = true;
+    forgedSchema7.legacy_schema_version = 6;
+    delete forgedSchema7.legacy_review;
     expect(() =>
-      openReviewWaveState(forgedHistorical, {
+      openReviewWaveState(forgedSchema7, {
         stage: "initial",
         baseSha: sha,
         headSha: sha,
