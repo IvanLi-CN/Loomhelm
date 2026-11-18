@@ -31,7 +31,7 @@ REQ-INVOCATION-001 至 REQ-INVOCATION-006 的候选实现已接入客户端、�
 
 机械迁移沿用 ADR 0041 与 SPEC 第 16 节的共享评估器，不把旧 receipt 改为 stopped；只有冻结审计中精确匹配的旧调用摘要可由目标身份建立新 journal。包资源登记同时包含迁移审计、评估器及其回归，独立安装消费者不得依赖仓库源码。schema-4 绑定拒绝旧维护 writer；新调用仍依赖不可变资源终态凭证。当前候选必须重做受影响的包验收、审查与 CI，历史 SHA 的通过结果不可替代。
 
-候选包版本为 `0.6.1`，保留 `compat-v1`；这里只准备版本元数据，实际合并和手动 CI 发布仍由主人控制。
+候选包版本为 `0.6.2`，保留 `compat-v1`；这里只准备版本元数据，实际合并和手动 CI 发布仍由主人控制。
 
 `@loomhelm/multi-task-flow@0.3.0` 的通用执行器默认合计捕获 stdout/stderr 上限为 1 MiB；超限后先 SIGTERM，250 ms 后 SIGKILL。编排子进程在 action 前写 running，在 finally 写 stopped；终止可能阻止 finally 完成。当前 LedgerStore 读取预算为 256 MiB，传输先于支持的数据容量失败。
 
