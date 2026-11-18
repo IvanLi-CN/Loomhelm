@@ -11,6 +11,7 @@ import { normalizeAcceptanceManifest } from "./acceptance";
 import { validateLaneSpecs } from "./review";
 import { sortedStrings } from "./review-wave-utils";
 import { prepareReviewWaveState } from "./review-open-guards";
+import { assertReviewReceiptIntegrity } from "./review-receipt-integrity";
 import { reviewState } from "./review-wave-support";
 
 export function openReviewWaveState(
@@ -199,6 +200,9 @@ function isLegacyReviewWave(
   const lanes = Object.entries(wave.lanes);
   if (!lanes.length || !reviewLaneTopologyMatches(ledger, wave, lanes))
     return false;
+  const receipts = Array.isArray(ledger.receipts)
+    ? ledger.receipts.filter(isRecord)
+    : [];
   return lanes.every(([, rawLane]) => {
     if (
       !isRecord(rawLane) ||
@@ -209,7 +213,14 @@ function isLegacyReviewWave(
       !rawLane.effort.trim()
     )
       return false;
-    return true;
+    return (
+      typeof rawLane.receipt_id === "string" &&
+      receipts.some(
+        (receipt) =>
+          receipt.receipt_id === rawLane.receipt_id &&
+          receipt.review_receipt_schema === 6,
+      )
+    );
   });
 }
 
@@ -223,6 +234,7 @@ function reviewWaveIsTerminal(
     : [];
   const lanes = Object.entries(wave.lanes);
   if (!reviewLaneTopologyMatches(ledger, wave, lanes)) return false;
+  const legacy = isLegacyReviewWave(ledger, wave);
   return lanes.every(([laneName, lane]) => {
     if (
       !isRecord(lane) ||
@@ -234,20 +246,34 @@ function reviewWaveIsTerminal(
     const receipt = receipts.find(
       (candidate) => candidate.receipt_id === lane.receipt_id,
     );
-    return (
-      isRecord(receipt) &&
-      (receipt.review_receipt_schema === 6 ||
-        receipt.review_receipt_schema === 7) &&
-      receipt.kind === "review" &&
-      receipt.terminal_state === "completed" &&
-      receipt.evidence_valid === true &&
-      receipt.post_execution_clean === true &&
-      receipt.exit_code === 0 &&
-      receipt.wave_id === wave.wave_id &&
-      receipt.lane === laneName &&
-      receipt.base_sha === wave.base_sha &&
-      receipt.head_sha === wave.head_sha
-    );
+    if (
+      !isRecord(receipt) ||
+      receipt.review_receipt_schema !== (legacy ? 6 : 7) ||
+      receipt.kind !== "review" ||
+      receipt.terminal_state !== "completed" ||
+      receipt.evidence_valid !== true ||
+      receipt.post_execution_clean !== true ||
+      receipt.exit_code !== 0 ||
+      receipt.wave_id !== wave.wave_id ||
+      receipt.lane !== laneName ||
+      receipt.base_sha !== wave.base_sha ||
+      receipt.head_sha !== wave.head_sha
+    )
+      return false;
+    if (!legacy) {
+      try {
+        assertReviewReceiptIntegrity(
+          ledger,
+          String(wave.wave_id),
+          laneName,
+          lane,
+          receipt,
+        );
+      } catch {
+        return false;
+      }
+    }
+    return true;
   });
 }
 

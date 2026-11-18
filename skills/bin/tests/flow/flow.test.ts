@@ -775,6 +775,47 @@ describe("acceptance and review state", () => {
         lane: lane.lane,
       });
 
+    const disguisedCurrent = structuredClone(ledger) as Record<string, unknown>;
+    const disguisedReview = disguisedCurrent.review as Record<string, unknown>;
+    const disguisedWave = (
+      disguisedReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    delete disguisedWave.scope_binding;
+    for (const lane of Object.values(
+      disguisedWave.lanes as Record<string, Record<string, unknown>>,
+    ))
+      delete lane.requested_profile;
+    const disguisedReceipt = (
+      disguisedCurrent.receipts as Record<string, unknown>[]
+    ).find((receipt) => receipt.lane === "contract");
+    if (!disguisedReceipt) throw new Error("disguised review receipt is missing");
+    disguisedReceipt.review_clear = false;
+    disguisedReceipt.overall_correctness = "patch is incorrect";
+    disguisedReceipt.finding_fingerprints = ["blocking-finding"];
+    expect(() =>
+      openReviewWaveState(disguisedCurrent, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "b".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(disguisedWave.state).toBe("open");
+    const malformedCurrent = structuredClone(ledger) as Record<string, unknown>;
+    const malformedReceipt = (
+      malformedCurrent.receipts as Record<string, unknown>[]
+    ).find((receipt) => receipt.lane === "contract");
+    if (!malformedReceipt) throw new Error("malformed review receipt is missing");
+    malformedReceipt.review_result_sha256 = "tampered-result-hash";
+    expect(() =>
+      openReviewWaveState(malformedCurrent, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "c".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+
     const historical = structuredClone(ledger) as Record<string, unknown>;
     historical.schema_version = 6;
     const historicalReceipts = (
