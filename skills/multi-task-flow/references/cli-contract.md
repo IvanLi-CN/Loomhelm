@@ -60,6 +60,8 @@ TTY 默认由 JSON 改为 human 是可观察兼容性变化；机器消费者应
 
 在当前合同中，`task-update` 可直接更正等待或阻塞状态，首次进入运行时的 `occurred_at` 可省略。任务上下文和仪表板提供 `dispatch_eligibility`，单独说明是否可领取任务对话派发以及当前阻塞原因；就绪通知回执不影响领取资格。
 
+当前合同下，工作原子的归属 Agent 可用 `atom-update` 或 `group-atom-update` 直接报告 `planned`、`blocked`、`running` 或 `completed`；前两个值可以撤回完成。报告 `running` 或 `completed` 要求全部祖先及沿途门禁满足。流程节点仍遵循对应操作的门禁；历史合同不接受新的状态切换。
+
 `lifecycle-record workspace_ready` 可同时提供 `baseline` 和 `baseline_sync`；后者包含 `mode`、`dispatch_operation_id`、`expected_previous_baseline`、`expected_lineage_sha` 和 `lineage_event_id`。命令复用基线同步校验，只接受事先登记的资源，并在一次提交中完成准备原子和生命周期。原分步命令仍可用。
 
 `merge-observe` 由目标负责人提交已登记 PR 的 provider 合并回执；可用 `supersedes` 修正同一 PR 的上一条有效观测。结果提示使用既有操作对账或说明未认领、冲突。观测不会追加成功事实、推进 SHA 或满足依赖。

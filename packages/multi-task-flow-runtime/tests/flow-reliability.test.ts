@@ -61,11 +61,11 @@ test("current contract atom updates follow edges despite reversed storage order"
         actor,
       ),
     );
-  expect(() => invoke(second!.id)).toThrow("Earlier atoms");
+  expect(() => invoke(second!.id)).toThrow(first!.id);
   expect(invoke(first!.id)).toMatchObject({ code: "APPLIED" });
 });
 
-test("a milestone releases successors from reported completion without task-internal evidence", () => {
+test("a milestone distinguishes reported completion from explicit evidence", () => {
   const ledger = modernFixture();
   const plan = ledger.plans[0]!;
   const [source, target] = ledger.tasks[0]!.atoms;
@@ -102,6 +102,8 @@ test("a milestone releases successors from reported completion without task-inte
   ];
   expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([milestoneId]);
   source!.status = "completed";
+  expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([milestoneId]);
+  plan.atomic_edges[0]!.requires = { kind: "source_terminal_success" };
   expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([]);
   plan.atomic_edges[0]!.requires = {
     kind: "source_evidence",
@@ -114,7 +116,7 @@ test("a milestone releases successors from reported completion without task-inte
   expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([]);
 });
 
-test("the bound agent may report an ordinary atom completed without intermediate progress", () => {
+test("the owner may retract completion and all descendants recheck the graph", () => {
   const ledger = modernFixture();
   ledger.contract_version = 6;
   ledger.runtime_identity = identity;
@@ -122,35 +124,46 @@ test("the bound agent may report an ordinary atom completed without intermediate
   task.thread_id = actor.thread_id;
   task.state = "running";
   const plan = ledger.plans[0]!;
-  const atom = {
-    id: "ordinary-work",
-    title: "Implement change",
-    purpose: "Implement change",
-    output: "Working change",
-  };
-  task.atoms.push({ id: atom.id, title: atom.title, status: "planned" });
-  plan.atoms.push({ ...atom, task_id: task.id });
-  plan.atomic_nodes.push({
-    ...atom,
-    kind: "work",
-    activity_type: "contribution",
-    state: "planned",
-    acceptance: [],
-    scope: { kind: "task", task_id: task.id, delivery_unit_id: task.group_id },
-  });
-  expect(
+  for (const id of ["work-c", "work-b", "work-a"]) {
+    const atom = { id, title: id, purpose: "Implement change", output: "Working change" };
+    task.atoms.push({ id, title: id, status: "planned" });
+    plan.atoms.push({ ...atom, task_id: task.id });
+    plan.atomic_nodes.push({
+      ...atom,
+      kind: "work",
+      activity_type: "contribution",
+      state: "planned",
+      acceptance: [],
+      scope: { kind: "task", task_id: task.id, delivery_unit_id: task.group_id },
+    });
+  }
+  for (const [from, to] of [
+    ["work-a", "work-b"],
+    ["work-b", "work-c"],
+  ] as const)
+    plan.atomic_edges.push({
+      id: `${from}-to-${to}`,
+      from_node_id: from,
+      to_node_id: to,
+      requires: { kind: "source_terminal_success" },
+    });
+  let sequence = 0;
+  const report = (atom_id: string, state: string, reporter = actor) =>
     apply(
       ledger,
       "atom-update",
-      request(
-        ledger,
-        "report-work-done",
-        { task_id: task.id, atom_id: atom.id, state: "completed" },
-        actor,
-      ),
-    ),
-  ).toMatchObject({ code: "APPLIED", result: { state: "completed" } });
-  expect(ledger.tasks[0]!.atoms.find((item) => item.id === atom.id)?.status).toBe("completed");
+      request(ledger, `report-atom-${++sequence}`, { task_id: task.id, atom_id, state }, reporter),
+    );
+  expect(report("work-a", "completed")).toMatchObject({ code: "APPLIED" });
+  expect(report("work-b", "completed")).toMatchObject({ code: "APPLIED" });
+  expect(() => report("work-a", "planned", { ...actor, thread_id: "another-thread" })).toThrow();
+  expect(report("work-a", "planned")).toMatchObject({ code: "APPLIED" });
+  expect(ledger.tasks[0]!.atoms.find((item) => item.id === "work-b")?.status).toBe("completed");
+  expect(() => report("work-c", "running")).toThrow(/work-b/);
+  expect(() => report("work-c", "completed")).toThrow(/work-b/);
+  expect(report("work-c", "blocked")).toMatchObject({ code: "APPLIED" });
+  expect(report("work-a", "completed")).toMatchObject({ code: "APPLIED" });
+  expect(report("work-c", "completed")).toMatchObject({ code: "APPLIED" });
 });
 
 test("an unclaimed external merge can be corrected without authorizing integration", () => {

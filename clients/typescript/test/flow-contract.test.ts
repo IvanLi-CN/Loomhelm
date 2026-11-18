@@ -43,6 +43,12 @@ test("flow schema exposes the versioned command contract", () => {
 	const commands = FLOW_CONTRACT.commands as Record<string, any>;
 	assert.ok(commands["execution-profile-update"]);
 	assert.ok(commands["task-external-merge-reconcile"]);
+	for (const command of ["atom-update", "group-atom-update"]) {
+		assert.deepEqual(
+			commands[command].request.properties.payload.properties.state.enum,
+			["planned", "running", "blocked", "completed"],
+		);
+	}
 	assert.deepEqual(
 		commands["plan-propose"].request.properties.payload.properties.revision,
 		{

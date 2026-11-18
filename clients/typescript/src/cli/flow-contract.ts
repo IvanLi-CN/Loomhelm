@@ -655,16 +655,25 @@ add(
 		},
 	},
 );
+const atomReportState = { enum: ["planned", "running", "blocked", "completed"] };
 add(
 	"atom-update",
 	["task_id", "atom_id", "state"],
 	["task_id", "atom_id", "state"],
+	{
+		payloadOverrides: { state: atomReportState },
+		resultOverrides: { state: atomReportState },
+	},
 );
 add(
 	"group-atom-update",
 	["group_id", "atom_id", "state", "detail", "occurred_at"],
 	["group_id", "atom_id", "state"],
-	{ optionalPayload: ["detail", "occurred_at"] },
+	{
+		optionalPayload: ["detail", "occurred_at"],
+		payloadOverrides: { state: atomReportState },
+		resultOverrides: { state: atomReportState },
+	},
 );
 add(
 	"group-execution-update",

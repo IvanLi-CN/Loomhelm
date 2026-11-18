@@ -208,6 +208,12 @@ export function atomicNodeSatisfied(ledger: Ledger, node: any): boolean {
 export function atomicConditionEvaluator(ledger: Ledger, plan: Plan) {
   const nodes = new Map(plan.atomic_nodes.map((node): [string, AtomicNode] => [node.id, node]));
   const edges = plan.atomic_edges.filter((edge): edge is AtomicEdge => "from_node_id" in edge);
+  const inbound = new Map<string, AtomicEdge[]>();
+  for (const edge of edges) {
+    const incoming = inbound.get(edge.to_node_id);
+    if (incoming) incoming.push(edge);
+    else inbound.set(edge.to_node_id, [edge]);
+  }
   const visiting = new Set<string>();
   const cache = new Map<string, boolean>();
   type Criterion = Extract<AtomicNode, { kind: "milestone" }>["acceptance"][number];
@@ -231,29 +237,23 @@ export function atomicConditionEvaluator(ledger: Ledger, plan: Plan) {
     return false;
   }
   function edgeSatisfied(edge: AtomicEdge): boolean {
-    if (edge.requires.kind !== "source_evidence") return nodeSatisfied(edge.from_node_id);
-    const { criterion } = edge.requires;
-    if (["node_satisfied", "pr_published", "pr_merged"].includes(criterion.kind))
-      return criterionSatisfied(criterion);
-    const source = nodes.get(edge.from_node_id);
     return (
-      source?.kind === "work" &&
-      ["contribution", "documentation"].includes(source.activity_type) &&
-      nodeSatisfied(edge.from_node_id)
+      nodeSatisfied(edge.from_node_id) &&
+      (edge.requires.kind !== "source_evidence" || criterionSatisfied(edge.requires.criterion))
     );
   }
   function nodeSatisfied(id: string): boolean {
     if (cache.has(id)) return cache.get(id) ?? false;
     const node = nodes.get(id);
     if (!node || visiting.has(id)) return false;
-    if (node.kind !== "milestone") return atomicNodeSatisfied(ledger, node);
-    const incoming = edges.filter((edge) => edge.to_node_id === id);
+    const incoming = inbound.get(id) ?? [];
     visiting.add(id);
     const satisfied =
-      node.state === "planned" &&
-      incoming.length + node.acceptance.length > 0 &&
-      incoming.every(edgeSatisfied) &&
-      node.acceptance.every(criterionSatisfied);
+      (node.kind === "milestone"
+        ? node.state === "planned" &&
+          incoming.length + node.acceptance.length > 0 &&
+          node.acceptance.every(criterionSatisfied)
+        : atomicNodeSatisfied(ledger, node)) && incoming.every(edgeSatisfied);
     visiting.delete(id);
     cache.set(id, satisfied);
     return satisfied;
@@ -289,7 +289,10 @@ export function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: stri
     task.atoms.some((atom) => !taskNodes.some((node) => node.id === atom.id)) ||
     taskNodes.some((node) => {
       const atom = task.atoms.find((candidate) => candidate.id === node.id);
-      return !atom || (node.state === "completed" && atom.status !== "completed");
+      return (
+        !atom ||
+        (ledger.contract_version < 6 && node.state === "completed" && atom.status !== "completed")
+      );
     })
   )
     return false;
