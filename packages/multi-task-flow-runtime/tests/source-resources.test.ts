@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -15,7 +16,7 @@ import { copySkillSources } from "../lib/package-source.ts";
 import { sourceResources, verifySourceBytes } from "../lib/source-resources.ts";
 
 test("source discovery maps new modules and excludes ignored local files without a digest refresh", () => {
-  const root = mkdtempSync(join(tmpdir(), "loomhelm-resources-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "loomhelm-resources-")));
   const write = (path: string, text: string) => {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     writeFileSync(join(root, path), text);
@@ -50,7 +51,9 @@ test("source discovery maps new modules and excludes ignored local files without
     expect(() => verifySourceBytes(resource, readFileSync(modulePath))).toThrow(
       "changed since build commit",
     );
-    expect(() => copySkillSources(root, join(root, "output"), { sourceRef: tree })).toThrow("changed since build commit");
+    expect(() => copySkillSources(root, join(root, "output"), { sourceRef: tree })).toThrow(
+      "changed since build commit",
+    );
     unlinkSync(modulePath);
     expect(() => sourceResources(root)).toThrow("Missing source resource");
     write("packages/multi-task-flow-runtime/lib/new.ts", "restored");
