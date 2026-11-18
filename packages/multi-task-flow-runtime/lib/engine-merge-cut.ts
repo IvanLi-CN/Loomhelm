@@ -41,6 +41,7 @@ const {
   requireLifecycle,
   exactApprovedAction,
   protectedActionApproved,
+  protectedActionTargetDigest,
   historicalGroupLineageContains,
   externalMergeFactId,
   latestPublication,
@@ -110,6 +111,8 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
         .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)
         .parse(payload.expected_base_sha);
       let targetBranch: string | null = owner.parent_branch;
+      let originalParentPr: z.infer<typeof externalRef> | null = null;
+      let originalParentMergeSha: string | null = null;
       if (mode === "child") {
         const taskId = parse(id, payload.task_id);
         ownerOfTask(ledger, request, taskId);
@@ -188,9 +191,11 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
         );
         const mergedContinuation = isMergedGroupContinuation(ledger, owner);
         requireCondition(
-          owner.state === "active" || mergedContinuation,
+          mode === "parent-followup"
+            ? ledger.contract_version >= 3 && mergedContinuation
+            : owner.state === "active",
           "GROUP_NOT_ACTIVE",
-          "Only an active group or an approved post-merge continuation can merge its parent PR",
+          "Only an active parent merge or an approved post-merge continuation can merge this PR",
           4,
         );
         if (mode === "parent") {
@@ -203,33 +208,29 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
             3,
           );
         } else {
-          const originalParent = parse(externalRef, payload.original_parent_pr);
+          originalParentPr = parse(externalRef, payload.original_parent_pr);
           requireCondition(
-            deliveryUnitPr(owner) && stable(deliveryUnitPr(owner)) === stable(originalParent),
+            deliveryUnitPr(owner) && stable(deliveryUnitPr(owner)) === stable(originalParentPr),
             "PR_MISMATCH",
             "Follow-up merge must identify the registered parent PR",
             3,
           );
           requireCondition(
-            pr.id !== originalParent.id &&
+            pr.id !== originalParentPr.id &&
               pr.provider === ledger.repository.provider &&
               pr.repository === `${ledger.repository.owner}/${ledger.repository.name}`,
             "PR_MISMATCH",
             "Follow-up merge must identify a distinct PR in the bound repository",
             3,
           );
-          requireCondition(
-            typeof payload.original_parent_merge_sha === "string" &&
-              /^[a-f0-9]{40}$/.test(payload.original_parent_merge_sha),
-            "EVIDENCE_REQUIRED",
-            "Follow-up merge must retain the original parent merge SHA",
-            5,
-          );
+          originalParentMergeSha = z
+            .string()
+            .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)
+            .parse(payload.original_parent_merge_sha);
           if (ledger.contract_version >= 3)
             requireCondition(
               mergedContinuation &&
-                payload.original_parent_merge_sha ===
-                  deliveryUnitOriginalParentMergeSha(ledger, owner),
+                originalParentMergeSha === deliveryUnitOriginalParentMergeSha(ledger, owner),
               "EVIDENCE_REQUIRED",
               "Follow-up merge must retain the verified original parent merge SHA",
               5,
@@ -359,15 +360,44 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
           "Parent SHA differs from the claimed base",
           3,
         );
-      if (mode === "parent" || (mode === "parent-followup" && ledger.contract_version >= 3))
+      if (mode === "parent" || mode === "parent-followup") {
+        const ownerApprovalId = string(payload.owner_approval_id);
+        const ownerApprovalTargetDigest =
+          mode === "parent-followup"
+            ? protectedActionTargetDigest({
+                kind: "delivery_unit_merge",
+                mode,
+                group_id: groupId,
+                pr,
+                expected_head_sha: headSha,
+                expected_base_sha: expectedSha,
+                target_branch: targetBranch,
+                original_parent_pr: originalParentPr,
+                original_parent_merge_sha: originalParentMergeSha,
+              })
+            : null;
         protectedActionApproved(
           ledger,
           "delivery_unit_merge",
           groupId,
-          string(payload.owner_approval_id),
+          ownerApprovalId,
+          ownerApprovalTargetDigest,
         );
+      }
       const op = addOperation(ledger, request, "merge", groupId, expectedSha);
       op.request.mode = mode;
+      if (mode === "parent-followup")
+        op.request.owner_approval_target_digest = protectedActionTargetDigest({
+          kind: "delivery_unit_merge",
+          mode,
+          group_id: groupId,
+          pr,
+          expected_head_sha: headSha,
+          expected_base_sha: expectedSha,
+          target_branch: targetBranch,
+          original_parent_pr: originalParentPr,
+          original_parent_merge_sha: originalParentMergeSha,
+        });
       addEvent(ledger, request, "merge_claimed", groupId, {
         operation_id: op.id,
       });

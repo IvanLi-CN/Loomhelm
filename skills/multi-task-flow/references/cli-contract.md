@@ -36,6 +36,8 @@ TTY 默认由 JSON 改为 human 是可观察兼容性变化；机器消费者应
 
 写操作通常使用 `{ "run_id": "...", "actor": { "role": "main|group|task", "thread_id": "..." }, "request_id": "...", "expected_revision": 0, "payload": {} }`；`request_id` 必须唯一，重放只允许使用相同 canonical input，revision 冲突必须先读取账本再决定下一步。
 
+`merge-claim` 的 `parent-followup` 模式仅适用于 contract 3 或更高版本中已经 merged 且有 approved plan revision 新增 active contribution 的 DeliveryUnit；普通 `parent` 模式只适用于 active DeliveryUnit。续作 payload 必须包含 `original_parent_pr`、40 或 64 位 `original_parent_merge_sha`、独立 follow-up `pr`、`target_branch`、预期 head/base 和 `owner_approval_id`；protected approval 的 `target_digest` 是目标摘要的 64 位小写 SHA-256，成功 claim 后不得重复使用同一审批。
+
 ## Commands
 
 | Command | Access | Payload or query | Safe recovery |

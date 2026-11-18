@@ -54,6 +54,7 @@ const {
   requireLifecycle,
   exactApprovedAction,
   protectedActionApproved,
+  parseProtectedActionDigest,
   historicalGroupLineageContains,
   externalMergeFactId,
   latestPublication,
@@ -491,7 +492,7 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
       addEvent(ledger, request, "protected_action_approved", targetId, {
         kind,
         approval_id: approvalId,
-        target_digest: payload.target_digest ?? null,
+        target_digest: parseProtectedActionDigest(payload.target_digest),
       });
       return { target_id: targetId, kind, approval_id: approvalId };
     }
@@ -993,7 +994,6 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
           : {}),
       };
     }
-
     default:
       return undefined;
   }

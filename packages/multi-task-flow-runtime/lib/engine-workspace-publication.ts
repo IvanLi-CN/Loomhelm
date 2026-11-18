@@ -301,6 +301,15 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
         "Branch publication is already pending",
         4,
       );
+      requireCondition(
+        targetType !== "group" ||
+          !ledger.operations.some(
+            (item) => item.kind === "merge" && item.target_id === targetId && activeOperation(item),
+          ),
+        "MERGE_PENDING",
+        "A merge into this group is already pending",
+        4,
+      );
       const op = addOperation(ledger, request, "publish_branch", targetId, expectedSha);
       op.request.target_type = targetType;
       op.request.branch = branch;
@@ -490,6 +499,15 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
         "PR publication is already pending",
         4,
       );
+      requireCondition(
+        targetType !== "group" ||
+          !ledger.operations.some(
+            (item) => item.kind === "merge" && item.target_id === targetId && activeOperation(item),
+          ),
+        "MERGE_PENDING",
+        "A merge into this group is already pending",
+        4,
+      );
       const op = addOperation(ledger, request, "publish_pr", targetId, headSha);
       op.request.target_type = targetType;
       op.request.branch = branch;
@@ -554,6 +572,7 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
           sha: receipt.head_sha,
           evidence_ref: receipt.evidence_ref,
           receipt,
+          ...(op.request.continuation === true ? { continuation: true } : {}),
         });
         ledger.facts.push(observed);
         op.receipt_fact_id = observed.id;

@@ -96,6 +96,16 @@ export function stable(value: any): string {
       .join(",")}}`;
   return JSON.stringify(value);
 }
+export function protectedActionTargetDigest(value: unknown): string {
+  return createHash("sha256").update(stable(value)).digest("hex");
+}
+export function parseProtectedActionDigest(value: unknown): string | null {
+  if (value == null) return null;
+  return z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .parse(value);
+}
 function activeOperation(item: Ledger["operations"][number]): boolean {
   return item.status === "claimed" || item.status === "unknown";
 }
@@ -286,6 +296,14 @@ export function authorizedAction(ledger: Ledger, action: string): void {
       event.data.approval_id === current.approval_id,
   );
   requireCondition(approval, "ACTION_NOT_APPROVED", `Action ${action} is not approved`, 4);
+  if (ledger.contract_version >= 3)
+    requireCondition(
+      Array.isArray(approval.data.authorized_actions) &&
+        approval.data.authorized_actions.includes(action),
+      "ACTION_NOT_APPROVED",
+      `Action ${action} is not approved`,
+      4,
+    );
 }
 export function legacyLedger(ledger: Ledger): boolean {
   return ledger.source_schema_version === 1 && ledger.contract_version !== 2;
@@ -520,6 +538,7 @@ export function protectedActionApproved(
   kind: "delivery_unit_merge" | "delivery_unit_recovery" | "release" | "deploy",
   targetId: string,
   approvalId: string,
+  targetDigest: string | null = null,
 ): void {
   requireCondition(
     ledger.events.some(
@@ -527,12 +546,25 @@ export function protectedActionApproved(
         event.type === "protected_action_approved" &&
         event.subject_id === targetId &&
         event.data.kind === kind &&
-        event.data.approval_id === approvalId,
+        event.data.approval_id === approvalId &&
+        (event.data.target_digest ?? null) === targetDigest,
     ),
     "PROTECTED_ACTION_NOT_APPROVED",
     `Protected action ${kind} is not approved`,
     4,
   );
+  if (kind === "delivery_unit_merge")
+    requireCondition(
+      !ledger.operations.some(
+        (operation) =>
+          operation.kind === "merge" &&
+          operation.request.owner_approval_id === approvalId &&
+          operation.status !== "failed",
+      ),
+      "PROTECTED_ACTION_REPLAY",
+      `Protected action ${kind} approval has already been used`,
+      4,
+    );
 }
 
 export function historicalGroupLineageContains(

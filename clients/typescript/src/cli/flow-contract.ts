@@ -21,6 +21,7 @@ const shaValue = {
 	pattern: "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
 } as const;
 const sha40Value = { type: "string", pattern: "^[a-f0-9]{40}$" } as const;
+const digestValue = { type: "string", pattern: "^[a-f0-9]{64}$" } as const;
 const commitArrayValue = {
 	type: "array",
 	items: sha40Value,
@@ -205,6 +206,7 @@ const field = (name: string): JsonSchema => {
 	if (name === "expected_previous_baseline")
 		return { oneOf: [objectValue, { type: "null" }] };
 	if (name === "expected_lineage_sha") return { oneOf: [shaValue, { type: "null" }] };
+	if (name === "target_digest") return digestValue;
 	if (name === "runtime") return { enum: ["active", "idle", "unknown"] };
 	if (name === "evidence" || name === "handling_evidence" || name === "change_class")
 		return stringValue;
@@ -355,6 +357,7 @@ const command = (
 		optionalResult?: readonly string[];
 		payloadOverrides?: Record<string, JsonSchema>;
 		payloadAnyOfRequired?: readonly (readonly string[])[];
+		payloadIfThen?: readonly { when: JsonSchema; required: readonly string[] }[];
 		resultOverrides?: Record<string, JsonSchema>;
 		read?: boolean;
 	} = {},
@@ -377,6 +380,14 @@ const command = (
 					options.payloadAnyOfRequired
 						? {
 							anyOf: options.payloadAnyOfRequired.map((names) => ({ required: names })),
+						}
+						: {},
+					options.payloadIfThen
+						? {
+							allOf: options.payloadIfThen.map((condition) => ({
+								if: condition.when,
+								["then"]: { required: condition.required },
+							})),
 						}
 						: {},
 				),
@@ -728,7 +739,21 @@ add(
 			"follow_pr_id",
 			"owner_approval_id",
 		],
-		payloadOverrides: { original_parent_merge_sha: sha40Value },
+		payloadOverrides: { original_parent_merge_sha: shaValue },
+		payloadIfThen: [
+			{
+				when: { properties: { mode: { const: "parent" } } },
+				required: ["owner_approval_id"],
+			},
+			{
+				when: { properties: { mode: { const: "parent-followup" } } },
+				required: [
+					"owner_approval_id",
+					"original_parent_pr",
+					"original_parent_merge_sha",
+				],
+			},
+		],
 	},
 );
 add(
