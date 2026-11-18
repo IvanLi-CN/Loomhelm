@@ -615,7 +615,10 @@ function deliveryUnitMergeShas(ledger: Ledger, group: Ledger["groups"][number]):
     )
       continue;
     const fact = ledger.facts.find((item) => item.id === operation.receipt_fact_id);
-    if (fact?.kind === "pr_merged" && fact.status === "passed" && fact.sha) shas.add(fact.sha);
+    if (fact?.kind === "pr_merged" && fact.status === "passed") {
+      if (fact.sha) shas.add(fact.sha);
+      if (fact.receipt?.head_sha) shas.add(fact.receipt.head_sha);
+    }
   }
   return shas;
 }
