@@ -218,10 +218,34 @@ function isLegacyReviewWave(
       receipts.some(
         (receipt) =>
           receipt.receipt_id === rawLane.receipt_id &&
-          receipt.review_receipt_schema === 6,
+          isHistoricalReviewReceipt(receipt),
       )
     );
   });
+}
+
+function isHistoricalReviewReceipt(
+  receipt: Record<string, unknown>,
+): boolean {
+  return (
+    receipt.review_receipt_schema === 6 &&
+    typeof receipt.review_model === "string" &&
+    receipt.review_model.trim().length > 0 &&
+    typeof receipt.review_effort === "string" &&
+    receipt.review_effort.trim().length > 0 &&
+    typeof receipt.resolved_model === "string" &&
+    typeof receipt.resolved_effort === "string" &&
+    isRecord(receipt.profile_resolution) &&
+    receipt.profile_proof_status === "sub-agent-declared" &&
+    receipt.review_execution_source === "sub-agent" &&
+    receipt.provenance_boundary === "sub-agent-structured-result" &&
+    receipt.evidence_source === "sub-agent-structured-result" &&
+    !Object.hasOwn(receipt, "requested_profile") &&
+    !Object.hasOwn(receipt, "profile_verification") &&
+    !Object.hasOwn(receipt, "effective_profile") &&
+    !Object.hasOwn(receipt, "attempt_key") &&
+    !Object.hasOwn(receipt, "scope_class")
+  );
 }
 
 function reviewWaveIsTerminal(

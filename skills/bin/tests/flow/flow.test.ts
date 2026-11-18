@@ -612,6 +612,24 @@ describe("acceptance and review state", () => {
           }),
         ).toThrow("review attempt receipt integrity is invalid");
         unavailableReceipt.scope_class = "code";
+        unavailableReceipt.review_receipt_schema = 6;
+        expect(() =>
+          recordSubagentReviewState(ledger, {
+            reviewProfile: "pr-convergence",
+            baseRef: sha,
+            reviewAttemptId: "contract-startup-1",
+            reviewResultJson: JSON.stringify({
+              findings: [],
+              overall_correctness: "patch is correct",
+              overall_explanation:
+                "Inspected the candidate diff and confirmed the completed result.",
+              overall_confidence_score: 1,
+            }),
+            waveId: String(wave.wave_id),
+            lane: lane.lane,
+          }),
+        ).toThrow("review attempt receipt integrity is invalid");
+        unavailableReceipt.review_receipt_schema = 7;
         unavailableReceipt.reported_profile = {
           model: "reviewer-claim",
           effort: "reviewer-claim",
@@ -785,6 +803,8 @@ describe("acceptance and review state", () => {
       disguisedWave.lanes as Record<string, Record<string, unknown>>,
     ))
       delete lane.requested_profile;
+    for (const receipt of disguisedCurrent.receipts as Record<string, unknown>[])
+      if (receipt.kind === "review") receipt.review_receipt_schema = 6;
     const disguisedReceipt = (
       disguisedCurrent.receipts as Record<string, unknown>[]
     ).find((receipt) => receipt.lane === "contract");
@@ -796,7 +816,7 @@ describe("acceptance and review state", () => {
       openReviewWaveState(disguisedCurrent, {
         stage: "initial",
         baseSha: sha,
-        headSha: "b".repeat(40),
+        headSha: sha,
         laneSpecs: lanes,
       }),
     ).toThrow("another review wave is already active");
@@ -828,6 +848,8 @@ describe("acceptance and review state", () => {
         "profile_verification",
         "effective_profile",
         "reported_profile",
+        "attempt_key",
+        "scope_class",
       ])
         delete legacy[key];
       legacy.review_receipt_schema = 6;

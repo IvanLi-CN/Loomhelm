@@ -123,6 +123,9 @@ export function recordSubagentReviewState(
     waveProofKey,
   );
   if (existingAttempt) {
+    assertCurrentReviewReceiptFields(existingAttempt);
+    if (existingAttempt.review_receipt_schema !== 7)
+      throw new FlowError("review attempt receipt integrity is invalid");
     if (existingAttempt.terminal_state !== "completed")
       throw new FlowError(
         "review attempt id is already recorded with a different terminal state",
@@ -234,6 +237,7 @@ function recordUnavailable(
         "review attempt id is already recorded with a different terminal state",
       );
     if (
+      existingAttempt.review_receipt_schema !== 7 ||
       existingAttempt.kind !== "review_attempt" ||
       existingAttempt.receipt_id !== receiptId ||
       existingAttempt.proof_key !== proofKey ||
@@ -313,7 +317,6 @@ function findAttemptReceipt(
 ): Record<string, unknown> | undefined {
   return receipts.find(
     (receipt) =>
-      receipt.review_receipt_schema === 7 &&
       receipt.attempt_key === attemptKey &&
       receipt.wave_proof_key === waveProofKey,
   );
