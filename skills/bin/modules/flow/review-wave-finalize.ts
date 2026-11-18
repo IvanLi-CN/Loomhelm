@@ -1,10 +1,14 @@
 import { FlowError, isoNow, isRecord, stableHash } from "./common";
-import { normalizeReviewSynthesis } from "./review";
+import { normalizeReviewSynthesis, validateLaneSpecs } from "./review";
 import { recordReviewHistory } from "./review-history";
 import { canonicalList, deriveReviewSynthesis } from "./review-wave-utils";
 import { assertReviewReceiptIntegrity } from "./review-receipt-integrity";
 import { validateReviewSynthesisAcceptance } from "./review-synthesis";
-import { activeWave, reviewState } from "./review-wave-support";
+import {
+  activeWave,
+  reviewState,
+  reviewWaveScopeBindingMatches,
+} from "./review-wave-support";
 
 export function finalizeReviewWaveState(
   ledger: Record<string, unknown>,
@@ -15,6 +19,29 @@ export function finalizeReviewWaveState(
   const wave = activeWave(ledger, waveId);
   if (wave.state !== "open" || !isRecord(wave.lanes))
     throw new FlowError("review wave is not open");
+  if (!reviewWaveScopeBindingMatches(wave))
+    throw new FlowError("review wave scope binding is invalid");
+  const assessment = isRecord(ledger.review_assessment)
+    ? ledger.review_assessment
+    : undefined;
+  const tier = assessment?.tier;
+  if (tier !== 3 && tier !== 4)
+    throw new FlowError("review wave necessity tier is invalid");
+  const hasRequestedProfiles =
+    isRecord(wave.lanes) &&
+    Object.values(wave.lanes).every(
+      (lane) => isRecord(lane) && Object.hasOwn(lane, "requested_profile"),
+    );
+  if (ledger.legacy_compatibility !== true || hasRequestedProfiles)
+    validateLaneSpecs(
+      String(wave.stage),
+      Object.entries(wave.lanes).map(([lane, rawLane]) => ({
+        lane,
+        model: isRecord(rawLane) ? String(rawLane.model ?? "") : "",
+        effort: isRecord(rawLane) ? String(rawLane.effort ?? "") : "",
+      })),
+      tier,
+    );
   const receipts = Array.isArray(ledger.receipts)
     ? (ledger.receipts as Record<string, unknown>[])
     : [];

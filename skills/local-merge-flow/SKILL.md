@@ -10,7 +10,7 @@ Use only for explicit `local-merge`, `no-pr`, or a currently locked local-merge 
 ## Authorization
 
 - Execute `$project-engineering-workflow` Step 1-4 and Step 5L locally.
-- Authorize local implementation, validation, signed-off commits, applicable contract sync, and fixes required by current local facts. The Agent records a Tier 1..4 review necessity assessment with no categorical rubric: Tier 1 needs no code review, Tier 2 is advisory only, Tier 3 requires fresh clear read-only-sub-agent four-lane current-head review evidence, and Tier 4 requires those lanes plus one or two selected dynamic lanes before Step 5L.
+- Authorize local implementation, validation, signed-off commits, applicable contract sync, and fixes required by current local facts. The Agent records a Tier 1..4 review necessity assessment with no categorical rubric: Tier 1 needs no code review, Tier 2 is advisory only, Tier 3 requires fresh clear read-only-sub-agent four-lane current-head review evidence, and Tier 4 requires those lanes plus one or two selected dynamic lanes before Step 5L. Formal lane requests come from the parent flow, and review output contains content evidence only.
 - Do not create/update/merge a PR or push. A read-only `gh` lookup is allowed only to resolve live base/head facts.
 - Review disposition semantics come from the shared `../project-engineering-workflow/references/review-proof-short-contract.md` contract.
 - Before any Tier 3/4 lane launch, confirm Review Readiness: approved behavior, acceptance, scope, and required contracts are settled; no design decision is unresolved; and current-candidate validation plus applicable visual evidence are complete. Tier 1/2 record only their assessment and rationale.

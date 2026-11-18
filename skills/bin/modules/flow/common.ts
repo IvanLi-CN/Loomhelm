@@ -8,7 +8,7 @@ export class FlowError extends Error {
 }
 
 export const FLOW_SCHEMA_VERSION = 7;
-export const REVIEW_RECEIPT_SCHEMA_VERSION = 6;
+export const REVIEW_RECEIPT_SCHEMA_VERSION = 7;
 export const DEFAULT_COMMAND_BUDGET_SECONDS = 1800;
 export const MAX_CONVERGENCE_ROUNDS = 3;
 export const TRANSIENT_VALIDATION_EXIT_CODES = new Set([75, 124]);

@@ -11,6 +11,7 @@
 | 统一手动版本发布 | active | 统一发版实现及故障验证已接入，平台对齐与真实首发仍需对应证据 | [manual-version-release-delivery](manual-version-release-delivery/SPEC.md) | - |
 | 任务流上下文菜单与任务直达链接 | active | 已实现并通过局部验证；视觉证据已确认 | [multi-task-flow-task-links](multi-task-flow-task-links/SPEC.md) | - |
 | 统一原子编排 | active | 需求、角色交互、数据模型、状态机与 CLI 契约已分层；实现偏差与验证缺口见主题实现说明 | [multi-task-flow-unified-atomic-orchestration](multi-task-flow-unified-atomic-orchestration/SPEC.md) | - |
+| Formal review 请求参数与结果证据 | active | 父流程请求 profile，review 结果只证明候选内容和绑定关系；provider 实际路由保持未知 | [formal-review-request-evidence](formal-review-request-evidence/SPEC.md) | - |
 
 ## 文件命名
 
