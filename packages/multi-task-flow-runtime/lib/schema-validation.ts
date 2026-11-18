@@ -82,9 +82,9 @@ export function validateLedger(value: unknown): Ledger {
     );
     const upgrade = parsed.upgrade;
     requireCondition(
-      parsed.contract_version !== 5 || !upgrade || Boolean(upgrade.migration_audit),
+      parsed.contract_version < 5 || !upgrade || Boolean(upgrade.migration_audit),
       "MIGRATION_AUDIT_REQUIRED",
-      "Contract 5 upgrades require a persisted mechanical migration audit",
+      "Identity-bound contract upgrades require a persisted mechanical migration audit",
       4,
     );
     const expected = upgrade?.phase === "prepared" ? upgrade.source : upgrade?.target;
@@ -236,8 +236,14 @@ export function validateLedger(value: unknown): Ledger {
     "APPROVAL_MISMATCH",
     "Control approval must match the execution plan approval",
   );
+  const historicalLifecycleRoleInference =
+    parsed.contract_version < 6 ||
+    (parsed.contract_version === 6 && (parsed.upgrade?.migration_audit?.source_contract ?? 6) < 6);
   for (const item of parsed.plans) {
-    validatePlan(item);
+    validatePlan(item, {
+      allowLegacyLifecycleRoleInference: historicalLifecycleRoleInference,
+      requireCanonicalLifecycleGraph: !historicalLifecycleRoleInference,
+    });
     if (item.lifecycle === "proposed")
       requireCondition(
         item.approval_id === null,

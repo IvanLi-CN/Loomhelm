@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
+import { lifecycleStageOf } from "../lib/atomic-orchestration";
 import { ContractError, requireCondition } from "../lib/errors";
 import {
   effectiveProfile,
@@ -336,8 +337,8 @@ export function requireContributionDispatchGate(
   retryAction: "dispatch-claim" | "task-update" = "dispatch-claim",
 ): void {
   if (legacyLedger(ledger)) return;
-  const workspaceAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "workspace_ready");
-  const prAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "pr_created");
+  const workspaceAtom = owner.atoms.find((atom) => lifecycleStageOf(atom) === "workspace_ready");
+  const prAtom = owner.atoms.find((atom) => lifecycleStageOf(atom) === "pr_created");
   const missing: string[] = [];
   if (owner.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     missing.push("workspace_ready");
@@ -599,7 +600,7 @@ export function prReceipt(
 export function parentPrReady(
   ledger: Ledger,
   owner: Ledger["groups"][number],
-  prAtom = owner.atoms.find((atom) => atom.lifecycle_stage === "pr_created"),
+  prAtom = owner.atoms.find((atom) => lifecycleStageOf(atom) === "pr_created"),
 ): boolean {
   const pr = deliveryUnitPr(owner);
   const canonicalState = owner.pr && "state" in owner.pr ? owner.pr.state : null;

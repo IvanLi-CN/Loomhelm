@@ -280,12 +280,15 @@ export function buildView(
         : runtimeProjection.summary.status;
   const hasLegacyAtomicProjection =
     !plan.atomic_nodes.length && (plan.atoms.length > 0 || plan.group_atoms.length > 0);
-  const compatibilityPlan = hasLegacyAtomicProjection
-    ? canonicalizeContract3Plan(plan, ledger.tasks)
-    : null;
+  // Normalize role metadata for both canonical and legacy plans. The normalizer
+  // only derives lifecycle roles from explicit metadata or the bounded legacy
+  // atom identity rules; it never invents dependency edges.
+  const compatibilityPlan = canonicalizeContract3Plan(plan, ledger.tasks);
   const canonicalAtomicNodes: AtomicNode[] = (
     plan.atomic_nodes.length
-      ? plan.atomic_nodes.map((node) => compatibilityAtomicNodeState(node, ledger))
+      ? (compatibilityPlan.atomic_nodes as AtomicNode[]).map((node) =>
+          compatibilityAtomicNodeState(node, ledger),
+        )
       : hasLegacyAtomicProjection
         ? (compatibilityPlan.atomic_nodes as AtomicNode[]).map((node) =>
             compatibilityAtomicNodeState(node, ledger),

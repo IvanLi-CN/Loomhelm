@@ -28,7 +28,7 @@ import {
   singleDeliveryUnitName,
 } from "../examples/single-delivery-unit/ledger";
 import { singleDeliveryUnitObserver } from "../examples/single-delivery-unit/outputs";
-import { versionEnvelope } from "../lib/contract";
+import { CONTRACT_VERSION, versionEnvelope } from "../lib/contract";
 import { type Ledger, validateLedger } from "../lib/schema";
 import { ServiceAuth } from "../lib/service-auth";
 import { compatibility, type ReleaseManifest } from "../lib/service-contract";
@@ -156,7 +156,7 @@ files.viewer = digest(readFileSync(import.meta.path));
 const body = {
   schema_version: 1 as const,
   source_sha: source.stdout.toString().trim(),
-  ledger_contract: 3,
+  ledger_contract: CONTRACT_VERSION,
   service_version: "source-preview",
   platform: `${process.platform}-${process.arch}` as ReleaseManifest["platform"],
   ...versionEnvelope,

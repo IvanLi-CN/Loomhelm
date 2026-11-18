@@ -1,4 +1,5 @@
 import type { Ledger, Plan } from "../lib/schema";
+import { lifecycleStageOf } from "./atomic-orchestration";
 
 export function createAtomProjection(ledger: Ledger, plan: Plan) {
   const eventTime = (
@@ -22,7 +23,12 @@ export function createAtomProjection(ledger: Ledger, plan: Plan) {
   };
   const atomTime = (
     ownerId: string,
-    atom: { id: string; status: string; lifecycle_stage?: string | null },
+    atom: {
+      id: string;
+      status: string;
+      lifecycle_stage?: string | null;
+      lifecycle_role?: unknown;
+    },
     isGroup = false,
   ): string | null =>
     atom.status === "completed"
@@ -31,7 +37,7 @@ export function createAtomProjection(ledger: Ledger, plan: Plan) {
           ownerId,
           (data) => data.atom_id === atom.id && data.state === "completed",
         ) ??
-        (isGroup && atom.lifecycle_stage === "closed"
+        (isGroup && lifecycleStageOf(atom) === "closed"
           ? eventTime("group_updated", ownerId, (data) => data.state === "closed")
           : null))
       : null;
@@ -57,7 +63,8 @@ export function createAtomProjection(ledger: Ledger, plan: Plan) {
             title: atom.title,
             purpose: atom.purpose,
             output: atom.output,
-            lifecycle_stage: atom.lifecycle_stage,
+            lifecycle_stage: lifecycleStageOf(atom),
+            lifecycle_role: atom.lifecycle_role,
             status: runtimeAtoms.get(atom.id)?.status ?? "planned",
           }))
         : [];
@@ -80,6 +87,7 @@ export function createAtomProjection(ledger: Ledger, plan: Plan) {
             title: atom.title,
             purpose: atom.purpose,
             output: atom.output,
+            lifecycle_role: atom.lifecycle_role,
             status: runtimeAtoms.get(atom.id)?.status ?? "planned",
             completed_at: atomTime(
               task.id,

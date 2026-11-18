@@ -28,8 +28,8 @@
     "persistent_state": {
       "applicable": true,
       "impact": "minor",
-      "state_description": "Contract 5/schema-3 binding intentionally fences older writers; immutable evidence is retained and repaired forward",
-      "source_program_compatibility_range": "Validated schema-2/contract-3 and contract-4 source; exact contract-5 forward repair",
+      "state_description": "Contract 6/schema-4 binding intentionally fences older writers; immutable evidence is retained and repaired forward",
+      "source_program_compatibility_range": "Validated schema-2/contract-3/4/5 source; contract-6 forward repair and same-contract identity upgrade",
       "evidence": [
         "invocation-evidence-migration.json",
         "invocation-journal.test.ts",

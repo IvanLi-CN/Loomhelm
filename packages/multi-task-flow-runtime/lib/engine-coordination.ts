@@ -229,7 +229,7 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
       validateRevisionReason(revision);
       proposed.revision = revision;
       proposed.lifecycle = "proposed";
-      validatePlan(proposed);
+      validatePlan(proposed, { allowLegacyLifecycleRoleInference: ledger.contract_version < 6 });
       if (proposed.plan_handoff) {
         const cutAssignments = previous.plan_handoff
           ? collectCutAssignmentEvidence(ledger, previous)

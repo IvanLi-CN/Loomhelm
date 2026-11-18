@@ -37,6 +37,7 @@ import { parseViewerRoute } from "../scripts/viewer-gateway";
 import { createWorkerGeneration, ViewerWorkerPool } from "../scripts/viewer-runtime";
 import { startUnixViewerWorkerServer, viewerWorkerSocketPath } from "../scripts/viewer-socket";
 import { createUnixViewerWorker, dataVersionOf, workerKeyOf } from "../scripts/viewer-worker";
+import { CONTRACT_VERSION } from "./contract";
 import { identityOf, requireRunIdentity } from "./orchestration-identity";
 import {
   agentInput,
@@ -166,7 +167,7 @@ export async function startSharedViewer(
     build_id: manifest.build_id,
     source_sha: serviceConfig.source_sha ?? manifest.source_sha,
     compatibility_line: serviceConfig.compatibility_line ?? "compat-v1",
-    ledger_contract: serviceConfig.ledger_contract ?? manifest.ledger_contract ?? 3,
+    ledger_contract: serviceConfig.ledger_contract ?? manifest.ledger_contract ?? CONTRACT_VERSION,
     api_contract: serviceConfig.api_contract ?? manifest.api_versions[0] ?? 1,
     frontend_contract: serviceConfig.frontend_contract ?? manifest.frontend_contracts[0] ?? 1,
     viewer_contract: serviceConfig.viewer_contract ?? manifest.viewer_contract,

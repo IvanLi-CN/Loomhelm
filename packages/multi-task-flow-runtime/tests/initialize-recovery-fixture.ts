@@ -15,6 +15,7 @@ export const repairIdentity = {
   package_version: "0.6.0",
   build_id: "b".repeat(64),
   source_sha: "b".repeat(40),
+  ledger_contract: 6,
 };
 export function initializeFixture() {
   const { state } = serviceFixture();
@@ -32,7 +33,7 @@ export function initializeFixture() {
       updated_at: new Date().toISOString(),
     }),
   );
-  upgradeOrchestration(store, source, source, {});
+  upgradeOrchestration(store, repairIdentity, repairIdentity, {});
   process.env.LOOMHELM_CALLER_IDENTITY = JSON.stringify(repairIdentity);
   return store;
 }

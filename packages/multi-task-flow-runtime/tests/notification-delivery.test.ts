@@ -32,6 +32,28 @@ function fixture(current = false) {
   });
   const store = new LedgerStore(root, ledger.orchestration_id);
   if (current) {
+    for (const plan of ledger.plans) {
+      plan.group_atoms = plan.group_atoms.map(({ lifecycle_stage: _stage, ...atom }) => ({
+        ...atom,
+        lifecycle_stage: null,
+      }));
+      plan.atomic_edges = [];
+    }
+    for (const group of ledger.groups)
+      group.atoms = group.atoms.map(({ lifecycle_stage: _stage, ...atom }) => ({
+        ...atom,
+        lifecycle_stage: null,
+      }));
+    for (const event of ledger.events) {
+      for (const field of ["old_group_snapshot", "group_snapshot"] as const) {
+        const snapshot = event.data?.[field];
+        if (snapshot?.atoms)
+          snapshot.atoms = snapshot.atoms.map(({ lifecycle_stage: _stage, ...atom }) => ({
+            ...atom,
+            lifecycle_stage: null,
+          }));
+      }
+    }
     ledger.contract_version = fixtureIdentity.ledger_contract;
     ledger.runtime_identity = fixtureIdentity;
   }

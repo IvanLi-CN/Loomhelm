@@ -29,6 +29,7 @@ describe("dashboard graph projection", () => {
           acceptance: [],
           activity_type: "contribution",
           state: "completed",
+          lifecycle_role: "closeout",
           scope: { kind: "task", task_id: "t-1", delivery_unit_id: "du-1" },
           runtime: {
             started_at: "2026-01-01T00:00:00Z",
@@ -58,6 +59,7 @@ describe("dashboard graph projection", () => {
     expect(projection.nodes[0]).toMatchObject({
       scope: "task:t-1 / delivery-unit:du-1",
       evidence: ["receipt:1"],
+      lifecycle_role: "closeout",
     });
     expect(projection.edges[0]).toMatchObject({
       source: "w-1",

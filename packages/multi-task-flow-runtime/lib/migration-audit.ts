@@ -16,7 +16,7 @@ export const migrationAudit = z
     schema_version: z.literal(1),
     policy: z.literal("preserve-unresolved-v1"),
     validator_version: z.literal(1),
-    source_contract: z.union([z.literal(3), z.literal(4), z.literal(5)]),
+    source_contract: z.union([z.literal(3), z.literal(4), z.literal(5), z.literal(6)]),
     source_revision: z.number().int().nonnegative(),
     source_digest: digest,
     source_binding_digest: digest,
@@ -27,6 +27,7 @@ export const migrationAudit = z
     writer_barrier: z.enum([
       "ledger-contract-5-and-binding-schema-2",
       "ledger-contract-5-and-binding-schema-3",
+      "ledger-contract-6-and-binding-schema-4",
     ]),
     native_quiescence: z.literal("not_asserted"),
   })
@@ -115,7 +116,12 @@ export function auditMatchesSource(raw: any, state: any, retained: RetainedSourc
       binding.run_id === backup.orchestration_id &&
       backup.orchestration_id === raw.orchestration_id &&
       binding.revision === state.source_binding_revision &&
-      audit.source_contract === backup.contract_version &&
+      audit.source_contract ===
+        (backup.contract_version === 6 &&
+        backup.upgrade?.migration_audit?.source_contract !== undefined &&
+        backup.upgrade.migration_audit.source_contract < 6
+          ? backup.upgrade.migration_audit.source_contract
+          : backup.contract_version) &&
       audit.source_revision === state.source_revision &&
       audit.source_revision === backup.revision &&
       audit.source_digest === state.source_digest &&

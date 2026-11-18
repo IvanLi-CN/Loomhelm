@@ -466,7 +466,7 @@ describe("phase-aware plan revisions", () => {
     };
     expect(schema.properties).toHaveProperty("execution_plan_id");
     expect(schema.properties).toHaveProperty("contract_version");
-    expect(schema["x-contract-version"]).toBe(5);
+    expect(schema["x-contract-version"]).toBe(6);
     expect(schema["x-field-metadata"]).toHaveProperty("plan_revision");
     const projection = localSemanticProjection(fixture(), "plan-propose");
     expect(projection).toMatchObject({

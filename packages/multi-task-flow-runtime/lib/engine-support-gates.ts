@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
+import { lifecycleStageOf } from "../lib/atomic-orchestration";
 import { ContractError, requireCondition } from "../lib/errors";
 import {
   effectiveProfile,
@@ -668,7 +669,7 @@ function lifecycleAtomEventId(requestId: string, atomId: string): string {
 export function taskMergePrerequisitesComplete(ledger: Ledger, task: Task): boolean {
   if (legacyLedger(ledger)) return true;
   if (ledger.contract_version < 3) return task.atoms.every((atom) => atom.status === "completed");
-  const mergeIndex = task.atoms.findIndex((atom) => atom.lifecycle_stage === "pr_merged");
+  const mergeIndex = task.atoms.findIndex((atom) => lifecycleStageOf(atom) === "pr_merged");
   if (mergeIndex < 0 || ["blocked", "completed"].includes(task.atoms[mergeIndex]?.status ?? ""))
     return false;
   let currentPlan: Plan;
@@ -736,7 +737,7 @@ export function completeTaskLifecycleAtom(
   evidence: { fact_id: string; evidence_ref: string | null; occurred_at: string },
 ): void {
   if (ledger.contract_version < 3) return;
-  const index = task.atoms.findIndex((atom) => atom.lifecycle_stage === lifecycleStage);
+  const index = task.atoms.findIndex((atom) => lifecycleStageOf(atom) === lifecycleStage);
   requireCondition(index >= 0, "ATOMS_PENDING", "Contract 3 task must declare a pr_merged atom", 4);
   const atom = task.atoms[index]!;
   if (atom.status === "completed") {

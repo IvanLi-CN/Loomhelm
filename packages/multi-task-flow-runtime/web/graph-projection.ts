@@ -1,4 +1,4 @@
-import type { AtomicEdge, AtomicNode } from "../lib/atomic-orchestration";
+import { type AtomicEdge, type AtomicNode, lifecycleRoleOf } from "../lib/atomic-orchestration";
 import { type StateIconName, stateIconName, stateLabel } from "./labels";
 import type { Node, Task, View } from "./model";
 
@@ -49,6 +49,7 @@ export type GraphProjectionNode = {
   evidence?: string[];
   blocker?: string | null;
   acceptance_count?: number;
+  lifecycle_role?: string;
   diagnostics?: string[];
 };
 
@@ -91,6 +92,7 @@ export type AtomicGraphProjectionNode = {
   evidence: string[];
   blocker: string | null;
   acceptance_count: number;
+  lifecycle_role?: string;
 };
 
 export type AtomicGraphProjection = {
@@ -141,6 +143,7 @@ export function projectAtomicGraph(
         evidence: node.result?.evidence_refs ?? node.runtime?.evidence_refs ?? [],
         blocker: node.blocker?.message ?? null,
         acceptance_count: node.acceptance.length,
+        lifecycle_role: lifecycleRoleOf(node) ?? undefined,
       };
     }),
     edges: edges.map((edge) => ({

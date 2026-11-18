@@ -27,11 +27,11 @@ REQ-INVOCATION-001 至 REQ-INVOCATION-006 的候选实现已接入客户端、�
 | REQ-INVOCATION-001 | `clients/typescript/src/runtime/process.ts`、`clients/typescript/src/cli/flow.ts`、`clients/typescript/src/toolkit.ts` | `flow-process.ts` 使用 runtime-core 0.2.0 的异步输出接收器、零累计捕获和独立 IPC；80 MiB 慢消费者、显式预算、EPIPE 与通用 1 MiB 默认值有回归覆盖 |
 | REQ-INVOCATION-002 | `packages/multi-task-flow-runtime/scripts/orchestrate.ts`、`lib/orchestration-lifecycle.ts`、`lib/store.ts` | show/view（含 task-context）在已有账本锁内读取 ledger、binding 与 invocation 一致快照，输出前释放锁；持有 lifecycle 锁时的零写入与 actor/build 拒绝已覆盖 |
 | REQ-INVOCATION-003、REQ-INVOCATION-004 | `packages/multi-task-flow-runtime/lib/orchestration-lifecycle.ts` 及原生调用适配器 | `invocation-journal.ts` 统一记录资源意图与终态、执行结束和停止事实；初始化、恢复 writer 与 RPC 适配器登记资源；恢复 writer 仅在既有 history 校验确认匹配终态 turn 后登记凭证，observe/RPC 失败不构成终态；错误 turn、断线、协作停止和强杀有回归覆盖 |
-| REQ-INVOCATION-005、REQ-INVOCATION-006 | 编排 CLI/help/schema、生命周期与升级边界 | `invocation-inspect` / `invocation-reconcile` 接入 help/schema；contract 3/4 的显式停止对账及独立机械迁移至 contract 5/schema-3 绑定已覆盖；主线 0.4.0 的 contract-5/schema-2 来源可按机械迁移保留未知调用，升级后新调用未停止仍拒绝重入，已发布 0.3.0 CLI/Worker 在隔离 contract 5 运行上拒绝访问且持久文件保持不变；真实原生取消与 IPC 断连缺少终态凭证时保持 running/unknown 并阻断副作用；前向升级先严格解析绑定，未知格式在原子发布前拒绝 |
+| REQ-INVOCATION-005、REQ-INVOCATION-006 | 编排 CLI/help/schema、生命周期与升级边界 | `invocation-inspect` / `invocation-reconcile` 接入 help/schema；contract 3/4/5 的显式停止对账及独立机械迁移至 contract 6/schema-4 绑定已覆盖；contract-5/schema-3 来源可按机械迁移保留未知调用，升级后新调用未停止仍拒绝重入，旧 CLI/Worker 在隔离 contract 6 运行上拒绝访问且持久文件保持不变；真实原生取消与 IPC 断连缺少终态凭证时保持 running/unknown 并阻断副作用；前向升级先严格解析绑定，未知格式在原子发布前拒绝 |
 
-机械迁移沿用 ADR 0041 与 SPEC 第 16 节的共享评估器，不把旧 receipt 改为 stopped；只有冻结审计中精确匹配的旧调用摘要可由目标身份建立新 journal。包资源登记同时包含迁移审计、评估器及其回归，独立安装消费者不得依赖仓库源码。schema-3 绑定拒绝旧维护 writer；新调用仍依赖不可变资源终态凭证。当前候选必须重做受影响的包验收、审查与 CI，历史 SHA 的通过结果不可替代。
+机械迁移沿用 ADR 0041 与 SPEC 第 16 节的共享评估器，不把旧 receipt 改为 stopped；只有冻结审计中精确匹配的旧调用摘要可由目标身份建立新 journal。包资源登记同时包含迁移审计、评估器及其回归，独立安装消费者不得依赖仓库源码。schema-4 绑定拒绝旧维护 writer；新调用仍依赖不可变资源终态凭证。当前候选必须重做受影响的包验收、审查与 CI，历史 SHA 的通过结果不可替代。
 
-候选包版本已由主人指定为 `0.5.0`，保留 `compat-v1`；这里只准备版本元数据，实际合并和手动 CI 发布仍由主人控制。
+候选包版本为 `0.6.1`，保留 `compat-v1`；这里只准备版本元数据，实际合并和手动 CI 发布仍由主人控制。
 
 `@loomhelm/multi-task-flow@0.3.0` 的通用执行器默认合计捕获 stdout/stderr 上限为 1 MiB；超限后先 SIGTERM，250 ms 后 SIGKILL。编排子进程在 action 前写 running，在 finally 写 stopped；终止可能阻止 finally 完成。当前 LedgerStore 读取预算为 256 MiB，传输先于支持的数据容量失败。
 
@@ -190,7 +190,7 @@ Gateway 不再为缺失历史绑定的账本使用当前安装或 fallback 身�
 
 ## 保留结果不确定的调用的机械迁移
 
-对应 ADR 0041 与 SPEC 第 16 节 REQ/VER-MIGRATION-001 至 011。`orchestration-migration.ts` 以 no-follow 双读快照统一 upgrade-check、dry-run 与提交时评估，检查目录身份、源绑定、支持范围及中断审计，并在消费字节前核对实际打开的文件描述符及父目录身份、所有权和链接数；`migration-audit.ts` 定义摘要和结果不确定的调用集合，兼容历史 notification status 字段；中断审计核对冻结源身份与保留源绑定及账本，机械迁移拒绝改变 API/frontend/viewer 合同；`orchestration-upgrade.ts` 在原有原子目录发布事务中写入 contract 5 与冻结审计，不调用业务 provider。
+对应 ADR 0041 与 SPEC 第 16 节 REQ/VER-MIGRATION-001 至 011。`orchestration-migration.ts` 以 no-follow 双读快照统一 upgrade-check、dry-run 与提交时评估，检查目录身份、源绑定、支持范围及中断审计，并在消费字节前核对实际打开的文件描述符及父目录身份、所有权和链接数；`migration-audit.ts` 定义摘要和结果不确定的调用集合，兼容历史 notification status 字段；中断审计核对冻结源身份与保留源绑定及账本，机械迁移拒绝改变 API/frontend/viewer 合同；`orchestration-upgrade.ts` 在原有原子目录发布事务中写入 contract 6 与冻结审计，不调用业务 provider。
 
 `orchestration-migration.test.ts`、`orchestration-upgrade.test.ts` 覆盖 VER-MIGRATION-001、002、006、007、008 的只读安全、3/4/5 迁移、业务保真、崩溃续跑和旧目录等待者。`conversation-archive.test.ts` 覆盖 VER-MIGRATION-005 的身份与 attempt 时间保留、缺失身份拒绝和负向对账不重发；既有 notification 与 recovery 权限回归继续覆盖其禁止重发和历史拒绝路径。`orchestration-upgrade-compatibility.test.ts` 通过显式历史 CLI 路径消费实际 0.2.55 或 0.3.0，验证旧 reader、writer 与维护入口拒绝已发布屏障。`clients/typescript/test/orchestration-upgrade.test.ts` 验证公开 CLI 的检查、schema、dry-run、升级和幂等。
 
@@ -218,13 +218,13 @@ VER-MIGRATION-003、004、009、010 的完整经验验收需另绑定最终 Cand
 
 这组结果支持继续验证“机械迁移可以保留结果不确定的调用”的假设，尚未形成完整安全证明。取舍是旧调用可能继续完成其既有副作用，旧 writer 的晚回执会被拒绝，目标只能继续保留 unknown；不保证该回执日后仍能取回，不保证外部资源静止或相关业务恢复。新准入必须明确记录这些事实，不能把未证明静止标为 proven、把结果不确定的状态转成失败，或自动释放 claim、容量。
 
-方案范围收敛到既有升级事务、共享迁移评估、旧 writer 屏障与结果不确定的身份保留：只接受已验证的机械转换，不改写业务含义；沿用既有维护、账本、绑定和 lifecycle 排斥，不把它们扩称为所有原生调用已停止；在事务中保存源身份、源 revision/digest、业务数据与结果不确定的对象集合摘要、转换规则及 writer 屏障判定。目标 contract 5 仍需独立实现并验证；原生静止若未证明必须如实记录，不要求为迁移新增 Host 会话解析器、全局排空协议或新的恢复账本。无法确认副作用前先提交 intent 的来源、转换保真或旧 writer 排斥时，拒绝该转换。
+方案范围收敛到既有升级事务、共享迁移评估、旧 writer 屏障与结果不确定的身份保留：只接受已验证的机械转换，不改写业务含义；沿用既有维护、账本、绑定和 lifecycle 排斥，不把它们扩称为所有原生调用已停止；在事务中保存源身份、源 revision/digest、业务数据与结果不确定的对象集合摘要、转换规则及 writer 屏障判定。目标 contract 6 已在当前候选实现并验证；原生静止若未证明必须如实记录，不要求为迁移新增 Host 会话解析器、全局排空协议或新的恢复账本。无法确认副作用前先提交 intent 的来源、转换保真或旧 writer 排斥时，拒绝该转换。
 
-ADR 0041 记录对 ADR 0039 静止前提的替代，需求和验收仍只由 SPEC 持有。验收至少覆盖：迁移调用原生变更接口次数为零；全部业务数据及 unknown/attempt/claim/容量摘要保持；真实旧包及旧目录等待者无法晚写；同一和新 request 均不能重发结果不确定的通知、创建、recovery 或归档；全部崩溃阶段仅向冻结目标续跑；实际 contract-5 tarball 的公开 CLI 在历史副本上完成升级并可读取。真实 LIMS run 最后仍须由 main 发布的精确 artifact 经独立授权执行，不能由副本实验替代。
+ADR 0041 记录对 ADR 0039 静止前提的替代，需求和验收仍只由 SPEC 持有。验收至少覆盖：迁移调用原生变更接口次数为零；全部业务数据及 unknown/attempt/claim/容量摘要保持；真实旧包及旧目录等待者无法晚写；同一和新 request 均不能重发结果不确定的通知、创建、recovery 或归档；全部崩溃阶段仅向冻结目标续跑；实际 contract-6 tarball 的公开 CLI 在历史副本上完成升级并可读取。真实 LIMS run 最后仍须由 main 发布的精确 artifact 经独立授权执行，不能由副本实验替代。
 
 ### 实现与验收边界
 
-仅实现共享机械迁移评估、无锁只读 upgrade-check/dry-run、contract-5 升级审计及旧 writer 屏障，并修复结果不确定的归档身份保留。经验性证据须在最终 Candidate 上重跑实际旧包与受控私有副本；原型结果不能转写为候选通过。VER-MIGRATION-011 必须在真实 Merge Receipt、正式 artifact 和独立运行写入授权后执行。
+仅实现共享机械迁移评估、无锁只读 upgrade-check/dry-run、contract-6 升级审计及旧 writer 屏障，并修复结果不确定的归档身份保留。经验性证据须在最终 Candidate 上重跑实际旧包与受控私有副本；原型结果不能转写为候选通过。VER-MIGRATION-011 必须在真实 Merge Receipt、正式 artifact 和独立运行写入授权后执行。
 
 详情面板新增的渲染、组合投影及回归测试模块通过 `scripts/check-client-skills.ts` 注册到 `skills/resource-manifest.json` 的运行时源码映射，确保打包安装包含同一套模块和摘要；更新源码不自动更新用户级已安装版本。
 

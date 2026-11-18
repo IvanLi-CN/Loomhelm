@@ -3,6 +3,10 @@ import { posix as posixPath } from "node:path";
 import { z } from "zod";
 import {
   atomicNode,
+  explicitLifecycleRoleOf,
+  inferredLifecycleRoleOf,
+  type LifecycleRoleValidationOptions,
+  lifecycleRoleOf,
   validateAtomicBoundaries,
   validateAtomicGraph,
   validateDeliveryUnitLifecycleEdges,
@@ -486,7 +490,45 @@ export function validateInitialRuntimeState(
   );
 }
 
-export function validatePlan(candidate: Plan): void {
+export type PlanValidationOptions = LifecycleRoleValidationOptions & {
+  requireCanonicalLifecycleGraph?: boolean;
+};
+
+function validateCanonicalLifecycleRoles(candidate: Plan, options: PlanValidationOptions): void {
+  const allowLegacyInference = options.allowLegacyLifecycleRoleInference === true;
+  const canonicalById = new Map(candidate.atomic_nodes.map((node) => [node.id, node]));
+  for (const atom of [...candidate.atoms, ...candidate.group_atoms]) {
+    const node = canonicalById.get(atom.id);
+    if (!node || node.kind !== "work") continue;
+    const atomExplicit = explicitLifecycleRoleOf(atom);
+    const nodeExplicit = explicitLifecycleRoleOf(node);
+    const atomInferred = inferredLifecycleRoleOf(atom);
+    const nodeInferred = inferredLifecycleRoleOf(node);
+    if (!allowLegacyInference) {
+      if (!atomExplicit && !nodeExplicit && !atomInferred && !nodeInferred) continue;
+      requireCondition(
+        atomExplicit !== null && nodeExplicit !== null,
+        "ATOMIC_GRAPH_INCOMPLETE",
+        `Canonical lifecycle atom ${atom.id} and its legacy declaration must both declare lifecycle_role`,
+      );
+      requireCondition(
+        atomExplicit === nodeExplicit,
+        "ATOMIC_GRAPH_INCOMPLETE",
+        `Canonical lifecycle atom ${atom.id} has a conflicting lifecycle_role declaration`,
+      );
+      continue;
+    }
+    const atomRole = lifecycleRoleOf(atom);
+    const nodeRole = lifecycleRoleOf(node);
+    requireCondition(
+      !atomRole || !nodeRole || atomRole === nodeRole,
+      "ATOMIC_GRAPH_INCOMPLETE",
+      `Canonical lifecycle atom ${atom.id} has a conflicting lifecycle role`,
+    );
+  }
+}
+
+export function validatePlan(candidate: Plan, options: PlanValidationOptions = {}): void {
   validatePlanHandoff(candidate);
   if (candidate.revision) {
     const changeCount =
@@ -533,10 +575,23 @@ export function validatePlan(candidate: Plan): void {
       "Plan IDs must be unique within each collection",
     );
   }
-  if (
-    candidate.atomic_nodes.length ||
-    candidate.atomic_edges.some((edge) => "from_node_id" in edge)
-  ) {
+  const hasCanonicalAtomicGraph =
+    candidate.atomic_nodes.length > 0 ||
+    candidate.atomic_edges.some((edge) => "from_node_id" in edge);
+  const hasLegacyAtomicEdges = candidate.atomic_edges.some((edge) => "from_atom_id" in edge);
+  const hasLifecycleAtoms = [...candidate.atoms, ...candidate.group_atoms].some(
+    (atom) => lifecycleRoleOf(atom) !== null || atom.lifecycle_stage != null,
+  );
+  if (options.requireCanonicalLifecycleGraph !== false) {
+    requireCondition(
+      options.allowLegacyLifecycleRoleInference === true ||
+        hasCanonicalAtomicGraph ||
+        (!hasLegacyAtomicEdges && !hasLifecycleAtoms),
+      "ATOMIC_CONTRACT_REQUIRED",
+      "New plans with lifecycle atoms must use canonical atomic nodes and node-based atomic edges",
+    );
+  }
+  if (hasCanonicalAtomicGraph) {
     requireCondition(
       candidate.atomic_edges.every((edge) => "from_node_id" in edge && "to_node_id" in edge),
       "ATOMIC_CONTRACT_REQUIRED",
@@ -573,8 +628,16 @@ export function validatePlan(candidate: Plan): void {
         `Canonical graph must contain delivery-unit atom ${atom.id} with matching scope`,
       );
     }
+    validateCanonicalLifecycleRoles(candidate, options);
+    const lifecycleOptions = {
+      allowLegacyLifecycleRoleInference: options.allowLegacyLifecycleRoleInference === true,
+    };
     try {
-      validateDeliveryUnitLifecycleEdges(candidate.group_atoms, candidate.atomic_edges);
+      validateDeliveryUnitLifecycleEdges(
+        candidate.group_atoms,
+        candidate.atomic_edges,
+        lifecycleOptions,
+      );
     } catch (error) {
       requireCondition(
         false,
@@ -583,7 +646,7 @@ export function validatePlan(candidate: Plan): void {
       );
     }
     try {
-      validateTaskLifecycleEdges(candidate.atoms, candidate.atomic_edges);
+      validateTaskLifecycleEdges(candidate.atoms, candidate.atomic_edges, lifecycleOptions);
     } catch (error) {
       requireCondition(
         false,
@@ -599,12 +662,20 @@ export function validatePlan(candidate: Plan): void {
       `Contribution task ${task.id} must declare at least one atomic task`,
     );
   }
-  validateGrouping(
-    candidate.atoms,
-    candidate.atomic_edges.filter(
-      (edge): edge is z.infer<typeof atomEdge> => "from_atom_id" in edge,
-    ),
-  );
+  const taskAtomIds = new Set(candidate.atoms.map((atom) => atom.id));
+  const groupAtomIds = new Set(candidate.group_atoms.map((atom) => atom.id));
+  const groupingEdges = candidate.atomic_edges.filter((edge): edge is z.infer<typeof atomEdge> => {
+    if (!("from_atom_id" in edge)) return false;
+    const taskEdge = taskAtomIds.has(edge.from_atom_id) && taskAtomIds.has(edge.to_atom_id);
+    const groupEdge = groupAtomIds.has(edge.from_atom_id) && groupAtomIds.has(edge.to_atom_id);
+    requireCondition(
+      taskEdge || groupEdge,
+      "UNKNOWN_NODE",
+      "Atomic edge references an unknown atom",
+    );
+    return taskEdge;
+  });
+  validateGrouping(candidate.atoms, groupingEdges);
   topologicalOrder(
     candidate.nodes.map((item) => item.id),
     candidate.edges.map((item) => ({

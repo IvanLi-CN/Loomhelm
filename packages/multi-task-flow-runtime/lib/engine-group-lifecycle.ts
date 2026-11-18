@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lifecycleStageOf } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
 import { externalRef, fact, group, id, isContributionKind, providerReceipt } from "../lib/schema";
 import type { CommandContext } from "./engine-command-context";
@@ -134,7 +135,7 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
       requireCondition(
         !(
           ledger.contract_version >= 3 &&
-          atom.lifecycle_stage === "pr_merged" &&
+          lifecycleStageOf(atom) === "pr_merged" &&
           state === "completed"
         ),
         "EVIDENCE_REQUIRED",
@@ -210,17 +211,18 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         "Invalid delivery-unit atom transition",
         3,
       );
+      const lifecycleStage = lifecycleStageOf(atom);
       requireCondition(
-        !(state === "completed" && atom.lifecycle_stage === "closed"),
+        !(state === "completed" && lifecycleStage === "closed"),
         "GROUP_CLOSE_REQUIRED",
         "The closeout atom completes with group-close",
         4,
       );
-      if (state === "completed" && atom.lifecycle_stage)
+      if (state === "completed" && lifecycleStage)
         requireCondition(
-          legacyLedger(ledger) || owner.lifecycle[atom.lifecycle_stage] === "passed",
+          legacyLedger(ledger) || owner.lifecycle[lifecycleStage] === "passed",
           "LIFECYCLE_BLOCKED",
-          `Delivery-unit lifecycle stage ${atom.lifecycle_stage} is not passed`,
+          `Delivery-unit lifecycle stage ${lifecycleStage} is not passed`,
           4,
         );
       atom.status = state;

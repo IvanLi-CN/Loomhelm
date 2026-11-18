@@ -8,7 +8,7 @@ import { safeId, withExclusiveLock, writeAtomic } from "./store";
 
 export const viewerBindingSchema = z
   .object({
-    schema_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    schema_version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
     run_id: z.string().min(1),
     package_name: z.literal("@loomhelm/multi-task-flow"),
     package_version: z.union([

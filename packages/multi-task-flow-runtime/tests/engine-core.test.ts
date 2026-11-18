@@ -721,6 +721,20 @@ test("contract-3 child merge gates follow canonical predecessors instead of atom
   expect(taskMergePrerequisitesComplete(ledger, task)).toBe(false);
 });
 
+test("role-only lifecycle metadata remains visible to the task merge gate", () => {
+  const { ledger } = contract3ChildMergeFixture();
+  const task = ledger.tasks[0]!;
+  const roles = ["prepare-branch", "create-pr", "merge-pr", "closeout"] as const;
+  const stages = ["branch_ready", "pr_created", "pr_merged", "closed"] as const;
+  task.atoms = task.atoms.map((atom, index) => ({
+    ...atom,
+    lifecycle_role: roles[index],
+    lifecycle_stage: stages[index],
+  }));
+
+  expect(taskMergePrerequisitesComplete(ledger, task)).toBe(true);
+});
+
 test("contract-3 merge atom cannot be completed without provider evidence", () => {
   const { ledger, actor } = contract3ChildMergeFixture();
   const mergeAtom = ledger.tasks[0]!.atoms.find((atom) => atom.lifecycle_stage === "pr_merged")!;

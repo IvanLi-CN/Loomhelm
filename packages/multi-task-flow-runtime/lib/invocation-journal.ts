@@ -27,7 +27,13 @@ export { digest, readMarker } from "./invocation-events";
 import { z } from "zod";
 import { requireCondition } from "./errors";
 import { initializeRecovery, initializeRecoveryReceipt } from "./invocation-initialize-recovery";
-import { callerIdentity, identityOf, runIdentity, sameRunIdentity } from "./orchestration-identity";
+import {
+  bindingSchemaVersionForContract,
+  callerIdentity,
+  identityOf,
+  runIdentity,
+  sameRunIdentity,
+} from "./orchestration-identity";
 import { validateLedger } from "./schema";
 import { type LedgerStore, withExclusiveLock } from "./store";
 import { viewerBindingSchema } from "./viewer-binding";
@@ -336,12 +342,12 @@ export function recoverySource(
   );
   const source = runIdentity.parse(ledger.runtime_identity ?? identityOf(binding));
   requireCondition(
-    [3, 4, 5].includes(ledger.contract_version) &&
+    [3, 4, 5, 6].includes(ledger.contract_version) &&
       ledger.schema_version === 2 &&
       source.ledger_contract === ledger.contract_version &&
       (ledger.contract_version === 5
         ? [2, 3].includes(binding.schema_version)
-        : binding.schema_version === 2) &&
+        : binding.schema_version === bindingSchemaVersionForContract(ledger.contract_version)) &&
       binding.run_id === ledger.orchestration_id &&
       sameRunIdentity(source, identityOf(binding)),
     "RUN_VERSION_MISMATCH",
@@ -355,7 +361,7 @@ export function recoverySource(
     4,
   );
   requireCondition(
-    executor.ledger_contract === 5 &&
+    executor.ledger_contract >= source.ledger_contract &&
       executor.compatibility_line === source.compatibility_line &&
       (sameRunIdentity(source, executor) ||
         Bun.semver.order(executor.package_version, source.package_version) > 0),
@@ -422,9 +428,11 @@ export function reconcileInvocation(store: LedgerStore, input: unknown): unknown
         4,
       );
       const marker = readMarker(store);
+      const initializeRecoveryState = marker ? initializeRecovery(store, marker) : null;
       requireCondition(
         marker?.invocation_id === parsed.payload.invocation_id &&
-          sameRunIdentity(marker.identity, identities.source),
+          (sameRunIdentity(marker.identity, identities.source) ||
+            initializeRecoveryState?.eligible === true),
         "INVOCATION_STATE_CONFLICT",
         "Invocation identity changed",
         4,

@@ -247,6 +247,7 @@ export type View = {
     id: string;
     title: string;
     state: string;
+    lifecycle_role?: string;
     scope?: { kind: string; task_id?: string; delivery_unit_id: string };
   }[];
   canonical_atomic_edges?: {

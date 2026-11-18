@@ -112,6 +112,109 @@ describe("orchestrate init", () => {
     ).toBe(true);
   });
 
+  test("materializes role-only delivery-unit lifecycle stages in the plan and runtime", async () => {
+    const root = temporaryRoot();
+    const input = structuredClone(initialInput);
+    for (const atom of input.payload.initial_plan.group_atoms) {
+      if (atom.lifecycle_role) delete atom.lifecycle_stage;
+    }
+
+    const result = await runInit(root, input);
+    const ledger = JSON.parse(
+      readFileSync(join(root, "runs", input.run_id, "ledger.json"), "utf8"),
+    );
+    const planAtoms = ledger.plans[0].group_atoms.filter((atom: any) => atom.lifecycle_role);
+    const runtimeAtoms = ledger.groups[0].atoms.filter((atom: any) => atom.lifecycle_role);
+
+    expect(result.exitCode).toBe(0);
+    expect(planAtoms.map((atom: any) => atom.lifecycle_stage)).toEqual([
+      "workspace_ready",
+      "pr_created",
+      "pr_merged",
+      "closed",
+    ]);
+    expect(runtimeAtoms.map((atom: any) => atom.lifecycle_stage)).toEqual(
+      planAtoms.map((atom: any) => atom.lifecycle_stage),
+    );
+  });
+
+  test("normalizes role-only lifecycle metadata on prepopulated delivery-unit atoms", async () => {
+    const root = temporaryRoot();
+    const input = structuredClone(initialInput);
+    for (const atom of input.payload.initial_plan.group_atoms) {
+      if (atom.lifecycle_role) delete atom.lifecycle_stage;
+    }
+    input.payload.groups[0].atoms = input.payload.initial_plan.group_atoms.map(
+      ({ group_id, ...atom }: any) => ({
+        ...atom,
+        lifecycle_stage: null,
+        status: "planned",
+      }),
+    );
+
+    const result = await runInit(root, input);
+    expect(result.exitCode).toBe(0);
+    const ledger = JSON.parse(
+      readFileSync(join(root, "runs", input.run_id, "ledger.json"), "utf8"),
+    );
+    const runtimeAtoms = ledger.groups[0].atoms.filter((atom: any) => atom.lifecycle_role);
+
+    expect(runtimeAtoms.map((atom: any) => atom.lifecycle_stage)).toEqual([
+      "workspace_ready",
+      "pr_created",
+      "pr_merged",
+      "closed",
+    ]);
+  });
+
+  test("propagates role-only task lifecycle metadata into runtime atoms", async () => {
+    const root = temporaryRoot();
+    const input = structuredClone(initialInput);
+    const roles = ["prepare-branch", "create-pr", "merge-pr", "closeout"];
+    const verificationAtom = input.payload.initial_plan.atoms.find(
+      (atom: any) => atom.task_id === "task-2",
+    );
+    const taskAtoms = roles.map((role) => ({
+      id: `task-1-${role}`,
+      title: role,
+      task_id: "task-1",
+      purpose: role,
+      output: role,
+      lifecycle_role: role,
+    }));
+    input.payload.initial_plan.atoms = [...taskAtoms, verificationAtom];
+    input.payload.tasks[0].atoms = taskAtoms.map(({ task_id, purpose, output, ...atom }: any) => ({
+      ...atom,
+      status: "planned",
+    }));
+    input.payload.initial_plan.atomic_edges.push(
+      ...taskAtoms.slice(1).map((atom: any, index: number) => ({
+        id: `task-lifecycle-${index}`,
+        from_atom_id: taskAtoms[index]!.id,
+        to_atom_id: atom.id,
+      })),
+    );
+
+    const result = await runInit(root, input);
+    expect(result.output).toMatchObject({ ok: true });
+    expect(result.exitCode).toBe(0);
+    const ledger = JSON.parse(
+      readFileSync(join(root, "runs", input.run_id, "ledger.json"), "utf8"),
+    );
+    const planAtoms = ledger.plans[0].atoms.filter((atom: any) => atom.task_id === "task-1");
+    const runtimeAtoms = ledger.tasks[0].atoms;
+
+    expect(runtimeAtoms.map((atom: any) => atom.lifecycle_role)).toEqual(
+      planAtoms.map((atom: any) => atom.lifecycle_role),
+    );
+    expect(runtimeAtoms.map((atom: any) => atom.lifecycle_stage)).toEqual([
+      "branch_ready",
+      "pr_created",
+      "pr_merged",
+      "closed",
+    ]);
+  });
+
   test("preserves registered requirements paths during initialisation", async () => {
     const root = temporaryRoot();
     const input = structuredClone(initialInput);
@@ -145,6 +248,7 @@ describe("orchestrate init", () => {
     const root = temporaryRoot();
     const input = structuredClone(initialInput);
     input.payload.initial_plan.group_atoms = [];
+    input.payload.initial_plan.atomic_edges = [];
     input.payload.groups = input.payload.groups.map((group: any) => ({ ...group, atoms: [] }));
     const result = await runInit(root, input);
     expect(result.output).toMatchObject({ ok: false, code: "ATOMIC_GRAPH_INCOMPLETE" });
@@ -643,9 +747,16 @@ describe("orchestrate group-base-reconcile", () => {
     };
     const input = structuredClone(initialInput);
     input.run_id = "cli-reconcile-run";
-    input.payload.groups[0].atoms = input.payload.initial_plan.group_atoms
-      .filter((atom: any) => atom.group_id === input.payload.groups[0].id)
-      .map(({ group_id, ...atom }: any) => ({ ...atom, status: "planned" }));
+    input.payload.initial_plan.atoms = [];
+    input.payload.initial_plan.group_atoms = [];
+    input.payload.initial_plan.atomic_edges = [];
+    input.payload.initial_plan.edges = [];
+    input.payload.groups[0].atoms = [];
+    input.payload.tasks = input.payload.tasks.map((task: any) => ({
+      ...task,
+      kind: "verification",
+      atoms: [],
+    }));
     input.payload.groups[0] = {
       ...input.payload.groups[0],
       agent_thread_id: "group-thread",

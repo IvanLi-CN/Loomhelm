@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
+import { CONTRACT_VERSION, SKILL_ID, SKILL_VERSION, VIEWER_CONTRACT } from "../lib/contract";
 import { requireCondition } from "../lib/errors";
 import { copySkillSources } from "../lib/package-source.ts";
 import { compatibility } from "../lib/service-contract";
@@ -61,7 +61,7 @@ const manifest = {
   source_sha: source.stdout.toString().trim(),
   skill_id: SKILL_ID,
   skill_version: SKILL_VERSION,
-  ledger_contract: 3,
+  ledger_contract: CONTRACT_VERSION,
   viewer_contract: VIEWER_CONTRACT,
   service_version: version,
   platform: `${process.platform}-${process.arch}` as "darwin-arm64",

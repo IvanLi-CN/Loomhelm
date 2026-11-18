@@ -20,6 +20,8 @@
 
 Contract 3 canonical graph 必须显式保存 task-scoped work atoms、delivery-unit lifecycle atoms 和 dependency edges。边必须引用存在的节点，图必须无环，里程碑必须至少有一个入边或验收条件；旧 `atoms`、`group_atoms` 和 legacy plan edges 只能通过机械 canonicalization 转换，不能推断业务语义。
 
+生命周期预设原子必须保存 `lifecycle_role`：交付单元使用 `prepare-parent`、`create-pr`、`merge-pr`、`closeout`，任务使用 `prepare-branch`、`create-pr`、`merge-pr`、`closeout`。viewer、validator 和 scheduler 优先读取该字段；历史读取只按 scope、owner 和完整后缀规则适配旧 ID，不从标题或任意 ID 猜测角色，也不由角色顺序补造 dependency edge。
+
 图视图可以添加 `boundary` 类型的“开始”和“结束”节点，帮助识别无前驱和无后继；边界节点是视图投影，不得伪造运行事实。UI 的节点颜色、选中状态和详情文案不能代替账本状态或 provider evidence。
 
 ## 计划修订

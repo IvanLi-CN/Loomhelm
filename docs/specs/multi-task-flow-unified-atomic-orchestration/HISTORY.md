@@ -1,5 +1,7 @@
 # History
 
+- 2026-11-18：为生命周期预设补齐显式 `lifecycle_role`，viewer、validator 和 scheduler 不再依赖任意节点 ID 猜测角色；新初始化升级到 ledger contract 6/schema-4 binding，并验证 contract 3/4/5 到 6 的机械迁移保留未知调用与业务摘要。仅准备候选发布，未修改正式 LIMS run 或全局安装。
+
 ## CLI 输出受众
 
 2026-11-18：确认 auto/human/json 输出选择、统一帮助、显式查询身份及人类摘要；以原 JSON 和持久状态合同为边界，引入增量人类展示及隔离回归。TTY 默认变化须在发布时评估兼容线，源码实现不代表全局安装或 npm 已更新。

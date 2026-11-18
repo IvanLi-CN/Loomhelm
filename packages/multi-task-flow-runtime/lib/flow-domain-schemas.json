@@ -652,6 +652,32 @@
             "output": {
               "type": "string",
               "minLength": 1
+            },
+            "lifecycle_role": {
+              "type": "string",
+              "enum": [
+                "prepare-parent",
+                "prepare-branch",
+                "create-pr",
+                "merge-pr",
+                "closeout"
+              ]
+            },
+            "lifecycle_stage": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "branch_ready",
+                    "pr_created",
+                    "pr_merged",
+                    "closed"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -689,6 +715,16 @@
             "output": {
               "type": "string",
               "minLength": 1
+            },
+            "lifecycle_role": {
+              "type": "string",
+              "enum": [
+                "prepare-parent",
+                "prepare-branch",
+                "create-pr",
+                "merge-pr",
+                "closeout"
+              ]
             },
             "lifecycle_stage": {
               "default": null,
@@ -1077,6 +1113,16 @@
                             "additionalProperties": false
                           }
                         },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
+                        },
                         "activity_type": {
                           "type": "string",
                           "enum": [
@@ -1154,6 +1200,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -1256,6 +1312,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -1389,6 +1455,16 @@
                             "additionalProperties": false
                           }
                         },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
+                        },
                         "activity_type": {
                           "type": "string",
                           "enum": [
@@ -1520,6 +1596,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -1680,6 +1766,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -1841,6 +1937,16 @@
                             "additionalProperties": false
                           }
                         },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
+                        },
                         "activity_type": {
                           "type": "string",
                           "enum": [
@@ -1919,6 +2025,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -2044,6 +2160,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -2200,6 +2326,16 @@
                             "additionalProperties": false
                           }
                         },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
+                        },
                         "activity_type": {
                           "type": "string",
                           "enum": [
@@ -2354,6 +2490,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -2537,6 +2683,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -4016,6 +4172,16 @@
                 }
               ]
             },
+            "lifecycle_role": {
+              "type": "string",
+              "enum": [
+                "prepare-parent",
+                "prepare-branch",
+                "create-pr",
+                "merge-pr",
+                "closeout"
+              ]
+            },
             "status": {
               "type": "string",
               "enum": [
@@ -4381,6 +4547,16 @@
                 {
                   "type": "null"
                 }
+              ]
+            },
+            "lifecycle_role": {
+              "type": "string",
+              "enum": [
+                "prepare-parent",
+                "prepare-branch",
+                "create-pr",
+                "merge-pr",
+                "closeout"
               ]
             }
           },
@@ -5695,6 +5871,10 @@
           {
             "type": "number",
             "const": 5
+          },
+          {
+            "type": "number",
+            "const": 6
           }
         ]
       },
@@ -5943,6 +6123,10 @@
                   {
                     "type": "number",
                     "const": 5
+                  },
+                  {
+                    "type": "number",
+                    "const": 6
                   }
                 ]
               },
@@ -6030,7 +6214,8 @@
                 "type": "string",
                 "enum": [
                   "ledger-contract-5-and-binding-schema-2",
-                  "ledger-contract-5-and-binding-schema-3"
+                  "ledger-contract-5-and-binding-schema-3",
+                  "ledger-contract-6-and-binding-schema-4"
                 ]
               },
               "native_quiescence": {
@@ -6504,6 +6689,32 @@
                   "output": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
+                  },
+                  "lifecycle_stage": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "branch_ready",
+                          "pr_created",
+                          "pr_merged",
+                          "closed"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -6541,6 +6752,16 @@
                   "output": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
                   },
                   "lifecycle_stage": {
                     "default": null,
@@ -6929,6 +7150,16 @@
                                   "additionalProperties": false
                                 }
                               },
+                              "lifecycle_role": {
+                                "type": "string",
+                                "enum": [
+                                  "prepare-parent",
+                                  "prepare-branch",
+                                  "create-pr",
+                                  "merge-pr",
+                                  "closeout"
+                                ]
+                              },
                               "activity_type": {
                                 "type": "string",
                                 "enum": [
@@ -7006,6 +7237,16 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "lifecycle_role": {
+                                "type": "string",
+                                "enum": [
+                                  "prepare-parent",
+                                  "prepare-branch",
+                                  "create-pr",
+                                  "merge-pr",
+                                  "closeout"
+                                ]
                               },
                               "activity_type": {
                                 "type": "string",
@@ -7108,6 +7349,16 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "lifecycle_role": {
+                                "type": "string",
+                                "enum": [
+                                  "prepare-parent",
+                                  "prepare-branch",
+                                  "create-pr",
+                                  "merge-pr",
+                                  "closeout"
+                                ]
                               },
                               "activity_type": {
                                 "type": "string",
@@ -7241,6 +7492,16 @@
                                   "additionalProperties": false
                                 }
                               },
+                              "lifecycle_role": {
+                                "type": "string",
+                                "enum": [
+                                  "prepare-parent",
+                                  "prepare-branch",
+                                  "create-pr",
+                                  "merge-pr",
+                                  "closeout"
+                                ]
+                              },
                               "activity_type": {
                                 "type": "string",
                                 "enum": [
@@ -7372,6 +7633,16 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "lifecycle_role": {
+                                "type": "string",
+                                "enum": [
+                                  "prepare-parent",
+                                  "prepare-branch",
+                                  "create-pr",
+                                  "merge-pr",
+                                  "closeout"
+                                ]
                               },
                               "activity_type": {
                                 "type": "string",
@@ -7532,6 +7803,16 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "lifecycle_role": {
+                                "type": "string",
+                                "enum": [
+                                  "prepare-parent",
+                                  "prepare-branch",
+                                  "create-pr",
+                                  "merge-pr",
+                                  "closeout"
+                                ]
                               },
                               "activity_type": {
                                 "type": "string",
@@ -7693,6 +7974,16 @@
                                   "additionalProperties": false
                                 }
                               },
+                              "lifecycle_role": {
+                                "type": "string",
+                                "enum": [
+                                  "prepare-parent",
+                                  "prepare-branch",
+                                  "create-pr",
+                                  "merge-pr",
+                                  "closeout"
+                                ]
+                              },
                               "activity_type": {
                                 "type": "string",
                                 "enum": [
@@ -7771,6 +8062,16 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "lifecycle_role": {
+                                "type": "string",
+                                "enum": [
+                                  "prepare-parent",
+                                  "prepare-branch",
+                                  "create-pr",
+                                  "merge-pr",
+                                  "closeout"
+                                ]
                               },
                               "activity_type": {
                                 "type": "string",
@@ -7896,6 +8197,16 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "lifecycle_role": {
+                                "type": "string",
+                                "enum": [
+                                  "prepare-parent",
+                                  "prepare-branch",
+                                  "create-pr",
+                                  "merge-pr",
+                                  "closeout"
+                                ]
                               },
                               "activity_type": {
                                 "type": "string",
@@ -8052,6 +8363,16 @@
                                   "additionalProperties": false
                                 }
                               },
+                              "lifecycle_role": {
+                                "type": "string",
+                                "enum": [
+                                  "prepare-parent",
+                                  "prepare-branch",
+                                  "create-pr",
+                                  "merge-pr",
+                                  "closeout"
+                                ]
+                              },
                               "activity_type": {
                                 "type": "string",
                                 "enum": [
@@ -8206,6 +8527,16 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "lifecycle_role": {
+                                "type": "string",
+                                "enum": [
+                                  "prepare-parent",
+                                  "prepare-branch",
+                                  "create-pr",
+                                  "merge-pr",
+                                  "closeout"
+                                ]
                               },
                               "activity_type": {
                                 "type": "string",
@@ -8389,6 +8720,16 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "lifecycle_role": {
+                                "type": "string",
+                                "enum": [
+                                  "prepare-parent",
+                                  "prepare-branch",
+                                  "create-pr",
+                                  "merge-pr",
+                                  "closeout"
+                                ]
                               },
                               "activity_type": {
                                 "type": "string",
@@ -9525,6 +9866,16 @@
                             "additionalProperties": false
                           }
                         },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
+                        },
                         "activity_type": {
                           "type": "string",
                           "enum": [
@@ -9602,6 +9953,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -9704,6 +10065,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -9837,6 +10208,16 @@
                             "additionalProperties": false
                           }
                         },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
+                        },
                         "activity_type": {
                           "type": "string",
                           "enum": [
@@ -9968,6 +10349,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -10128,6 +10519,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -10289,6 +10690,16 @@
                             "additionalProperties": false
                           }
                         },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
+                        },
                         "activity_type": {
                           "type": "string",
                           "enum": [
@@ -10367,6 +10778,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -10492,6 +10913,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -10648,6 +11079,16 @@
                             "additionalProperties": false
                           }
                         },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
+                        },
                         "activity_type": {
                           "type": "string",
                           "enum": [
@@ -10802,6 +11243,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -10985,6 +11436,16 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "lifecycle_role": {
+                          "type": "string",
+                          "enum": [
+                            "prepare-parent",
+                            "prepare-branch",
+                            "create-pr",
+                            "merge-pr",
+                            "closeout"
+                          ]
                         },
                         "activity_type": {
                           "type": "string",
@@ -12403,6 +12864,16 @@
                       }
                     ]
                   },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
+                  },
                   "status": {
                     "type": "string",
                     "enum": [
@@ -12770,6 +13241,16 @@
                       {
                         "type": "null"
                       }
+                    ]
+                  },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
                     ]
                   }
                 },
@@ -14490,6 +14971,16 @@
                       "additionalProperties": false
                     }
                   },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
+                  },
                   "activity_type": {
                     "type": "string",
                     "enum": [
@@ -14567,6 +15058,16 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
                   },
                   "activity_type": {
                     "type": "string",
@@ -14669,6 +15170,16 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
                   },
                   "activity_type": {
                     "type": "string",
@@ -14802,6 +15313,16 @@
                       "additionalProperties": false
                     }
                   },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
+                  },
                   "activity_type": {
                     "type": "string",
                     "enum": [
@@ -14933,6 +15454,16 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
                   },
                   "activity_type": {
                     "type": "string",
@@ -15093,6 +15624,16 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
                   },
                   "activity_type": {
                     "type": "string",
@@ -15254,6 +15795,16 @@
                       "additionalProperties": false
                     }
                   },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
+                  },
                   "activity_type": {
                     "type": "string",
                     "enum": [
@@ -15332,6 +15883,16 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
                   },
                   "activity_type": {
                     "type": "string",
@@ -15457,6 +16018,16 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
                   },
                   "activity_type": {
                     "type": "string",
@@ -15613,6 +16184,16 @@
                       "additionalProperties": false
                     }
                   },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
+                  },
                   "activity_type": {
                     "type": "string",
                     "enum": [
@@ -15767,6 +16348,16 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
                   },
                   "activity_type": {
                     "type": "string",
@@ -15950,6 +16541,16 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "lifecycle_role": {
+                    "type": "string",
+                    "enum": [
+                      "prepare-parent",
+                      "prepare-branch",
+                      "create-pr",
+                      "merge-pr",
+                      "closeout"
+                    ]
                   },
                   "activity_type": {
                     "type": "string",

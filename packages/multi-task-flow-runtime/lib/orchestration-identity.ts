@@ -18,6 +18,10 @@ export const runIdentity = z
   })
   .strict();
 export type RunIdentity = z.infer<typeof runIdentity>;
+
+export function bindingSchemaVersionForContract(contract: number): 2 | 3 | 4 {
+  return contract >= 6 ? 4 : contract === 5 ? 3 : 2;
+}
 export function sameRunIdentity(left: unknown, right: unknown): boolean {
   const a = runIdentity.safeParse(left);
   const b = runIdentity.safeParse(right);
@@ -90,7 +94,7 @@ export function requireRunBinding(
     );
   }
   if (
-    binding.schema_version !== (ledger.contract_version === 5 ? 3 : 2) ||
+    binding.schema_version !== bindingSchemaVersionForContract(ledger.contract_version) ||
     binding.run_id !== runId ||
     !sameRunIdentity(identityOf(binding), caller)
   )

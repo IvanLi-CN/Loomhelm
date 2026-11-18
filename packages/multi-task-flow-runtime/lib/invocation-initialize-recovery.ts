@@ -84,7 +84,7 @@ export function initializeRecovery(
   const source = runIdentity.safeParse(marker.identity);
   if (
     !source.success ||
-    source.data.ledger_contract !== 5 ||
+    ![5, 6].includes(source.data.ledger_contract) ||
     source.data.compatibility_line !== "compat-v1"
   )
     return blocked("unsupported_source");
@@ -186,7 +186,7 @@ export function initializeRecovery(
     persisted.data.proof_digest === proofDigest &&
     sameRunIdentity(persisted.data.source, source.data) &&
     persisted.data.executor.compatibility_line === source.data.compatibility_line &&
-    persisted.data.executor.ledger_contract === 5 &&
+    persisted.data.executor.ledger_contract >= source.data.ledger_contract &&
     (sameRunIdentity(persisted.data.executor, source.data) ||
       Bun.semver.order(persisted.data.executor.package_version, source.data.package_version) > 0);
   return {

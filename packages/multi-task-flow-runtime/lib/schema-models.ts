@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { posix as posixPath } from "node:path";
 import { z } from "zod";
 import {
+  atomicLifecycleRole,
   atomicNode,
   atomicEdge as canonicalAtomicEdge,
   deliveryUnitExternalFacts,
@@ -117,7 +118,18 @@ export const externalRef = z
   })
   .strict();
 export const atomPlan = z
-  .object({ id, title: text, task_id: id, purpose: text, output: text })
+  .object({
+    id,
+    title: text,
+    task_id: id,
+    purpose: text,
+    output: text,
+    lifecycle_role: atomicLifecycleRole.optional(),
+    lifecycle_stage: z
+      .enum(["branch_ready", "pr_created", "pr_merged", "closed"])
+      .nullable()
+      .optional(),
+  })
   .strict();
 export const groupAtomPlan = z
   .object({
@@ -126,6 +138,7 @@ export const groupAtomPlan = z
     group_id: id,
     purpose: text,
     output: text,
+    lifecycle_role: atomicLifecycleRole.optional(),
     lifecycle_stage: z
       .enum(["workspace_ready", "pr_created", "pr_merged", "closed"])
       .nullable()
@@ -255,6 +268,7 @@ export const group = z
             lifecycle_stage: z
               .enum(["workspace_ready", "pr_created", "pr_merged", "closed"])
               .nullable(),
+            lifecycle_role: atomicLifecycleRole.optional(),
             status: z.enum(["planned", "running", "completed", "blocked"]),
           })
           .strict(),
@@ -288,6 +302,7 @@ export function defaultGroupAtoms(groupId: string) {
       purpose: "建立交付单元父分支",
       output: "父分支已准备",
       lifecycle_stage: "workspace_ready" as const,
+      lifecycle_role: "prepare-parent" as const,
       status: "planned" as const,
     },
     {
@@ -296,6 +311,7 @@ export function defaultGroupAtoms(groupId: string) {
       purpose: "提交交付单元父 PR",
       output: "父 PR 已创建",
       lifecycle_stage: "pr_created" as const,
+      lifecycle_role: "create-pr" as const,
       status: "planned" as const,
     },
     {
@@ -304,6 +320,7 @@ export function defaultGroupAtoms(groupId: string) {
       purpose: "合并已验收的父 PR",
       output: "父 PR 已合并",
       lifecycle_stage: "pr_merged" as const,
+      lifecycle_role: "merge-pr" as const,
       status: "planned" as const,
     },
     {
@@ -312,6 +329,7 @@ export function defaultGroupAtoms(groupId: string) {
       purpose: "完成交付单元收口",
       output: "交付单元已收口",
       lifecycle_stage: "closed" as const,
+      lifecycle_role: "closeout" as const,
       status: "planned" as const,
     },
   ];
@@ -324,24 +342,28 @@ export function defaultTaskAtoms(taskId: string) {
       title: "准备任务分支",
       status: "planned" as const,
       lifecycle_stage: "branch_ready" as const,
+      lifecycle_role: "prepare-branch" as const,
     },
     {
       id: `task-atom-${taskId}-create-pr`,
       title: "创建任务 PR",
       status: "planned" as const,
       lifecycle_stage: "pr_created" as const,
+      lifecycle_role: "create-pr" as const,
     },
     {
       id: `task-atom-${taskId}-merge-pr`,
       title: "合并任务 PR",
       status: "planned" as const,
       lifecycle_stage: "pr_merged" as const,
+      lifecycle_role: "merge-pr" as const,
     },
     {
       id: `task-atom-${taskId}-closeout`,
       title: "任务收口",
       status: "planned" as const,
       lifecycle_stage: "closed" as const,
+      lifecycle_role: "closeout" as const,
     },
   ];
 }
@@ -394,6 +416,7 @@ export const task = z
             .enum(["branch_ready", "pr_created", "pr_merged", "closed"])
             .nullable()
             .optional(),
+          lifecycle_role: atomicLifecycleRole.optional(),
         })
         .strict(),
     ),
@@ -661,6 +684,7 @@ export const ledgerSchema = z
       z.literal(3),
       z.literal(4),
       z.literal(5),
+      z.literal(6),
     ]),
     runtime_identity: runIdentity.optional(),
     upgrade: upgradeState.optional(),

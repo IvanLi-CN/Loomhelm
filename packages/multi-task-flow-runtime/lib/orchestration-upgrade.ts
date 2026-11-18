@@ -10,6 +10,7 @@ import {
 import { ContractError, requireCondition } from "./errors";
 import { auditMatchesSource, migrationAudit } from "./migration-audit";
 import {
+  bindingSchemaVersionForContract,
   identityOf,
   type RunIdentity,
   runIdentity,
@@ -45,9 +46,9 @@ function requireForward(source: RunIdentity, target: RunIdentity): void {
     4,
   );
   requireCondition(
-    target.ledger_contract === 5,
+    target.ledger_contract === 6,
     "INCOMPATIBLE_RELEASE",
-    "Target must implement ledger contract 5",
+    "Target must implement ledger contract 6",
     4,
   );
 }
@@ -131,7 +132,7 @@ export function upgradeOrchestration(
       const source = pending?.source ?? runIdentity.parse(raw.runtime_identity ?? bound);
       if (pending) {
         requireCondition(
-          binding.schema_version === 3,
+          binding.schema_version === bindingSchemaVersionForContract(target.ledger_contract),
           "UPGRADE_STATE_CONFLICT",
           "Prepared upgrade requires the fenced binding format",
           4,
@@ -144,7 +145,7 @@ export function upgradeOrchestration(
         );
         requireCondition(
           sameRunIdentity(bound, source)
-            ? [1, 2, 3].some(
+            ? [1, 2, 3, 4].some(
                 (schema_version) =>
                   digest(JSON.stringify({ ...binding, schema_version })) ===
                   pending.source_binding_digest,
@@ -168,7 +169,7 @@ export function upgradeOrchestration(
           return { changed: false, identity: target, upgrade: previous };
         requireCondition(
           raw.schema_version === 2 &&
-            [3, 4, 5].includes(raw.contract_version) &&
+            [3, 4, 5, 6].includes(raw.contract_version) &&
             source.ledger_contract === raw.contract_version,
           "MIGRATION_REQUIRED",
           "No verified mechanical migration is available for this source",
@@ -204,6 +205,12 @@ export function upgradeOrchestration(
         if (!state) {
           const sourceDigest = digest(originalContent);
           const backup = `upgrade-${sourceDigest}.json`;
+          const migrationSourceContract =
+            raw.contract_version === 6 &&
+            raw.upgrade?.migration_audit?.source_contract !== undefined &&
+            raw.upgrade.migration_audit.source_contract < 6
+              ? raw.upgrade.migration_audit.source_contract
+              : raw.contract_version;
           const backupPath = join(store.runPath, backup);
           if (!existsSync(backupPath))
             writeExclusiveNoFollow(
@@ -235,7 +242,7 @@ export function upgradeOrchestration(
               schema_version: 1,
               policy: "preserve-unresolved-v1",
               validator_version: 1,
-              source_contract: raw.contract_version,
+              source_contract: migrationSourceContract,
               source_revision: raw.revision,
               source_digest: sourceDigest,
               source_binding_digest: digest(JSON.stringify(binding)),
@@ -243,11 +250,11 @@ export function upgradeOrchestration(
               business_digest: report.business_digest,
               unresolved_digest: report.unresolved_digest,
               unresolved: report.unresolved,
-              writer_barrier: "ledger-contract-5-and-binding-schema-3",
+              writer_barrier: "ledger-contract-6-and-binding-schema-4",
               native_quiescence: "not_asserted",
             }),
           };
-          raw.contract_version = 5;
+          raw.contract_version = 6;
           raw.runtime_identity = source;
           raw.upgrade = state;
           raw.revision += 1;
@@ -256,7 +263,7 @@ export function upgradeOrchestration(
           store.publishUpgrade(
             context,
             raw,
-            { ...binding, schema_version: 3 },
+            { ...binding, schema_version: bindingSchemaVersionForContract(target.ledger_contract) },
             state.source_directory,
             dependencies.afterStage,
           );
@@ -310,7 +317,7 @@ export function upgradeOrchestration(
             write(
               bindingPath,
               JSON.stringify({
-                schema_version: 3,
+                schema_version: bindingSchemaVersionForContract(target.ledger_contract),
                 run_id: raw.orchestration_id,
                 ...target,
                 revision: state!.source_binding_revision + 1,
