@@ -583,27 +583,19 @@ export function deliveryUnitOriginalParentMergeSha(
   }
   return null;
 }
-
-function planAddsTask(plan: Plan, taskId: string): boolean {
-  return Boolean(
-    plan.revision?.change_set.added.some((entry) => entry.path === `tasks[${taskId}]`),
-  );
-}
-
 function planRevisionChainAddsTask(ledger: Ledger, taskId: string): boolean {
-  let plan = executionPlan(ledger);
+  let plan: Plan | undefined = executionPlan(ledger);
   const visited = new Set<string>();
-  while (!visited.has(plan.id)) {
-    if (planAddsTask(plan, taskId)) return true;
+  let added = false;
+  const taskPath = `tasks[${taskId}]`;
+  while (plan && !visited.has(plan.id)) {
     visited.add(plan.id);
-    if (!plan.supersedes_id) return false;
-    const previous = ledger.plans.find((item) => item.id === plan.supersedes_id);
-    if (!previous) return false;
-    plan = previous;
+    added ||= Boolean(plan.revision?.change_set.added.some((entry) => entry.path === taskPath));
+    if (!plan.supersedes_id) return added;
+    plan = ledger.plans.find((item) => item.id === plan.supersedes_id);
   }
   return false;
 }
-
 function deliveryUnitMergeShas(ledger: Ledger, group: Ledger["groups"][number]): Set<string> {
   const shas = new Set<string>();
   for (const operation of ledger.operations) {
@@ -615,12 +607,17 @@ function deliveryUnitMergeShas(ledger: Ledger, group: Ledger["groups"][number]):
     )
       continue;
     const fact = ledger.facts.find((item) => item.id === operation.receipt_fact_id);
-    if (fact?.kind === "pr_merged" && fact.status === "passed")
-      for (const sha of [fact.sha, fact.receipt?.head_sha]) if (sha) shas.add(sha);
+    if (fact?.kind !== "pr_merged" || fact.status !== "passed") continue;
+    const verifiedHead =
+      fact.receipt?.head_sha &&
+      ["parent", "parent-followup"].includes(operation.request.mode) &&
+      fact.receipt.head_sha === operation.request.expected_head_sha
+        ? fact.receipt.head_sha
+        : null;
+    for (const sha of [fact.sha, verifiedHead]) if (sha) shas.add(sha);
   }
   return shas;
 }
-
 export function isMergedGroupContinuation(
   ledger: Ledger,
   group: Ledger["groups"][number],

@@ -216,7 +216,7 @@ function postMergeContinuationFixture() {
     actor_id: group.agent_thread_id!,
     target_id: group.id,
     status: "succeeded",
-    request: { mode: "parent", pr: parentPr },
+    request: { mode: "parent", pr: parentPr, expected_head_sha: originalMerge },
     expected_sha: originalMerge,
     receipt_fact_id: mergeFactId,
     created_at: "2026-01-01T00:01:00.000Z",
@@ -862,4 +862,38 @@ test("a later plan revision retains an existing continuation task", () => {
 
   expect(isMergedGroupContinuation(ledger, group)).toBe(true);
   expect(isMergedContributionContinuation(ledger, group, task)).toBe(true);
+});
+
+test("an unverified parent merge head cannot authorize continuation lineage", () => {
+  const { ledger, group, task } = postMergeContinuationFixture();
+  const invalidHead = "d".repeat(64);
+  ledger.facts.find((fact) => fact.id === "group-parent-merge")!.receipt!.head_sha = invalidHead;
+  task.base_sha = invalidHead;
+
+  expect(isMergedContributionContinuation(ledger, group, task)).toBe(false);
+});
+
+test("an invalid continuation revision chain never qualifies", () => {
+  for (const [name, supersedesId] of [
+    ["missing predecessor", "plan-missing"],
+    ["cycle", "plan-invalid"],
+  ] as const) {
+    const { ledger, group, task } = postMergeContinuationFixture();
+    const previousPlan = ledger.plans[0]!;
+    const invalidPlan = structuredClone(previousPlan);
+    invalidPlan.id = "plan-invalid";
+    invalidPlan.supersedes_id = supersedesId;
+    invalidPlan.revision = {
+      ...previousPlan.revision!,
+      change_set: {
+        ...previousPlan.revision!.change_set,
+        added: [{ path: `tasks[${task.id}]`, new_value: structuredClone(task) }],
+      },
+    };
+    ledger.plans.push(invalidPlan);
+    ledger.active_plan_id = invalidPlan.id;
+    ledger.execution_plan_id = invalidPlan.id;
+
+    expect(isMergedGroupContinuation(ledger, group), name).toBe(false);
+  }
 });
