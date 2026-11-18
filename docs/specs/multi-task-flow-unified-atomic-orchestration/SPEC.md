@@ -8,6 +8,8 @@
 
 当前合同的原子执行和收口依据显式依赖边及生命周期角色，不以数组位置推导依赖。派发资格由账本重算，就绪通知的投递与确认独立追踪。任务负责人可直接更正等待或阻塞报告；工作区证据可在同一事务记录基线、就绪状态和原子完成。缺少已授权操作的外部合并观测仅作审计，不满足下游依赖。
 
+普通原子以归属 Agent 报告的 `completed` 为完成事实，无需先记开工，也无需另行登记内部测试、部署或验收证明。原子边读取前置节点状态；旧计划中的原子内部验收描述继续可读。PR 发布、合并等独立操作仍以各自的授权和回执为准。
+
 ## Context and Scope
 
 本主题定义 Multi-task Flow 的统一原子编排合同，覆盖 AtomicNode、AtomicEdge、Task、DeliveryUnit、外部事实、状态推导、迁移和网页投影。它约束 `skills/multi-task-flow/` 的持久化、运行时门禁、验证器和 viewer，不替代仓库级工程交付流程或外部 provider 的事实来源。
@@ -319,7 +321,7 @@ AtomicNode + AtomicEdge
 
 不建议一次性重写历史账本。应先实现新 schema、只读迁移和三种视图验证，再对可机械转换的历史数据执行受控迁移；无法机械判断的历史语义必须等待显式计划修订。
 
-本设计锁定以下边界：AtomicNode + AtomicEdge 是唯一编排真相；Task 与 DeliveryUnit 是平级投影；里程碑以所有入边条件和所有显式验收条件的全量 AND 规则达成；空条件 planned milestone 无效；Task 和 DeliveryUnit 的业务状态由原子、里程碑和外部事实推导；Agent 运行观察单独记录；coordination 不再作为新任务类型或原子活动类型。
+AtomicNode + AtomicEdge 是编排事实；Task 与 DeliveryUnit 是平级投影。当前合同的里程碑检查全部显式前置节点和独立的 PR 条件，不核验原子内部工作。空条件 planned milestone 无效。Task 和 DeliveryUnit 的业务状态由原子、里程碑和外部事实推导；Agent 运行观察单独记录；coordination 不作为新任务类型或原子活动类型。
 
 ## 14. Native creation reconciliation
 

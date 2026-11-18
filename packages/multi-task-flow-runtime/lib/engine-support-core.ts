@@ -227,13 +227,11 @@ export function atomicConditionEvaluator(ledger: Ledger, plan: Plan) {
             fact.receipt.merge_sha === criterion.merge_sha)
       );
     }
-    // Exact criteria without a matching structured receipt cannot be inferred from an evidence URL.
-    return false;
+    // Task-level acceptance details remain readable as plan context.
+    return true;
   }
   function edgeSatisfied(edge: AtomicEdge): boolean {
-    return edge.requires.kind === "source_evidence"
-      ? criterionSatisfied(edge.requires.criterion)
-      : nodeSatisfied(edge.from_node_id);
+    return nodeSatisfied(edge.from_node_id);
   }
   function nodeSatisfied(id: string): boolean {
     if (cache.has(id)) return cache.get(id) ?? false;

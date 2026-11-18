@@ -65,11 +65,10 @@ test("current contract atom updates follow edges despite reversed storage order"
   expect(invoke(first!.id)).toMatchObject({ code: "APPLIED" });
 });
 
-test("a milestone releases successors only after its work and evidence conditions pass", () => {
+test("a milestone releases successors from reported completion without task-internal evidence", () => {
   const ledger = modernFixture();
   const plan = ledger.plans[0]!;
   const [source, target] = ledger.tasks[0]!.atoms;
-  const evidence = ledger.tasks[1]!.atoms[0]!;
   const milestoneId = "evidence-gate";
   plan.atomic_nodes.push({
     id: milestoneId,
@@ -84,15 +83,14 @@ test("a milestone releases successors only after its work and evidence condition
       id: "source-to-milestone",
       from_node_id: source!.id,
       to_node_id: milestoneId,
-      requires: { kind: "source_terminal_success" },
-    },
-    {
-      id: "evidence-to-milestone",
-      from_node_id: source!.id,
-      to_node_id: milestoneId,
       requires: {
         kind: "source_evidence",
-        criterion: { kind: "node_satisfied", node_id: evidence.id },
+        criterion: {
+          kind: "ci_passed",
+          target_ref: "mock",
+          head_sha: "a".repeat(40),
+          checks: ["test"],
+        },
       },
     },
     {
@@ -102,10 +100,48 @@ test("a milestone releases successors only after its work and evidence condition
       requires: { kind: "source_terminal_success" },
     },
   ];
-  source!.status = "completed";
   expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([milestoneId]);
-  evidence.status = "completed";
+  source!.status = "completed";
   expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([]);
+});
+
+test("the bound agent may report an ordinary atom completed without intermediate progress", () => {
+  const ledger = modernFixture();
+  ledger.contract_version = 6;
+  ledger.runtime_identity = identity;
+  const task = ledger.tasks[0]!;
+  task.thread_id = actor.thread_id;
+  task.state = "running";
+  const plan = ledger.plans[0]!;
+  const atom = {
+    id: "ordinary-work",
+    title: "Implement change",
+    purpose: "Implement change",
+    output: "Working change",
+  };
+  task.atoms.push({ id: atom.id, title: atom.title, status: "planned" });
+  plan.atoms.push({ ...atom, task_id: task.id });
+  plan.atomic_nodes.push({
+    ...atom,
+    kind: "work",
+    activity_type: "contribution",
+    state: "planned",
+    acceptance: [],
+    scope: { kind: "task", task_id: task.id, delivery_unit_id: task.group_id },
+  });
+  expect(
+    apply(
+      ledger,
+      "atom-update",
+      request(
+        ledger,
+        "report-work-done",
+        { task_id: task.id, atom_id: atom.id, state: "completed" },
+        actor,
+      ),
+    ),
+  ).toMatchObject({ code: "APPLIED", result: { state: "completed" } });
+  expect(ledger.tasks[0]!.atoms.find((item) => item.id === atom.id)?.status).toBe("completed");
 });
 
 test("an unclaimed external merge can be corrected without authorizing integration", () => {

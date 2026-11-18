@@ -779,7 +779,21 @@ add(
 	["observation_id", "status", "operation_id"],
 	{
 		optionalPayload: ["supersedes"],
-		payloadOverrides: { provider_observation: publicationReceipt },
+		payloadOverrides: {
+			provider_observation: {
+				...publicationReceipt,
+				required: [...publicationReceipt.required, "merge_sha"],
+				properties: {
+					...publicationReceipt.properties,
+					resource_type: { const: "pr" },
+					state: { const: "merged" },
+					pr: externalRefValue,
+					base_sha: shaValue,
+					head_sha: shaValue,
+					merge_sha: shaValue,
+				},
+			},
+		},
 		resultOverrides: {
 			observation_id: id,
 			status: { enum: ["reconcile_required", "already_recorded", "conflict", "unclaimed"] },

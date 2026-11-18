@@ -184,7 +184,11 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         blocked: ["running"],
       };
       requireCondition(
-        allowed[atom.status]?.includes(state),
+        allowed[atom.status]?.includes(state) ||
+          (ledger.contract_version >= 6 &&
+            !lifecycleStageOf(atom) &&
+            state === "completed" &&
+            ["planned", "blocked"].includes(atom.status)),
         "INVALID_TRANSITION",
         "Invalid atom transition",
         3,
@@ -257,13 +261,17 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         running: ["blocked", "completed"],
         blocked: ["running"],
       };
+      const lifecycleStage = lifecycleStageOf(atom);
       requireCondition(
-        allowed[atom.status]?.includes(state),
+        allowed[atom.status]?.includes(state) ||
+          (ledger.contract_version >= 6 &&
+            !lifecycleStage &&
+            state === "completed" &&
+            ["planned", "blocked"].includes(atom.status)),
         "INVALID_TRANSITION",
         "Invalid delivery-unit atom transition",
         3,
       );
-      const lifecycleStage = lifecycleStageOf(atom);
       requireCondition(
         !(state === "completed" && lifecycleStage === "closed"),
         "GROUP_CLOSE_REQUIRED",
