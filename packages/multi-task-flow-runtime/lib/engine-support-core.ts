@@ -227,11 +227,20 @@ export function atomicConditionEvaluator(ledger: Ledger, plan: Plan) {
             fact.receipt.merge_sha === criterion.merge_sha)
       );
     }
-    // Task-level acceptance details remain readable as plan context.
-    return true;
+    // A standalone external gate cannot be satisfied by an atom status report.
+    return false;
   }
   function edgeSatisfied(edge: AtomicEdge): boolean {
-    return nodeSatisfied(edge.from_node_id);
+    if (edge.requires.kind !== "source_evidence") return nodeSatisfied(edge.from_node_id);
+    const { criterion } = edge.requires;
+    if (["node_satisfied", "pr_published", "pr_merged"].includes(criterion.kind))
+      return criterionSatisfied(criterion);
+    const source = nodes.get(edge.from_node_id);
+    return (
+      source?.kind === "work" &&
+      ["contribution", "documentation"].includes(source.activity_type) &&
+      nodeSatisfied(edge.from_node_id)
+    );
   }
   function nodeSatisfied(id: string): boolean {
     if (cache.has(id)) return cache.get(id) ?? false;

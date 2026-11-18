@@ -103,6 +103,15 @@ test("a milestone releases successors from reported completion without task-inte
   expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([milestoneId]);
   source!.status = "completed";
   expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([]);
+  plan.atomic_edges[0]!.requires = {
+    kind: "source_evidence",
+    criterion: { kind: "pr_published", pr_ref: ledger.groups[0]!.parent_pr! },
+  };
+  const publication = ledger.facts.find((fact) => fact.kind === "pr_published")!;
+  publication.status = "unknown";
+  expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([milestoneId]);
+  publication.status = "passed";
+  expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([]);
 });
 
 test("the bound agent may report an ordinary atom completed without intermediate progress", () => {

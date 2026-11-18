@@ -787,6 +787,7 @@ add(
 					...publicationReceipt.properties,
 					resource_type: { const: "pr" },
 					state: { const: "merged" },
+					target_branch: textValue,
 					pr: externalRefValue,
 					base_sha: shaValue,
 					head_sha: shaValue,
