@@ -274,6 +274,11 @@ function isHistoricalReviewReceipt(
       receipt.lane === laneName &&
       receipt.head_sha === wave.head_sha &&
       receipt.base_sha === wave.base_sha &&
+      typeof receipt.proof_key === "string" &&
+      receipt.proof_key.trim().length > 0 &&
+      typeof receipt.wave_proof_key === "string" &&
+      receipt.wave_proof_key ===
+        `${receipt.proof_key}:${wave.wave_id}:${laneName}` &&
       receipt.receipt_id === expectedId &&
       receipt.review_result_sha256 === parsed.resultSha256 &&
       Array.isArray(receipt.finding_fingerprints) &&

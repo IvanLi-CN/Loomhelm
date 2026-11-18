@@ -676,6 +676,30 @@ describe("acceptance and review state", () => {
     });
     expect(contractReceipt).not.toHaveProperty("reported_profile");
     if (!contractReceipt) throw new Error("contract receipt is missing");
+    contractReceipt.requested_profile = {
+      model: "tampered-model",
+      effort: "tampered-effort",
+    };
+    expect(() =>
+      recordSubagentReviewState(ledger, {
+        reviewProfile: "pr-convergence",
+        baseRef: sha,
+        reviewAttemptId: "attempt-contract",
+        reviewResultJson: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation:
+            "Inspected the candidate diff and tests; the patch is correct.",
+          overall_confidence_score: 1,
+        }),
+        waveId: String(wave.wave_id),
+        lane: "contract",
+      }),
+    ).toThrow("review receipt requested profile integrity is invalid");
+    contractReceipt.requested_profile = {
+      model: "gpt-6-luna",
+      effort: "max",
+    };
     for (const claim of ["reported_profile", "effective_model"]) {
       contractReceipt[claim] = {
         model: "reviewer-claim",
@@ -941,6 +965,24 @@ describe("acceptance and review state", () => {
     const normalized = normalizeLedger(historical);
     expect(normalized.receipts).toEqual(historicalSnapshot);
     expect(normalized.legacy_schema_version).toBe(6);
+    const malformedHistoricalProof = structuredClone(normalized) as Record<
+      string,
+      unknown
+    >;
+    const malformedHistoricalProofReceipt = (
+      malformedHistoricalProof.receipts as Record<string, unknown>[]
+    ).find((receipt) => receipt.kind === "review");
+    if (!malformedHistoricalProofReceipt)
+      throw new Error("malformed historical proof receipt is missing");
+    malformedHistoricalProofReceipt.proof_key = "tampered-proof-key";
+    expect(() =>
+      openReviewWaveState(malformedHistoricalProof, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
     expect(() =>
       finalizeReviewWaveState(normalized, String(wave.wave_id), {
         groups: [],

@@ -13,7 +13,10 @@ import {
 } from "./review-result";
 import { isFormalReviewRequestProfile } from "./review-profile-policy";
 import { reviewWaveScopeBindingMatches } from "./review-wave-support";
-import { assertCurrentReviewReceiptFields } from "./review-receipt-integrity";
+import {
+  assertCurrentReviewReceiptFields,
+  assertReviewReceiptIntegrity,
+} from "./review-receipt-integrity";
 
 export interface SubagentReviewOptions {
   reviewProfile: string;
@@ -134,6 +137,14 @@ export function recordSubagentReviewState(
       throw new FlowError(
         "review attempt id is already bound to a different result",
       );
+    assertReviewReceiptIntegrity(
+      ledger,
+      waveId,
+      lane,
+      laneState,
+      existingAttempt,
+      options.repoPath,
+    );
     return { reused: true, receipt: existingAttempt };
   }
   const existingLaneId = laneState.receipt_id;
@@ -145,10 +156,28 @@ export function recordSubagentReviewState(
       throw new FlowError(
         "review lane already has a different recorded receipt",
       );
+    assertReviewReceiptIntegrity(
+      ledger,
+      waveId,
+      lane,
+      laneState,
+      existing,
+      options.repoPath,
+    );
     return { reused: true, receipt: existing };
   }
   const existing = receipts.find((receipt) => receipt.receipt_id === receiptId);
-  if (existing) return { reused: true, receipt: existing };
+  if (existing) {
+    assertReviewReceiptIntegrity(
+      ledger,
+      waveId,
+      lane,
+      laneState,
+      existing,
+      options.repoPath,
+    );
+    return { reused: true, receipt: existing };
+  }
   const receipt: Record<string, unknown> = {
     receipt_id: receiptId,
     kind: "review",
