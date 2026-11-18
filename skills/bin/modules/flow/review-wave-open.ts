@@ -1,7 +1,6 @@
 import {
   DYNAMIC_REVIEW_LANES,
   FIXED_REVIEW_LANES,
-  FLOW_SCHEMA_VERSION,
   FlowError,
   REVIEW_SCOPE_CLASSES,
   isoNow,
@@ -185,48 +184,25 @@ function isLegacyReviewWave(
   wave: Record<string, unknown>,
 ): boolean {
   if (
-    !(
-      (ledger.legacy_compatibility === true &&
-        ledger.legacy_schema_version === 6) ||
-      ledger.schema_version === FLOW_SCHEMA_VERSION
-    ) ||
+    ledger.legacy_compatibility !== true ||
+    ledger.legacy_schema_version !== 6 ||
     !isRecord(wave.lanes)
   )
     return false;
   const lanes = Object.entries(wave.lanes);
   if (!lanes.length || !legacyLaneTopologyMatches(ledger, wave, lanes))
     return false;
-  const receipts = Array.isArray(ledger.receipts)
-    ? (ledger.receipts as unknown[])
-    : [];
-  return lanes.every(([laneName, rawLane]) => {
+  return lanes.every(([, rawLane]) => {
     if (
       !isRecord(rawLane) ||
       Object.hasOwn(rawLane, "requested_profile") ||
       typeof rawLane.model !== "string" ||
       !rawLane.model.trim() ||
       typeof rawLane.effort !== "string" ||
-      !rawLane.effort.trim() ||
-      typeof rawLane.receipt_id !== "string"
+      !rawLane.effort.trim()
     )
       return false;
-    const receipt = receipts.find(
-      (candidate) =>
-        isRecord(candidate) && candidate.receipt_id === rawLane.receipt_id,
-    );
-    return (
-      isRecord(receipt) &&
-      receipt.review_receipt_schema === 6 &&
-      receipt.kind === "review" &&
-      receipt.terminal_state === "completed" &&
-      receipt.evidence_valid === true &&
-      receipt.post_execution_clean === true &&
-      receipt.exit_code === 0 &&
-      receipt.wave_id === wave.wave_id &&
-      receipt.lane === laneName &&
-      receipt.head_sha === wave.head_sha &&
-      receipt.base_sha === wave.base_sha
-    );
+    return true;
   });
 }
 

@@ -21,7 +21,12 @@ export function finalizeReviewWaveState(
   const tier = assessment?.tier;
   if (tier !== 3 && tier !== 4)
     throw new FlowError("review wave necessity tier is invalid");
-  if (ledger.legacy_compatibility !== true)
+  const hasRequestedProfiles =
+    isRecord(wave.lanes) &&
+    Object.values(wave.lanes).every(
+      (lane) => isRecord(lane) && Object.hasOwn(lane, "requested_profile"),
+    );
+  if (ledger.legacy_compatibility !== true || hasRequestedProfiles)
     validateLaneSpecs(
       String(wave.stage),
       Object.entries(wave.lanes).map(([lane, rawLane]) => ({

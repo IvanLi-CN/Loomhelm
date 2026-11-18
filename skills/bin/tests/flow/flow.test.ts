@@ -444,6 +444,11 @@ describe("acceptance and review state", () => {
         ).find((receipt) => receipt.kind === "review_attempt");
         if (!unavailableReceipt)
           throw new Error("unavailable receipt is missing");
+        expect(unavailableReceipt).toMatchObject({
+          review_execution_source: "parent-flow-request",
+          provenance_boundary: "parent-flow-request-and-startup-observation",
+          evidence_source: "parent-request-and-startup-observation",
+        });
         unavailableReceipt.requested_profile = {
           model: "tampered-model",
           effort: "tampered-effort",
@@ -622,6 +627,25 @@ describe("acceptance and review state", () => {
     ).toThrow("review receipt integrity is invalid");
 
     const freshHead = "b".repeat(40);
+    const partial = structuredClone(normalized) as Record<string, unknown>;
+    const partialReview = partial.review as Record<string, unknown>;
+    const partialWave = (
+      partialReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    const partialLane = (
+      partialWave.lanes as Record<string, Record<string, unknown>>
+    )["test-platform"];
+    partialLane.receipt_id = null;
+    partialLane.state = "pending";
+    const partialFresh = openReviewWaveState(partial, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: freshHead,
+      laneSpecs: lanes,
+    });
+    expect(partialFresh.next).toBe("record-review");
+    expect(partialWave.state).toBe("retired");
+
     const fresh = openReviewWaveState(normalized, {
       stage: "initial",
       baseSha: sha,
@@ -639,6 +663,18 @@ describe("acceptance and review state", () => {
           canonicalJson({ model: "gpt-6-luna", effort: "max" }),
       ),
     ).toBe(true);
+    delete (
+      freshWave.lanes as Record<string, Record<string, unknown>>
+    )["test-platform"];
+    expect(() =>
+      finalizeReviewWaveState(normalized, String(freshWave.wave_id), {
+        groups: [],
+        invariants: ["all lanes covered"],
+        coverage: lanes.map(({ lane }) => lane),
+        conflicts: [],
+        acceptance: [],
+      }),
+    ).toThrow("required review wave lane topology");
   });
 
   test("rejects retired fixed lane profiles instead of falling back", () => {

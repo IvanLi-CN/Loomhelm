@@ -245,6 +245,11 @@ function recordUnavailable(
         canonicalJson(requestedProfile) ||
       existingAttempt.profile_verification !== "request_recorded" ||
       existingAttempt.effective_profile !== null ||
+      existingAttempt.review_execution_source !== "parent-flow-request" ||
+      existingAttempt.provenance_boundary !==
+        "parent-flow-request-and-startup-observation" ||
+      existingAttempt.evidence_source !==
+        "parent-request-and-startup-observation" ||
       existingAttempt.terminal_state !== "unavailable" ||
       existingAttempt.unavailability_classification !==
         SUBAGENT_STARTUP_UNAVAILABLE ||
@@ -270,8 +275,8 @@ function recordUnavailable(
     profile_verification: "request_recorded",
     effective_profile: null,
     review_execution_source: "parent-flow-request",
-    provenance_boundary: "parent-flow-request-and-subagent-result",
-    evidence_source: "parent-request-and-subagent-result",
+    provenance_boundary: "parent-flow-request-and-startup-observation",
+    evidence_source: "parent-request-and-startup-observation",
     terminal_state: "unavailable",
     unavailability_classification: SUBAGENT_STARTUP_UNAVAILABLE,
     wave_id: waveId,
