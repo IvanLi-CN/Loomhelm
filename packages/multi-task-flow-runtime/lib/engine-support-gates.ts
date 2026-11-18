@@ -626,13 +626,12 @@ export function isMergedGroupContinuation(
   group: Ledger["groups"][number],
 ): boolean {
   if (group.state !== "merged" || !deliveryUnitPrMergedFromLedger(ledger, group)) return false;
-  const plan = executionPlan(ledger);
   return ledger.tasks.some(
     (task) =>
       task.group_id === group.id &&
       isContributionKind(task.kind) &&
       task.disposition === "active" &&
-      planAddsTask(plan, task.id),
+      planRevisionChainAddsTask(ledger, task.id),
   );
 }
 

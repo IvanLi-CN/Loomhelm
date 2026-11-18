@@ -5,6 +5,7 @@ import { protectedActionApproved, protectedActionTargetDigest } from "../lib/eng
 import {
   deliveryUnitPrMergedFromLedger,
   isMergedContributionContinuation,
+  isMergedGroupContinuation,
 } from "../lib/engine-support-gates";
 import { defaultTaskAtoms } from "../lib/schema";
 import { latestParentPrFact } from "../lib/view-readiness";
@@ -835,4 +836,30 @@ test("a later continuation can use the prior follow-up PR head as its base", () 
   });
 
   expect(isMergedContributionContinuation(ledger, group, nextTask)).toBe(true);
+});
+
+test("a later plan revision retains an existing continuation task", () => {
+  const { ledger, group, task } = postMergeContinuationFixture();
+  const previousPlan = ledger.plans[0]!;
+  const laterPlan = structuredClone(previousPlan);
+  laterPlan.id = "plan-followup-3";
+  laterPlan.supersedes_id = previousPlan.id;
+  laterPlan.revision = {
+    ...previousPlan.revision!,
+    affected_task_ids: [task.id],
+    affected_node_ids: [],
+    affected_edge_ids: [],
+    change_set: {
+      added: [],
+      removed: [],
+      modified: [{ path: `tasks[${task.id}].atoms`, new_value: structuredClone(task.atoms) }],
+    },
+  };
+  previousPlan.lifecycle = "superseded";
+  ledger.plans.push(laterPlan);
+  ledger.active_plan_id = laterPlan.id;
+  ledger.execution_plan_id = laterPlan.id;
+
+  expect(isMergedGroupContinuation(ledger, group)).toBe(true);
+  expect(isMergedContributionContinuation(ledger, group, task)).toBe(true);
 });
