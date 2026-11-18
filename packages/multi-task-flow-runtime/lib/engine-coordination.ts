@@ -17,6 +17,7 @@ import {
   type Task,
   task,
   validateDevPlanHandoff,
+  validateExecutableAtomicCriteria,
   validateInitialRuntimeState,
   validateNewTaskKinds,
   validatePlan,
@@ -168,6 +169,7 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
     case "plan-propose": {
       onlyMain(request.actor);
       const proposed = parse(plan, payload.plan);
+      if (ledger.contract_version >= 6) validateExecutableAtomicCriteria(proposed);
       requireCondition(
         proposed.approval_id === null,
         "INVALID_PLAN",
@@ -420,6 +422,7 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
         "INVALID_PLAN",
         "Only the active proposed plan can be approved",
       );
+      if (ledger.contract_version >= 6) validateExecutableAtomicCriteria(current);
       ensureSchedulable(ledger, current);
       const previousExecution = current.supersedes_id
         ? (ledger.plans.find((item) => item.id === current.supersedes_id) ?? null)

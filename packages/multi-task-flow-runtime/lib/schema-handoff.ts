@@ -14,6 +14,7 @@ import {
 } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
 import { topologicalOrder, validateGrouping } from "../lib/graph";
+import { canEvaluateAtomicCriterion, type MilestoneCriterion } from "./atomic-criteria";
 import {
   type atomEdge,
   executionPhase,
@@ -493,6 +494,25 @@ export function validateInitialRuntimeState(
 export type PlanValidationOptions = LifecycleRoleValidationOptions & {
   requireCanonicalLifecycleGraph?: boolean;
 };
+
+// Admission only: previously stored plans must remain readable and repairable.
+export function validateExecutableAtomicCriteria(candidate: Plan): void {
+  function requireSupported(criterion: MilestoneCriterion, location: string): void {
+    requireCondition(
+      canEvaluateAtomicCriterion(criterion),
+      "UNSUPPORTED_ATOMIC_CRITERION",
+      `${location} requires ${criterion.kind}, which cannot be verified from current ledger receipts. Revise the plan to use a supported gate, or use reported work completion for internal work.`,
+    );
+  }
+  for (const edge of candidate.atomic_edges) {
+    if ("from_node_id" in edge && edge.requires.kind === "source_evidence")
+      requireSupported(edge.requires.criterion, `Atomic edge ${edge.id}`);
+  }
+  for (const node of candidate.atomic_nodes) {
+    if (node.kind === "milestone")
+      for (const criterion of node.acceptance) requireSupported(criterion, `Milestone ${node.id}`);
+  }
+}
 
 export function historicalLifecycleCompatibility(value: {
   contract_version: number;

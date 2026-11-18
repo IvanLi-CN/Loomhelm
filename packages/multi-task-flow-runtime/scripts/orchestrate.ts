@@ -48,6 +48,7 @@ import {
   ledgerSchema,
   plan,
   task,
+  validateExecutableAtomicCriteria,
   validateInitialRuntimeState,
   validateLedger,
   validateNewTaskKinds,
@@ -263,6 +264,7 @@ try {
       const requestedPlan = parsed.payload.initial_plan;
       if (requestedPlan.approval_id !== null)
         throw new ContractError("INVALID_PLAN", "Initial plan must be unapproved");
+      validateExecutableAtomicCriteria(requestedPlan);
       const configuredGroupIds = new Set(requestedPlan.group_atoms.map((atom) => atom.group_id));
       const planGroupIds = new Set(
         requestedPlan.nodes

@@ -113,7 +113,55 @@ test("a milestone distinguishes reported completion from explicit evidence", () 
   publication.status = "unknown";
   expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([milestoneId]);
   publication.status = "passed";
+  ledger.facts.push({
+    ...publication,
+    id: "old-pr-observation",
+    observed_at: "2020-01-01T00:00:00Z",
+    status: "failed",
+  });
   expect(atomicPredecessorsPending(ledger, plan, target!.id)).toEqual([]);
+});
+
+test("a stored plan stays readable while admission rejects an unsupported atomic edge", () => {
+  const ledger = modernFixture();
+  ledger.contract_version = 6;
+  ledger.runtime_identity = identity;
+  const previous = ledger.plans[0]!;
+  const edge = previous.atomic_edges.find((item) => "from_node_id" in item);
+  if (!edge || !("from_node_id" in edge)) throw new Error("Missing canonical edge");
+  edge.requires = {
+    kind: "source_evidence",
+    criterion: {
+      kind: "ci_passed",
+      target_ref: "mock",
+      head_sha: "a".repeat(40),
+      checks: ["test"],
+    },
+  };
+  expect(validateLedger(ledger).execution_plan_id).toBe(previous.id);
+  const proposal = {
+    ...structuredClone(previous),
+    id: "gate-revision",
+    supersedes_id: previous.id,
+    approval_id: null,
+  };
+  const before = structuredClone(ledger);
+  expect(() =>
+    apply(ledger, "plan-propose", request(ledger, "propose-unsupported-gate", { plan: proposal })),
+  ).toThrow(`Atomic edge ${edge.id} requires ci_passed`);
+  expect(ledger).toEqual(before);
+
+  proposal.lifecycle = "proposed";
+  ledger.plans.push(proposal);
+  ledger.active_plan_id = proposal.id;
+  expect(() =>
+    apply(
+      ledger,
+      "plan-approve",
+      request(ledger, "approve-unsupported-gate", { plan_id: proposal.id }),
+    ),
+  ).toThrow(`Atomic edge ${edge.id} requires ci_passed`);
+  expect(ledger.execution_plan_id).toBe(previous.id);
 });
 
 test("the owner may retract completion and all descendants recheck the graph", () => {

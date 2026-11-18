@@ -51,6 +51,7 @@ import {
   validateSchedulablePlan,
   validateTaskExecutionPolicies,
 } from "../lib/schema";
+import { canEvaluateAtomicCriterion, type MilestoneCriterion } from "./atomic-criteria";
 import { latestPublicationFact } from "./publication-facts";
 
 export const actorSchema = z
@@ -216,25 +217,22 @@ export function atomicConditionEvaluator(ledger: Ledger, plan: Plan) {
   }
   const visiting = new Set<string>();
   const cache = new Map<string, boolean>();
-  type Criterion = Extract<AtomicNode, { kind: "milestone" }>["acceptance"][number];
-  function criterionSatisfied(criterion: Criterion): boolean {
+  function criterionSatisfied(criterion: MilestoneCriterion): boolean {
+    if (!canEvaluateAtomicCriterion(criterion)) return false;
     if (criterion.kind === "node_satisfied") return nodeSatisfied(criterion.node_id);
-    if (criterion.kind === "pr_published" || criterion.kind === "pr_merged") {
-      const fact = ledger.facts.findLast(
-        (item) =>
-          item.kind === criterion.kind && stable(item.receipt?.pr) === stable(criterion.pr_ref),
-      );
-      return (
-        fact?.status === "passed" &&
-        (criterion.kind === "pr_published"
-          ? fact.receipt?.state === "open" || fact.receipt?.state === "merged"
-          : fact.receipt?.state === "merged" &&
-            fact.sha === criterion.merge_sha &&
-            fact.receipt.merge_sha === criterion.merge_sha)
-      );
-    }
-    // A standalone external gate cannot be satisfied by an atom status report.
-    return false;
+    const prRef = stable(criterion.pr_ref);
+    const fact = ledger.facts
+      .filter((item) => item.kind === criterion.kind && stable(item.receipt?.pr) === prRef)
+      .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
+      .at(-1);
+    return (
+      fact?.status === "passed" &&
+      (criterion.kind === "pr_published"
+        ? fact.receipt?.state === "open" || fact.receipt?.state === "merged"
+        : fact.receipt?.state === "merged" &&
+          fact.sha === criterion.merge_sha &&
+          fact.receipt.merge_sha === criterion.merge_sha)
+    );
   }
   function edgeSatisfied(edge: AtomicEdge): boolean {
     return (
