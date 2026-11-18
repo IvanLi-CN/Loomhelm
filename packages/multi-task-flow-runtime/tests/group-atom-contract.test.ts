@@ -74,9 +74,10 @@ for (const contamination of ["clean", "binding", "atom", "coordination", "lifecy
     const roleOrder = new Map([
       ["prepare-parent", 0],
       ["prepare-branch", 0],
-      ["create-pr", 1],
-      ["merge-pr", 2],
-      ["closeout", 3],
+      ["integrate", 1],
+      ["create-pr", 2],
+      ["merge-pr", 3],
+      ["closeout", 4],
     ]);
     proposed.atoms = proposed.atoms.map(withExplicitRole);
     proposed.group_atoms = proposed.group_atoms.map(withExplicitRole);

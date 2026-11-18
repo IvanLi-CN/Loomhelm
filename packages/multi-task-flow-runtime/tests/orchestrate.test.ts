@@ -129,6 +129,7 @@ describe("orchestrate init", () => {
     expect(result.exitCode).toBe(0);
     expect(planAtoms.map((atom: any) => atom.lifecycle_stage)).toEqual([
       "workspace_ready",
+      null,
       "pr_created",
       "pr_merged",
       "closed",
@@ -161,6 +162,7 @@ describe("orchestrate init", () => {
 
     expect(runtimeAtoms.map((atom: any) => atom.lifecycle_stage)).toEqual([
       "workspace_ready",
+      null,
       "pr_created",
       "pr_merged",
       "closed",

@@ -3,6 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createDemoLedger } from "../examples/orchestration-viewer/ledger";
+import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import { apply } from "../lib/engine";
 import {
   deliverClaimedNotification,
@@ -33,11 +34,23 @@ function fixture(current = false) {
   const store = new LedgerStore(root, ledger.orchestration_id);
   if (current) {
     for (const plan of ledger.plans) {
+      const groupIds = [...new Set(plan.group_atoms.map((atom) => atom.group_id))];
+      const lifecycleEdges = groupIds.flatMap((groupId) => {
+        const atoms = plan.group_atoms.filter((atom) => atom.group_id === groupId);
+        return atoms.slice(1).map((atom, index) => ({
+          id: `fixture-${groupId}-lifecycle-${index}`,
+          from_atom_id: atoms[index]!.id,
+          to_atom_id: atom.id,
+        }));
+      });
+      Object.assign(
+        plan,
+        canonicalizeContract3Plan({ ...plan, atomic_edges: lifecycleEdges }, ledger.tasks),
+      );
       plan.group_atoms = plan.group_atoms.map(({ lifecycle_stage: _stage, ...atom }) => ({
         ...atom,
         lifecycle_stage: null,
       }));
-      plan.atomic_edges = [];
     }
     for (const group of ledger.groups)
       group.atoms = group.atoms.map(({ lifecycle_stage: _stage, ...atom }) => ({
