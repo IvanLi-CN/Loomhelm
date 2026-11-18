@@ -1,4 +1,5 @@
 import { REVIEW_NECESSITY_TIERS, isRecord, stableHash } from "./common";
+import { assertReviewWaveTopology } from "./review-wave-identity";
 
 export function reviewTier(ledger: Record<string, unknown>): number | null {
   if (typeof ledger.flow_type !== "string") return null;
@@ -41,6 +42,11 @@ export function isCurrentClearWave(
   )
     return false;
   if (!isRecord(wave.lanes)) return false;
+  try {
+    assertReviewWaveTopology(wave);
+  } catch {
+    return false;
+  }
   const names = new Set(Object.keys(wave.lanes));
   const fixed = [...FIXED_REVIEW_LANES].every((name) => names.has(name));
   const dynamic = [...names].filter((name) => !FIXED_REVIEW_LANES.has(name));

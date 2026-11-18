@@ -5,6 +5,7 @@ import { canonicalList, deriveReviewSynthesis } from "./review-wave-utils";
 import { assertReviewReceiptIntegrity } from "./review-receipt-integrity";
 import { validateReviewSynthesisAcceptance } from "./review-synthesis";
 import { activeWave, reviewState } from "./review-wave-support";
+import { assertReviewWaveTopology } from "./review-wave-identity";
 
 export function finalizeReviewWaveState(
   ledger: Record<string, unknown>,
@@ -15,6 +16,7 @@ export function finalizeReviewWaveState(
   const wave = activeWave(ledger, waveId);
   if (wave.state !== "open" || !isRecord(wave.lanes))
     throw new FlowError("review wave is not open");
+  assertReviewWaveTopology(wave);
   const receipts = Array.isArray(ledger.receipts)
     ? (ledger.receipts as Record<string, unknown>[])
     : [];

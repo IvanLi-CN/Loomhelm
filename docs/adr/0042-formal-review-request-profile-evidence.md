@@ -23,3 +23,5 @@ Review result 不能可靠证明 provider 最终使用的 model/effort。现有 
 Schema 7 新增请求与结果证据分离字段；schema 6 历史记录保持只读兼容，新候选不能使用旧自报字段满足 clear。
 
 Schema 7 receipt 同时绑定 review scope 和 parent attempt identity；历史 wave 的退休要求所有 lane 形状与绑定 receipt 都完整合法，不能因单个 lane 的旧 receipt 而放行混合损坏状态。
+
+Schema 7 completed 与 unavailable receipt 均要求父流程提供非空 attempt ID；wave 保存 required lane topology，并以 scope、lane specs 和 generation 重算 wave identity。缺失 required lane、成对 scope 篡改、pending/null pointer 或 schema 7 mixed pointer 均保持阻塞，只有完整合法的 schema 6 历史 wave 才能退休并生成 fresh wave。

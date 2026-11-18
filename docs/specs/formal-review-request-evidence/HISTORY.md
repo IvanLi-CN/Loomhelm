@@ -15,3 +15,5 @@ Schema 7 的 unavailable attempt 使用父流程 `review-attempt-id` 作为幂�
 Repair Batch 补充了父流程 formal pair 的 record/integrity 双重校验，以及同候选 legacy recovery 的 fresh wave identity；旧 receipt 和 retired wave 保持历史只读，不会被 fresh wave 覆盖或复用。
 
 后续完整性收紧补充 scope 与 attempt identity 绑定，并拒绝带有任一 malformed lane profile 的 mixed legacy wave；单一合法 schema 6 receipt 不再足以退休损坏的 active wave。
+
+当前实现进一步要求 completed receipt 也必须有父流程 attempt ID，绑定并重算 required lane topology 与 wave scope identity，并通过 CLI replay、缺失 lane、成对 scope 篡改和 mixed schema 7 恢复测试固定失败边界。

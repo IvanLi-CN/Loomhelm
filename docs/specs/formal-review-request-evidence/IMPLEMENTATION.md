@@ -13,3 +13,5 @@ Schema 6 active wave 的恢复按保守条件执行：只有缺少 `requested_pr
 正式请求 pair 在 record 和 receipt integrity 两条路径独立复核；即使同时篡改持久化 lane 的 `model`、`effort` 和 `requested_profile`，非 `gpt-6-luna + max` 也不能写入或验收 schema 7 receipt。Legacy recovery 在保留 epoch 的情况下对已存在的 wave ID 使用 fresh generation hash，避免覆盖 retired wave、重复 epoch 历史或复用 schema 6 receipt。
 
 Schema 7 receipt 记录 `scope_class`，wave identity 纳入 scope，完整性校验同时绑定 scope 和 parent `attempt_key`；completed receipt 的 identity 重算包含 attempt，unavailable attempt 保持独立幂等。Legacy retirement 要求所有 lane 都没有 `requested_profile` 且各自状态合法，不能由单一 schema 6 receipt 放过混合 malformed wave。
+
+新的 schema 7 completed/unavailable receipt 都必须由父流程提供非空 attempt ID；wave 持久化 required lane topology，并在 finalize、clear 和 receipt integrity 路径重新计算 wave identity，因而成对篡改 scope 或删除 required lane 都会阻塞。Legacy recovery 对 pending/null receipt pointer、schema 7 mixed pointer 和不完整 topology 采取 fail-closed，只有全量合法 schema 6 completed pointer 才能退休旧 wave。

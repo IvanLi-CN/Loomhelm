@@ -12,6 +12,7 @@ import {
   validateReviewFindingLocations,
 } from "./review-result";
 import { isFormalReviewRequestProfile } from "./review-profile-policy";
+import { assertReviewWaveTopology } from "./review-wave-identity";
 
 export interface SubagentReviewOptions {
   reviewProfile: string;
@@ -49,6 +50,7 @@ export function recordSubagentReviewState(
   const waves = isRecord(review.waves) ? review.waves : {};
   const wave = waveId && isRecord(waves[waveId]) ? waves[waveId] : undefined;
   if (!wave) throw new FlowError(`review wave does not exist: ${waveId}`);
+  assertReviewWaveTopology(wave);
   const lane = options.lane ?? "";
   if (!isRecord(wave.lanes) || !isRecord(wave.lanes[lane]))
     throw new FlowError(`review lane does not exist: ${lane}`);
@@ -105,11 +107,12 @@ export function recordSubagentReviewState(
   const parsed = parseReviewResultJson(options.reviewResultJson);
   if (repoPath)
     validateReviewFindingLocations(parsed.result, repoPath, baseSha, headSha);
-  const attemptKey = reviewAttemptKey(options);
+  const attemptKey = reviewAttemptKey(options, true);
   const receiptId = stableHash([
     ledger.run_id,
     "sub-agent-review",
     waveProofKey,
+    scopeClass,
     parsed.resultSha256,
     attemptKey,
   ]);
@@ -284,7 +287,7 @@ function reviewAttemptKey(
   if (options.reviewAttemptId === undefined) {
     if (required)
       throw new FlowError(
-        "unavailable sub-agent review requires a parent-supplied review attempt id",
+        "sub-agent review requires a parent-supplied review attempt id",
       );
     return "default";
   }

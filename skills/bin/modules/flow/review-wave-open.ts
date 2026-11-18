@@ -1,4 +1,6 @@
 import {
+  DYNAMIC_REVIEW_LANES,
+  FIXED_REVIEW_LANES,
   FlowError,
   REVIEW_SCOPE_CLASSES,
   isoNow,
@@ -10,6 +12,7 @@ import { validateLaneSpecs } from "./review";
 import { sortedStrings } from "./review-wave-utils";
 import { prepareReviewWaveState } from "./review-open-guards";
 import { reviewState } from "./review-wave-support";
+import { reviewWaveIdentity } from "./review-wave-identity";
 
 export function openReviewWaveState(
   ledger: Record<string, unknown>,
@@ -111,24 +114,29 @@ export function openReviewWaveState(
   if (!Array.isArray(epoch.waves)) epoch.waves = [];
   if (!Array.isArray(epoch.permits)) epoch.permits = [];
   const waves = isRecord(review.waves) ? review.waves : {};
-  const waveIdSeed = [
-    ledger.run_id,
-    epoch.epoch_id,
+  let waveGeneration = 0;
+  let waveId = reviewWaveIdentity(
+    String(ledger.run_id),
+    String(epoch.epoch_id),
     options.stage,
     options.headSha,
     options.baseSha,
     scopeClass,
     options.laneSpecs,
-  ];
-  let waveGeneration = 0;
-  let waveId = stableHash(waveIdSeed).slice(0, 20);
+    waveGeneration,
+  );
   while (Object.hasOwn(waves, waveId)) {
     waveGeneration += 1;
-    waveId = stableHash([
-      ...waveIdSeed,
-      "fresh-wave-generation",
+    waveId = reviewWaveIdentity(
+      String(ledger.run_id),
+      String(epoch.epoch_id),
+      options.stage,
+      options.headSha,
+      options.baseSha,
+      scopeClass,
+      options.laneSpecs,
       waveGeneration,
-    ]).slice(0, 20);
+    );
   }
   const lanes = Object.fromEntries(
     options.laneSpecs.map((lane) => [
@@ -157,6 +165,7 @@ export function openReviewWaveState(
       ? stableHash(normalizeAcceptanceManifest(ledger.acceptance_manifest))
       : null,
     lanes,
+    required_lane_names: options.laneSpecs.map(({ lane }) => lane).sort(),
     blockers: [],
     blocker_fingerprints: [],
     scope_class: scopeClass,
@@ -194,24 +203,13 @@ function isLegacyReviewWave(
     ledger.legacy_compatibility === true && ledger.legacy_schema_version === 6;
   const lanes = Object.entries(wave.lanes);
   if (!lanes.length) return false;
-  const hasSchemaSixReceipt = lanes.some(([laneName, rawLane]) => {
-    if (!isRecord(rawLane) || typeof rawLane.receipt_id !== "string")
-      return false;
-    const receipt = receipts.find(
-      (candidate) =>
-        isRecord(candidate) && candidate.receipt_id === rawLane.receipt_id,
-    );
-    return (
-      isRecord(receipt) &&
-      receipt.review_receipt_schema === 6 &&
-      receiptBindsToWave(receipt, wave, laneName)
-    );
-  });
   const legacyLaneShape = lanes.every(
     ([, rawLane]) =>
       isRecord(rawLane) && !Object.hasOwn(rawLane, "requested_profile"),
   );
   if (!legacyLaneShape) return false;
+  if (!legacyLaneTopologyMatches(ledger, wave, lanes.map(([lane]) => lane)))
+    return false;
   for (const [laneName, rawLane] of lanes) {
     if (
       !isRecord(rawLane) ||
@@ -221,19 +219,57 @@ function isLegacyReviewWave(
       !rawLane.effort.trim()
     )
       return false;
-    if (rawLane.receipt_id !== null && typeof rawLane.receipt_id !== "string")
+    if (typeof rawLane.receipt_id !== "string") return false;
+    const receipt = receipts.find(
+      (candidate) =>
+        isRecord(candidate) && candidate.receipt_id === rawLane.receipt_id,
+    );
+    if (
+      !isRecord(receipt) ||
+      receipt.review_receipt_schema !== 6 ||
+      receipt.terminal_state !== "completed" ||
+      receipt.evidence_valid !== true ||
+      receipt.post_execution_clean !== true ||
+      receipt.exit_code !== 0 ||
+      !receiptBindsToWave(receipt, wave, laneName)
+    )
       return false;
-    if (typeof rawLane.receipt_id === "string") {
-      const receipt = receipts.find(
-        (candidate) =>
-          isRecord(candidate) && candidate.receipt_id === rawLane.receipt_id,
-      );
-      if (!isRecord(receipt) || !receiptBindsToWave(receipt, wave, laneName))
-        return false;
-      if (![6, 7].includes(Number(receipt.review_receipt_schema))) return false;
-    }
   }
-  return hasSchemaSixReceipt || (migratedSchemaSix && legacyLaneShape);
+  return migratedSchemaSix;
+}
+
+function legacyLaneTopologyMatches(
+  ledger: Record<string, unknown>,
+  wave: Record<string, unknown>,
+  laneNames: string[],
+): boolean {
+  if (Object.hasOwn(wave, "required_lane_names")) {
+    if (!Array.isArray(wave.required_lane_names)) return false;
+    const required = wave.required_lane_names;
+    if (
+      required.some((lane) => typeof lane !== "string") ||
+      new Set(required).size !== required.length ||
+      JSON.stringify([...required].sort()) !==
+        JSON.stringify([...laneNames].sort())
+    )
+      return false;
+    return true;
+  }
+  const assessment = isRecord(ledger.review_assessment)
+    ? ledger.review_assessment
+    : undefined;
+  const tier = assessment?.tier;
+  if (wave.stage === "risk-arbitration")
+    return laneNames.length === 1 && laneNames[0] === "risk-arbitration";
+  const names = new Set(laneNames);
+  const fixed = [...FIXED_REVIEW_LANES].every((lane) => names.has(lane));
+  const dynamic = laneNames.filter((lane) => !FIXED_REVIEW_LANES.has(lane));
+  return (
+    fixed &&
+    dynamic.length <= 2 &&
+    dynamic.every((lane) => DYNAMIC_REVIEW_LANES.has(lane)) &&
+    (tier === 3 ? dynamic.length === 0 : tier === 4 && dynamic.length >= 1)
+  );
 }
 
 function receiptBindsToWave(

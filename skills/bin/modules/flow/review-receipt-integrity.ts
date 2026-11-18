@@ -11,6 +11,7 @@ import {
   validateReviewFindingLocations,
 } from "./review-result";
 import { isFormalReviewRequestProfile } from "./review-profile-policy";
+import { assertReviewWaveIdentity } from "./review-wave-identity";
 
 export function assertReviewReceiptIntegrity(
   ledger: Record<string, unknown>,
@@ -23,6 +24,7 @@ export function assertReviewReceiptIntegrity(
   const review = isRecord(ledger.review) ? ledger.review : undefined;
   const waves = review && isRecord(review.waves) ? review.waves : undefined;
   const wave = waves && isRecord(waves[waveId]) ? waves[waveId] : undefined;
+  if (wave) assertReviewWaveIdentity(ledger, wave, waveId);
   if (
     !wave ||
     receipt.kind !== "review" ||
@@ -114,6 +116,7 @@ export function assertReviewReceiptIntegrity(
     ledger.run_id,
     "sub-agent-review",
     receipt.wave_proof_key,
+    receipt.scope_class,
     receipt.review_result_sha256,
     receipt.attempt_key,
   ]);
