@@ -536,20 +536,26 @@ describe("acceptance and review state", () => {
     });
     expect(contractReceipt).not.toHaveProperty("reported_profile");
     if (!contractReceipt) throw new Error("contract receipt is missing");
-    contractReceipt.reported_profile = {
-      model: "reviewer-claim",
-      effort: "reviewer-claim",
-    };
-    expect(() =>
-      finalizeReviewWaveState(ledger, String(wave.wave_id), {
-        groups: [],
-        invariants: ["all lanes covered"],
-        coverage: lanes.map(({ lane }) => lane),
-        conflicts: [],
-        acceptance: [],
-      }),
-    ).toThrow("review receipt must not contain reviewer profile claims");
-    delete contractReceipt.reported_profile;
+    for (const claim of ["reported_profile", "effective_model"]) {
+      contractReceipt[claim] = {
+        model: "reviewer-claim",
+        effort: "reviewer-claim",
+      };
+      expect(() =>
+        finalizeReviewWaveState(ledger, String(wave.wave_id), {
+          groups: [],
+          invariants: ["all lanes covered"],
+          coverage: lanes.map(({ lane }) => lane),
+          conflicts: [],
+          acceptance: [],
+        }),
+      ).toThrow(
+        claim === "reported_profile"
+          ? "review receipt must not contain reviewer profile claims"
+          : "review receipt contains unsupported fields",
+      );
+      delete contractReceipt[claim];
+    }
     const finalized = finalizeReviewWaveState(ledger, String(wave.wave_id), {
       groups: [],
       invariants: ["all lanes covered"],
@@ -706,6 +712,32 @@ describe("acceptance and review state", () => {
         acceptance: [],
       }),
     ).toThrow("review receipt integrity is invalid");
+
+    expect(() =>
+      openReviewWaveState(normalized, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+
+    const upgraded = structuredClone(normalized) as Record<string, unknown>;
+    delete upgraded.legacy_compatibility;
+    delete upgraded.legacy_schema_version;
+    const upgradedNormalized = normalizeLedger(upgraded);
+    const upgradedFresh = openReviewWaveState(upgradedNormalized, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: "c".repeat(40),
+      laneSpecs: lanes,
+    });
+    expect(upgradedFresh.next).toBe("record-review");
+    expect(
+      (
+        upgradedNormalized.review as Record<string, unknown>
+      ).active_wave_id,
+    ).toBe((upgradedFresh.wave as Record<string, unknown>).wave_id);
 
     const freshHead = "b".repeat(40);
     const partial = structuredClone(normalized) as Record<string, unknown>;

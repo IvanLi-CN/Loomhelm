@@ -59,6 +59,11 @@ export function openReviewWaveState(
       : undefined;
     if (!active || !isLegacyReviewWave(ledger, active))
       throw new FlowError("another review wave is already active");
+    if (
+      active.head_sha === options.headSha &&
+      active.base_sha === options.baseSha
+    )
+      throw new FlowError("another review wave is already active");
     active.state = "retired";
     active.retirement_reason = "legacy-review-receipt-schema";
     active.retired_at = isoNow();
@@ -184,12 +189,7 @@ function isLegacyReviewWave(
   ledger: Record<string, unknown>,
   wave: Record<string, unknown>,
 ): boolean {
-  if (
-    ledger.legacy_compatibility !== true ||
-    ledger.legacy_schema_version !== 6 ||
-    !isRecord(wave.lanes)
-  )
-    return false;
+  if (!isRecord(wave.lanes)) return false;
   const lanes = Object.entries(wave.lanes);
   if (!lanes.length || !legacyLaneTopologyMatches(ledger, wave, lanes))
     return false;

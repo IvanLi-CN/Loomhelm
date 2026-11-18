@@ -13,6 +13,40 @@ import {
 import { isFormalReviewRequestProfile } from "./review-profile-policy";
 import { reviewWaveScopeBindingMatches } from "./review-wave-support";
 
+const CURRENT_REVIEW_RECEIPT_KEYS = new Set([
+  "receipt_id",
+  "kind",
+  "review_receipt_schema",
+  "proof_key",
+  "wave_proof_key",
+  "head_sha",
+  "base_sha",
+  "review_profile",
+  "attempt_key",
+  "scope_class",
+  "requested_profile",
+  "profile_verification",
+  "effective_profile",
+  "review_execution_source",
+  "provenance_boundary",
+  "evidence_source",
+  "terminal_state",
+  "wave_id",
+  "lane",
+  "finding_fingerprints",
+  "review_result",
+  "review_result_sha256",
+  "review_findings",
+  "review_clear",
+  "overall_correctness",
+  "overall_explanation",
+  "evidence_valid",
+  "post_execution_clean",
+  "exit_code",
+  "unavailability_classification",
+  "recorded_at",
+]);
+
 export function assertReviewReceiptIntegrity(
   ledger: Record<string, unknown>,
   waveId: string,
@@ -58,6 +92,10 @@ export function assertReviewReceiptIntegrity(
     ].some((key) => Object.hasOwn(receipt, key))
   )
     throw new FlowError("review receipt must not contain reviewer profile claims");
+  if (
+    Object.keys(receipt).some((key) => !CURRENT_REVIEW_RECEIPT_KEYS.has(key))
+  )
+    throw new FlowError("review receipt contains unsupported fields");
   const expectedProfile =
     wave.stage === "risk-arbitration"
       ? "risk-arbitration"
