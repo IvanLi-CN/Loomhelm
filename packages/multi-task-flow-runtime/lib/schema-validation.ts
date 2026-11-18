@@ -350,18 +350,28 @@ export function validateLedger(value: unknown): Ledger {
     const expected = configured.length
       ? configured.map(({ group_id, ...atom }) => atom)
       : (snapshot?.atoms.map(({ status, ...atom }) => atom) ?? []);
+    const actual = owner.atoms.map(({ status, ...atom }) => atom);
+    if (parsed.contract_version >= 6) {
+      expected.sort((a, b) => a.id.localeCompare(b.id));
+      actual.sort((a, b) => a.id.localeCompare(b.id));
+    }
     requireCondition(
-      canonicalJson(expected) === canonicalJson(owner.atoms.map(({ status, ...atom }) => atom)),
+      canonicalJson(expected) === canonicalJson(actual),
       "GROUP_ATOM_MISMATCH",
-      "Delivery-unit atoms must match their plan or verified cut configuration in serial order",
+      "Delivery-unit atoms must match their plan or verified cut configuration",
     );
   }
   for (const task of parsed.tasks) {
     const expected = active.atoms.filter((atom) => atom.task_id === task.id).map((atom) => atom.id);
+    const actual = task.atoms.map((atom) => atom.id);
+    if (parsed.contract_version >= 6) {
+      expected.sort();
+      actual.sort();
+    }
     requireCondition(
-      JSON.stringify(expected) === JSON.stringify(task.atoms.map((atom) => atom.id)),
+      JSON.stringify(expected) === JSON.stringify(actual),
       "ATOM_MISMATCH",
-      "Task atoms must match the active plan in serial order",
+      "Task atoms must match the active plan",
     );
   }
   for (const target of [

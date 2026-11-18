@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { taskDispatchEligibility } from "../lib/dispatch-eligibility";
 import { apply } from "../lib/engine";
 import { notification } from "../lib/schema";
 import { modernFixture, request } from "./role-flow-fixtures";
@@ -34,20 +35,22 @@ function fixture(status: "pending" | "failed" | "sent" | "unknown") {
   return ledger;
 }
 for (const status of ["pending", "failed", "sent", "unknown"] as const) {
-  test(`dispatch rejects ${status} task-ready notification without recipient acknowledgement`, () => {
+  test(`dispatch is independent of a ${status} ready notification`, () => {
     const ledger = fixture(status);
-    const before = JSON.stringify(ledger);
-    expect(() =>
+    expect(
+      taskDispatchEligibility(ledger, ledger.tasks.find((t) => t.id === "task-a")!).allowed,
+    ).toBe(true);
+    expect(
       apply(
         ledger,
         "dispatch-claim",
         request(ledger, "claim", { task_id: "task-a", operation_id: "dispatch" }),
       ),
-    ).toThrow("requires recipient acknowledgement");
-    expect(JSON.stringify(ledger)).toBe(before);
+    ).toMatchObject({ code: "APPLIED" });
+    expect(ledger.notifications.find((n) => n.id === "ready-notice")?.delivery_status).toBe(status);
   });
 }
-test("only the current ready generation and owner acknowledgement release dispatch", () => {
+test("only the recipient can acknowledge, even when acknowledgement is optional", () => {
   const ledger = fixture("sent");
   expect(() =>
     apply(
@@ -68,13 +71,13 @@ test("only the current ready generation and owner acknowledgement release dispat
   );
   const stale = structuredClone(ledger);
   stale.events.push({ ...stale.events.find((e) => e.id === "ready")!, id: "ready-new" });
-  expect(() =>
+  expect(
     apply(
       stale,
       "dispatch-claim",
       request(stale, "claim", { task_id: "task-a", operation_id: "dispatch" }),
     ),
-  ).toThrow("requires recipient acknowledgement");
+  ).toMatchObject({ code: "APPLIED" });
   expect(
     apply(
       ledger,
@@ -82,4 +85,25 @@ test("only the current ready generation and owner acknowledgement release dispat
       request(ledger, "claim", { task_id: "task-a", operation_id: "dispatch" }),
     ),
   ).toMatchObject({ code: "APPLIED" });
+});
+
+test("a pending claim uses capacity without blocking an unrelated task", () => {
+  const ledger = fixture("unknown");
+  const a = ledger.tasks.find((task) => task.id === "task-a")!;
+  const b = () => ledger.tasks.find((task) => task.id === "task-b")!;
+  ledger.config.max_running_tasks = 1;
+  apply(
+    ledger,
+    "dispatch-claim",
+    request(ledger, "first", { task_id: a.id, operation_id: "op-a" }),
+  );
+  expect(
+    taskDispatchEligibility(ledger, ledger.tasks.find((task) => task.id === a.id)!),
+  ).toMatchObject({ allowed: false, blocker: { code: "OPERATION_PENDING" } });
+  expect(taskDispatchEligibility(ledger, b())).toMatchObject({
+    allowed: false,
+    blocker: { code: "CAPACITY" },
+  });
+  ledger.config.max_running_tasks = 2;
+  expect(taskDispatchEligibility(ledger, b()).allowed).toBe(true);
 });

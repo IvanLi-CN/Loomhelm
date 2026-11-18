@@ -299,13 +299,26 @@ export function executeCloseoutCommand(context: CommandContext): unknown | undef
         "Group tasks are incomplete",
         4,
       );
+      const closeout =
+        ledger.contract_version >= 6
+          ? owner.atoms.find((atom) => lifecycleStageOf(atom) === "closed")
+          : owner.atoms.at(-1);
       requireCondition(
-        owner.atoms.slice(0, -1).every((atom) => atom.status === "completed"),
+        (ledger.contract_version >= 6
+          ? owner.atoms.filter((atom) => atom !== closeout)
+          : owner.atoms.slice(0, -1)
+        ).every((atom) => atom.status === "completed"),
         "ATOMS_PENDING",
         "Delivery-unit atoms are incomplete",
         4,
       );
-      const closeout = owner.atoms.at(-1);
+      if (ledger.contract_version >= 6 && closeout)
+        requireCondition(
+          core.atomicPredecessorsPending(ledger, executionPlan(ledger), closeout.id).length === 0,
+          "ATOMS_PENDING",
+          "Delivery-unit closeout predecessors are incomplete",
+          4,
+        );
       requireCondition(
         lifecycleStageOf(closeout ?? {}) !== "closed"
           ? owner.atoms.every((atom) => atom.status === "completed")

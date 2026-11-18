@@ -21,6 +21,7 @@ import {
   validatePlan,
   validateTaskExecutionPolicies,
 } from "../lib/schema";
+import { requireTaskDispatch } from "./dispatch-eligibility";
 import type { CommandContext } from "./engine-command-context";
 import * as core from "./engine-support-core";
 import * as support from "./engine-support-gates";
@@ -592,140 +593,8 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
     }
     case "dispatch-claim": {
       onlyMain(request.actor);
-      authorizedAction(ledger, "dispatch");
-      ensureSchedulable(ledger, approved(ledger));
       const target = find(ledger.tasks, (item) => item.id === string(payload.task_id), "Task");
-      requireCondition(
-        !core.isDeliveryVerification(target),
-        "DELIVERY_VERIFICATION_DISPATCH",
-        "A delivery verification must use its bound delivery agent, not a task conversation",
-        3,
-      );
-      requireCondition(
-        target.disposition === "active",
-        "TASK_NOT_ACTIVE",
-        "Task is no longer an active responsibility",
-        3,
-      );
-      requireCondition(
-        ["planned", "ready"].includes(target.state) && !target.thread_id,
-        "NOT_DISPATCHABLE",
-        "Task already started or bound",
-        4,
-      );
-      const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
-      requireCondition(
-        !isSharedDeliveryTask(ledger, target),
-        "SHARED_DELIVERY_UNIT_DISPATCH",
-        "A single-contribution delivery unit is dispatched through its delivery-unit conversation; do not create a task conversation",
-        3,
-        {
-          recovery: ["dispatch-group-claim", "dispatch-resolve", "task-update"],
-        },
-      );
-      requireCondition(
-        groupOwnerThread(ledger, owner),
-        "GROUP_NOT_READY",
-        "Task group is not bound",
-        4,
-      );
-      const mergedContinuation = isMergedContributionContinuation(ledger, owner, target);
-      if (["release", "deployment", "verification"].includes(target.kind)) {
-        requireCondition(
-          owner.state === "merged" && owner.merge_sha,
-          "GROUP_NOT_MERGED",
-          "Post-merge task must wait for its parent PR",
-          4,
-        );
-      } else {
-        requireCondition(
-          owner.state === "active" || mergedContinuation,
-          "GROUP_NOT_READY",
-          "Task group is not active or approved for a post-merge continuation",
-          4,
-        );
-      }
-      if (isContributionKind(target.kind)) {
-        requireContributionDispatchGate(ledger, owner, true, "dispatch-claim", mergedContinuation);
-        requireCondition(
-          owner.parent_branch && target.base_sha && owner.current_sha === target.base_sha,
-          "BASE_NOT_READY",
-          "Contribution task requires the current delivery-unit base",
-          4,
-        );
-        requireCondition(
-          legacyLedger(ledger) ||
-            (owner.lifecycle.workspace_ready === "passed" &&
-              branchReceipt(ledger, owner.id, owner.parent_branch, owner.current_sha)),
-          "BRANCH_NOT_PUBLISHED",
-          "Contribution dispatch requires a provider-published delivery-unit branch",
-          4,
-        );
-      }
-      const pendingRevision = activePlan(ledger);
-      requireCondition(
-        !(
-          pendingRevision.id !== ledger.execution_plan_id &&
-          pendingRevision.lifecycle === "proposed" &&
-          pendingRevision.revision?.paused_task_ids.includes(target.id)
-        ),
-        "PLAN_REVISION_HOLD",
-        "Task is paused by a pending high-impact plan revision",
-        4,
-      );
-      requireCondition(
-        ready(ledger, target.id),
-        "DEPENDENCIES_PENDING",
-        "Task dependencies are not satisfied",
-        4,
-      );
-      requireCondition(
-        !ledger.operations.some(
-          (item) =>
-            item.kind === "dispatch" && item.target_id === target.id && activeOperation(item),
-        ),
-        "OPERATION_PENDING",
-        "Task already has a dispatch claim",
-        4,
-      );
-      if (ledger.contract_version >= 3) {
-        const readyEvent = ledger.events.findLast(
-          (event) =>
-            event.type === "task_ready" &&
-            Array.isArray(event.data.task_ids) &&
-            event.data.task_ids.includes(target.id),
-        );
-        // Initially ready tasks may be discovered directly by the coordinator.
-        // Once a readiness transition emits an intent, only its recipient can release it.
-        if (readyEvent)
-          requireCondition(
-            ledger.notifications.some(
-              (notice) =>
-                notice.event_id === readyEvent.id &&
-                notice.recipient_thread_id === ledger.control.owner_thread_id &&
-                notice.ledger_status === "committed" &&
-                notice.delivery_status === "sent" &&
-                notice.status === "acknowledged" &&
-                notice.ack_status === "acknowledged",
-            ),
-            "READINESS_ACK_REQUIRED",
-            "The latest task-ready notification requires recipient acknowledgement before dispatch",
-            4,
-          );
-      }
-      const running = ledger.tasks.filter((item) =>
-        ["starting", "running", "agent_idle"].includes(item.state),
-      ).length;
-      const pending = ledger.operations.filter(
-        (item) =>
-          item.kind === "dispatch" && item.request.target_type !== "group" && activeOperation(item),
-      ).length;
-      requireCondition(
-        running + pending < ledger.config.max_running_tasks,
-        "CAPACITY",
-        "No execution slot available",
-        4,
-      );
+      requireTaskDispatch(ledger, target);
       const op = addOperation(ledger, request, "dispatch", target.id, null);
       op.request.execution_profile = effectiveProfile(ledger, target);
       addEvent(ledger, request, "dispatch_claimed", target.id, {

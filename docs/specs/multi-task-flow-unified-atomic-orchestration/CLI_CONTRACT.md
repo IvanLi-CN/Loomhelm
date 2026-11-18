@@ -58,7 +58,13 @@ TTY 默认由 JSON 改为 human 是可观察兼容性变化；机器消费者应
 
 ## Machine-readable surfaces
 
-registry 当前包含 66 个精确命令；`multi-task-flow flow --help` 输出调用形式和安全边界；`multi-task-flow flow <command> --help` 输出该命令的用途、参数和示例，完整 request/response schema 由专用 schema 命令提供；`multi-task-flow flow schema --format json` 输出符合 JSON Schema Draft 2020-12 的完整 command registry。`dispatch-bind-request` 与 `dispatch-resolve` 是 Contract 3 的内部 CLI-only 命令，直接调用会返回 `CLI_ONLY_DISPATCH`。
+在当前合同中，`task-update` 可直接更正等待或阻塞状态，首次进入运行时的 `occurred_at` 可省略。任务上下文和仪表板提供 `dispatch_eligibility`，单独说明是否可领取任务对话派发以及当前阻塞原因；就绪通知回执不影响领取资格。
+
+`lifecycle-record workspace_ready` 可同时提供 `baseline` 和 `baseline_sync`；后者包含 `mode`、`dispatch_operation_id`、`expected_previous_baseline`、`expected_lineage_sha` 和 `lineage_event_id`。命令复用基线同步校验，只接受事先登记的资源，并在一次提交中完成准备原子和生命周期。原分步命令仍可用。
+
+`merge-observe` 由目标负责人提交已登记 PR 的 provider 合并回执；可用 `supersedes` 修正同一 PR 的上一条有效观测。结果提示使用既有操作对账或说明未认领、冲突。观测不会追加成功事实、推进 SHA 或满足依赖。
+
+registry 当前包含 67 个精确命令；`multi-task-flow flow --help` 输出调用形式和安全边界；`multi-task-flow flow <command> --help` 输出该命令的用途、参数和示例，完整 request/response schema 由专用 schema 命令提供；`multi-task-flow flow schema --format json` 输出符合 JSON Schema Draft 2020-12 的完整 command registry。`dispatch-bind-request` 与 `dispatch-resolve` 是 Contract 3 的内部 CLI-only 命令，直接调用会返回 `CLI_ONLY_DISPATCH`。
 
 每个 registry command 都包含 `request`、`response.success` 和 `response.error`；request 明确定义 envelope 与 payload 字段，success 明确定义 `{ ok, code, revision, result }`，error 明确定义 `{ ok, code, revision, message, details }`。registry 的 `$defs` 来自 `flow-domain-schemas.json`，其中 `plan`、`group`、`task`、`ledger`、`execution_profile`、`baseline_receipt`、`notification`、`fact`、`resource`、`atomic_node` 和 `atomic_edge` 由 runtime 的 Zod schema 生成 JSON Schema；provider receipt 按 runtime 的严格字段定义，其他外部事实保留 runtime 明确允许的开放对象边界。
 

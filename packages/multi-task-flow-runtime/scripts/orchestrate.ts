@@ -19,7 +19,7 @@ import {
 import { CONTRACT_VERSION, versionEnvelope } from "../lib/contract";
 import { sweepConversationArchives } from "../lib/conversation-archive";
 import { desktopHandoff } from "../lib/desktop-handoff";
-import { actorSchema, apply, authorize, ready, requestSchema } from "../lib/engine";
+import { actorSchema, apply, authorize, requestSchema } from "../lib/engine";
 import { ContractError } from "../lib/errors";
 import {
   effectiveProfile,
@@ -58,6 +58,7 @@ import {
 import { checkViewerCompatibility, renewViewerUsage } from "../lib/service-usage";
 import { defaultRoot, LedgerStore, safeId } from "../lib/store";
 import { migrationCanonicalInput } from "../lib/store-migration";
+import { taskContext } from "../lib/task-context";
 import { buildView } from "../lib/view";
 
 const initialRequest = z
@@ -844,23 +845,6 @@ try {
           "Task context is limited to the bound task conversation",
           3,
         );
-      const contextPlan = ledger.plans.find((item) => item.id === ledger.execution_plan_id);
-      const contextNode = contextPlan?.nodes.find(
-        (item) => item.kind === "task" && item.ref_id === parsed.task_id,
-      );
-      const contextEdges =
-        contextPlan?.edges.filter(
-          (edge) => edge.from_node_id === contextNode?.id || edge.to_node_id === contextNode?.id,
-        ) ?? [];
-      const contextAtomicNodes = (contextPlan?.atomic_nodes ?? ledger.atomic_nodes).filter(
-        (node) =>
-          (node.kind === "work" &&
-            node.scope?.kind === "task" &&
-            node.scope.task_id === parsed.task_id) ||
-          (node.kind === "milestone" &&
-            node.scope?.kind === "task" &&
-            node.scope.task_id === parsed.task_id),
-      );
       const sections = {
         summary: {
           orchestration_id: ledger.orchestration_id,
@@ -871,29 +855,7 @@ try {
         tasks: ledger.tasks,
         operations: ledger.operations,
         notifications: ledger.notifications,
-        "task-context": {
-          task: contextTask,
-          delivery_unit: contextTask
-            ? ledger.groups.find((item) => item.id === contextTask.group_id)
-            : null,
-          plan_node: contextNode ?? null,
-          dependency_edges: contextEdges,
-          atomic_nodes: contextAtomicNodes,
-          atomic_edges: (contextPlan?.atomic_edges ?? ledger.atomic_edges).filter((edge) =>
-            contextAtomicNodes.some(
-              (node) => node.id === edge.from_node_id || node.id === edge.to_node_id,
-            ),
-          ),
-          resources: contextTask
-            ? ledger.resources.filter(
-                (resource) =>
-                  resource.target === contextTask.id ||
-                  resource.target === contextTask.thread_id ||
-                  resource.target === contextTask.branch,
-              )
-            : [],
-          ready: parsed.task_id ? ready(ledger, parsed.task_id) : false,
-        },
+        "task-context": taskContext(ledger, parsed.task_id, contextTask),
         full: ledger,
       };
       console.log(

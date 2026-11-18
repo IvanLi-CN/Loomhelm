@@ -205,6 +205,17 @@ export function atomicNodeSatisfied(ledger: Ledger, node: any): boolean {
   const atom = atoms?.find((candidate) => candidate.id === node.id);
   return atom ? atom.status === "completed" : false;
 }
+export function atomicPredecessorsPending(ledger: Ledger, plan: Plan, atomId: string): string[] {
+  const nodes = new Map(plan.atomic_nodes.map((node) => [node.id, node]));
+  if (nodes.get(atomId)?.kind !== "work") return [atomId];
+  return plan.atomic_edges.flatMap((edge) =>
+    "from_node_id" in edge &&
+    edge.to_node_id === atomId &&
+    !atomicNodeSatisfied(ledger, nodes.get(edge.from_node_id))
+      ? [edge.from_node_id]
+      : [],
+  );
+}
 export function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): boolean {
   const nodes = (plan.atomic_nodes ?? []) as any[];
   const edges = (plan.atomic_edges ?? []).filter((edge: any) => "from_node_id" in edge) as any[];
@@ -240,6 +251,7 @@ export function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: stri
   )
     return false;
   if (
+    ledger.contract_version < 6 &&
     task.atoms.some((atom, index) => {
       if (index === 0) return false;
       const node = taskNodes.find((candidate) => candidate.id === atom.id);
@@ -258,6 +270,8 @@ export function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: stri
     )
       return false;
     const targetIndex = task.atoms.findIndex((candidate) => candidate.id === target.id);
+    if (ledger.contract_version >= 6)
+      return atomicPredecessorsPending(ledger, plan, target.id).length === 0;
     const incoming = edges.filter((edge) => edge.to_node_id === target.id);
     if (targetIndex > 0 && !incoming.length) return false;
     return incoming.every((edge) =>

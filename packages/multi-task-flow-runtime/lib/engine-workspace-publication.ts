@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { requireCondition } from "../lib/errors";
 import { baselineReceipt, externalRef, fact, id, milestone, providerReceipt } from "../lib/schema";
+import { lifecycleStageOf } from "./atomic-orchestration";
 import type { CommandContext } from "./engine-command-context";
+import { executeExecutionCommand } from "./engine-execution";
 import * as core from "./engine-support-core";
 import * as support from "./engine-support-gates";
 
@@ -145,6 +147,60 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
           (op.request.creation_parameters as any)?.transport === "codex-exec" &&
           op.status === "succeeded",
       );
+      if (payload.baseline_sync !== undefined) {
+        const sync = z
+          .object({
+            mode: z.enum(["initial", "refresh"]),
+            dispatch_operation_id: id,
+            expected_previous_baseline: baselineReceipt.nullable(),
+            expected_lineage_sha: z
+              .string()
+              .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)
+              .nullable(),
+            lineage_event_id: z.string().min(1),
+          })
+          .strict()
+          .parse(payload.baseline_sync);
+        requireCondition(
+          ledger.contract_version >= 6 && cliDispatch?.id === sync.dispatch_operation_id,
+          "BASELINE_REQUIRED",
+          "Combined readiness requires the bound CLI dispatch and current contract",
+          4,
+        );
+        const preparationStage = targetType === "group" ? stage : "branch_ready";
+        const preparation = target.atoms.find(
+          (atom: { id: string; status: string }) => lifecycleStageOf(atom) === preparationStage,
+        );
+        requireCondition(
+          preparation &&
+            preparation.status !== "blocked" &&
+            core.atomicPredecessorsPending(ledger, executionPlan(ledger), preparation.id).length ===
+              0,
+          "ATOMS_PENDING",
+          "Workspace atom or its predecessors are incomplete",
+          4,
+        );
+        executeExecutionCommand({
+          ...context,
+          command: "development-baseline-sync",
+          request: { ...request, request_id: `${request.request_id}-baseline` },
+          payload: { ...payload, ...sync },
+        });
+        preparation.status = "completed";
+        addEvent(
+          ledger,
+          request,
+          targetType === "group" ? "group_atom_updated" : "atom_updated",
+          targetId,
+          {
+            [targetType === "group" ? "group_id" : "task_id"]: targetId,
+            atom_id: preparation.id,
+            state: "completed",
+          },
+          now(),
+          `${request.request_id}-workspace-atom`,
+        );
+      }
       if (cliDispatch) {
         const baseline = parse(baselineReceipt, payload.baseline);
         requireCondition(

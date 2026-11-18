@@ -416,7 +416,12 @@ export function executeExecutionCommand(context: CommandContext): unknown | unde
         5,
       );
       requireCondition(
-        expectedLineage !== null && baseline.sha === expectedLineage,
+        expectedLineage === null
+          ? targetType === "group" &&
+              mode === "initial" &&
+              !!baseline.fetched_at &&
+              Date.parse(baseline.fetched_at) >= Date.parse(dispatch.created_at)
+          : baseline.sha === expectedLineage,
         "BASELINE_MISMATCH",
         "Workspace baseline must match the current target lineage",
         4,

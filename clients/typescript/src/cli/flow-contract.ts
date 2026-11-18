@@ -527,12 +527,28 @@ add(
 		"branch",
 		"resource_ids",
 		"baseline",
+		"baseline_sync",
 		"evidence_ref",
 	],
 	["target_type", "target_id", "stage"],
 	{
-		optionalPayload: ["baseline"],
-		payloadOverrides: { branch: stringValue },
+		optionalPayload: ["baseline", "baseline_sync"],
+		payloadOverrides: {
+			branch: stringValue,
+			baseline: domainRef("baseline_receipt"),
+			baseline_sync: {
+				type: "object",
+				additionalProperties: false,
+				required: ["mode", "dispatch_operation_id", "expected_previous_baseline", "expected_lineage_sha", "lineage_event_id"],
+				properties: {
+					mode: { enum: ["initial", "refresh"] },
+					dispatch_operation_id: id,
+					expected_previous_baseline: { oneOf: [domainRef("baseline_receipt"), { type: "null" }] },
+					expected_lineage_sha: { oneOf: [shaValue, { type: "null" }] },
+					lineage_event_id: textValue,
+				},
+			},
+		},
 	},
 );
 add(
@@ -754,6 +770,20 @@ add(
 				],
 			},
 		],
+	},
+);
+add(
+	"merge-observe",
+	["target_type", "target_id", "provider_observation", "supersedes"],
+	["observation_id", "status", "operation_id"],
+	{
+		optionalPayload: ["supersedes"],
+		payloadOverrides: { provider_observation: publicationReceipt },
+		resultOverrides: {
+			observation_id: id,
+			status: { enum: ["reconcile_required", "already_recorded", "conflict", "unclaimed"] },
+			operation_id: nullableId,
+		},
 	},
 );
 add(

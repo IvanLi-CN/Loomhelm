@@ -31,6 +31,7 @@ import {
 } from "../lib/schema";
 import { createAtomProjection } from "../lib/view-atoms";
 import { type AgentOutput, initialOutput } from "../web/agent-output";
+import { taskDispatchEligibility } from "./dispatch-eligibility";
 import type { PlannedInterval, ReadinessBlocker } from "./view-readiness";
 import * as viewHelpers from "./view-readiness";
 
@@ -450,6 +451,11 @@ export function buildView(
     .filter((task) => selectedTaskIds.has(task.id))
     .map((task) => {
       const owner = ledger.groups.find((item) => item.id === task.group_id);
+      const dispatchEligibility = taskDispatchEligibility(ledger, task);
+      const separateDispatch =
+        ledger.contract_version >= 6 &&
+        ["planned", "ready"].includes(task.state) &&
+        task.conversation_policy === "task_agent";
       let isReady = false;
       const isHeld =
         activePlan.revision?.paused_task_ids.includes(task.id) === true &&
@@ -488,6 +494,7 @@ export function buildView(
       );
       return {
         ...task,
+        dispatch_eligibility: dispatchEligibility,
         pr: taskPrProjection(task, owner),
         ...(() => {
           const gateDiagnostics =
@@ -497,6 +504,7 @@ export function buildView(
           return { gateDiagnostics };
         })(),
         dispatch_diagnostics: [
+          ...(separateDispatch && dispatchEligibility.blocker ? [dispatchEligibility.blocker] : []),
           ...taskExecutionPolicyIssues(task),
           ...(owner && owner.delivery_unit_kind === "regular" && !owner.agent_thread_id
             ? [
@@ -510,10 +518,13 @@ export function buildView(
             ? deliveryGateDiagnostics(ledger, owner, task)
             : []),
         ],
-        dispatch_readiness:
-          task.execution_owner === null &&
-          task.conversation_policy === null &&
-          task.delivery_policy === null
+        dispatch_readiness: separateDispatch
+          ? dispatchEligibility.allowed
+            ? "ready"
+            : "blocked"
+          : task.execution_owner === null &&
+              task.conversation_policy === null &&
+              task.delivery_policy === null
             ? "unknown"
             : taskExecutionPolicyIssues(task).length > 0
               ? "blocked"

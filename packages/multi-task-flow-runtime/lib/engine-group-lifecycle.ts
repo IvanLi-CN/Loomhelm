@@ -127,7 +127,9 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
       const atom = target.atoms[index]!;
       const state = z.enum(["running", "blocked", "completed"]).parse(payload.state);
       requireCondition(
-        target.atoms.slice(0, index).every((item) => item.status === "completed"),
+        ledger.contract_version >= 6
+          ? core.atomicPredecessorsPending(ledger, executionPlan(ledger), atom.id).length === 0
+          : target.atoms.slice(0, index).every((item) => item.status === "completed"),
         "ATOMS_PENDING",
         "Earlier atoms must complete first",
         4,
@@ -195,7 +197,9 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
       const index = owner.atoms.indexOf(atom);
       const state = z.enum(["running", "blocked", "completed"]).parse(payload.state);
       requireCondition(
-        owner.atoms.slice(0, index).every((item) => item.status === "completed"),
+        ledger.contract_version >= 6
+          ? core.atomicPredecessorsPending(ledger, executionPlan(ledger), atom.id).length === 0
+          : owner.atoms.slice(0, index).every((item) => item.status === "completed"),
         "ATOMS_PENDING",
         "Earlier delivery-unit atoms must complete first",
         4,

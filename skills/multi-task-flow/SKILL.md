@@ -6,6 +6,8 @@ version: 3.0.0
 
 # Multi-task flow
 
+从当前账本判断是否可派发；task-ready 通知确认独立追踪。普通进度可直接更正等待或阻塞。工作区准备可通过 `lifecycle-record workspace_ready` 和 `baseline_sync` 一次记账；未关联已授权操作的外部合并通过 `merge-observe` 留存观测，不推进依赖。
+
 ## 适用范围与授权
 
 用于主人批准的、具有明确依赖的正式多对话编排。明确要求使用本 Skill 时，创建或继续正式运行并交付仪表板；明确要求审查、诊断或仅制定计划时，只做 proposal 或只读查询，不初始化、不创建对话。生命周期为 `proposal → initialized run → scheduled run → completed run`。与 `$dev-plan` 独立，`init` 不接收其专用字段、plan digest 或 handoff envelope。

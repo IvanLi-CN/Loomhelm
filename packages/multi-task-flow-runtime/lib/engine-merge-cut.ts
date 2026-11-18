@@ -8,6 +8,7 @@ import {
   group,
   id,
   isContributionKind,
+  providerReceipt,
 } from "../lib/schema";
 import type { CommandContext } from "./engine-command-context";
 import * as core from "./engine-support-core";
@@ -87,11 +88,96 @@ const {
   groupBaseReconciliation,
 } = support;
 
-export const mergeCutCommands = ["merge-claim", "merge-resolve", "cut-claim", "cut-apply"] as const;
+export const mergeCutCommands = [
+  "merge-claim",
+  "merge-resolve",
+  "merge-observe",
+  "cut-claim",
+  "cut-apply",
+] as const;
 
 export function executeMergeCutCommand(context: CommandContext): unknown | undefined {
   const { ledger, command, request, payload, currentPlan } = context;
   switch (command) {
+    case "merge-observe": {
+      const targetType = z.enum(["group", "task"]).parse(payload.target_type);
+      const targetId = parse(id, payload.target_id);
+      requireOwner(ledger, request, targetType, targetId);
+      const group =
+        targetType === "group"
+          ? find(ledger.groups, (item) => item.id === targetId, "Group")
+          : find(
+              ledger.groups,
+              (item) =>
+                item.id === find(ledger.tasks, (task) => task.id === targetId, "Task").group_id,
+              "Group",
+            );
+      const task =
+        targetType === "task" ? find(ledger.tasks, (item) => item.id === targetId, "Task") : null;
+      const expectedPr = task ? taskPrRef(task) : deliveryUnitPr(group);
+      const receipt = providerReceipt.parse(payload.provider_observation);
+      requireCondition(
+        expectedPr &&
+          receipt.pr &&
+          stable(receipt.pr) === stable(expectedPr) &&
+          receipt.provider === ledger.repository.provider &&
+          receipt.repository === `${ledger.repository.owner}/${ledger.repository.name}` &&
+          receipt.resource_type === "pr" &&
+          receipt.resource_id === expectedPr.id &&
+          receipt.state === "merged" &&
+          receipt.merge_sha &&
+          receipt.head_sha &&
+          receipt.base_sha &&
+          receipt.branch === (task ? task.branch : group.parent_branch) &&
+          receipt.target_branch === (task ? group.parent_branch : ledger.repository.target_branch),
+        "EVIDENCE_MISMATCH",
+        "Merge observation must match the registered PR, branches and provider",
+        5,
+      );
+      const matching = ledger.operations.find(
+        (item) =>
+          item.kind === "merge" &&
+          item.target_id === group.id &&
+          stable(item.request.pr) === stable(expectedPr) &&
+          item.request.expected_head_sha === receipt.head_sha &&
+          item.expected_sha === receipt.base_sha,
+      );
+      const supersedes = payload.supersedes === undefined ? null : parse(id, payload.supersedes);
+      if (supersedes)
+        requireCondition(
+          ledger.events.some(
+            (event) =>
+              event.id === supersedes &&
+              event.subject_id === targetId &&
+              event.data.operation === "merge-observe" &&
+              event.data.target_type === targetType &&
+              stable(object(event.data.provider_observation).pr) === stable(expectedPr),
+          ) &&
+            !ledger.events.some(
+              (event) =>
+                event.data.operation === "merge-observe" && event.data.supersedes === supersedes,
+            ),
+          "EVIDENCE_MISMATCH",
+          "Correction must supersede a current observation of this PR",
+          5,
+        );
+      const status = matching
+        ? activeOperation(matching)
+          ? "reconcile_required"
+          : matching.status === "succeeded"
+            ? "already_recorded"
+            : "conflict"
+        : "unclaimed";
+      addEvent(ledger, request, "fact_observed", targetId, {
+        operation: "merge-observe",
+        target_type: targetType,
+        provider_observation: receipt,
+        status,
+        supersedes,
+        operation_id: matching?.id ?? null,
+      });
+      return { observation_id: request.request_id, status, operation_id: matching?.id ?? null };
+    }
     case "merge-claim": {
       authorizedAction(ledger, "merge");
       const groupId = parse(id, payload.group_id);

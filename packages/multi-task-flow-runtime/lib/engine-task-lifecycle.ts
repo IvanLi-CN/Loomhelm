@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { requireCondition } from "../lib/errors";
 import { externalRef, id, isContributionKind } from "../lib/schema";
+import { requireTaskCapacity } from "./dispatch-eligibility";
 import type { CommandContext } from "./engine-command-context";
 import * as core from "./engine-support-core";
 import * as support from "./engine-support-gates";
@@ -163,8 +164,8 @@ export function executeTaskLifecycleCommand(context: CommandContext): unknown | 
         starting: ["running", "waiting", "blocked"],
         running: ["waiting", "blocked"],
         agent_idle: ["running", "waiting", "blocked"],
-        waiting: ["running"],
-        blocked: ["running"],
+        waiting: ["running", "waiting", "blocked"],
+        blocked: ["running", "waiting", "blocked"],
         integrated: ["closed"],
         completed: ["closed"],
       };
@@ -255,21 +256,7 @@ export function executeTaskLifecycleCommand(context: CommandContext): unknown | 
           "Task dependencies are not satisfied",
           4,
         );
-        const used =
-          ledger.tasks.filter((item) => ["starting", "running", "agent_idle"].includes(item.state))
-            .length +
-          ledger.operations.filter(
-            (item) =>
-              item.kind === "dispatch" &&
-              item.request.target_type !== "group" &&
-              activeOperation(item),
-          ).length;
-        requireCondition(
-          used < ledger.config.max_running_tasks,
-          "CAPACITY",
-          "No execution slot available",
-          4,
-        );
+        requireTaskCapacity(ledger);
       }
       if (state === "running" && previousState === "planned")
         requireCondition(
@@ -326,7 +313,10 @@ export function executeTaskLifecycleCommand(context: CommandContext): unknown | 
       if (state === "closed" && target.lifecycle && !legacyLedger(ledger))
         target.lifecycle.closed = "passed";
       if (state === "running" && (previousState === "starting" || previousState === "planned"))
-        target.started_at = z.iso.datetime({ offset: false }).parse(payload.occurred_at);
+        target.started_at =
+          payload.occurred_at === undefined
+            ? now()
+            : z.iso.datetime({ offset: false }).parse(payload.occurred_at);
       if (state === "completed")
         target.finished_at = payload.occurred_at
           ? z.iso.datetime({ offset: false }).parse(payload.occurred_at)
