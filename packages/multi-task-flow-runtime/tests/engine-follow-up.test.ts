@@ -3,7 +3,7 @@ import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import { apply } from "../lib/engine";
 import { protectedActionApproved, protectedActionTargetDigest } from "../lib/engine-support-core";
 import { deliveryUnitPrMergedFromLedger } from "../lib/engine-support-gates";
-import { defaultTaskAtoms, type Ledger } from "../lib/schema";
+import { defaultTaskAtoms } from "../lib/schema";
 import { latestParentPrFact } from "../lib/view-readiness";
 import { approve, at, fixture, groupActor, main, request } from "./engine-fixtures";
 import { modernFixture, request as roleRequest } from "./role-flow-fixtures";
@@ -244,86 +244,6 @@ function postMergeContinuationFixture() {
   return { ledger, group, task, parentPr, originalMerge, followUpPr, followUpHead, followUpMerge };
 }
 
-function claimFollowUpBranch(
-  ledger: Ledger,
-  group: Ledger["groups"][number],
-  followUpHead: string,
-) {
-  apply(
-    ledger,
-    "publish-branch-claim",
-    roleRequest(
-      ledger,
-      "follow-up-branch-claim",
-      {
-        operation_id: "follow-up-branch-op",
-        action_id: "publish-followup-branch",
-        target_type: "group",
-        target_id: group.id,
-        branch: group.parent_branch,
-        expected_head_sha: followUpHead,
-      },
-      { role: "group", thread_id: group.agent_thread_id! },
-    ),
-  );
-  apply(
-    ledger,
-    "publish-branch-resolve",
-    roleRequest(
-      ledger,
-      "follow-up-branch-resolve",
-      {
-        operation_id: "follow-up-branch-op",
-        outcome: "succeeded",
-        fact_id: "follow-up-branch-fact",
-        provider_receipt: {
-          provider: "github",
-          repository: "example/loomhelm",
-          resource_type: "branch",
-          resource_id: group.parent_branch,
-          branch: group.parent_branch,
-          target_branch: null,
-          base_sha: null,
-          head_sha: followUpHead,
-          pr: null,
-          state: "exists",
-          evidence_ref: "fixture:follow-up-branch",
-        },
-      },
-      { role: "group", thread_id: group.agent_thread_id! },
-    ),
-  );
-}
-
-function claimFollowUpPr(
-  ledger: Ledger,
-  group: Ledger["groups"][number],
-  originalMerge: string,
-  followUpHead: string,
-  followUpPr: { provider: string; repository: string; id: string; url: string },
-) {
-  apply(
-    ledger,
-    "publish-pr-claim",
-    roleRequest(
-      ledger,
-      "follow-up-pr-claim",
-      {
-        operation_id: "follow-up-pr-op",
-        action_id: "publish-followup-pr",
-        target_type: "group",
-        target_id: group.id,
-        branch: group.parent_branch,
-        target_branch: "main",
-        expected_base_sha: originalMerge,
-        expected_head_sha: followUpHead,
-        pr: followUpPr,
-      },
-      { role: "group", thread_id: group.agent_thread_id! },
-    ),
-  );
-}
-
 test("approved plan revisions can dispatch a contribution after group merge", () => {
   const { ledger, task } = postMergeContinuationFixture();
   const result = apply(
@@ -535,8 +455,70 @@ test("post-merge follow-up publication preserves the original parent PR receipt"
     if (task.id === "task-followup") for (const atom of task.atoms) atom.status = "completed";
   }
 
-  claimFollowUpBranch(ledger, group, followUpHead);
-  claimFollowUpPr(ledger, group, originalMerge, followUpHead, followUpPr);
+  apply(
+    ledger,
+    "publish-branch-claim",
+    roleRequest(
+      ledger,
+      "follow-up-branch-claim",
+      {
+        operation_id: "follow-up-branch-op",
+        action_id: "publish-followup-branch",
+        target_type: "group",
+        target_id: group.id,
+        branch: group.parent_branch,
+        expected_head_sha: followUpHead,
+      },
+      { role: "group", thread_id: group.agent_thread_id! },
+    ),
+  );
+  apply(
+    ledger,
+    "publish-branch-resolve",
+    roleRequest(
+      ledger,
+      "follow-up-branch-resolve",
+      {
+        operation_id: "follow-up-branch-op",
+        outcome: "succeeded",
+        fact_id: "follow-up-branch-fact",
+        provider_receipt: {
+          provider: "github",
+          repository: "example/loomhelm",
+          resource_type: "branch",
+          resource_id: group.parent_branch,
+          branch: group.parent_branch,
+          target_branch: null,
+          base_sha: null,
+          head_sha: followUpHead,
+          pr: null,
+          state: "exists",
+          evidence_ref: "fixture:follow-up-branch",
+        },
+      },
+      { role: "group", thread_id: group.agent_thread_id! },
+    ),
+  );
+  apply(
+    ledger,
+    "publish-pr-claim",
+    roleRequest(
+      ledger,
+      "follow-up-pr-claim",
+      {
+        operation_id: "follow-up-pr-op",
+        action_id: "publish-followup-pr",
+        target_type: "group",
+        target_id: group.id,
+        branch: group.parent_branch,
+        target_branch: "main",
+        expected_base_sha: originalMerge,
+        expected_head_sha: followUpHead,
+        pr: followUpPr,
+      },
+      { role: "group", thread_id: group.agent_thread_id! },
+    ),
+  );
   apply(
     ledger,
     "publish-pr-resolve",
@@ -674,9 +656,71 @@ test("post-merge follow-up publication waits for new contribution atoms", () => 
   group.current_sha = followUpHead;
   for (const task of ledger.tasks) task.state = "integrated";
 
-  claimFollowUpBranch(ledger, group, followUpHead);
-
-  expect(() => claimFollowUpPr(ledger, group, originalMerge, followUpHead, followUpPr)).toThrow(
-    "Contribution task atoms must complete before parent PR publication",
+  apply(
+    ledger,
+    "publish-branch-claim",
+    roleRequest(
+      ledger,
+      "follow-up-branch-claim",
+      {
+        operation_id: "follow-up-branch-op",
+        action_id: "publish-followup-branch",
+        target_type: "group",
+        target_id: group.id,
+        branch: group.parent_branch,
+        expected_head_sha: followUpHead,
+      },
+      { role: "group", thread_id: group.agent_thread_id! },
+    ),
   );
+  apply(
+    ledger,
+    "publish-branch-resolve",
+    roleRequest(
+      ledger,
+      "follow-up-branch-resolve",
+      {
+        operation_id: "follow-up-branch-op",
+        outcome: "succeeded",
+        fact_id: "follow-up-branch-fact",
+        provider_receipt: {
+          provider: "github",
+          repository: "example/loomhelm",
+          resource_type: "branch",
+          resource_id: group.parent_branch,
+          branch: group.parent_branch,
+          target_branch: null,
+          base_sha: null,
+          head_sha: followUpHead,
+          pr: null,
+          state: "exists",
+          evidence_ref: "fixture:follow-up-branch",
+        },
+      },
+      { role: "group", thread_id: group.agent_thread_id! },
+    ),
+  );
+
+  expect(() =>
+    apply(
+      ledger,
+      "publish-pr-claim",
+      roleRequest(
+        ledger,
+        "follow-up-pr-claim",
+        {
+          operation_id: "follow-up-pr-op",
+          action_id: "publish-followup-pr",
+          target_type: "group",
+          target_id: group.id,
+          branch: group.parent_branch,
+          target_branch: "main",
+          expected_base_sha: originalMerge,
+          expected_head_sha: followUpHead,
+          pr: followUpPr,
+        },
+        { role: "group", thread_id: group.agent_thread_id! },
+      ),
+    ),
+  ).toThrow("Contribution task atoms must complete before parent PR publication");
 });
