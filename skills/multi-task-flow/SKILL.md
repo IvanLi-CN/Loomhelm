@@ -12,7 +12,7 @@ version: 3.0.0
 
 本 Skill 用于经主人批准、具有明确任务依赖的正式多对话运行。它拥有独立的输入合同和运行时生命周期，与 `$dev-plan` 相互独立，也不会迁移或修改已有运行。初始化是有副作用的运行时操作；只读审查、诊断、代码探索或仅制定计划时不得调用本 Skill。主 Agent（main Agent）按需创建和管理平级的交付单元及任务对话。恰好只有一个 contribution Task 的 regular 交付单元使用共享交付拓扑：交付单元对话、工作区、分支和 PR 同时服务两个作用域。存在多个 contribution Task 时，使用独立的任务 Agent 对话和 child PR，由交付 Agent（Delivery Agent）负责父 PR 集成。主 Agent（main Agent）负责调度，并将只提交证据的工作与产生 PR 的贡献工作分开。
 
-每次运行可以包含一个 `bootstrap` 交付单元，后接零个或多个 `regular` 交付单元。默认第一个交付单元 MUST 为 `bootstrap`；只有提案记录了明确的例外原因和证据时，才允许第一个单元为 `regular`。Bootstrap 是唯一的主会话所有单元：绑定的主对话可以提交初始 SPEC/ADR/计划文档并管理第一个 parent PR。它使用 `owner_kind: "main"`，没有交付单元对话绑定，且必须位于第一位。Regular 单元保留交付单元所有权合同，激活前必须有交付单元对话；当其中恰好只有一个 contribution Task 时，该对话同时拥有任务对话、工作区、分支和 PR。Parent PR 默认串行；只有依赖允许时，regular 单元才可以并行。交付单元类型、所有权和交付单元对话绑定不能通过普通交付单元更新或计划修订改写。本版本不提供原地所有权转移命令；已有运行保留当前所有权。先初始化计划中的 bootstrap，再发布其 parent PR，并在同一个主会话工作区记录工作区和发布回执。
+每次运行可以包含一个 `bootstrap` 交付单元，后接零个或多个 `regular` 交付单元。默认第一个交付单元 MUST 为 `bootstrap`；只有提案记录了明确的例外原因和证据时，才允许第一个单元为 `regular`。Bootstrap 是唯一的主会话所有单元：绑定的主对话可以提交初始 SPEC/ADR/计划文档并管理第一个 parent PR。它使用 `owner_kind: "main"`，没有交付单元对话绑定，且必须位于第一位。Regular 单元保留交付单元所有权合同，激活前必须有交付单元对话；当其中恰好只有一个 contribution Task 时，该对话同时拥有任务对话、工作区、分支和 PR。Parent PR 默认串行；只有依赖允许时，regular 单元才可以并行。交付单元类型、所有权和交付单元对话绑定不能通过普通交付单元更新或计划修订改写。本版本不提供原地所有权转移命令；已有运行保留当前所有权。先初始化计划中的 bootstrap，完成交付内容集成，再发布其 parent PR，并在同一个主会话工作区记录工作区和发布回执。
 
 这仍然是依赖驱动交付的顶层活动流程。当拓扑声明包含多个任务时，已批准的运行至少需要两个任务节点；权威运行时账本是任务、交付单元、依赖和收口状态的唯一事实来源。
 
@@ -48,7 +48,7 @@ version: 3.0.0
 
 对话创建只有一条正式路径：`dispatch-claim`/`dispatch-group-claim` → exact-version CLI `conversation-create` → native evidence reconcile → formal dispatch。Contract 3 下任何 Agent 都不得直接调用 `mcp__codex_app__create_thread`、裸 `thread/start`、`codex://threads/...` 或 `thread/resume + turn/start` 创建或启动交付对话；这些结果不能绑定到账本。唯一例外是由 CLI `initialization-recover` 按 ADR 0038 在同一已观察 thread/worktree 内执行的受审计固定握手恢复，仍不得裸调用原生 API。发现绕过路径时必须记录 `orphan thread / orchestration violation`，保持 claim 和容量占用并停止调度，不能释放 claim 后静默重试或伪造成功。
 
-Delivery Unit 的四个预设生命周期原子必须按 `prepare-parent → create-pr → merge-pr → closeout` 保持可达顺序；Contribution Task 的四个预设生命周期原子必须按 `prepare-branch → create-pr → merge-pr → closeout` 保持可达顺序。两层原子不得混用；不再预设 `verify-integration` 或 `verify-task-pr`。两节点之间允许插入 Agent 创建的 work、milestone 和并行分支，但只能使用 Agent 声明的边形成路径；缺失、逆序、无关或自动补出的关系都必须使计划拒绝。
+Delivery Unit 的五个预设生命周期原子必须按 `prepare-parent → integrate → create-pr → merge-pr → closeout` 保持可达顺序；其中 `integrate` 负责先把交付内容写入父分支，`create-pr` 只能在它完成后执行。Contribution Task 的四个预设生命周期原子必须按 `prepare-branch → create-pr → merge-pr → closeout` 保持可达顺序。两层原子不得混用；不再预设 `verify-integration` 或 `verify-task-pr`。两节点之间允许插入 Agent 创建的 work、milestone 和并行分支，但只能使用 Agent 声明的边形成路径；缺失、逆序、无关或自动补出的关系都必须使计划拒绝。
 
 ### 交付单元归纳
 

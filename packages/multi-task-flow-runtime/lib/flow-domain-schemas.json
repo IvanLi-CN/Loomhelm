@@ -658,6 +658,7 @@
               "enum": [
                 "prepare-parent",
                 "prepare-branch",
+                "integrate",
                 "create-pr",
                 "merge-pr",
                 "closeout"
@@ -721,6 +722,7 @@
               "enum": [
                 "prepare-parent",
                 "prepare-branch",
+                "integrate",
                 "create-pr",
                 "merge-pr",
                 "closeout"
@@ -1118,6 +1120,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -1206,6 +1209,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -1318,6 +1322,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -1460,6 +1465,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -1602,6 +1608,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -1772,6 +1779,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -1942,6 +1950,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -2031,6 +2040,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -2166,6 +2176,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -2331,6 +2342,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -2496,6 +2508,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -2689,6 +2702,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -4177,6 +4191,7 @@
               "enum": [
                 "prepare-parent",
                 "prepare-branch",
+                "integrate",
                 "create-pr",
                 "merge-pr",
                 "closeout"
@@ -4554,6 +4569,7 @@
               "enum": [
                 "prepare-parent",
                 "prepare-branch",
+                "integrate",
                 "create-pr",
                 "merge-pr",
                 "closeout"
@@ -6695,6 +6711,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -6758,6 +6775,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -7155,6 +7173,7 @@
                                 "enum": [
                                   "prepare-parent",
                                   "prepare-branch",
+                                  "integrate",
                                   "create-pr",
                                   "merge-pr",
                                   "closeout"
@@ -7243,6 +7262,7 @@
                                 "enum": [
                                   "prepare-parent",
                                   "prepare-branch",
+                                  "integrate",
                                   "create-pr",
                                   "merge-pr",
                                   "closeout"
@@ -7355,6 +7375,7 @@
                                 "enum": [
                                   "prepare-parent",
                                   "prepare-branch",
+                                  "integrate",
                                   "create-pr",
                                   "merge-pr",
                                   "closeout"
@@ -7497,6 +7518,7 @@
                                 "enum": [
                                   "prepare-parent",
                                   "prepare-branch",
+                                  "integrate",
                                   "create-pr",
                                   "merge-pr",
                                   "closeout"
@@ -7639,6 +7661,7 @@
                                 "enum": [
                                   "prepare-parent",
                                   "prepare-branch",
+                                  "integrate",
                                   "create-pr",
                                   "merge-pr",
                                   "closeout"
@@ -7809,6 +7832,7 @@
                                 "enum": [
                                   "prepare-parent",
                                   "prepare-branch",
+                                  "integrate",
                                   "create-pr",
                                   "merge-pr",
                                   "closeout"
@@ -7979,6 +8003,7 @@
                                 "enum": [
                                   "prepare-parent",
                                   "prepare-branch",
+                                  "integrate",
                                   "create-pr",
                                   "merge-pr",
                                   "closeout"
@@ -8068,6 +8093,7 @@
                                 "enum": [
                                   "prepare-parent",
                                   "prepare-branch",
+                                  "integrate",
                                   "create-pr",
                                   "merge-pr",
                                   "closeout"
@@ -8203,6 +8229,7 @@
                                 "enum": [
                                   "prepare-parent",
                                   "prepare-branch",
+                                  "integrate",
                                   "create-pr",
                                   "merge-pr",
                                   "closeout"
@@ -8368,6 +8395,7 @@
                                 "enum": [
                                   "prepare-parent",
                                   "prepare-branch",
+                                  "integrate",
                                   "create-pr",
                                   "merge-pr",
                                   "closeout"
@@ -8533,6 +8561,7 @@
                                 "enum": [
                                   "prepare-parent",
                                   "prepare-branch",
+                                  "integrate",
                                   "create-pr",
                                   "merge-pr",
                                   "closeout"
@@ -8726,6 +8755,7 @@
                                 "enum": [
                                   "prepare-parent",
                                   "prepare-branch",
+                                  "integrate",
                                   "create-pr",
                                   "merge-pr",
                                   "closeout"
@@ -9871,6 +9901,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -9959,6 +9990,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -10071,6 +10103,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -10213,6 +10246,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -10355,6 +10389,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -10525,6 +10560,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -10695,6 +10731,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -10784,6 +10821,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -10919,6 +10957,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -11084,6 +11123,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -11249,6 +11289,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -11442,6 +11483,7 @@
                           "enum": [
                             "prepare-parent",
                             "prepare-branch",
+                            "integrate",
                             "create-pr",
                             "merge-pr",
                             "closeout"
@@ -12869,6 +12911,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -13248,6 +13291,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -14976,6 +15020,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -15064,6 +15109,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -15176,6 +15222,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -15318,6 +15365,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -15460,6 +15508,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -15630,6 +15679,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -15800,6 +15850,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -15889,6 +15940,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -16024,6 +16076,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -16189,6 +16242,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -16354,6 +16408,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"
@@ -16547,6 +16602,7 @@
                     "enum": [
                       "prepare-parent",
                       "prepare-branch",
+                      "integrate",
                       "create-pr",
                       "merge-pr",
                       "closeout"

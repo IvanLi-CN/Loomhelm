@@ -296,6 +296,7 @@ export function executeExecutionCommand(context: CommandContext): unknown | unde
               (item) => item.id === (dispatchTarget as Ledger["tasks"][number]).group_id,
               "Group",
             ),
+            (dispatchTarget as Ledger["tasks"][number]).delivery_policy === "parent_pr",
           );
         requireCondition(
           object(payload.creation_parameters ?? {}).transport === "codex-exec",

@@ -333,7 +333,8 @@ export function ownsDeliveryVerification(
 export function requireContributionDispatchGate(
   ledger: Ledger,
   owner: Ledger["groups"][number],
-  requireParentPr = true,
+  requireParentPr = false,
+  requireParentPrAbsenceEvidence = false,
   retryAction: "dispatch-claim" | "task-update" = "dispatch-claim",
 ): void {
   if (legacyLedger(ledger)) return;
@@ -342,7 +343,9 @@ export function requireContributionDispatchGate(
   const missing: string[] = [];
   if (owner.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     missing.push("workspace_ready");
-  const parentPrRequired = requireParentPr || !parentPrDefinitivelyAbsent(ledger, owner);
+  const parentPrRequired =
+    requireParentPr ||
+    (requireParentPrAbsenceEvidence && !parentPrDefinitivelyAbsent(ledger, owner));
   if (parentPrRequired && !parentPrReady(ledger, owner, prAtom)) missing.push("parent_pr");
   if (missing.length)
     throw new ContractError(

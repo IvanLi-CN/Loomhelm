@@ -763,9 +763,12 @@ test("contract-3 merge atom cannot be completed without provider evidence", () =
   expect(ledger.tasks[0]!.atoms.find((atom) => atom.id === mergeAtom.id)!.status).toBe("running");
 });
 
-test("contribution dispatch is blocked until the parent PR gate is complete", () => {
+test("explicit parent PR delivery policy retains its gate", () => {
   const ledger = v2Fixture();
   approveV2(ledger);
+  ledger.tasks[0].execution_owner = "main";
+  ledger.tasks[0].conversation_policy = "main_owned";
+  ledger.tasks[0].delivery_policy = "parent_pr";
   ledger.groups[0].atoms = [
     {
       id: "workspace",
@@ -1165,7 +1168,7 @@ test("bootstrap parent PR bypass fails closed for uncertain publication and reta
   }
 });
 
-test("regular and Task Agent bootstrap paths retain the parent PR gate after workspace readiness", () => {
+test("explicit parent PR policy retains its gate while child PR work can start", () => {
   const regular = readyBootstrapFixture();
   regular.groups[0].delivery_unit_kind = "regular";
   regular.groups[0].owner_kind = "group";
@@ -1197,7 +1200,7 @@ test("regular and Task Agent bootstrap paths retain the parent PR gate after wor
   taskAgent.tasks[0].delivery_policy = "child_pr";
   taskAgent.tasks[0].thread_id = "task-a-thread";
   taskAgent.tasks[0].state = "starting";
-  expect(() =>
+  expect(
     apply(
       taskAgent,
       "task-update",
@@ -1212,11 +1215,11 @@ test("regular and Task Agent bootstrap paths retain the parent PR gate after wor
         { role: "task", thread_id: "task-a-thread" },
       ),
     ),
-  ).toThrow("parent PR is created and verified");
-  expect(taskAgent.tasks[0].state).toBe("starting");
+  ).toMatchObject({ result: { state: "running" } });
+  expect(taskAgent.tasks[0].state).toBe("running");
 });
 
-test("bootstrap dispatch-claim remains blocked for Task Agent work without a parent PR", () => {
+test("bootstrap dispatch-claim reports branch readiness instead of parent PR absence", () => {
   const ledger = readyBootstrapFixture();
   ledger.tasks[0].execution_owner = "task_agent";
   ledger.tasks[0].conversation_policy = "task_agent";
@@ -1230,7 +1233,7 @@ test("bootstrap dispatch-claim remains blocked for Task Agent work without a par
         operation_id: "bootstrap-dispatch-without-parent-op",
       }),
     ),
-  ).toThrow("parent PR is created and verified");
+  ).toThrow("provider-published delivery-unit branch");
   expect(ledger.operations).toHaveLength(0);
 });
 
@@ -1264,10 +1267,9 @@ test("closed parent PRs do not satisfy the retained contribution gate", () => {
     evidence_ref: "provider:closed-parent-pr",
     receipt: { ...providerPrReceipt("closed-parent", "parent", base, base), state: "absent" },
   });
-  ledger.tasks[0].execution_owner = "task_agent";
-  ledger.tasks[0].conversation_policy = "task_agent";
-  ledger.tasks[0].delivery_policy = "child_pr";
-  ledger.tasks[0].thread_id = "task-a-thread";
+  ledger.tasks[0].execution_owner = "main";
+  ledger.tasks[0].conversation_policy = "main_owned";
+  ledger.tasks[0].delivery_policy = "parent_pr";
   ledger.tasks[0].state = "starting";
   expect(() =>
     apply(
@@ -1281,7 +1283,7 @@ test("closed parent PRs do not satisfy the retained contribution gate", () => {
           state: "running",
           occurred_at: at,
         },
-        { role: "task", thread_id: "task-a-thread" },
+        main,
       ),
     ),
   ).toThrow("parent PR is created and verified");
@@ -1436,7 +1438,7 @@ test("contract-3 regular dispatch uses the repository target branch and current 
   const staleHead = readyLedger();
   const parentPrFact = staleHead.facts.find((fact) => fact.id === "parent-pr-fact")!;
   parentPrFact.receipt!.head_sha = head;
-  expect(() =>
+  expect(
     apply(
       staleHead,
       "dispatch-claim",
@@ -1445,20 +1447,7 @@ test("contract-3 regular dispatch uses the repository target branch and current 
         operation_id: "stale-parent-head-op",
       }),
     ),
-  ).toThrow("parent PR is created and verified");
-  try {
-    apply(
-      staleHead,
-      "dispatch-claim",
-      request(staleHead, "stale-parent-head-details", {
-        task_id: "a",
-        operation_id: "stale-parent-head-details-op",
-      }),
-    );
-  } catch (error) {
-    expect((error as any).code).toBe("DELIVERY_GATE_PENDING");
-    expect((error as any).details.missing).toEqual(["parent_pr"]);
-  }
+  ).toMatchObject({ result: { operation_id: "stale-parent-head-op" } });
 });
 
 function mergedUpstreamFixture() {

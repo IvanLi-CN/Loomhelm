@@ -238,7 +238,13 @@ export function executeTaskLifecycleCommand(context: CommandContext): unknown | 
           "Task group is not active",
           4,
         );
-        requireContributionDispatchGate(ledger, owner, !bootstrapMainOwnedStart, "task-update");
+        requireContributionDispatchGate(
+          ledger,
+          owner,
+          target.delivery_policy === "parent_pr" && !bootstrapMainOwnedStart,
+          bootstrapMainOwnedStart && target.delivery_policy === "parent_pr",
+          "task-update",
+        );
       }
       if (state === "running" && previousState !== "starting" && !occupiedSlot) {
         requireCondition(

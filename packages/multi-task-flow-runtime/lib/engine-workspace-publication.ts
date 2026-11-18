@@ -442,6 +442,25 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
           "A cut delivery unit cannot publish a new PR",
           4,
         );
+      if (targetType === "group") {
+        const integrationAtom = target.atoms.find((atom: any) => atom.id.endsWith("-integrate"));
+        requireCondition(
+          !integrationAtom || integrationAtom.status === "completed",
+          "INTEGRATION_PENDING",
+          "Delivery-unit content must be integrated before parent PR publication",
+          4,
+        );
+        const parentPrIndex = target.atoms.findIndex(
+          (atom: any) => atom.lifecycle_stage === "pr_created",
+        );
+        requireCondition(
+          parentPrIndex < 0 ||
+            target.atoms.slice(0, parentPrIndex).every((atom: any) => atom.status === "completed"),
+          "INTEGRATION_PENDING",
+          "Delivery-unit content must be integrated before parent PR publication",
+          4,
+        );
+      }
       const baseSha = z
         .string()
         .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)

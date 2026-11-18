@@ -18,6 +18,8 @@ Contract 3 首次使用 `development-baseline-sync` 的 `mode: "initial"` 建立
 
 共享交付拓扑的唯一交付单元 PR 同时服务 contribution Task，不创建 child PR。多贡献拓扑中，child PR 合并由实现批准覆盖，交付单元 PR 仍需要针对该单元的 `protected-approve`。
 
+父 PR 的顺序固定为先完成交付内容集成并核对父分支 SHA，再执行 `publish-pr-claim`；不能为了满足派发门禁先创建一个与目标分支没有差异的空父 PR。普通 child PR 和 shared-delivery 内容可以在父 PR 创建前执行，只有显式 `delivery_policy: "parent_pr"` 的任务保留父 PR 前置门禁。
+
 child PR 冲突或检查失败时，Task Agent 先判断是否由自身变更造成；自身问题留在同一任务和 PR 修复，外部问题向 main Agent 提交诊断证据、影响和候选调整。基线变化由 Task Agent 负责 rebase、重新验证和刷新任务 baseline 后再重试。
 
 ## Follow-up 与 cut

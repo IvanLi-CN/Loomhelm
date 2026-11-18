@@ -645,7 +645,7 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
         );
       }
       if (isContributionKind(target.kind)) {
-        requireContributionDispatchGate(ledger, owner);
+        requireContributionDispatchGate(ledger, owner, target.delivery_policy === "parent_pr");
         requireCondition(
           owner.parent_branch && target.base_sha && owner.current_sha === target.base_sha,
           "BASE_NOT_READY",

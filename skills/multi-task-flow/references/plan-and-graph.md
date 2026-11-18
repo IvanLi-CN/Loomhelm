@@ -10,6 +10,8 @@
 
 同一交付单元恰好一个 contribution Task 时使用共享交付拓扑；多个 contribution Task 时使用多任务集成拓扑。共享拓扑复用交付单元对话、工作区、分支和 PR；多任务拓扑为每个任务创建独立对话、工作区、分支和 child PR。verification、release 和 deployment Task 不计入 contribution Task 数量。
 
+交付单元的默认生命周期是 `prepare-parent → integrate → create-pr → merge-pr → closeout`。`integrate` 必须先把产品、指南、参考正文或已验收 child PR 结果写入父分支，父 PR 只能从这个已有内容的分支创建；父 PR 不是普通贡献任务开始工作的前置条件。
+
 计划校验必须保证每个 contribution Task 有且只有一个交付单元归属，并保证执行策略与拓扑一致。缺少归属、多个归属或策略冲突时拒绝计划，不能退回“一项任务一个交付单元”的隐式默认。
 
 默认第一个交付单元是 bootstrap，且只有一个；它由 main conversation 持有、使用 `owner_kind: "main"`、不绑定交付单元对话，并负责初始 SPEC/ADR/计划文档和第一个 parent PR。第一个单元为 regular 时，提案必须记录明确例外原因和证据。regular 单元在激活前必须具备交付单元对话；类型、所有权和对话绑定不能通过普通更新改写。
