@@ -37,10 +37,11 @@ test("multi-task-flow documents require formal dashboard delivery", () => {
   expect(spec).toContain("初始化");
   expect(execution).toContain("正式");
   expect(viewer).toContain("revision");
-  expect(skill).toContain("candidate `init-input.json`");
-  expect(skill).toContain("built-in browser");
-  expect(skill).toContain("SSE and heartbeat");
-  expect(skill).toContain("Git push");
+  expect(skill).toContain("候选 `init-input.json` 或打开工具的成功回执均不算交付");
+  expect(skill).toContain("优先从宿主浏览器清单选择 `ChatGPT in-app browser`");
+  expect(skill).toContain("宿主未提供该浏览器时，按 `$ego-browser` 执行");
+  expect(skill).toContain("保持页面打开接收 SSE／heartbeat 更新");
+  expect(skill).toContain("实现计划批准覆盖计划内的对话、工作区、push");
   expect(spec).toContain("REQ-ORCH-013");
   expect(viewer).toContain("正常 ledger 修订保持同一页面");
 });
@@ -100,9 +101,12 @@ test("multi-task-flow CLI documentation pins package and service identity", () =
     expect(document).toContain("bunx --bun @loomhelm/multi-task-flow@<exact-version>");
   }
   for (const document of [skill, viewer, packageReadme]) {
+    expect(document).toContain("npx");
+  }
+  expect(skill).toContain("[共享 viewer](references/shared-viewer.md)");
+  for (const document of [viewer, packageReadme]) {
     expect(document).toContain("service.json");
     expect(document).toContain("current_build");
-    expect(document).toContain("npx");
   }
   expect(designData).not.toContain("`multi-task-flow flow <command> --input -`");
   expect(designData).not.toContain("`orchestrate.ts migrate --input -`");
@@ -117,15 +121,17 @@ test("multi-task-flow documents the coordinator-only native conversation boundar
     join(repositoryRoot, "skills/multi-task-flow/SKILL.md"),
     "utf8",
   );
-  expect(skill).toContain("Contract 3 下任何 Agent 都不得直接调用");
-  expect(skill).toContain("mcp__codex_app__create_thread");
-  expect(skill).toContain("conversation-create` 是唯一入口");
+  const plan = readFileSync(
+    join(repositoryRoot, "skills/multi-task-flow/references/plan-and-graph.md"),
+    "utf8",
+  );
+  expect(skill).toContain("任何 Agent 都不得调用 `mcp__codex_app__create_thread`");
+  expect(skill).toContain("→ conversation-create → native evidence reconcile → formal dispatch");
   expect(skill).toContain("capability gap");
   expect(skill).toContain("orphan thread / orchestration violation");
-  expect(skill).toContain("释放 claim 或容量");
-  expect(skill).toContain("原子图 MUST 明确声明开始节点、结束节点、里程碑节点和全部 `atomic_edges`");
-  expect(skill).toContain("系统预设的交付单元生命周期原子只提供节点定义，不提供依赖关系");
-  expect(skill).toContain("orphan thread / orchestration violation");
+  expect(skill).toContain("保留 claim 和容量，暂停受影响运行");
+  expect(plan).toContain("原子图 MUST 明确声明开始节点、结束节点、里程碑节点和全部 `atomic_edges`");
+  expect(plan).toContain("系统预设的交付单元生命周期原子只提供节点定义，不提供依赖关系");
 });
 
 test("multi-task-flow task-local direct delivery requires an open PR", () => {
