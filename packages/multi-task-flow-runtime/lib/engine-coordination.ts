@@ -12,6 +12,7 @@ import {
   group,
   id,
   isContributionKind,
+  historicalLifecycleValidationOptions as lifecycleValidationOptions,
   plan,
   type Task,
   task,
@@ -84,7 +85,6 @@ const {
   ready,
   deliveryUnitPrMerged,
   deliveryUnitPrMergedFromLedger,
-  isMergedContributionContinuation,
   requireHandoffAcknowledged,
   requireGroupDispatchGate,
   ownerOfTask,
@@ -229,7 +229,7 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
       validateRevisionReason(revision);
       proposed.revision = revision;
       proposed.lifecycle = "proposed";
-      validatePlan(proposed, { allowLegacyLifecycleRoleInference: ledger.contract_version < 6 });
+      validatePlan(proposed, lifecycleValidationOptions(ledger, ledger.contract_version >= 6));
       if (proposed.plan_handoff) {
         const cutAssignments = previous.plan_handoff
           ? collectCutAssignmentEvidence(ledger, previous)
@@ -629,7 +629,6 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
         "Task group is not bound",
         4,
       );
-      const mergedContinuation = isMergedContributionContinuation(ledger, owner, target);
       if (["release", "deployment", "verification"].includes(target.kind)) {
         requireCondition(
           owner.state === "merged" && owner.merge_sha,
@@ -639,14 +638,15 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
         );
       } else {
         requireCondition(
-          owner.state === "active" || mergedContinuation,
+          owner.state === "active" ||
+            support.isMergedContributionContinuation(ledger, owner, target),
           "GROUP_NOT_READY",
           "Task group is not active or approved for a post-merge continuation",
           4,
         );
       }
       if (isContributionKind(target.kind)) {
-        requireContributionDispatchGate(ledger, owner, true, "dispatch-claim", mergedContinuation);
+        support.requireContributionTaskDispatchGate(ledger, owner, target);
         requireCondition(
           owner.parent_branch && target.base_sha && owner.current_sha === target.base_sha,
           "BASE_NOT_READY",

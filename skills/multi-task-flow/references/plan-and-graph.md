@@ -10,6 +10,8 @@
 
 归纳结果只落在已批准计划的原子 scope 中：每个 contribution 或 documentation work 原子使用唯一的 `TaskScope { kind: "task", task_id, delivery_unit_id }`；`DeliveryUnitDefinition` 不复制 `task_ids`，成员由原子 scope 派生。主 Agent 的中间推理不作为新的 Proposal 类型或独立账本对象持久化。
 
+交付单元的默认生命周期是 `prepare-parent → integrate → create-pr → merge-pr → closeout`。`integrate` 必须先把产品、指南、参考正文或已验收 child PR 结果写入父分支，父 PR 只能从这个已有内容的分支创建；父 PR 不是普通贡献任务开始工作的前置条件。
+
 归纳完成后才选择执行拓扑：同一 `delivery_unit_id` 恰好有一个 contribution Task 时，使用共享交付拓扑；有多个 contribution Task 时，使用多任务集成拓扑。共享拓扑复用交付单元对话、工作区、分支和 PR；多任务集成为每个任务创建独立对话、工作区、分支和 child PR。verification、release 和 deployment Task 不增加 contribution Task 数量。
 
 计划校验必须保证每个 contribution Task 有且只有一个交付单元归属，并保证执行策略与归纳结果一致。缺少归属、出现多个归属或任务策略与拓扑冲突时，计划必须被拒绝；不能退回“一项任务一个交付单元”的隐式默认。计划批准后不得静默重新归纳，必须通过计划修订处理。
@@ -22,7 +24,7 @@ bootstrap 是首个单元的主会话所有权与启动机制，覆盖完整交�
 
 主 Agent 在调用 `init` 前 必须形成完整 canonical plan：每个 contribution Task 都必须有自己的原子任务；原子图 MUST 明确声明开始节点、结束节点、里程碑节点和全部 `atomic_edges`。系统预设的交付单元生命周期原子只提供节点定义，不提供依赖关系；生命周期关系必须由 Agent 在 plan 中显式声明。运行时不得从任务图、交付单元数组顺序、原子数组顺序或名称推导任何原子依赖。
 
-Delivery Unit 的四个预设生命周期原子必须按 `prepare-parent → create-pr → merge-pr → closeout` 保持可达顺序；Contribution Task 的四个预设生命周期原子必须按 `prepare-branch → create-pr → merge-pr → closeout` 保持可达顺序。两层原子不得混用；不再预设 `verify-integration` 或 `verify-task-pr`。两节点之间允许插入 Agent 创建的 work、milestone 和并行分支，但只能使用 Agent 声明的边形成路径；缺失、逆序、无关或自动补出的关系都必须使计划拒绝。
+Delivery Unit 的五个预设生命周期原子必须按 `prepare-parent → integrate → create-pr → merge-pr → closeout` 保持可达顺序；`integrate` 必须先把交付内容写入父分支，`create-pr` 只能在它完成后执行。Contribution Task 的四个预设生命周期原子必须按 `prepare-branch → create-pr → merge-pr → closeout` 保持可达顺序。两层原子不得混用；不再预设 `verify-integration` 或 `verify-task-pr`。两节点之间允许插入 Agent 创建的 work、milestone 和并行分支，但只能使用 Agent 声明的边形成路径；缺失、逆序、无关或自动补出的关系都必须使计划拒绝。
 
 生命周期节点保存显式 `lifecycle_role`；历史读取仅按 owner scope 和完整后缀规则适配旧 ID，不从标题或任意 ID 猜角色或依赖。边引用存在的节点，图无环，里程碑至少有入边或验收条件；历史原子／边只允许机械 canonicalization，不推断业务语义。视图投影的 boundary、颜色、选中状态与详情文案不构成运行事实或 provider evidence。
 

@@ -618,6 +618,22 @@ export function isMergedContributionContinuation(
   );
 }
 
+export function requireContributionTaskDispatchGate(
+  ledger: Ledger,
+  owner: Ledger["groups"][number],
+  target: Ledger["tasks"][number],
+  retryAction: "dispatch-claim" | "task-update" = "dispatch-claim",
+): void {
+  core.requireContributionDispatchGate(
+    ledger,
+    owner,
+    target.delivery_policy === "parent_pr",
+    false,
+    retryAction,
+    isMergedContributionContinuation(ledger, owner, target),
+  );
+}
+
 export function requireHandoffAcknowledged(ledger: Ledger, group: Ledger["groups"][number]): void {
   const dispatch = ledger.operations.find(
     (item) =>

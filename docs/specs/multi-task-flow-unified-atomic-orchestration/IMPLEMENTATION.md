@@ -31,7 +31,7 @@ REQ-INVOCATION-001 至 REQ-INVOCATION-006 的候选实现已接入客户端、�
 
 机械迁移沿用 ADR 0041 与 SPEC 第 16 节的共享评估器，不把旧 receipt 改为 stopped；只有冻结审计中精确匹配的旧调用摘要可由目标身份建立新 journal。包资源登记同时包含迁移审计、评估器及其回归，独立安装消费者不得依赖仓库源码。schema-4 绑定拒绝旧维护 writer；新调用仍依赖不可变资源终态凭证。当前候选必须重做受影响的包验收、审查与 CI，历史 SHA 的通过结果不可替代。
 
-候选包版本为 `0.6.2`，保留 `compat-v1`；这里只准备版本元数据，实际合并和受保护 CI 发布仍由主人控制。
+候选包版本为 `0.6.3`，保留 `compat-v1`；这里只准备版本元数据，实际合并和受保护 CI 发布仍由主人控制。
 
 `@loomhelm/multi-task-flow@0.3.0` 的通用执行器默认合计捕获 stdout/stderr 上限为 1 MiB；超限后先 SIGTERM，250 ms 后 SIGKILL。编排子进程在 action 前写 running，在 finally 写 stopped；终止可能阻止 finally 完成。当前 LedgerStore 读取预算为 256 MiB，传输先于支持的数据容量失败。
 
@@ -69,7 +69,7 @@ DeliveryUnit merge capability 需要由统一的 engine/domain/view predicate �
 
 ## PR and starting gates
 
-贡献 Task 使用 `TaskPrBinding` 表达 unbound/shared_delivery_unit/open/merged/closed。共享交付拓扑下，只有一个 contribution Task 的 DeliveryUnit 使用 `shared_delivery_unit`，Task 与 DeliveryUnit 共用 conversation、worktree、branch 和唯一 PR；多任务集成拓扑下才使用独立 child PR。普通贡献 work 原子或贡献 Task 进入 `starting` 前，所属 DeliveryUnit 必须有已核验的 `pr` 和 `parent_branch`；活跃且 workspace readiness 已完成的 main-owned bootstrap unit 可以让其 main-owned contribution task 在父 PR 创建前启动，但该例外只适用于 canonical facts 明确证明父 PR definitively absent 且交付单元 PR 为 `unpublished` 的路径，父 PR 发布进行中、结果未知、已有父 PR 事实或 provider/repository/id/state identity 不匹配时仍必须阻塞。engine、atomic validator 和 viewer 必须共享这组外部 PR identity/state 判定；engine 也必须拒绝缺少明确 absent receipt 的 bootstrap 启动，viewer 还必须在计划级 readiness 聚合 DeliveryUnit 门禁，不能因 bootstrap 类型而跳过 active、workspace 或父 PR 证据。启动输入不要求提交 hash。DeliveryUnit 集成 PR 的 canonical 字段是 `pr`，旧 `parent_pr` 仅作为只读兼容输入。
+贡献 Task 使用 `TaskPrBinding` 表达 unbound/shared_delivery_unit/open/merged/closed。共享交付拓扑下，只有一个 contribution Task 的 DeliveryUnit 使用 `shared_delivery_unit`，Task 与 DeliveryUnit 共用 conversation、worktree、branch 和唯一 PR；多任务集成拓扑下才使用独立 child PR。普通贡献 work 原子或贡献 Task 进入 `starting` 前，所属 DeliveryUnit 必须有 active workspace、`parent_branch` 和 branch receipt；父 PR 只对显式 `delivery_policy: "parent_pr"` 的任务构成前置条件。交付单元的“集成交付内容”原子必须先完成，`publish-pr-claim` 才能创建父 PR；engine、atomic validator 和 viewer 必须共享 delivery policy 及外部 PR identity/state 判定。启动输入不要求提交 hash。DeliveryUnit 集成 PR 的 canonical 字段是 `pr`，旧 `parent_pr` 仅作为只读兼容输入。
 
 ## Post-merge continuation
 

@@ -8,7 +8,12 @@ import { requireCondition } from "../lib/errors";
 import { sameRunIdentity } from "./orchestration-identity";
 import { isContinuationPublication } from "./publication-facts";
 import { collectCutAssignmentEvidence } from "./schema-cut";
-import { canonicalJson, validateDevPlanHandoff, validatePlan } from "./schema-handoff";
+import {
+  canonicalJson,
+  historicalLifecycleCompatibility,
+  validateDevPlanHandoff,
+  validatePlan,
+} from "./schema-handoff";
 import { type Ledger, ledgerSchema, type Task } from "./schema-models";
 import { normalizeLegacyLedger } from "./schema-normalization";
 import {
@@ -237,12 +242,11 @@ export function validateLedger(value: unknown): Ledger {
     "APPROVAL_MISMATCH",
     "Control approval must match the execution plan approval",
   );
-  const historicalLifecycleRoleInference =
-    parsed.contract_version < 6 ||
-    (parsed.contract_version === 6 && (parsed.upgrade?.migration_audit?.source_contract ?? 6) < 6);
+  const historicalLifecycleRoleInference = historicalLifecycleCompatibility(parsed);
   for (const item of parsed.plans) {
     validatePlan(item, {
       allowLegacyLifecycleRoleInference: historicalLifecycleRoleInference,
+      allowLegacyDeliveryUnitLifecycleWithoutIntegration: historicalLifecycleRoleInference,
       requireCanonicalLifecycleGraph: !historicalLifecycleRoleInference,
     });
     if (item.lifecycle === "proposed")

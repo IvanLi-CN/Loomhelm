@@ -243,7 +243,8 @@ export function executeTaskLifecycleCommand(context: CommandContext): unknown | 
         requireContributionDispatchGate(
           ledger,
           owner,
-          !bootstrapMainOwnedStart,
+          target.delivery_policy === "parent_pr" && !bootstrapMainOwnedStart,
+          bootstrapMainOwnedStart && target.delivery_policy === "parent_pr",
           "task-update",
           mergedContinuation,
         );

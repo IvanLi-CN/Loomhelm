@@ -295,7 +295,8 @@ export function executeExecutionCommand(context: CommandContext): unknown | unde
           requireContributionDispatchGate(
             ledger,
             group,
-            true,
+            taskTarget.delivery_policy === "parent_pr",
+            false,
             "dispatch-claim",
             isMergedContributionContinuation(ledger, group, taskTarget),
           );

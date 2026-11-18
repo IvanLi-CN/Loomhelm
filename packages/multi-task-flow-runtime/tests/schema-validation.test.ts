@@ -87,4 +87,18 @@ describe("planned action schema", () => {
     expect(() => validateLedger(roleOnlyLifecycleLedger(6))).toThrow("canonical atomic nodes");
     expect(() => validateLedger(roleOnlyLifecycleLedger(5))).not.toThrow();
   });
+
+  test("rejects fresh delivery units whose atoms do not declare lifecycle roles", () => {
+    const ledger = roleOnlyLifecycleLedger(6) as any;
+    const atomDefinition = {
+      id: "custom-delivery-atom",
+      title: "Custom delivery step",
+      purpose: "Custom delivery step",
+      output: "Custom output",
+      lifecycle_stage: null,
+    };
+    ledger.groups[0].atoms = [{ ...atomDefinition, status: "planned" }];
+    ledger.plans[0].group_atoms = [{ ...atomDefinition, group_id: ledger.groups[0].id }];
+    expect(() => validateLedger(ledger)).toThrow("must declare lifecycle_role explicitly");
+  });
 });

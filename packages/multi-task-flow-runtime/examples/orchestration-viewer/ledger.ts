@@ -51,22 +51,25 @@ export function createDemoLedger(referenceTime = Date.now()): Ledger {
       purpose: "建立交付单元父分支",
       output: "父分支已准备",
       lifecycle_stage: "workspace_ready" as const,
+      lifecycle_role: "prepare-parent" as const,
     },
     {
       id: `group-atom-${groupId}-2`,
+      title: "集成交付内容",
+      group_id: groupId,
+      purpose: "将产品、指南和参考正文集成到父分支",
+      output: "交付内容已集成",
+      lifecycle_stage: null,
+      lifecycle_role: "integrate" as const,
+    },
+    {
+      id: `group-atom-${groupId}-3`,
       title: "创建父 PR",
       group_id: groupId,
       purpose: "提交交付单元父 PR",
       output: "父 PR 已创建",
       lifecycle_stage: "pr_created" as const,
-    },
-    {
-      id: `group-atom-${groupId}-3`,
-      title: "验收集成结果",
-      group_id: groupId,
-      purpose: "核对贡献任务集成结果",
-      output: "集成结果已验收",
-      lifecycle_stage: null,
+      lifecycle_role: "create-pr" as const,
     },
     {
       id: `group-atom-${groupId}-4`,
@@ -75,6 +78,7 @@ export function createDemoLedger(referenceTime = Date.now()): Ledger {
       purpose: "合并已验收的父 PR",
       output: "父 PR 已合并",
       lifecycle_stage: "pr_merged" as const,
+      lifecycle_role: "merge-pr" as const,
     },
     {
       id: `group-atom-${groupId}-5`,
@@ -83,6 +87,7 @@ export function createDemoLedger(referenceTime = Date.now()): Ledger {
       purpose: "完成交付单元收口",
       output: "交付单元已收口",
       lifecycle_stage: "closed" as const,
+      lifecycle_role: "closeout" as const,
     },
   ];
   const runtimeAtoms = (groupId: string, completed: number, running: number | null) =>

@@ -306,6 +306,15 @@ export function defaultGroupAtoms(groupId: string) {
       status: "planned" as const,
     },
     {
+      id: `group-atom-${groupId}-integrate`,
+      title: "集成交付内容",
+      purpose: "将产品、指南和参考正文集成到父分支",
+      output: "交付内容已集成",
+      lifecycle_stage: null,
+      lifecycle_role: "integrate" as const,
+      status: "planned" as const,
+    },
+    {
       id: `group-atom-${groupId}-create-pr`,
       title: "创建父 PR",
       purpose: "提交交付单元父 PR",

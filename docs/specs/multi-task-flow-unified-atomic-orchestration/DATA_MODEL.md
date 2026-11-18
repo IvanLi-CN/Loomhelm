@@ -242,7 +242,7 @@ TaskRuntimeObservation 只描述 Agent 或对话运行观察，不覆盖 TaskPro
 
 共享交付拓扑只在同一 DeliveryUnit 恰好存在一个 contribution Task 时合法；documentation 原子归入 contribution Task 后也计入该数量。verification、release 和 deployment Task 不增加 contribution Task 数量，可以继续使用 DeliveryUnitScope 或独立的 evidence 交付。共享绑定的 Task 与 DeliveryUnit 必须使用同一个 conversation、worktree、branch 和 PR，Task 的 PR 发布、检查和合并事实从该 DeliveryUnit 的 provider receipt 派生。新增第二个需要独立代码交付的 contribution Task 时，必须通过显式计划修订切换到多任务集成拓扑，不能在运行中静默创建 child PR。
 
-贡献 Task 切换到 starting 时，校验器必须解析其 `delivery_unit_id` 对应的 DeliveryUnitExternalFacts，并要求它处于 `published`，同时具有 `pr` 和 `parent_branch`；唯一例外是活跃且已完成 workspace readiness 的 main-owned bootstrap unit，其 main-owned contribution task 可以在集成 PR 创建前启动。regular unit 和 Task Agent 路径始终保留集成 PR 门禁。普通 starting 命令只需要这些交付单元集成 PR 和交付单元集成分支信息，不把提交 hash 当作启动条件；后续 provider receipt 可以补充 head SHA 或 merge SHA，但这些事实不改变 starting 的输入合同。
+贡献 Task 切换到 starting 时，校验器必须解析其 `delivery_unit_id` 对应的 DeliveryUnitExternalFacts，并要求 active workspace、`parent_branch` 和成功的 branch receipt；只有显式 `delivery_policy: "parent_pr"` 的任务还需要交付单元处于 `published` 并具有有效 `pr`。普通 starting 命令不把提交 hash 当作启动条件；后续 provider receipt 可以补充 head SHA 或 merge SHA，但这些事实不改变 starting 的输入合同。父 PR publication 必须等待交付单元的 `integrate` 原子完成。
 
 每个 Task 只能归纳出一个 TaskKind。允许混合的活动类型必须映射到同一个 TaskKind，例如 contribution 与 documentation 一起归入 contribution；verification、release 和 deployment 不能混合成一个 Task。TaskKind 归纳函数必须是纯函数并纳入 schema 校验。
 

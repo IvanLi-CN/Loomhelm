@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import {
   apply,
   deliveryUnitPrMerged,
@@ -7,7 +8,14 @@ import {
   requireGroupDispatchGate,
 } from "../lib/engine";
 import { deriveExecutionPhase } from "../lib/revisions";
-import { type Ledger, type Plan, type Task, validateLedger } from "../lib/schema";
+import {
+  defaultGroupAtoms,
+  type Ledger,
+  type Plan,
+  type Task,
+  validateLedger,
+} from "../lib/schema";
+import { fixtureIdentity } from "./cli-identity-fixture";
 import {
   approve,
   approveV2,
@@ -840,6 +848,92 @@ describe("orchestration state", () => {
     ).not.toThrow();
     expect(ledger.active_plan_id).toBe("plan-revision");
     expect(() => validateLedger(ledger)).not.toThrow();
+  });
+
+  test("requires explicit lifecycle roles for a plan revision after contract migration", () => {
+    const ledger = v2Fixture() as any;
+    const groupAtoms = defaultGroupAtoms("g")
+      .filter((atom) => atom.lifecycle_role !== "integrate")
+      .map(({ lifecycle_role: _role, ...atom }) => atom);
+    ledger.groups[0].atoms = groupAtoms;
+    ledger.plans[0].group_atoms = groupAtoms.map(({ status: _status, ...atom }) => ({
+      ...atom,
+      group_id: "g",
+    }));
+    ledger.plans[0].atomic_edges = groupAtoms.slice(1).map((atom, index) => ({
+      id: `historical-group-edge-${index}`,
+      from_atom_id: groupAtoms[index]!.id,
+      to_atom_id: atom.id,
+    }));
+    ledger.plans[0] = canonicalizeContract3Plan(ledger.plans[0], ledger.tasks);
+    for (const task of ledger.tasks) {
+      task.execution_owner = "task_agent";
+      task.conversation_policy = "task_agent";
+      task.delivery_policy = "child_pr";
+    }
+    ledger.plans[0].actions = ledger.plans[0].actions.map((action: any) => ({
+      ...action,
+      target: action.group_id
+        ? { type: "group", id: action.group_id }
+        : { type: "task", id: action.task_id },
+    }));
+    const digest = "a".repeat(64);
+    const sourceIdentity = {
+      ...fixtureIdentity,
+      package_version: "0.2.55",
+      build_id: "a".repeat(64),
+      source_sha: "a".repeat(40),
+      ledger_contract: 3,
+    };
+    ledger.contract_version = 6;
+    ledger.runtime_identity = { ...fixtureIdentity };
+    ledger.upgrade = {
+      operation_id: "historical-upgrade",
+      requested_selector: "0.6.0",
+      source: sourceIdentity,
+      target: { ...fixtureIdentity },
+      source_revision: ledger.revision,
+      source_directory: ".upgrade-00000000-0000-0000-0000-000000000000",
+      source_binding_revision: 0,
+      source_binding_digest: digest,
+      source_digest: digest,
+      backup: `upgrade-${digest}.json`,
+      phase: "completed",
+      migration_audit: {
+        schema_version: 1,
+        policy: "preserve-unresolved-v1",
+        validator_version: 1,
+        source_contract: 3,
+        source_revision: ledger.revision,
+        source_digest: digest,
+        source_binding_digest: digest,
+        source_call_digest: null,
+        business_digest: digest,
+        unresolved_digest: digest,
+        unresolved: [],
+        writer_barrier: "ledger-contract-6-and-binding-schema-4",
+        native_quiescence: "not_asserted",
+      },
+    };
+    approveV2(ledger);
+    const proposed = structuredClone(ledger.plans[0]);
+    proposed.id = "historical-revision";
+    proposed.supersedes_id = ledger.execution_plan_id;
+    proposed.approval_id = null;
+    proposed.lifecycle = "proposed";
+    proposed.nodes[0]!.label = "historical revision";
+    expect(() =>
+      apply(
+        ledger,
+        "plan-propose",
+        request(ledger, "historical-revision-propose", {
+          plan: proposed,
+          groups: structuredClone(ledger.groups),
+          tasks: structuredClone(ledger.tasks),
+        }),
+      ),
+    ).toThrow("must declare lifecycle_role explicitly in current contracts");
+    expect(ledger.active_plan_id).toBe(ledger.execution_plan_id);
   });
 
   test("rejects delivery-unit ownership rewrites in a plan revision", () => {

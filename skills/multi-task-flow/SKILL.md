@@ -36,20 +36,20 @@ version: 3.0.0
 
 先说明每个 contribution Task 的交付目标，把适合一起交付、一起验收的任务归入同一个 `delivery_unit_id`；只有可独立交付、独立验收的结果才拆单元。PR／Agent 数量、文件／模块边界、并行性、SPEC/ADR 编写、父 PR 初始化、准备与实现的先后及角色差异，都不能单独作为拆分理由。
 
-默认首个单元为唯一的 `bootstrap`：`owner_kind: "main"`、无交付单元对话绑定，由主对话协调准备、实现、验证、合并与收口；首个为 regular 必须在提案记录例外原因和证据。一个 bootstrap 即可完成整次交付，例如登录跳转修复中的诊断、测试、前后端修改与文档更新，无需另建 regular。后续 regular 由独立交付对话负责，激活前绑定真实身份。既有类型、owner 与对话绑定不可通过普通更新或计划修订改写，本版本不提供原地所有权转移。
+默认首个单元为唯一的 `bootstrap`：`owner_kind: "main"`、无交付单元对话绑定，由主对话协调准备、实现、集成、验证、合并与收口；首个为 regular 必须在提案记录例外原因和证据。一个 bootstrap 即可完成整次交付，例如登录跳转修复中的诊断、测试、前后端修改与文档更新，无需另建 regular。后续 regular 由独立交付对话负责，激活前绑定真实身份。既有类型、owner 与对话绑定不可通过普通更新或计划修订改写，本版本不提供原地所有权转移。
 
 归纳后再选拓扑：regular 单元恰好一个 contribution Task 时共享对话、工作区、分支和唯一 PR；多个贡献任务分别创建任务对话、工作区、分支和 child PR，由单元集成。verification、release、deployment 不计入贡献数量；证据任务与 PR 贡献分开建模。成员由原子 scope 派生，每个贡献任务恰有一个单元归属，策略必须匹配拓扑。
 
-`init` 前形成完整 canonical plan：任务类型仅为 `contribution`、`verification`、`release`、`deployment`；明确开始、结束、里程碑、各贡献任务的 work 原子和全部 `atomic_edges`。交付单元生命周期按 `prepare-parent → create-pr → merge-pr → closeout` 可达，贡献任务按 `prepare-branch → create-pr → merge-pr → closeout` 可达；保存显式 `lifecycle_role`。系统提供节点，不补造依赖；不从数组顺序、名称、分组或文件重叠推导边。
+`init` 前形成完整 canonical plan：任务类型仅为 `contribution`、`verification`、`release`、`deployment`；明确开始、结束、里程碑、各贡献任务的 work 原子和全部 `atomic_edges`。交付单元生命周期按 `prepare-parent → integrate → create-pr → merge-pr → closeout` 可达；`integrate` 必须先把产品、指南、参考正文或已验收 child PR 结果写入父分支，`create-pr` 只能从该已有内容的分支执行。贡献任务按 `prepare-branch → create-pr → merge-pr → closeout` 可达；保存显式 `lifecycle_role`。系统提供节点，不补造依赖；不从数组顺序、名称、分组或文件重叠推导边。
 
 规划单元 PR、必要的 child PR、post-merge release/deployment/verification，以及带来源和置信度的预计时间。默认最多三个任务并行，等待／阻塞释放名额；parent PR 默认串行，regular 仅在依赖允许时并行。多个任务的拓扑至少有两个任务节点。等待、阻塞、集成与单元管理用协调状态和里程碑表达。
 
 ## 主流程与硬门禁
 
-1. **恢复或初始化**：优先继续已绑定当前主对话的未完成 run；先核验 owner 与版本，记录 run ID、revision、owner thread ID。所有权或 fork 控制关系不明时暂停变更。新运行按批准计划执行 `init`，只传未绑定、`planned` 单元和规范任务；该命令写账本，不创建对话。bootstrap 在同一主会话工作区记录工作区事实并发布 parent PR。
+1. **恢复或初始化**：优先继续已绑定当前主对话的未完成 run；先核验 owner 与版本，记录 run ID、revision、owner thread ID。所有权或 fork 控制关系不明时暂停变更。新运行按批准计划执行 `init`，只传未绑定、`planned` 单元和规范任务；该命令写账本，不创建对话。bootstrap 在同一主会话工作区记录工作区事实，先完成 `integrate`，再发布 parent PR。
 2. **交付仪表板**：按共享 viewer 合同核验配置、CLI、runtime 身份。身份一致且服务运行时执行 `service ensure → service login → 浏览器核验`；身份异常、服务缺失／停运只报告证据，不以 ensure、安装或升级修复。首次交付须有正式账本、主对话绑定、依赖图和渲染页面上的当前 revision；proposal、候选 `init-input.json` 或打开工具的成功回执均不算交付。
 3. **创建与派发**：Contract 3 唯一入口是 `dispatch-group-claim`／`dispatch-claim → conversation-create → native evidence reconcile → formal dispatch`。先核验精确版本 CLI、claim 与原生证据能力；缺失则报告 capability gap。任何 Agent 都不得调用 `mcp__codex_app__create_thread`、`fork_thread`、裸 `thread/start` 或 `thread/resume + turn/start` 绕过正式路径。发现 `orphan thread / orchestration violation` 或证据绕过时保留 claim 和容量，暂停受影响运行交给主人，不绑定、不 resolve、不 handoff、不作为依赖事实。
-4. **建立开发基线**：独立工作区、owner、资源与真实 SHA 核验后，执行 `resource-update`、`development-baseline-sync` 和 `lifecycle-record`。regular 贡献任务还必须有 provider 证明 open 的 parent PR；仅 main-owned bootstrap 在 workspace ready 且 provider 明确证明 parent PR `absent` 时例外。`initial_head` 只是创建快照，不是开发基线。
+4. **建立开发基线**：独立工作区、owner、资源与真实 SHA 核验后，执行 `resource-update`、`development-baseline-sync` 和 `lifecycle-record`。普通 regular 贡献任务只需 active workspace、parent branch 和成功的 branch receipt；显式 `delivery_policy: "parent_pr"` 的任务还必须有 provider 证明 open 的 parent PR。main-owned bootstrap 可在 provider 明确证明 parent PR `absent` 时继续，但集成和 parent PR 发布仍受原子图约束。`initial_head` 只是创建快照，不是开发基线。
 5. **调度与记账**：任务 Agent 收到正式派发即读取自身 `task-context`，按原子推进至 closeout，不等待固定握手或自行派发任务。用 `task-update`、`atom-update` 记录事实；普通阻塞留在负责对话与账本。活跃单元只要有 ready 且未绑定的贡献任务，就不能记 idle，必须派发／对账，或记录带任务引用的 waiting、带原因的 blocked。
 6. **合并与收口**：每次 merge 先 `merge-claim`，通过绑定 Git provider 核对 PR、head/base、检查和质量证据，外部执行后查询 provider，再 `merge-resolve`。单元须完成 parent merge、merge SHA 上的 CI、计划 post-merge 任务和全部已知 follow PR；所有单元关闭且无未解决 operation／follow PR 后才 `run-complete`。资源逐项登记，运行数据与必要服务保留到主人确认清理。
 

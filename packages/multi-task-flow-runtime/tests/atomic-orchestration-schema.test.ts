@@ -199,12 +199,29 @@ test("derives business status and enforces contribution starting prerequisites",
       evidence_refs: [],
     },
   });
-  expect(() => validateContributionStart(node, { pr: { state: "unpublished" } } as any)).toThrow();
   expect(() =>
-    validateContributionStart(node, {
-      pr: { state: "published", pr: ref, parent_branch: "main" },
-      parent_branch: "main",
-    } as any),
+    validateContributionStart(
+      node,
+      { pr: { state: "unpublished" }, parent_branch: "main" } as any,
+      { delivery_policy: "parent_pr" },
+    ),
+  ).toThrow();
+  expect(() =>
+    validateContributionStart(
+      node,
+      {
+        pr: { state: "published", pr: ref, parent_branch: "main" },
+        parent_branch: "main",
+      } as any,
+      { delivery_policy: "parent_pr" },
+    ),
+  ).not.toThrow();
+  expect(() =>
+    validateContributionStart(
+      node,
+      { pr: { state: "unpublished" }, parent_branch: "main" } as any,
+      { delivery_policy: "child_pr" },
+    ),
   ).not.toThrow();
   expect(() =>
     validateContributionStart(node, { pr: { state: "unpublished" } } as any, {
@@ -212,6 +229,7 @@ test("derives business status and enforces contribution starting prerequisites",
       owner_kind: "main",
       execution_owner: "main",
       conversation_policy: "main_owned",
+      delivery_policy: "parent_pr",
       active: true,
       workspace_ready: true,
       parent_pr_status: "definitively_absent",
@@ -234,6 +252,7 @@ test("derives business status and enforces contribution starting prerequisites",
         owner_kind: "main",
         execution_owner: "main",
         conversation_policy: "main_owned",
+        delivery_policy: "parent_pr",
         active: true,
         workspace_ready: true,
         parent_pr_status: "present",
@@ -246,6 +265,7 @@ test("derives business status and enforces contribution starting prerequisites",
       owner_kind: "main",
       execution_owner: "main",
       conversation_policy: "main_owned",
+      delivery_policy: "parent_pr",
       active: true,
       workspace_ready: true,
       parent_pr_status: "unknown",
@@ -257,6 +277,7 @@ test("derives business status and enforces contribution starting prerequisites",
       owner_kind: "main",
       execution_owner: "task_agent",
       conversation_policy: "task_agent",
+      delivery_policy: "parent_pr",
       active: true,
       workspace_ready: true,
     }),
@@ -394,16 +415,31 @@ test("does not invent delivery-unit lifecycle edges when explicit atomic edges a
   ).toEqual(["task-atom->group-prepare"]);
 });
 
-test("requires an Agent-declared path across the four preset delivery-unit lifecycle atoms", () => {
-  const atoms = ["prepare-parent", "create-pr", "merge-pr", "closeout"].map((suffix) => ({
-    id: `group-1-${suffix}`,
-    group_id: "group-1",
-  }));
+test("requires integration before the parent PR in the preset delivery-unit lifecycle", () => {
+  const atoms = ["prepare-parent", "integrate", "create-pr", "merge-pr", "closeout"].map(
+    (suffix) => ({
+      id: `group-1-${suffix}`,
+      group_id: "group-1",
+    }),
+  );
   expect(() =>
     validateDeliveryUnitLifecycleEdges(atoms, [
       { from_node_id: atoms[0]!.id, to_node_id: atoms[1]!.id },
     ]),
   ).toThrow("Agent-declared dependency path");
+  const wrongOrderEdges = [
+    [0, 2],
+    [2, 1],
+    [1, 3],
+    [3, 4],
+  ].map(([from, to], index) => ({
+    id: `wrong-${index}`,
+    from_node_id: atoms[from]!.id,
+    to_node_id: atoms[to]!.id,
+  }));
+  expect(() => validateDeliveryUnitLifecycleEdges(atoms, wrongOrderEdges)).toThrow(
+    "Agent-declared dependency path",
+  );
   const edges = atoms
     .slice(1)
     .map((atom, index) => ({ from_node_id: atoms[index]!.id, to_node_id: atom.id }));

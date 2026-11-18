@@ -20,7 +20,7 @@ AtomicNode 与 AtomicEdge MUST 是唯一的编排依赖事实；Task 与 Deliver
 
 ### REQ-ATOMIC-002
 
-普通 contribution Task 和 Task Agent 路径 MUST 在 starting 前核验交付单元的集成 PR 与分支事实；只有 active、workspace-ready、main-owned 的 bootstrap unit 才能让 main-owned contribution task 在集成 PR 发布前启动，发布进行中、结果未知或已有非空父 PR 事实时 MUST 继续阻塞。
+普通 contribution Task 和 Task Agent 路径 MUST 在 starting 前核验交付单元的 active workspace、parent branch 和对应分支发布事实；父 PR 不是产生交付内容的前置条件，显式声明 `delivery_policy: "parent_pr"` 的任务除外。交付单元的父 PR MUST 在“集成交付内容”原子完成后才能发布；父 PR 发布中、结果未知或身份不匹配时，只有显式要求父 PR 的任务继续阻塞。
 
 ### REQ-ATOMIC-003
 
@@ -100,7 +100,7 @@ DeliveryUnit 的 `closed` 业务状态 MUST 保留已经验证的 `pr_merged` �
 
 - covers: `REQ-ATOMIC-002`
 - Method: engine、atomic-orchestration schema 和 dispatch claim 测试覆盖 bootstrap main-owned、regular、Task Agent、父 PR 发布中、未知和关闭事实。
-- Pass condition: 只有明确满足 bootstrap 例外的 main-owned contribution task 可以绕过父 PR；其他路径在缺少已发布且开放的父 PR 时保持阻塞。
+- Pass condition: 普通 child PR、shared-delivery 和内容任务在 workspace/branch 就绪后不因父 PR 缺失而阻塞；显式 `parent_pr` 策略、父 PR 发布中的未知状态和无效 provider identity 仍保持阻塞；父 PR 发布前的集成交付原子不允许被跳过。
 
 ### VER-ATOMIC-003
 
@@ -201,16 +201,16 @@ Task 与 DeliveryUnit 是平级对象；delivery_unit_id 只是共同的分类�
 
 交付单元的标准生命周期按以下顺序编排，具体顺序由 AtomicEdge 表达：
 
-1. 解析交付拓扑并准备工作区、交付单元分支和 PR 基线：记录外部操作及其 evidence，不创建 coordination 原子。只有一个 contribution Task 时选择共享交付拓扑；存在多个 contribution Task 时选择多任务集成拓扑。
-2. 创建并发布交付单元 PR：使用 delivery_unit scope 的 milestone，显式要求 provider receipt。共享交付拓扑下，该 PR 同时是唯一 contribution Task 的交付 PR。
-3. 执行该 `delivery_unit_id` 下的 contribution Task 原子。共享交付拓扑使用同一个交付单元对话、工作区、分支和 PR；多任务集成拓扑才为各 contribution Task 创建独立 child PR。普通 contribution 任务进入 starting 前，交付单元必须已经提供 `pr` 和 `parent_branch`，但活跃且 workspace readiness 已完成的 main-owned bootstrap unit 可以让其 main-owned contribution task 在集成 PR 创建前启动；regular unit 和 Task Agent 路径仍必须满足父 PR 门禁。启动输入不要求提交 hash；交付单元等待状态由依赖投影得到，不创建“等待任务”。
-4. 共享交付拓扑直接完成交付单元级验收；多任务集成拓扑先集成 child PR，再使用 delivery_unit scope 的 verification work 原子核对当前交付单元分支 SHA 和检查证据。
+1. 解析交付拓扑并准备工作区、交付单元分支和开发基线：记录外部操作及其 evidence，不创建 coordination 原子。只有一个 contribution Task 时选择共享交付拓扑；存在多个 contribution Task 时选择多任务集成拓扑。
+2. 执行该 `delivery_unit_id` 下的 contribution Task 原子。共享交付拓扑使用同一个交付单元对话、工作区和分支；多任务集成拓扑才为各 contribution Task 创建独立 child PR。任务可以在父 PR 不存在时产生内容，但必须先有 active workspace、parent branch 和分支发布事实；显式 `parent_pr` 策略仍按其声明等待父 PR。
+3. 集成交付内容：共享交付拓扑将内容写入交付单元父分支，多任务集成拓扑先合并已验收的 child PR，并核对当前父分支 SHA 和检查证据。
+4. 创建并发布交付单元 PR：使用 delivery_unit scope 的 milestone，显式要求 provider receipt；该步骤只能在“集成交付内容”原子完成后执行。共享交付拓扑下，该 PR 同时是唯一 contribution Task 的交付 PR。
 5. 合并交付单元 PR：使用 delivery_unit scope 的 milestone，显式要求前置原子完成和合并事实。
 6. 如果 parent PR 已合并后计划修订新增 active contribution work，交付 Agent 必须在 contract 3 或更高版本中使用 `parent-followup` 合并模式；该模式保留原 parent merge SHA、使用同仓库独立 PR、绑定一次性目标审批，并把 follow-up merge SHA 作为最终 `merge_sha`，不能让普通 `parent` 模式复用已合并状态。
 7. 按计划执行 release、deployment 和线上 verification 原子；根据责任边界使用 Task scope 或 delivery_unit scope。
 8. 收口和资源清理：使用 delivery_unit scope 的 milestone，显式要求必要节点、外部资源和通知条件满足；未合并的 continuation PR 或活动 merge/publication operation 必须阻止 closeout。
 
-交付单元的准备父分支、创建父 PR、合并父 PR 和收口是交付单元预设 work 原子；它们不得与 Task 原子混用。集成验收不是预设原子；如果计划需要集成检查，应由 Agent 创建实际 work 或 milestone，并声明其 scope 和条件。旧账本中的 coordination task 和 coordination session 只读兼容，不自动猜测业务语义；迁移必须通过显式计划修订，将其转换为 contribution、documentation、verification、release、deployment 或适当的 milestone。
+交付单元的准备父分支、集成交付内容、创建父 PR、合并父 PR 和收口是交付单元预设 work 原子；它们不得与 Task 原子混用。额外的集成验收或质量检查仍应由 Agent 创建实际 work 或 milestone，并声明其 scope 和条件。旧账本中的 coordination task 和 coordination session 只读兼容，不自动猜测业务语义；迁移必须通过显式计划修订，将其转换为 contribution、documentation、verification、release、deployment 或适当的 milestone。
 
 Canonical schema、Task/DeliveryUnit 投影、外部事实和执行策略见 [DATA_MODEL.md](./DATA_MODEL.md)。
 
@@ -247,8 +247,8 @@ Canonical schema、Task/DeliveryUnit 投影、外部事实和执行策略见 [DA
 - TaskKind 必须与成员 work 原子的归纳结果一致；不同 TaskKind 的活动不能混入同一个 Task。
 - contribution Task 必须有 `pr: TaskPrBinding` 字段；running 时可以是 `unbound`，blocked 时也可以是 `unbound`，从 running 之后进入的任何非 blocked 阶段必须是 `open` 或 `merged`。
 - TaskPrBinding 必须能够表达 `unbound`、`open`、`merged` 和 `closed`；DeliveryUnitExternalFacts 必须能够表达 `unpublished`、`published`、`merged` 和 `closed`。两者的 `closed` 都必须保留关闭时间和关闭原因，并只能作为外部失败/阻塞事实，不能被当作成功完成。
-- contribution Task 切换到 starting 时，所属 DeliveryUnit 的外部事实通常必须是 `published`，并提供 `pr` 与 `parent_branch`；活跃且已完成 workspace readiness 的 main-owned bootstrap unit 是唯一例外，可以在集成 PR 创建前启动其 main-owned contribution task。若父 PR 发布操作仍在进行、结果未知或已有非空的父 PR 事实，则不能使用该例外；engine、atomic validator 和 viewer 必须对父 PR 使用相同的 provider/repository/id/state 证据判定，engine 不得在缺少明确 absent receipt 时放行 bootstrap，且 viewer 的计划级 readiness 必须聚合 DeliveryUnit 的 active、workspace 和父 PR 门禁；starting 输入不要求提交 hash，提交 hash 只能作为后续 provider receipt 或合并事实记录。
-- contribution work 原子进入 starting 时必须满足同一 DeliveryUnit 的 `published` PR 前置条件，除非它属于上述 main-owned bootstrap 例外；starting 是原子生命周期的一部分，不能只在 TaskProjection 或 Agent runtime observation 中临时伪造。
+- contribution Task 切换到 starting 时，所属 DeliveryUnit 必须提供 active workspace、`parent_branch` 和成功的 branch receipt；父 PR 只在任务显式声明 `delivery_policy: "parent_pr"` 时作为 starting 前置条件。engine、atomic validator 和 viewer 必须使用相同的 delivery policy 与 provider identity/state 判定；starting 输入不要求提交 hash，提交 hash 只能作为后续 provider receipt 或合并事实记录。
+- contribution work 原子进入 starting 时必须满足对应 delivery policy 的前置条件；父 PR 发布原子必须位于“集成交付内容”之后，starting 是原子生命周期的一部分，不能只在 TaskProjection 或 Agent runtime observation 中临时伪造。
 - 活动类型、完成条件、result/evidence 和外部目标必须兼容。
 - TaskScope 和 DeliveryUnitScope 必须分别解析到对应的 execution_policy；不得出现 null 组合。
 - 外部事实必须绑定正确目标、SHA、PR、环境和来源身份。

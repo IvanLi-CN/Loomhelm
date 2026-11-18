@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { lifecycleStageOf } from "../lib/atomic-orchestration";
+import { lifecycleRoleOf, lifecycleStageOf } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
 import { externalRef, fact, group, id, isContributionKind, providerReceipt } from "../lib/schema";
 import type { CommandContext } from "./engine-command-context";
@@ -18,6 +18,7 @@ const {
   stable,
   activePlan,
   executionPlan,
+  atomicNodeSatisfied,
   requireDevelopmentTarget,
   developmentDispatch,
   lineageEventMatches,
@@ -87,6 +88,39 @@ export const groupLifecycleCommands = [
   "group-base-reconcile",
   "task-external-merge-reconcile",
 ] as const;
+
+function deliveryUnitAtomDependenciesReady(
+  ledger: any,
+  plan: any,
+  owner: any,
+  atom: any,
+  index: number,
+): boolean {
+  const nodes = (plan.atomic_nodes?.length ? plan.atomic_nodes : ledger.atomic_nodes) ?? [];
+  const edgeSource = plan.atomic_edges?.some((edge: any) => "from_node_id" in edge)
+    ? plan.atomic_edges
+    : ledger.atomic_edges;
+  const edges = (edgeSource ?? []).filter(
+    (edge: any) => "from_node_id" in edge && "to_node_id" in edge,
+  );
+  const node = nodes.find(
+    (candidate: any) =>
+      candidate.id === atom.id &&
+      candidate.kind === "work" &&
+      candidate.scope?.kind === "delivery_unit" &&
+      candidate.scope.delivery_unit_id === owner.id,
+  );
+  if (node)
+    return edges
+      .filter((edge: any) => edge.to_node_id === node.id)
+      .every((edge: any) =>
+        atomicNodeSatisfied(
+          ledger,
+          nodes.find((item: any) => item.id === edge.from_node_id),
+        ),
+      );
+  return owner.atoms.slice(0, index).every((item: any) => item.status === "completed");
+}
 
 export function executeGroupLifecycleCommand(context: CommandContext): unknown | undefined {
   const { ledger, command, request, payload, currentPlan } = context;
@@ -195,11 +229,25 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
       const index = owner.atoms.indexOf(atom);
       const state = z.enum(["running", "blocked", "completed"]).parse(payload.state);
       requireCondition(
-        owner.atoms.slice(0, index).every((item) => item.status === "completed"),
+        deliveryUnitAtomDependenciesReady(ledger, currentPlan(), owner, atom, index),
         "ATOMS_PENDING",
         "Earlier delivery-unit atoms must complete first",
         4,
       );
+      if (lifecycleRoleOf({ ...atom, group_id: groupId }) === "integrate")
+        requireCondition(
+          ledger.tasks
+            .filter(
+              (task) =>
+                task.group_id === groupId &&
+                task.disposition === "active" &&
+                isContributionKind(task.kind),
+            )
+            .every((task) => task.atoms.every((item) => item.status === "completed")),
+          "ATOMS_PENDING",
+          "Contribution task atoms must complete before delivery-unit integration",
+          4,
+        );
       const allowed: Record<string, string[]> = {
         planned: ["running"],
         running: ["blocked", "completed"],

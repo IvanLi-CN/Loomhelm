@@ -273,7 +273,7 @@ stateDiagram-v2
     blocked --> unknown: 任务策略回到未配置
 ```
 
-交付单元 D ready 要求 raw state 为 active、workspace lifecycle 通过且对应原子 completed、父 PR 门禁通过或满足 bootstrap 例外，并且 regular 单元已绑定 Agent。Task 则先检查三项执行策略是否全 null，再检查策略问题；贡献任务额外检查交付门禁，最后检查 bootstrap 或 Agent 绑定。D 不检查 Task 自身是否 completed，因此 completed + D ready 并不矛盾。R 还检查独立的资源证据和控制权，所以 D ready 既不蕴含 R ready，R ready 也不蕴含 D ready。
+交付单元 D ready 要求 raw state 为 active、workspace lifecycle 通过且对应原子 completed，并且 regular 单元已绑定 Agent；父 PR 不是交付单元开始工作的门禁。Task 则先检查三项执行策略是否全 null，再检查策略问题；贡献任务额外检查 workspace/branch 门禁，只有显式 `parent_pr` 策略才检查父 PR，最后检查 bootstrap 或 Agent 绑定。D 不检查 Task 自身是否 completed，因此 completed + D ready 并不矛盾。R 还检查独立的资源证据和控制权，所以 D ready 既不蕴含 R ready，R ready 也不蕴含 D ready。
 
 ### 5.4 组合、剪枝与状态转换
 
@@ -291,7 +291,7 @@ stateDiagram-v2
 
 证明来源：`deliveryGateDiagnostics` 对任意非 active 单元添加 `DELIVERY_UNIT_NOT_ACTIVE`，因此其 D 不可能 ready；`groupRuntimeReadiness` 在资源检查之前阻断 planned、blocked、closed，因此这些 S 的 R 不可能 ready；`view.ts` 的 group dispatch 分支只产生 ready 或 blocked。group D unknown 表示缺失/旧投影/尚未支持的数据，并非当前完整生产者的合法正常输出；UI 仍接受输入并走 unknown fallback，不能崩溃。
 
-不能额外剪掉 active + R blocked + D ready（调度门禁通过后 worktree 证据缺失）、active + R unknown + D ready（控制权未知）、active + R ready + D blocked（父 PR 门禁未通过），以及 merged + R ready + D blocked（当前 runtime 检查不把 merged 当作 closed）。这些是真实规则允许的情况，不应使用直觉上的 `D ready ⇒ R ready` 抹掉。
+不能额外剪掉 active + R blocked + D ready（调度门禁通过后 worktree 证据缺失）、active + R unknown + D ready（控制权未知）、active + R ready + D blocked（显式 parent PR 门禁未通过），以及 merged + R ready + D blocked（当前 runtime 检查不把 merged 当作 closed）。这些是真实规则允许的情况，不应使用直觉上的 `D ready ⇒ R ready` 抹掉。
 
 Task 的兼容输入积为 `10 × 3 × 3 = 90`。目前这三个可见字段不足以证明进一步的通用互斥关系，故保守保留；不能把 group 的剪枝规则套到 Task。R 属于 owner，D 属于 Task policy，S 属于 Task 的业务/执行观察，三者作用域不同。这里保留 90 个候选不等于声称某个固定任务在某个固定计划中能遍历全部候选；若将来引入 kind、policy、owner phase 等额外约束，必须先用生产者证据证明并扩充测试，再收窄允许集合。
 

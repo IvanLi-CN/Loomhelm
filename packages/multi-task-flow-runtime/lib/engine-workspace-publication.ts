@@ -1,6 +1,15 @@
 import { z } from "zod";
+import { explicitLifecycleRoleOf, lifecycleRoleOf } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
-import { baselineReceipt, externalRef, fact, id, milestone, providerReceipt } from "../lib/schema";
+import {
+  baselineReceipt,
+  externalRef,
+  fact,
+  id,
+  isContributionKind,
+  milestone,
+  providerReceipt,
+} from "../lib/schema";
 import type { CommandContext } from "./engine-command-context";
 import * as core from "./engine-support-core";
 import * as support from "./engine-support-gates";
@@ -457,6 +466,58 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
           "A cut delivery unit cannot publish a new PR",
           4,
         );
+      if (targetType === "group") {
+        const requiresExplicitLifecycle = ledger.contract_version >= 6;
+        const lifecycleRole = (atom: any) =>
+          requiresExplicitLifecycle
+            ? explicitLifecycleRoleOf(atom)
+            : lifecycleRoleOf({ ...atom, group_id: targetId });
+        const integrationAtom = target.atoms.find(
+          (atom: any) => lifecycleRole(atom) === "integrate",
+        );
+        const parentPrAtom = target.atoms.find((atom: any) => lifecycleRole(atom) === "create-pr");
+        requireCondition(
+          !requiresExplicitLifecycle || !!integrationAtom,
+          "INTEGRATION_PENDING",
+          "Delivery-unit lifecycle must declare an integrate atom before parent PR publication",
+          4,
+        );
+        requireCondition(
+          !requiresExplicitLifecycle || !!parentPrAtom,
+          "INTEGRATION_PENDING",
+          "Delivery-unit lifecycle must declare a create-pr atom before parent PR publication",
+          4,
+        );
+        requireCondition(
+          !integrationAtom || integrationAtom.status === "completed",
+          "INTEGRATION_PENDING",
+          "Delivery-unit content must be integrated before parent PR publication",
+          4,
+        );
+        requireCondition(
+          !parentPrAtom ||
+            target.atoms
+              .filter((atom: any) => ["prepare-parent", "integrate"].includes(lifecycleRole(atom)))
+              .every((atom: any) => atom.status === "completed"),
+          "INTEGRATION_PENDING",
+          "Delivery-unit content must be integrated before parent PR publication",
+          4,
+        );
+        requireCondition(
+          mergedContinuation ||
+            ledger.tasks
+              .filter(
+                (task) =>
+                  task.group_id === targetId &&
+                  task.disposition === "active" &&
+                  isContributionKind(task.kind),
+              )
+              .every((task) => task.atoms.every((atom) => atom.status === "completed")),
+          "INTEGRATION_PENDING",
+          "Contribution task atoms must complete before parent PR publication",
+          4,
+        );
+      }
       const baseSha = z
         .string()
         .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)

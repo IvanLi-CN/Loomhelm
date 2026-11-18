@@ -241,6 +241,62 @@ test("legacy canonical lifecycle graphs survive mechanical upgrade to contract 6
   expect(upgradedAgain.upgrade.migration_audit.source_contract).toBe(3);
 });
 
+test("historical four-role canonical lifecycle graphs remain mechanically migratable", () => {
+  const store = fixture(3);
+  const raw = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+  const plan = raw.plans[0];
+  const isIntegration = (atom: any) => atom.lifecycle_role === "integrate";
+  plan.group_atoms = plan.group_atoms.filter((atom: any) => !isIntegration(atom));
+  for (const group of raw.groups)
+    group.atoms = group.atoms.filter((atom: any) => !isIntegration(atom));
+  for (const event of raw.events) {
+    for (const field of ["old_group_snapshot", "group_snapshot"] as const) {
+      const snapshot = event.data?.[field];
+      if (snapshot?.atoms)
+        snapshot.atoms = snapshot.atoms.filter((atom: any) => !isIntegration(atom));
+    }
+  }
+  const groupByTask = new Map(raw.tasks.map((task: any) => [task.id, task.group_id]));
+  const definitions = [...plan.atoms, ...plan.group_atoms];
+  plan.atomic_nodes = definitions.map((atom: any) =>
+    atomicNode.parse({
+      kind: "work" as const,
+      id: atom.id,
+      title: atom.title,
+      purpose: atom.purpose,
+      output: atom.output,
+      acceptance: [],
+      activity_type: "verification" as const,
+      state: "planned" as const,
+      scope:
+        typeof atom.group_id === "string"
+          ? { kind: "delivery_unit" as const, delivery_unit_id: atom.group_id }
+          : {
+              kind: "task" as const,
+              task_id: atom.task_id,
+              delivery_unit_id: groupByTask.get(atom.task_id) ?? "unknown-group",
+            },
+    }),
+  );
+  plan.atomic_edges = raw.groups.flatMap((group: any) => {
+    const atoms = plan.group_atoms.filter((atom: any) => atom.group_id === group.id);
+    return atoms.slice(1).map((atom: any, index: number) => ({
+      id: `${group.id}-legacy-four-role-${index}`,
+      from_node_id: atoms[index]!.id,
+      to_node_id: atom.id,
+      requires: { kind: "source_terminal_success" },
+    }));
+  });
+  writeFileSync(store.ledgerPath, JSON.stringify(raw));
+
+  expect(checkMigration(store, target).migration_ready).toBe(true);
+  expect(() => upgradeOrchestration(store, target, target)).not.toThrow();
+  const after = JSON.parse(readFileSync(store.ledgerPath, "utf8"));
+  expect(after.contract_version).toBe(6);
+  expect(after.upgrade.migration_audit.source_contract).toBe(3);
+  expect(after.plans[0].group_atoms).toHaveLength(8);
+});
+
 test("read-only observation detects a concurrent source change and rejects links", () => {
   const store = fixture();
   const report = checkMigration(store, target, target, () =>

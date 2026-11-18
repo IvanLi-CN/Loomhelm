@@ -1,13 +1,22 @@
 import { describe, expect, test } from "bun:test";
+import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import {
   apply,
   deliveryUnitPrMerged,
+  execute,
   type Request,
   ready,
   requireGroupDispatchGate,
 } from "../lib/engine";
 import { deriveExecutionPhase } from "../lib/revisions";
-import { type Ledger, type Plan, type Task, validateLedger } from "../lib/schema";
+import {
+  defaultGroupAtoms,
+  type Ledger,
+  type Plan,
+  type Task,
+  validateLedger,
+} from "../lib/schema";
+import { fixtureIdentity } from "./cli-identity-fixture";
 import {
   approve,
   approveV2,
@@ -124,6 +133,28 @@ describe("orchestration state", () => {
     const ledger = v2Fixture();
     ledger.tasks[0].thread_id = "task-a";
     ledger.tasks[0].state = "running";
+    const groupAtoms = defaultGroupAtoms("g").map((atom, index) => ({
+      ...atom,
+      id: `group-atom-g-${index + 1}`,
+    }));
+    const runtimeGroupAtoms = [
+      groupAtoms[2]!,
+      groupAtoms[0]!,
+      groupAtoms[1]!,
+      groupAtoms[3]!,
+      groupAtoms[4]!,
+    ];
+    ledger.groups[0].atoms = runtimeGroupAtoms;
+    ledger.plans[0].group_atoms = runtimeGroupAtoms.map(({ status: _status, ...atom }) => ({
+      ...atom,
+      group_id: "g",
+    }));
+    ledger.plans[0].atomic_edges = groupAtoms.slice(1).map((atom, index) => ({
+      id: `group-atom-edge-${index}`,
+      from_atom_id: groupAtoms[index]!.id,
+      to_atom_id: atom.id,
+    }));
+    ledger.plans[0] = canonicalizeContract3Plan(ledger.plans[0], ledger.tasks);
     approveV2(ledger);
     expect(() =>
       apply(
@@ -212,6 +243,152 @@ describe("orchestration state", () => {
       ),
     );
     const parentPr = providerPrReceipt("parent-pr", "parent", base, base);
+    const groupAtom = (role: string) =>
+      ledger.groups[0].atoms.find((atom) => atom.lifecycle_role === role)!;
+    groupAtom("prepare-parent").status = "completed";
+    expect(() =>
+      apply(
+        ledger,
+        "publish-pr-claim",
+        request(
+          ledger,
+          "group-pr-before-integration",
+          {
+            action_id: "publish-group-pr",
+            target_type: "group",
+            target_id: "g",
+            branch: "parent",
+            target_branch: "main",
+            expected_base_sha: base,
+            expected_head_sha: base,
+            pr: parentPr.pr,
+            operation_id: "publish-group-pr-before-integration-op",
+          },
+          groupActor,
+        ),
+      ),
+    ).toThrow("integrated before parent PR publication");
+    const strictLedger = v2Fixture() as any;
+    strictLedger.contract_version = 6;
+    strictLedger.runtime_identity = { ...fixtureIdentity };
+    apply(
+      strictLedger,
+      "lifecycle-record",
+      request(
+        strictLedger,
+        "strict-group-workspace",
+        {
+          target_type: "group",
+          target_id: "g",
+          stage: "workspace_ready",
+          branch: "parent",
+          resource_ids: ["group-worktree", "group-branch"],
+          evidence_ref: "strict-workspace",
+        },
+        groupActor,
+      ),
+    );
+    expect(() =>
+      apply(
+        strictLedger,
+        "publish-pr-claim",
+        request(
+          strictLedger,
+          "strict-group-pr-before-integration",
+          {
+            action_id: "publish-group-pr",
+            target_type: "group",
+            target_id: "g",
+            branch: "parent",
+            target_branch: "main",
+            expected_base_sha: base,
+            expected_head_sha: base,
+            pr: parentPr.pr,
+            operation_id: "strict-group-pr-before-integration-op",
+          },
+          groupActor,
+        ),
+      ),
+    ).toThrow("must declare an integrate atom");
+    const migratedLedger = v2Fixture() as any;
+    migratedLedger.contract_version = 6;
+    migratedLedger.runtime_identity = { ...fixtureIdentity };
+    migratedLedger.groups[0].lifecycle.workspace_ready = "passed";
+    migratedLedger.groups[0].atoms = defaultGroupAtoms("g").map((atom) => {
+      const { lifecycle_role: _role, ...legacy } = atom;
+      return { ...legacy, status: "completed" as const };
+    });
+    expect(() =>
+      execute(
+        migratedLedger,
+        "publish-pr-claim",
+        request(
+          migratedLedger,
+          "migrated-group-pr-before-integration",
+          {
+            action_id: "publish-group-pr",
+            target_type: "group",
+            target_id: "g",
+            branch: "parent",
+            target_branch: "main",
+            expected_base_sha: base,
+            expected_head_sha: base,
+            pr: parentPr.pr,
+            operation_id: "migrated-group-pr-before-integration-op",
+          },
+          groupActor,
+        ),
+      ),
+    ).toThrow("must declare an integrate atom");
+    ledger.tasks[1].atoms[0].status = "planned";
+    expect(() =>
+      apply(
+        ledger,
+        "group-atom-update",
+        request(
+          ledger,
+          "group-integrate-before-content",
+          { group_id: "g", atom_id: groupAtom("integrate").id, state: "running" },
+          groupActor,
+        ),
+      ),
+    ).toThrow("Contribution task atoms must complete before delivery-unit integration");
+    ledger.tasks[1].atoms[0].status = "completed";
+    for (const state of ["running", "completed"] as const)
+      apply(
+        ledger,
+        "group-atom-update",
+        request(
+          ledger,
+          `group-integrate-${state}`,
+          { group_id: "g", atom_id: groupAtom("integrate").id, state },
+          groupActor,
+        ),
+      );
+    ledger.tasks[1].atoms[0].status = "planned";
+    expect(() =>
+      apply(
+        ledger,
+        "publish-pr-claim",
+        request(
+          ledger,
+          "group-pr-after-new-content",
+          {
+            action_id: "publish-group-pr",
+            target_type: "group",
+            target_id: "g",
+            branch: "parent",
+            target_branch: "main",
+            expected_base_sha: base,
+            expected_head_sha: base,
+            pr: parentPr.pr,
+            operation_id: "publish-group-pr-after-new-content-op",
+          },
+          groupActor,
+        ),
+      ),
+    ).toThrow("Contribution task atoms must complete before parent PR publication");
+    ledger.tasks[1].atoms[0].status = "completed";
     apply(
       ledger,
       "publish-pr-claim",
@@ -485,7 +662,7 @@ describe("orchestration state", () => {
           operation_id: "dispatch-b",
         }),
       ),
-    ).toThrow("parent PR is created and verified");
+    ).toThrow("workspace is ready");
     apply(
       ledger,
       "group-base",
@@ -702,7 +879,7 @@ describe("orchestration state", () => {
           operation_id: "blocked-dispatch",
         }),
       ),
-    ).toThrow("parent PR is created and verified");
+    ).toThrow("workspace is ready");
   });
   test("release facts cannot be written without an operation receipt", () => {
     const ledger = fixture();
