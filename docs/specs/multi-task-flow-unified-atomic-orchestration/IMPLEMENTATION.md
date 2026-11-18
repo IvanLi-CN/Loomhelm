@@ -14,7 +14,7 @@ TTY 默认变更具有公开终端兼容性影响；显式 JSON 的业务合同�
 
 ## Documentation map
 
-任务图的 `web/graph-projection.ts` 仅将全局 `main_start` / `main_end` 投影为起终点；交付单元边界仍参与隐藏路径折叠和来源追溯。`tests/graph-projection.test.ts` 覆盖多单元汇合、跨单元依赖以及全局起终点唯一性。`skills/resource-manifest.json` 同步登记投影与回归测试的源码摘要，独立源码包复制校验通过。
+任务图的 `web/graph-projection.ts` 仅将全局 `main_start` / `main_end` 投影为起终点；交付单元边界仍参与隐藏路径折叠和来源追溯。`tests/graph-projection.test.ts` 覆盖多单元汇合、跨单元依赖以及全局起终点唯一性。独立源码包从仓库目录发现投影与回归测试资源，复制时生成摘要。
 
 [SPEC.md](./SPEC.md) 记录长期需求、验收和兼容合同；[AGENT_INTERACTIONS.md](./AGENT_INTERACTIONS.md) 记录角色职责、交互顺序和时序图；[DATA_MODEL.md](./DATA_MODEL.md) 记录 canonical schema、投影和外部事实；[STATE_MACHINES.md](./STATE_MACHINES.md) 记录各对象的正常状态机、异常恢复状态机和范围修订；[CLI_CONTRACT.md](./CLI_CONTRACT.md) 记录命令接口；本文件记录实现入口、验证映射与已知偏差。
 
@@ -226,7 +226,7 @@ ADR 0041 记录对 ADR 0039 静止前提的替代，需求和验收仍只由 SPE
 
 仅实现共享机械迁移评估、无锁只读 upgrade-check/dry-run、contract-6 升级审计及旧 writer 屏障，并修复结果不确定的归档身份保留。经验性证据须在最终 Candidate 上重跑实际旧包与受控私有副本；原型结果不能转写为候选通过。VER-MIGRATION-011 必须在真实 Merge Receipt、正式 artifact 和独立运行写入授权后执行。
 
-详情面板新增的渲染、组合投影及回归测试模块通过 `scripts/check-client-skills.ts` 注册到 `skills/resource-manifest.json` 的运行时源码映射，确保打包安装包含同一套模块和摘要；更新源码不自动更新用户级已安装版本。
+详情面板的渲染、组合投影及回归测试模块按源码目录发现，打包时生成资源清单与摘要；更新源码不自动更新用户级已安装版本。
 
 详情回归补齐带图节点焦点的快照刷新、Bootstrap owner thread 与输出绑定、配置保存和详情快照替换后的焦点归还及浮层卸载。无 Popover API 时将浮层临时挂载到 body，避开移动抽屉的 transform 和 overflow；关闭或原详情卸载时回收浮层与事件监听。服务浏览器回归直接选择 `atom-model`，验证原子关系默认折叠、展开后的当前节点与 canonical 前驱/后继，不再等待已移除的聚合关系区域。
 

@@ -9,9 +9,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { sourceResources } from "./source-resources.ts";
 export const digest = (value) => createHash("sha256").update(value).digest("hex");
 export function copySkillSources(root, output, { dependencies = false } = {}) {
-  const manifest = JSON.parse(readFileSync(join(root, "skills/resource-manifest.json"), "utf8"));
+  const manifest = sourceResources(root);
   const skill = "multi-task-flow";
   const selected = (resource) =>
     resource.path === `skills/${skill}` || resource.path.startsWith(`skills/${skill}/`);
@@ -46,14 +47,14 @@ export function copySkillSources(root, output, { dependencies = false } = {}) {
     files.set(path, digest(contents));
   };
   const selectedFiles = manifest.files.filter(selected);
-  const selectedAdditions = (manifest.additions ?? []).filter(selected);
-  for (const file of [...selectedFiles, ...selectedAdditions])
-    copy(file.path, file.installedSha256, file.sourcePath ?? file.path);
+  for (const file of selectedFiles) copy(file.path, undefined, file.sourcePath ?? file.path);
   const packageManifest = {
-    ...manifest,
+    schemaVersion: 1,
     skills: [skill],
-    files: selectedFiles,
-    additions: selectedAdditions,
+    files: selectedFiles.map((file) => ({
+      path: file.path,
+      installedSha256: files.get(file.path),
+    })),
   };
   const manifestTarget = join(output, "skills/resource-manifest.json");
   mkdirSync(dirname(manifestTarget), { recursive: true, mode: 0o700 });

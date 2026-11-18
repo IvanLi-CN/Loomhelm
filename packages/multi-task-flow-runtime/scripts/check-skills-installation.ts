@@ -4,20 +4,15 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { sourceResources } from "../lib/source-resources.ts";
 
-// Source/vendor layouts share the migration inventory. Discovery of SKILL.md
-// alone does not establish that its executable dependency closure was installed.
+// Source layouts derive resources; packaged layouts validate their generated inventory.
 export function checkSkillsInstallation(root, { probe = false } = {}) {
   root = resolve(root);
   const inventory = resolve(root, "skills/resource-manifest.json");
-  if (!existsSync(inventory))
-    return {
-      ok: false,
-      code: "SKILLS_INVENTORY_MISSING",
-      root,
-      missing: ["skills/resource-manifest.json"],
-    };
-  const manifest = JSON.parse(readFileSync(inventory, "utf8"));
+  const manifest = existsSync(inventory)
+    ? JSON.parse(readFileSync(inventory, "utf8"))
+    : sourceResources(root);
   const localPath = (resource) => {
     const target = resolve(root, resource.path);
     if (existsSync(target)) return resource.path;
@@ -47,6 +42,7 @@ export function checkSkillsInstallation(root, { probe = false } = {}) {
     .filter((file) => {
       const path = localPath(file);
       return (
+        file.installedSha256 &&
         !missing.includes(path) &&
         createHash("sha256")
           .update(readFileSync(resolve(root, path)))

@@ -11,10 +11,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { sourceResources } from "../lib/source-resources.ts";
 
 const root = resolve(import.meta.dirname, "../../..");
 const target = resolve(root, "clients/typescript/resources");
-const manifest = JSON.parse(readFileSync(resolve(root, "skills/resource-manifest.json"), "utf8"));
+const manifest = sourceResources(root);
 const packageMetadata = JSON.parse(
   readFileSync(resolve(root, "clients/typescript/package.json"), "utf8"),
 );
@@ -244,16 +245,13 @@ function copyPackageManifest(): void {
       (file) => !packageOmissionPaths.has(file.path) && isRuntimeResource(file.path),
     ),
   );
-  const additions = packagedResources(
-    (manifest.additions ?? []).filter(
-      (file) => !packageOmissionPaths.has(file.path) && isRuntimeResource(file.path),
-    ),
-  );
   const packageManifest = {
-    ...manifest,
+    schemaVersion: 1,
     skills: [packagedSkill],
-    files,
-    additions,
+    files: files.map((file) => ({
+      path: file.path,
+      installedSha256: outputs.get(file.path)!.sha256,
+    })),
     packageOmissions,
   };
   writeGenerated(
@@ -275,11 +273,11 @@ function writeToolkitPackageMetadata(): void {
   writeFileSync(resolve(target, "package.json"), JSON.stringify(metadata, null, 2) + "\n");
 }
 for (const file of packagedResources(
-  [...manifest.files, ...(manifest.additions ?? [])].filter(
+  manifest.files.filter(
     (file) => !packageOmissionPaths.has(file.path) && isRuntimeResource(file.path),
   ),
 ))
-  copy(file.path, file.installedSha256, false, file.sourcePath ?? file.path);
+  copy(file.path, undefined, false, file.sourcePath ?? file.path);
 copyPackageManifest();
 writeToolkitPackageMetadata();
 writeGenerated(
