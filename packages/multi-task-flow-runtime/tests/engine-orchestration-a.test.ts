@@ -135,8 +135,15 @@ describe("orchestration state", () => {
       ...atom,
       id: `group-atom-g-${index + 1}`,
     }));
-    ledger.groups[0].atoms = groupAtoms;
-    ledger.plans[0].group_atoms = groupAtoms.map(({ status: _status, ...atom }) => ({
+    const runtimeGroupAtoms = [
+      groupAtoms[2]!,
+      groupAtoms[0]!,
+      groupAtoms[1]!,
+      groupAtoms[3]!,
+      groupAtoms[4]!,
+    ];
+    ledger.groups[0].atoms = runtimeGroupAtoms;
+    ledger.plans[0].group_atoms = runtimeGroupAtoms.map(({ status: _status, ...atom }) => ({
       ...atom,
       group_id: "g",
     }));
@@ -234,7 +241,9 @@ describe("orchestration state", () => {
       ),
     );
     const parentPr = providerPrReceipt("parent-pr", "parent", base, base);
-    ledger.groups[0].atoms[0]!.status = "completed";
+    const groupAtom = (role: string) =>
+      ledger.groups[0].atoms.find((atom) => atom.lifecycle_role === role)!;
+    groupAtom("prepare-parent").status = "completed";
     expect(() =>
       apply(
         ledger,
@@ -257,7 +266,7 @@ describe("orchestration state", () => {
         ),
       ),
     ).toThrow("integrated before parent PR publication");
-    ledger.groups[0].atoms[1]!.status = "completed";
+    groupAtom("integrate").status = "completed";
     apply(
       ledger,
       "publish-pr-claim",

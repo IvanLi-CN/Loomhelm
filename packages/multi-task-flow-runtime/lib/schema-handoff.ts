@@ -631,6 +631,8 @@ export function validatePlan(candidate: Plan, options: PlanValidationOptions = {
     validateCanonicalLifecycleRoles(candidate, options);
     const lifecycleOptions = {
       allowLegacyLifecycleRoleInference: options.allowLegacyLifecycleRoleInference === true,
+      allowLegacyDeliveryUnitLifecycleWithoutIntegration:
+        options.allowLegacyDeliveryUnitLifecycleWithoutIntegration === true,
     };
     try {
       validateDeliveryUnitLifecycleEdges(

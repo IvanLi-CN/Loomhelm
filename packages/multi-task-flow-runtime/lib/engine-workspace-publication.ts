@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lifecycleRoleOf } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
 import { baselineReceipt, externalRef, fact, id, milestone, providerReceipt } from "../lib/schema";
 import type { CommandContext } from "./engine-command-context";
@@ -443,19 +444,22 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
           4,
         );
       if (targetType === "group") {
-        const integrationAtom = target.atoms.find((atom: any) => atom.id.endsWith("-integrate"));
+        const lifecycleRole = (atom: any) => lifecycleRoleOf({ ...atom, group_id: targetId });
+        const integrationAtom = target.atoms.find(
+          (atom: any) => lifecycleRole(atom) === "integrate",
+        );
         requireCondition(
           !integrationAtom || integrationAtom.status === "completed",
           "INTEGRATION_PENDING",
           "Delivery-unit content must be integrated before parent PR publication",
           4,
         );
-        const parentPrIndex = target.atoms.findIndex(
-          (atom: any) => atom.lifecycle_stage === "pr_created",
-        );
+        const parentPrAtom = target.atoms.find((atom: any) => lifecycleRole(atom) === "create-pr");
         requireCondition(
-          parentPrIndex < 0 ||
-            target.atoms.slice(0, parentPrIndex).every((atom: any) => atom.status === "completed"),
+          !parentPrAtom ||
+            target.atoms
+              .filter((atom: any) => ["prepare-parent", "integrate"].includes(lifecycleRole(atom)))
+              .every((atom: any) => atom.status === "completed"),
           "INTEGRATION_PENDING",
           "Delivery-unit content must be integrated before parent PR publication",
           4,

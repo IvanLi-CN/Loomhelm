@@ -646,6 +646,8 @@ const taskLifecycleSuffixes = ["prepare-branch", "create-pr", "merge-pr", "close
 export type LifecycleRoleValidationOptions = {
   /** Allow stage/owner-scoped ID fallback for contract-3/4/5 historical reads. */
   allowLegacyLifecycleRoleInference?: boolean;
+  /** Keep the four-role Delivery Unit lifecycle readable during contract-3/4/5 migration. */
+  allowLegacyDeliveryUnitLifecycleWithoutIntegration?: boolean;
 };
 
 function validatePresetLifecycleEdges(
@@ -717,13 +719,20 @@ function validatePresetLifecycleEdges(
         }),
       ]),
     );
-    if (!suffixes.some((suffix) => bySuffix.get(suffix))) continue;
-    for (const suffix of suffixes)
+    const presentSuffixes = suffixes.filter((suffix) => bySuffix.get(suffix));
+    if (!presentSuffixes.length) continue;
+    const requiredSuffixes = suffixes.filter(
+      (suffix) =>
+        suffix !== "integrate" ||
+        options.allowLegacyDeliveryUnitLifecycleWithoutIntegration !== true,
+    );
+    for (const suffix of requiredSuffixes)
       if (!bySuffix.get(suffix))
         throw new Error(`${ownerLabel} ${ownerId} has an incomplete preset lifecycle atom set`);
-    for (let index = 1; index < suffixes.length; index++) {
-      const from = bySuffix.get(suffixes[index - 1])!.id;
-      const to = bySuffix.get(suffixes[index])!.id;
+    const orderedSuffixes = suffixes.filter((suffix) => bySuffix.get(suffix));
+    for (let index = 1; index < orderedSuffixes.length; index++) {
+      const from = bySuffix.get(orderedSuffixes[index - 1]!)!.id;
+      const to = bySuffix.get(orderedSuffixes[index]!)!.id;
       if (!reachable(from, to))
         throw new Error(
           `${ownerLabel} ${ownerId} lifecycle requires an Agent-declared dependency path from ${from} to ${to}`,
