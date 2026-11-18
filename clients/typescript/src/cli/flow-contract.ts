@@ -519,7 +519,10 @@ add(
 		"evidence_ref",
 	],
 	["target_type", "target_id", "stage"],
-	{ optionalPayload: ["baseline"] },
+	{
+		optionalPayload: ["baseline"],
+		payloadOverrides: { branch: stringValue },
+	},
 );
 add(
 	"milestone-record",

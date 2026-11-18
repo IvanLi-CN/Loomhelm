@@ -51,6 +51,7 @@ import {
   validateSchedulablePlan,
   validateTaskExecutionPolicies,
 } from "../lib/schema";
+import { latestPublicationFact } from "./publication-facts";
 
 export const actorSchema = z
   .object({
@@ -335,6 +336,7 @@ export function requireContributionDispatchGate(
   owner: Ledger["groups"][number],
   requireParentPr = true,
   retryAction: "dispatch-claim" | "task-update" = "dispatch-claim",
+  allowMergedContinuation = false,
 ): void {
   if (legacyLedger(ledger)) return;
   const workspaceAtom = owner.atoms.find((atom) => lifecycleStageOf(atom) === "workspace_ready");
@@ -342,7 +344,8 @@ export function requireContributionDispatchGate(
   const missing: string[] = [];
   if (owner.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     missing.push("workspace_ready");
-  const parentPrRequired = requireParentPr || !parentPrDefinitivelyAbsent(ledger, owner);
+  const parentPrRequired =
+    !allowMergedContinuation && (requireParentPr || !parentPrDefinitivelyAbsent(ledger, owner));
   if (parentPrRequired && !parentPrReady(ledger, owner, prAtom)) missing.push("parent_pr");
   if (missing.length)
     throw new ContractError(
@@ -554,13 +557,9 @@ export function latestPublication(
   ledger: Ledger,
   targetId: string,
   kind: "branch_published" | "pr_published",
+  includeContinuation = true,
 ): Ledger["facts"][number] | null {
-  return (
-    ledger.facts
-      .filter((item) => item.kind === kind && item.subject_id === targetId)
-      .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
-      .at(-1) ?? null
-  );
+  return latestPublicationFact(ledger, targetId, kind, includeContinuation);
 }
 export function branchReceipt(
   ledger: Ledger,
@@ -583,8 +582,9 @@ export function prReceipt(
   baseSha?: string,
   headSha?: string,
   receiptState?: z.infer<typeof providerReceipt>["state"],
+  includeContinuation = true,
 ): boolean {
-  const latest = latestPublication(ledger, targetId, "pr_published");
+  const latest = latestPublication(ledger, targetId, "pr_published", includeContinuation);
   return (
     latest?.status === "passed" &&
     latest.receipt?.resource_type === "pr" &&
@@ -604,13 +604,13 @@ export function parentPrReady(
 ): boolean {
   const pr = deliveryUnitPr(owner);
   const canonicalState = owner.pr && "state" in owner.pr ? owner.pr.state : null;
-  const receipt = latestPublication(ledger, owner.id, "pr_published")?.receipt;
+  const receipt = latestPublication(ledger, owner.id, "pr_published", false)?.receipt;
   return (
     owner.lifecycle.pr_created === "passed" &&
     prAtom?.status === "completed" &&
     !!pr &&
     (canonicalState === null || canonicalState === "published") &&
-    prReceipt(ledger, owner.id, pr, undefined, undefined, "open") &&
+    prReceipt(ledger, owner.id, pr, undefined, undefined, "open", false) &&
     (ledger.contract_version < 3 ||
       !receipt ||
       owner.current_sha === null ||
@@ -621,7 +621,7 @@ export function parentPrReady(
   );
 }
 function parentPrDefinitivelyAbsent(ledger: Ledger, owner: Ledger["groups"][number]): boolean {
-  const latest = latestPublication(ledger, owner.id, "pr_published");
+  const latest = latestPublication(ledger, owner.id, "pr_published", false);
   const publicationPending = ledger.operations.some(
     (item) => item.kind === "publish_pr" && item.target_id === owner.id && activeOperation(item),
   );

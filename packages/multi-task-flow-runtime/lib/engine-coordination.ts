@@ -83,6 +83,7 @@ const {
   ready,
   deliveryUnitPrMerged,
   deliveryUnitPrMergedFromLedger,
+  isMergedContributionContinuation,
   requireHandoffAcknowledged,
   requireGroupDispatchGate,
   ownerOfTask,
@@ -93,7 +94,6 @@ const {
   groupRuntimeState,
   validateRevisionReason,
 } = support;
-
 export const coordinationCommands = [
   "binding-resolve",
   "link-verification",
@@ -106,7 +106,6 @@ export const coordinationCommands = [
   "dispatch-group-claim",
   "dispatch-resolve",
 ] as const;
-
 export function executeCoordinationCommand(context: CommandContext): unknown | undefined {
   const { ledger, command, request, payload, currentPlan } = context;
   switch (command) {
@@ -629,6 +628,7 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
         "Task group is not bound",
         4,
       );
+      const mergedContinuation = isMergedContributionContinuation(ledger, owner, target);
       if (["release", "deployment", "verification"].includes(target.kind)) {
         requireCondition(
           owner.state === "merged" && owner.merge_sha,
@@ -638,14 +638,14 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
         );
       } else {
         requireCondition(
-          owner.state === "active",
+          owner.state === "active" || mergedContinuation,
           "GROUP_NOT_READY",
-          "Task group is not active",
+          "Task group is not active or approved for a post-merge continuation",
           4,
         );
       }
       if (isContributionKind(target.kind)) {
-        requireContributionDispatchGate(ledger, owner);
+        requireContributionDispatchGate(ledger, owner, true, "dispatch-claim", mergedContinuation);
         requireCondition(
           owner.parent_branch && target.base_sha && owner.current_sha === target.base_sha,
           "BASE_NOT_READY",

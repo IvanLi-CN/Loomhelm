@@ -6,8 +6,8 @@ A delivery unit can merge its registered parent PR and later need a follow-up PR
 
 ## Decision
 
-Add `merge-claim` mode `parent-followup` for the delivery coordinator. The claim must identify the registered parent PR, preserve its verified merge SHA, bind a distinct PR in the same repository, and target the repository integration branch. `merge-resolve` records the follow-up `pr_merged` fact, advances the delivery-unit current and merge SHA to the follow-up merge SHA, and marks the delivery unit merged without rewriting the original parent receipt.
+Add `merge-claim` mode `parent-followup` for the delivery coordinator. The claim must identify the registered parent PR, preserve its verified merge SHA, bind a distinct PR in the same repository, and target the repository integration branch. `merge-resolve` records the follow-up `pr_merged` fact, advances the delivery-unit `merge_sha` to the follow-up merge SHA used by post-merge tasks and closeout, preserves `current_sha` as the verified head of the delivery-unit parent branch, and marks the delivery unit merged without rewriting the original parent receipt.
 
 ## Consequences
 
-The ledger can represent the real provider history when a parent PR is merged before a later mainline follow-up PR. Existing parent and child merge modes keep their exact publication and approval gates. A follow-up claim is independently verified against the provider before resolution and remains subject to the delivery-unit task integration and closeout gates.
+The ledger can represent the real provider history when a parent PR is merged before a later mainline follow-up PR. `current_sha` and `merge_sha` retain separate lineage roles: the former guards subsequent parent-branch publication, while the latter identifies the target-branch merge used for downstream post-merge work. Existing parent and child merge modes keep their exact publication and approval gates. A follow-up claim is independently verified against the provider before resolution and remains subject to the delivery-unit task integration and closeout gates.

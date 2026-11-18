@@ -516,6 +516,31 @@ export function deliveryUnitPrMergedFromLedger(
   const latest = latestFact(ledger, group.id, "pr_merged");
   const canonicalPr = group.pr && "state" in group.pr ? group.pr.pr : group.pr;
   const canonicalState = group.pr && "state" in group.pr ? group.pr.state : null;
+  const mergeOperation = latest
+    ? ledger.operations.find(
+        (item) =>
+          item.kind === "merge" &&
+          item.target_id === group.id &&
+          item.status === "succeeded" &&
+          item.receipt_fact_id === latest.id,
+      )
+    : null;
+  const originalParentMergeSha = deliveryUnitOriginalParentMergeSha(ledger, group);
+  const canonicalMergeReceipt = Boolean(
+    canonicalPr &&
+      latest?.receipt?.resource_type === "pr" &&
+      latest.receipt.resource_id === canonicalPr.id &&
+      latest.receipt.pr &&
+      stable(canonicalPr) === stable(latest.receipt.pr),
+  );
+  const followUpMergeReceipt = Boolean(
+    mergeOperation?.request.mode === "parent-followup" &&
+      canonicalPr &&
+      latest?.receipt?.resource_type === "pr" &&
+      latest.receipt.pr &&
+      stable(mergeOperation.request.original_parent_pr) === stable(canonicalPr) &&
+      mergeOperation.request.original_parent_merge_sha === originalParentMergeSha,
+  );
   return Boolean(
     ["merged", "closed"].includes(group.state) &&
       group.merge_sha &&
@@ -523,18 +548,73 @@ export function deliveryUnitPrMergedFromLedger(
       latest?.status === "passed" &&
       latest.sha === group.merge_sha &&
       (canonicalState === null || canonicalState === "merged" || canonicalState === "closed") &&
-      ledger.operations.some(
-        (item) =>
-          item.kind === "merge" &&
-          item.target_id === group.id &&
-          item.status === "succeeded" &&
-          item.receipt_fact_id === latest.id,
-      ) &&
+      mergeOperation &&
       canonicalPr &&
       latest.receipt?.resource_type === "pr" &&
-      latest.receipt.resource_id === canonicalPr.id &&
       latest.receipt.pr &&
-      stable(canonicalPr) === stable(latest.receipt.pr),
+      (canonicalMergeReceipt || followUpMergeReceipt),
+  );
+}
+
+export function deliveryUnitOriginalParentMergeSha(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+): string | null {
+  const canonicalPr = group.pr && "state" in group.pr ? group.pr.pr : group.pr;
+  if (!canonicalPr) return null;
+  for (const operation of [...ledger.operations].reverse()) {
+    if (
+      operation.kind !== "merge" ||
+      operation.target_id !== group.id ||
+      operation.status !== "succeeded" ||
+      !operation.receipt_fact_id
+    )
+      continue;
+    const fact = ledger.facts.find((item) => item.id === operation.receipt_fact_id);
+    if (
+      fact?.kind === "pr_merged" &&
+      fact.status === "passed" &&
+      fact.sha &&
+      fact.receipt?.resource_type === "pr" &&
+      fact.receipt.pr &&
+      stable(fact.receipt.pr) === stable(canonicalPr)
+    )
+      return fact.sha;
+  }
+  return null;
+}
+
+function planAddsTask(plan: Plan, taskId: string): boolean {
+  return Boolean(
+    plan.revision?.change_set.added.some((entry) => entry.path === `tasks[${taskId}]`),
+  );
+}
+
+export function isMergedGroupContinuation(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+): boolean {
+  if (group.state !== "merged" || !deliveryUnitPrMergedFromLedger(ledger, group)) return false;
+  const plan = executionPlan(ledger);
+  return ledger.tasks.some(
+    (task) =>
+      task.group_id === group.id &&
+      isContributionKind(task.kind) &&
+      task.disposition === "active" &&
+      planAddsTask(plan, task.id),
+  );
+}
+
+export function isMergedContributionContinuation(
+  ledger: Ledger,
+  group: Ledger["groups"][number],
+  task: Ledger["tasks"][number],
+): boolean {
+  return (
+    task.group_id === group.id &&
+    isContributionKind(task.kind) &&
+    isMergedGroupContinuation(ledger, group) &&
+    planAddsTask(executionPlan(ledger), task.id)
   );
 }
 

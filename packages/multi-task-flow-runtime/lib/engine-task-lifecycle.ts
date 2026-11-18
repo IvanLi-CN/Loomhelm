@@ -63,6 +63,7 @@ const {
   ready,
   deliveryUnitPrMerged,
   deliveryUnitPrMergedFromLedger,
+  isMergedContributionContinuation,
   requireHandoffAcknowledged,
   requireGroupDispatchGate,
   ownerOfTask,
@@ -232,13 +233,20 @@ export function executeTaskLifecycleCommand(context: CommandContext): unknown | 
         const owner = find(ledger.groups, (item) => item.id === target.group_id, "Group");
         const bootstrapMainOwnedStart =
           mainOwned && owner.delivery_unit_kind === "bootstrap" && owner.owner_kind === "main";
+        const mergedContinuation = isMergedContributionContinuation(ledger, owner, target);
         requireCondition(
-          owner.state === "active",
+          owner.state === "active" || mergedContinuation,
           "GROUP_NOT_READY",
-          "Task group is not active",
+          "Task group is not active or approved for a post-merge continuation",
           4,
         );
-        requireContributionDispatchGate(ledger, owner, !bootstrapMainOwnedStart, "task-update");
+        requireContributionDispatchGate(
+          ledger,
+          owner,
+          !bootstrapMainOwnedStart,
+          "task-update",
+          mergedContinuation,
+        );
       }
       if (state === "running" && previousState !== "starting" && !occupiedSlot) {
         requireCondition(

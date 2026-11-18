@@ -70,6 +70,8 @@ const {
   ready,
   deliveryUnitPrMerged,
   deliveryUnitPrMergedFromLedger,
+  deliveryUnitOriginalParentMergeSha,
+  isMergedGroupContinuation,
   requireHandoffAcknowledged,
   requireGroupDispatchGate,
   ownerOfTask,
@@ -184,10 +186,11 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
           "The Delivery coordinator owns parent PR integration",
           3,
         );
+        const mergedContinuation = isMergedGroupContinuation(ledger, owner);
         requireCondition(
-          owner.state === "active",
+          owner.state === "active" || mergedContinuation,
           "GROUP_NOT_ACTIVE",
-          "Only an active group can merge its parent PR",
+          "Only an active group or an approved post-merge continuation can merge its parent PR",
           4,
         );
         if (mode === "parent") {
@@ -222,6 +225,21 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
             "Follow-up merge must retain the original parent merge SHA",
             5,
           );
+          if (ledger.contract_version >= 3)
+            requireCondition(
+              mergedContinuation &&
+                payload.original_parent_merge_sha ===
+                  deliveryUnitOriginalParentMergeSha(ledger, owner),
+              "EVIDENCE_REQUIRED",
+              "Follow-up merge must retain the verified original parent merge SHA",
+              5,
+            );
+          requireCondition(
+            ledger.contract_version < 3 || owner.current_sha === headSha,
+            "BASE_CHANGED",
+            "Follow-up PR head must match the current delivery-unit branch",
+            5,
+          );
         }
         if (mode === "parent")
           requireCondition(
@@ -230,6 +248,15 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
                 prReceipt(ledger, groupId, pr, expectedSha, headSha)),
             "PR_NOT_READY",
             "Parent PR must be provider-published before merge",
+            4,
+          );
+        if (mode === "parent-followup")
+          requireCondition(
+            ledger.contract_version < 3 ||
+              (owner.lifecycle.pr_created === "passed" &&
+                prReceipt(ledger, groupId, pr, expectedSha, headSha, "open")),
+            "PR_NOT_READY",
+            "Follow-up PR must be provider-published before merge",
             4,
           );
         requireCondition(
@@ -332,7 +359,7 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
           "Parent SHA differs from the claimed base",
           3,
         );
-      if (mode === "parent")
+      if (mode === "parent" || (mode === "parent-followup" && ledger.contract_version >= 3))
         protectedActionApproved(
           ledger,
           "delivery_unit_merge",
@@ -414,6 +441,31 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
             5,
           );
         }
+        if (ledger.contract_version >= 3 && op.request.mode === "parent-followup") {
+          const receipt = evidence.receipt;
+          const followUpOwner = find(ledger.groups, (item) => item.id === op.target_id, "Group");
+          requireCondition(
+            receipt !== null &&
+              receipt !== undefined &&
+              evidence.source === ledger.repository.provider &&
+              receipt.provider === ledger.repository.provider &&
+              receipt.repository === `${ledger.repository.owner}/${ledger.repository.name}` &&
+              receipt.resource_type === "pr" &&
+              receipt.resource_id === op.request.pr.id &&
+              receipt.pr !== null &&
+              stable(receipt.pr) === stable(op.request.pr) &&
+              receipt.state === "merged" &&
+              receipt.branch === followUpOwner.parent_branch &&
+              receipt.target_branch === op.request.target_branch &&
+              receipt.base_sha === op.expected_sha &&
+              receipt.head_sha === op.request.expected_head_sha &&
+              receipt.merge_sha === evidence.sha &&
+              receipt.evidence_ref === evidence.evidence_ref,
+            "EVIDENCE_MISMATCH",
+            "Provider follow-up merge receipt does not match the configured repository and merge claim",
+            5,
+          );
+        }
         const owner = find(ledger.groups, (item) => item.id === op.target_id, "Group");
         if (op.request.target_branch === owner.parent_branch)
           requireCondition(
@@ -444,7 +496,8 @@ export function executeMergeCutCommand(context: CommandContext): unknown | undef
             4,
           );
           owner.state = "merged";
-          if (op.request.mode === "parent-followup") owner.current_sha = evidence.sha;
+          if (op.request.mode === "parent-followup")
+            owner.current_sha = op.request.expected_head_sha;
           if (op.request.mode === "parent") {
             if (ledger.contract_version < 3) owner.parent_pr = op.request.pr;
             else

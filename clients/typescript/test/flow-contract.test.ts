@@ -56,6 +56,8 @@ test("flow schema exposes the versioned command contract", () => {
 	assert.equal(publicationReceipt.properties.repository.type, "string");
 	assert.equal(publicationReceipt.properties.branch.type, "string");
 	assert.equal(publicationReceipt.properties.evidence_ref.minLength, 1);
+	const lifecycleRecord = commands["lifecycle-record"].request.properties.payload;
+	assert.equal(lifecycleRecord.properties.branch.type, "string");
 	assert.deepEqual(
 		commands["notification-reconcile"].response.success.oneOf[1].properties
 			.result.required,
