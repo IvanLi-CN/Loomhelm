@@ -14,6 +14,7 @@ import {
   closeResourcePopover,
   type ResourceSource,
 } from "./resource-popover";
+import { taskDispatchStatus } from "./task-dispatch-status";
 import { formatDuration } from "./time";
 import type { TaskLayout } from "./view-state";
 
@@ -196,6 +197,12 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
     ),
   );
   select.setAttribute("aria-pressed", String(context.getSelectedTask() === task.id));
+  const dispatch = taskDispatchStatus(task);
+  const dispatchLabel = dispatch ? text("p", dispatch, "task-card-dispatch") : null;
+  if (dispatchLabel) {
+    dispatchLabel.id = `task-card-dispatch-${task.id}`;
+    select.setAttribute("aria-describedby", dispatchLabel.id);
+  }
   select.append(statusIcon(task.state, task.is_ready), text("span", task.title, "task-card-title"));
   select.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -243,6 +250,7 @@ function taskCard(task: Task, context: CardContext): HTMLElement {
   resources(actions, meta, "task", task.id, context);
   card.append(
     head,
+    ...(dispatchLabel ? [dispatchLabel] : []),
     meta,
     renderTaskOutput(
       task.latest_output,

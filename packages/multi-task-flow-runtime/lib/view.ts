@@ -494,7 +494,7 @@ export function buildView(
       );
       return {
         ...task,
-        dispatch_eligibility: dispatchEligibility,
+        dispatch_eligibility: separateDispatch ? dispatchEligibility : null,
         pr: taskPrProjection(task, owner),
         ...(() => {
           const gateDiagnostics =
