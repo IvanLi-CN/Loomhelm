@@ -29,6 +29,7 @@ import {
 } from "./orchestration-identity";
 import { validateLedger } from "./schema";
 import type { LedgerStore } from "./store";
+import { inspectUpgradeSnapshot, type UpgradeSnapshotBudget } from "./upgrade-snapshot";
 import { viewerBindingSchema } from "./viewer-binding";
 
 const digestSchema = z
@@ -50,6 +51,14 @@ export const migrationReport = z
     business_digest: digestSchema,
     unresolved_digest: digestSchema,
     unresolved: z.array(unresolvedCall),
+    snapshot: z
+      .object({
+        entries: z.number().int().nonnegative(),
+        bytes: z.number().int().nonnegative(),
+        max_bytes: z.number().int().positive(),
+        within_byte_budget: z.boolean(),
+      })
+      .nullable(),
     migration_supported: z.boolean(),
     migration_ready: z.boolean(),
     native_quiescence: z.literal("not_asserted"),
@@ -71,6 +80,7 @@ export type MigrationSnapshot = {
   bindingContent: string | null;
   callContent: string | null;
   directory: { dev: number; ino: number };
+  snapshot: UpgradeSnapshotBudget;
   retained?: { backup: string; ledger: string; binding: string; call: string | null };
 };
 const fingerprint = (stat: ReturnType<typeof lstatSync>) =>
@@ -268,6 +278,7 @@ export function readMigrationSnapshot(
     JSON.stringify(retained) !== JSON.stringify(retainedAfter)
   )
     throw new ContractError("OBSERVATION_STALE", "Run changed during the migration observation", 4);
+  const snapshot = inspectUpgradeSnapshot(store.runPath, store.rootPath);
   const content = first[0]!.content,
     bindingContent = first[1]?.content ?? null;
   return {
@@ -278,6 +289,7 @@ export function readMigrationSnapshot(
     binding: bindingContent === null ? null : JSON.parse(bindingContent),
     callContent: first[2]?.content ?? null,
     directory: { dev: directory.dev, ino: directory.ino },
+    snapshot,
     ...(pending
       ? {
           retained: {
@@ -353,6 +365,11 @@ export function assessMigration(snapshot: MigrationSnapshot, caller: RunIdentity
   }
   if (pending && (!snapshot.retained || !auditMatchesSource(raw, pending, snapshot.retained)))
     block("audit_conflict", "Migration audit does not match the retained source");
+  if (!snapshot.snapshot.within_byte_budget)
+    block(
+      "snapshot_too_large",
+      `Run snapshot exceeds its ${snapshot.snapshot.max_bytes} byte budget (${snapshot.snapshot.bytes} bytes)`,
+    );
   const unresolved = unresolvedCalls(raw);
   return {
     schema_version: 1 as const,
@@ -366,6 +383,7 @@ export function assessMigration(snapshot: MigrationSnapshot, caller: RunIdentity
       snapshot.bindingContent === null ? null : migrationDigest(JSON.stringify(binding)),
     source_call_digest:
       snapshot.callContent === null ? null : migrationDigest(snapshot.callContent),
+    snapshot: snapshot.snapshot,
     directory: snapshot.directory,
     business_digest: businessDigest(raw),
     unresolved,
@@ -399,6 +417,7 @@ export function checkMigration(
       source_digest: null,
       source_binding_digest: null,
       source_call_digest: null,
+      snapshot: null,
       directory: null,
       business_digest: null,
       unresolved_digest: null,

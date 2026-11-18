@@ -35,8 +35,8 @@ async function main(args: string[]): Promise<void> {
     const result = await new SkillsRuntime().run('skills/multi-task-flow/scripts/viewer-worker-process.ts', [], { timeoutMs: 2_147_483_647 });
     process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exitCode = result.code ?? 1; return;
   }
-  if (command === 'gateway') { await runGatewayCommand(rest); return; }
-  if (command === 'orchestration') { await runOrchestrationCommand(rest); return; }
+  if (command === 'gateway') { await runGatewayCommand(rest, configPath); return; }
+  if (command === 'orchestration') { await runOrchestrationCommand(rest, configPath); return; }
   if (command === 'release') { await runReleaseCommand(rest); return; }
   if (command === 'workflow') {
     if (rest[0] === 'verify') throw new Error('WORKFLOW_LEGACY_COMMAND_UNSUPPORTED: use local-verify for local validation only; follow the migrated engineering Skills for delivery gates');
