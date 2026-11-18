@@ -12,6 +12,7 @@ import {
   validateReviewFindingLocations,
 } from "./review-result";
 import { isFormalReviewRequestProfile } from "./review-profile-policy";
+import { reviewWaveScopeBindingMatches } from "./review-wave-support";
 
 export interface SubagentReviewOptions {
   reviewProfile: string;
@@ -47,6 +48,8 @@ export function recordSubagentReviewState(
   const waves = isRecord(review.waves) ? review.waves : {};
   const wave = waveId && isRecord(waves[waveId]) ? waves[waveId] : undefined;
   if (!wave) throw new FlowError(`review wave does not exist: ${waveId}`);
+  if (!reviewWaveScopeBindingMatches(wave))
+    throw new FlowError("review wave scope binding is invalid");
   const lane = options.lane ?? "";
   if (!isRecord(wave.lanes) || !isRecord(wave.lanes[lane]))
     throw new FlowError(`review lane does not exist: ${lane}`);

@@ -158,6 +158,7 @@ export function openReviewWaveState(
     blockers: [],
     blocker_fingerprints: [],
     scope_class: scopeClass,
+    scope_binding: stableHash(["review-wave-scope", scopeClass]),
     previous_head_sha: options.previousHeadSha ?? null,
     repair_permit_id: options.repairPermitId ?? null,
     arbitration_source_wave_id:

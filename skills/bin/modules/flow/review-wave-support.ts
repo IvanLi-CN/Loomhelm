@@ -1,4 +1,4 @@
-import { FlowError, isRecord } from "./common";
+import { FlowError, isRecord, stableHash } from "./common";
 
 export function reviewState(
   ledger: Record<string, unknown>,
@@ -20,4 +20,15 @@ export function activeWave(
   if (!id || !isRecord(waves[id]))
     throw new FlowError(`review wave does not exist: ${id}`);
   return waves[id];
+}
+
+export function reviewWaveScopeBindingMatches(
+  wave: Record<string, unknown>,
+): boolean {
+  if (!Object.hasOwn(wave, "scope_binding")) return true;
+  return (
+    typeof wave.scope_class === "string" &&
+    typeof wave.scope_binding === "string" &&
+    wave.scope_binding === stableHash(["review-wave-scope", wave.scope_class])
+  );
 }

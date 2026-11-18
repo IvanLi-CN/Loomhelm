@@ -4,7 +4,11 @@ import { recordReviewHistory } from "./review-history";
 import { canonicalList, deriveReviewSynthesis } from "./review-wave-utils";
 import { assertReviewReceiptIntegrity } from "./review-receipt-integrity";
 import { validateReviewSynthesisAcceptance } from "./review-synthesis";
-import { activeWave, reviewState } from "./review-wave-support";
+import {
+  activeWave,
+  reviewState,
+  reviewWaveScopeBindingMatches,
+} from "./review-wave-support";
 
 export function finalizeReviewWaveState(
   ledger: Record<string, unknown>,
@@ -15,6 +19,8 @@ export function finalizeReviewWaveState(
   const wave = activeWave(ledger, waveId);
   if (wave.state !== "open" || !isRecord(wave.lanes))
     throw new FlowError("review wave is not open");
+  if (!reviewWaveScopeBindingMatches(wave))
+    throw new FlowError("review wave scope binding is invalid");
   const assessment = isRecord(ledger.review_assessment)
     ? ledger.review_assessment
     : undefined;

@@ -11,6 +11,7 @@ import {
   validateReviewFindingLocations,
 } from "./review-result";
 import { isFormalReviewRequestProfile } from "./review-profile-policy";
+import { reviewWaveScopeBindingMatches } from "./review-wave-support";
 
 export function assertReviewReceiptIntegrity(
   ledger: Record<string, unknown>,
@@ -43,6 +44,8 @@ export function assertReviewReceiptIntegrity(
     receipt.evidence_source !== "parent-request-and-subagent-result"
   )
     throw new FlowError("review receipt integrity is invalid");
+  if (!reviewWaveScopeBindingMatches(wave))
+    throw new FlowError("review wave scope binding is invalid");
   if (
     [
       "reported_profile",

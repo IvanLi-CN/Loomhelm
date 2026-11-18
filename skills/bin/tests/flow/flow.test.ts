@@ -426,6 +426,25 @@ describe("acceptance and review state", () => {
         laneSpecs: lanes,
       }),
     ).toThrow("another review wave is already active");
+    const originalScope = wave.scope_class;
+    wave.scope_class = "document";
+    expect(() =>
+      recordSubagentReviewState(ledger, {
+        reviewProfile: "pr-convergence",
+        baseRef: sha,
+        reviewAttemptId: "scope-tamper",
+        reviewResultJson: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation:
+            "Inspected the candidate diff and confirmed the complete result.",
+          overall_confidence_score: 1,
+        }),
+        waveId: String(wave.wave_id),
+        lane: "contract",
+      }),
+    ).toThrow("review wave scope binding is invalid");
+    wave.scope_class = originalScope;
     for (const lane of lanes) {
       if (lane.lane === "contract") {
         const unavailable = recordSubagentReviewState(ledger, {
@@ -526,6 +545,49 @@ describe("acceptance and review state", () => {
         (receipt) => receipt.kind === "review_attempt",
       ),
     ).toHaveLength(1);
+  });
+
+  test("blocks clear when startup unavailability is the only lane result", () => {
+    const ledger = initialLedger("review-unavailable-run", "fast-track", sha, sha, null);
+    ledger.review_assessment = {
+      tier: 3,
+      reason: "startup unavailable coverage",
+      assessed_at: "2026-10-27T00:00:00.000Z",
+      assessed_head_sha: sha,
+      source: "agent-assessment",
+    };
+    const lanes = [
+      { lane: "contract", model: "gpt-6-luna", effort: "max" },
+      { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
+      { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
+      { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
+    ];
+    const opened = openReviewWaveState(ledger, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: sha,
+      laneSpecs: lanes,
+    });
+    const wave = opened.wave as Record<string, unknown>;
+    recordSubagentReviewState(ledger, {
+      reviewProfile: "pr-convergence",
+      baseRef: sha,
+      reviewAttemptId: "startup-only",
+      reviewResultJson: "",
+      terminalState: "unavailable",
+      unavailabilityClassification: "startup-unavailable",
+      waveId: String(wave.wave_id),
+      lane: "contract",
+    });
+    expect(() =>
+      finalizeReviewWaveState(ledger, String(wave.wave_id), {
+        groups: [],
+        invariants: ["all lanes covered"],
+        coverage: lanes.map(({ lane }) => lane),
+        conflicts: [],
+        acceptance: [],
+      }),
+    ).toThrow("review wave requires terminal receipts");
   });
 
   test("keeps schema 6 review receipts historical and blocks fresh clear", () => {
