@@ -62,7 +62,8 @@ export function openReviewWaveState(
       active?.head_sha === options.headSha && active?.base_sha === options.baseSha;
     if (
       !active ||
-      (sameCandidate && (!legacy || !legacyWaveIsTerminal(active)))
+      !reviewWaveIsTerminal(ledger, active) ||
+      (sameCandidate && !legacy)
     )
       throw new FlowError("another review wave is already active");
     active.state = "retired";
@@ -211,15 +212,40 @@ function isLegacyReviewWave(
   });
 }
 
-function legacyWaveIsTerminal(wave: Record<string, unknown>): boolean {
+function reviewWaveIsTerminal(
+  ledger: Record<string, unknown>,
+  wave: Record<string, unknown>,
+): boolean {
   if (!isRecord(wave.lanes)) return false;
-  return Object.values(wave.lanes).every(
-    (lane) =>
-      isRecord(lane) &&
-      lane.state === "completed" &&
-      typeof lane.receipt_id === "string" &&
-      lane.receipt_id.trim().length > 0,
-  );
+  const receipts = Array.isArray(ledger.receipts)
+    ? ledger.receipts.filter(isRecord)
+    : [];
+  return Object.entries(wave.lanes).every(([laneName, lane]) => {
+    if (
+      !isRecord(lane) ||
+      lane.state !== "completed" ||
+      typeof lane.receipt_id !== "string" ||
+      !lane.receipt_id.trim()
+    )
+      return false;
+    const receipt = receipts.find(
+      (candidate) => candidate.receipt_id === lane.receipt_id,
+    );
+    return (
+      isRecord(receipt) &&
+      (receipt.review_receipt_schema === 6 ||
+        receipt.review_receipt_schema === 7) &&
+      receipt.kind === "review" &&
+      receipt.terminal_state === "completed" &&
+      receipt.evidence_valid === true &&
+      receipt.post_execution_clean === true &&
+      receipt.exit_code === 0 &&
+      receipt.wave_id === wave.wave_id &&
+      receipt.lane === laneName &&
+      receipt.base_sha === wave.base_sha &&
+      receipt.head_sha === wave.head_sha
+    );
+  });
 }
 
 function legacyLaneTopologyMatches(

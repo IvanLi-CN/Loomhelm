@@ -121,7 +121,6 @@ export function recordSubagentReviewState(
     receipts,
     attemptKey,
     waveProofKey,
-    scopeClass,
   );
   if (existingAttempt) {
     if (existingAttempt.terminal_state !== "completed")
@@ -227,7 +226,6 @@ function recordUnavailable(
     receipts,
     attemptKey,
     waveProofKey,
-    scopeClass,
   );
   if (existingAttempt) {
     assertCurrentReviewReceiptFields(existingAttempt);
@@ -243,6 +241,7 @@ function recordUnavailable(
       existingAttempt.head_sha !== headSha ||
       existingAttempt.base_sha !== baseSha ||
       existingAttempt.review_profile !== options.reviewProfile ||
+      existingAttempt.scope_class !== scopeClass ||
       existingAttempt.wave_id !== waveId ||
       existingAttempt.lane !== lane ||
       !isRecord(existingAttempt.requested_profile) ||
@@ -311,14 +310,12 @@ function findAttemptReceipt(
   receipts: Record<string, unknown>[],
   attemptKey: string,
   waveProofKey: string,
-  scopeClass: string,
 ): Record<string, unknown> | undefined {
   return receipts.find(
     (receipt) =>
       receipt.review_receipt_schema === 7 &&
       receipt.attempt_key === attemptKey &&
-      receipt.wave_proof_key === waveProofKey &&
-      receipt.scope_class === scopeClass,
+      receipt.wave_proof_key === waveProofKey,
   );
 }
 

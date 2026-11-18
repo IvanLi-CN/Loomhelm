@@ -441,6 +441,21 @@ describe("acceptance and review state", () => {
       laneSpecs: lanes,
     });
     const staleWave = staleOpened.wave as Record<string, unknown>;
+    for (const lane of lanes)
+      recordSubagentReviewState(staleLedger, {
+        reviewProfile: "pr-convergence",
+        baseRef: sha,
+        reviewAttemptId: `stale-${lane.lane}`,
+        reviewResultJson: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation:
+            "Inspected the completed stale candidate code and recorded terminal evidence.",
+          overall_confidence_score: 1,
+        }),
+        waveId: String(staleWave.wave_id),
+        lane: lane.lane,
+      });
     const refreshed = openReviewWaveState(staleLedger, {
       stage: "initial",
       baseSha: sha,
@@ -451,6 +466,19 @@ describe("acceptance and review state", () => {
     expect((refreshed.wave as Record<string, unknown>).head_sha).toBe(
       "b".repeat(40),
     );
+    const pendingStale = structuredClone(ledger) as Record<string, unknown>;
+    const pendingWave = (
+      pendingStale.review as Record<string, unknown>
+    ).waves as Record<string, Record<string, unknown>>;
+    expect(() =>
+      openReviewWaveState(pendingStale, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "b".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(pendingWave[String(wave.wave_id)].state).toBe("open");
     const originalScope = wave.scope_class;
     const originalBinding = wave.scope_binding;
     delete wave.scope_binding;
@@ -532,6 +560,20 @@ describe("acceptance and review state", () => {
           model: "gpt-6-luna",
           effort: "max",
         };
+        unavailableReceipt.scope_class = "document";
+        expect(() =>
+          recordSubagentReviewState(ledger, {
+            reviewProfile: "pr-convergence",
+            baseRef: sha,
+            reviewAttemptId: "contract-startup-1",
+            reviewResultJson: "",
+            terminalState: "unavailable",
+            unavailabilityClassification: "startup-unavailable",
+            waveId: String(wave.wave_id),
+            lane: lane.lane,
+          }),
+        ).toThrow("review attempt receipt integrity is invalid");
+        unavailableReceipt.scope_class = "code";
         unavailableReceipt.reported_profile = {
           model: "reviewer-claim",
           effort: "reviewer-claim",
@@ -770,6 +812,29 @@ describe("acceptance and review state", () => {
     expect(sameCandidateOldWave.state).toBe("retired");
     expect(sameCandidateFresh.next).toBe("record-review");
 
+    const danglingReceipt = structuredClone(normalized) as Record<
+      string,
+      unknown
+    >;
+    const danglingWave = (
+      danglingReceipt.review as Record<string, unknown>
+    ).waves as Record<string, Record<string, unknown>>;
+    const danglingLane = (
+      danglingWave[String(wave.wave_id)].lanes as Record<
+        string,
+        Record<string, unknown>
+      >
+    ).contract;
+    danglingLane.receipt_id = "missing-review-receipt";
+    expect(() =>
+      openReviewWaveState(danglingReceipt, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+
     const unfinishedSameCandidate = structuredClone(normalized) as Record<
       string,
       unknown
@@ -822,14 +887,15 @@ describe("acceptance and review state", () => {
     )["test-platform"];
     partialLane.receipt_id = null;
     partialLane.state = "pending";
-    const partialFresh = openReviewWaveState(partial, {
-      stage: "initial",
-      baseSha: sha,
-      headSha: freshHead,
-      laneSpecs: lanes,
-    });
-    expect(partialFresh.next).toBe("record-review");
-    expect(partialWave.state).toBe("retired");
+    expect(() =>
+      openReviewWaveState(partial, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: freshHead,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(partialWave.state).toBe("open");
 
     const fresh = openReviewWaveState(normalized, {
       stage: "initial",
