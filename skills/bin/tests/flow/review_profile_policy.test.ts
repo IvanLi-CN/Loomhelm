@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   DIRECT_REVIEW_POLICY_PROFILES,
+  FORMAL_REVIEW_REQUEST_PROFILE,
   directReviewRuntimeFields,
   selectDirectReviewProfile,
   selectDirectReviewProfiles,
@@ -107,6 +108,13 @@ describe("direct review profile policy", () => {
         overrideScope: "lane",
       }),
     ).toThrow("complete model and effort pair");
+  });
+
+  test("maps the formal request pair to native runtime fields", () => {
+    expect(directReviewRuntimeFields(FORMAL_REVIEW_REQUEST_PROFILE)).toEqual({
+      model: "gpt-6-luna",
+      reasoning_effort: "max",
+    });
   });
 
   test("applies invocation and lane-scoped overrides", () => {

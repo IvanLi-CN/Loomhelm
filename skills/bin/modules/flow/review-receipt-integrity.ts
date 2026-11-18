@@ -1,19 +1,60 @@
 import {
   FlowError,
+  REVIEW_SCOPE_CLASSES,
   REVIEW_RECEIPT_SCHEMA_VERSION,
   canonicalJson,
   isRecord,
   stableHash,
 } from "./common";
 import {
-  directReviewProfileResolution,
-  reviewModelMatchesLane,
-} from "./review";
-import { directWaveLaneProfileAuthorized } from "./review-profile";
-import {
   parseReviewResultJson,
   validateReviewFindingLocations,
 } from "./review-result";
+import { isFormalReviewRequestProfile } from "./review-profile-policy";
+import { reviewWaveScopeBindingMatches } from "./review-wave-support";
+
+const CURRENT_REVIEW_RECEIPT_KEYS = new Set([
+  "receipt_id",
+  "kind",
+  "review_receipt_schema",
+  "proof_key",
+  "wave_proof_key",
+  "head_sha",
+  "base_sha",
+  "review_profile",
+  "attempt_key",
+  "scope_class",
+  "requested_profile",
+  "profile_verification",
+  "effective_profile",
+  "review_execution_source",
+  "provenance_boundary",
+  "evidence_source",
+  "terminal_state",
+  "wave_id",
+  "lane",
+  "finding_fingerprints",
+  "review_result",
+  "review_result_sha256",
+  "review_findings",
+  "review_clear",
+  "overall_correctness",
+  "overall_explanation",
+  "evidence_valid",
+  "post_execution_clean",
+  "exit_code",
+  "unavailability_classification",
+  "recorded_at",
+]);
+
+export function assertCurrentReviewReceiptFields(
+  receipt: Record<string, unknown>,
+): void {
+  if (
+    Object.keys(receipt).some((key) => !CURRENT_REVIEW_RECEIPT_KEYS.has(key))
+  )
+    throw new FlowError("review receipt contains unsupported fields");
+}
 
 export function assertReviewReceiptIntegrity(
   ledger: Record<string, unknown>,
@@ -36,12 +77,31 @@ export function assertReviewReceiptIntegrity(
     receipt.evidence_valid !== true ||
     receipt.post_execution_clean !== true ||
     receipt.exit_code !== 0 ||
-    receipt.profile_proof_status !== "sub-agent-declared" ||
-    receipt.review_execution_source !== "sub-agent" ||
-    receipt.provenance_boundary !== "sub-agent-structured-result" ||
-    receipt.evidence_source !== "sub-agent-structured-result"
+    typeof receipt.attempt_key !== "string" ||
+    !receipt.attempt_key.trim() ||
+    receipt.profile_verification !== "request_recorded" ||
+    receipt.effective_profile !== null ||
+    receipt.review_execution_source !== "parent-flow-request" ||
+    receipt.provenance_boundary !==
+      "parent-flow-request-and-subagent-result" ||
+    receipt.evidence_source !== "parent-request-and-subagent-result"
   )
     throw new FlowError("review receipt integrity is invalid");
+  if (!reviewWaveScopeBindingMatches(wave))
+    throw new FlowError("review wave scope binding is invalid");
+  if (
+    [
+      "reported_profile",
+      "review_model",
+      "review_effort",
+      "resolved_model",
+      "resolved_effort",
+      "profile_resolution",
+      "profile_proof_status",
+    ].some((key) => Object.hasOwn(receipt, key))
+  )
+    throw new FlowError("review receipt must not contain reviewer profile claims");
+  assertCurrentReviewReceiptFields(receipt);
   const expectedProfile =
     wave.stage === "risk-arbitration"
       ? "risk-arbitration"
@@ -57,42 +117,28 @@ export function assertReviewReceiptIntegrity(
     receipt.wave_proof_key !== `${receipt.proof_key}:${waveId}:${laneName}`
   )
     throw new FlowError("review receipt provenance integrity is invalid");
-  const declaredModel = String(laneState.model ?? "");
-  const declaredEffort = String(laneState.effort ?? "");
-  const reviewModel = String(receipt.review_model ?? "");
-  const reviewEffort = String(receipt.review_effort ?? "");
+  const requestedProfile = laneRequestedProfile(laneState);
+  if (!isFormalReviewRequestProfile(requestedProfile))
+    throw new FlowError(
+      "review lane requested profile does not match the formal request",
+    );
   if (
-    !reviewModelMatchesLane(
-      declaredModel,
-      declaredEffort,
-      reviewModel,
-      reviewEffort,
-      true,
-    )
+    !isRecord(receipt.requested_profile) ||
+    canonicalJson(receipt.requested_profile) !== canonicalJson(requestedProfile)
   )
-    throw new FlowError("review receipt lane profile integrity is invalid");
+    throw new FlowError("review receipt requested profile integrity is invalid");
+  if (
+    typeof wave.scope_class !== "string" ||
+    !REVIEW_SCOPE_CLASSES.has(wave.scope_class) ||
+    receipt.scope_class !== wave.scope_class
+  )
+    throw new FlowError("review receipt scope integrity is invalid");
   if (
     repoPath !== undefined &&
     receipt.proof_key !==
       `${repoPath}:${receipt.head_sha}:${receipt.base_sha}:${expectedProfile}`
   )
     throw new FlowError("review receipt provenance integrity is invalid");
-  if (
-    repoPath !== undefined &&
-    !directWaveLaneProfileAuthorized(ledger, {
-      repoPath,
-      headSha: String(receipt.head_sha),
-      baseSha: String(receipt.base_sha),
-      waveId,
-      lane: laneName,
-      reviewProfile: expectedProfile,
-      declaredModel,
-      declaredEffort,
-      reviewModel,
-      reviewEffort,
-    })
-  )
-    throw new FlowError("review receipt profile authorization is invalid");
   if (!isRecord(receipt.review_result))
     throw new FlowError("review receipt result is invalid");
   let parsed;
@@ -121,30 +167,13 @@ export function assertReviewReceiptIntegrity(
         parsed.result.overall_correctness === "patch is correct")
   )
     throw new FlowError("review receipt result integrity is invalid");
-  let resolution: Record<string, unknown>;
-  try {
-    resolution = directReviewProfileResolution(
-      declaredModel,
-      declaredEffort,
-      reviewModel,
-      reviewEffort,
-    );
-  } catch (error) {
-    throw new FlowError("review receipt profile resolution is invalid", {
-      cause: error,
-    });
-  }
-  if (
-    receipt.resolved_model !== reviewModel ||
-    receipt.resolved_effort !== reviewEffort ||
-    canonicalJson(receipt.profile_resolution) !== canonicalJson(resolution)
-  )
-    throw new FlowError("review receipt profile integrity is invalid");
   const expectedId = stableHash([
     ledger.run_id,
     "sub-agent-review",
     receipt.wave_proof_key,
+    receipt.scope_class,
     receipt.review_result_sha256,
+    receipt.attempt_key,
   ]);
   if (
     receipt.receipt_id !== expectedId ||
@@ -152,4 +181,29 @@ export function assertReviewReceiptIntegrity(
     typeof receipt.wave_proof_key !== "string"
   )
     throw new FlowError("review receipt identity integrity is invalid");
+}
+
+function laneRequestedProfile(
+  laneState: Record<string, unknown>,
+): { model: string; effort: string } {
+  const requested = laneState.requested_profile;
+  if (
+    isRecord(requested) &&
+    typeof requested.model === "string" &&
+    requested.model.trim() &&
+    typeof requested.effort === "string" &&
+    requested.effort.trim()
+  ) {
+    const legacy = { model: laneState.model, effort: laneState.effort };
+    if (
+      typeof legacy.model !== "string" ||
+      typeof legacy.effort !== "string" ||
+      canonicalJson(requested) !== canonicalJson(legacy)
+    )
+      throw new FlowError("review lane requested profile is inconsistent");
+    return { model: requested.model, effort: requested.effort };
+  }
+  throw new FlowError(
+    "review lane requested profile is missing; open a fresh review wave",
+  );
 }

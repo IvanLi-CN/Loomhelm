@@ -220,6 +220,8 @@ function requireComplete(
         "complete requires no active review epoch after proof finalization",
       );
     const proofEpoch = (Array.isArray(review.epochs) ? review.epochs : [])
+      .slice()
+      .reverse()
       .filter(isRecord)
       .find(
         (epoch) =>

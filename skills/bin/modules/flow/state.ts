@@ -220,7 +220,6 @@ export function normalizeLedger(input: unknown): Record<string, unknown> {
     payload.review_assessment ??= pendingReviewAssessment();
     payload.legacy_compatibility = true;
     payload.legacy_schema_version = version;
-    payload.schema_version = FLOW_SCHEMA_VERSION;
     payload.repository_binding ??= null;
     payload.provider_facts ??= null;
   } else {

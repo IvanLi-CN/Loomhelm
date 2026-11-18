@@ -211,8 +211,7 @@ async function main(argv: string[]): Promise<number> {
       ledger.recordSubagentReview({
         reviewProfile: value(parsed.options, "review-profile")!,
         baseRef: value(parsed.options, "base-ref")!,
-        reviewModel: value(parsed.options, "review-model")!,
-        reviewEffort: value(parsed.options, "review-effort")!,
+        reviewAttemptId: value(parsed.options, "review-attempt-id"),
         reviewResultJson:
           value(parsed.options, "review-result-json", false) ?? "",
         terminalState:

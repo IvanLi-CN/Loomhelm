@@ -25,6 +25,7 @@ import {
 import {
   initialLedger,
   normalizePostMergeEvidence,
+  normalizeLedger,
 } from "../../modules/flow/state";
 import { recordValidationState } from "../../modules/flow/validation";
 import { tryLockFile } from "../../modules/core/security_file";
@@ -405,10 +406,10 @@ describe("acceptance and review state", () => {
       source: "agent-assessment",
     };
     const lanes = [
-      { lane: "contract", model: "gpt-5.6-luna", effort: "medium" },
-      { lane: "state-concurrency", model: "gpt-5.6-luna", effort: "xhigh" },
-      { lane: "failure-data-safety", model: "gpt-5.6-luna", effort: "max" },
-      { lane: "test-platform", model: "gpt-6.1-sol", effort: "high" },
+      { lane: "contract", model: "gpt-6-luna", effort: "max" },
+      { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
+      { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
+      { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
     ];
     const opened = openReviewWaveState(ledger, {
       stage: "initial",
@@ -417,12 +418,240 @@ describe("acceptance and review state", () => {
       laneSpecs: lanes,
     });
     const wave = opened.wave as Record<string, unknown>;
+    expect(() =>
+      openReviewWaveState(ledger, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    const staleLedger = initialLedger(
+      "review-stale-wave-run",
+      "fast-track",
+      sha,
+      sha,
+      null,
+    );
+    staleLedger.review_assessment = ledger.review_assessment;
+    const staleOpened = openReviewWaveState(staleLedger, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: sha,
+      laneSpecs: lanes,
+    });
+    const staleWave = staleOpened.wave as Record<string, unknown>;
+    for (const lane of lanes)
+      recordSubagentReviewState(staleLedger, {
+        reviewProfile: "pr-convergence",
+        baseRef: sha,
+        reviewAttemptId: `stale-${lane.lane}`,
+        reviewResultJson: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation:
+            "Inspected the completed stale candidate code and recorded terminal evidence.",
+          overall_confidence_score: 1,
+        }),
+        waveId: String(staleWave.wave_id),
+        lane: lane.lane,
+      });
+    const findingStale = structuredClone(staleLedger) as Record<string, unknown>;
+    const findingReview = findingStale.review as Record<string, unknown>;
+    const findingWave = (
+      findingReview.waves as Record<string, Record<string, unknown>>
+    )[String(staleWave.wave_id)];
+    const findingReceipt = (
+      findingStale.receipts as Record<string, unknown>[]
+    ).find((receipt) => receipt.lane === "contract");
+    if (!findingReceipt) throw new Error("stale review receipt is missing");
+    findingReceipt.review_clear = false;
+    findingReceipt.overall_correctness = "patch is incorrect";
+    findingReceipt.finding_fingerprints = ["blocking-finding"];
+    expect(() =>
+      openReviewWaveState(findingStale, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "c".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(findingWave.state).toBe("open");
+    const missingLane = structuredClone(staleLedger) as Record<string, unknown>;
+    const missingReview = missingLane.review as Record<string, unknown>;
+    const missingWave = (
+      missingReview.waves as Record<string, Record<string, unknown>>
+    )[String(staleWave.wave_id)];
+    delete (
+      missingWave.lanes as Record<string, Record<string, unknown>>
+    )["test-platform"];
+    expect(() =>
+      openReviewWaveState(missingLane, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "d".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(missingWave.state).toBe("open");
+    const refreshed = openReviewWaveState(staleLedger, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: "b".repeat(40),
+      laneSpecs: lanes,
+    });
+    expect(staleWave.state).toBe("retired");
+    expect((refreshed.wave as Record<string, unknown>).head_sha).toBe(
+      "b".repeat(40),
+    );
+    const pendingStale = structuredClone(ledger) as Record<string, unknown>;
+    const pendingWave = (
+      pendingStale.review as Record<string, unknown>
+    ).waves as Record<string, Record<string, unknown>>;
+    expect(() =>
+      openReviewWaveState(pendingStale, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "b".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(pendingWave[String(wave.wave_id)].state).toBe("open");
+    const originalScope = wave.scope_class;
+    const originalBinding = wave.scope_binding;
+    delete wave.scope_binding;
+    expect(() =>
+      recordSubagentReviewState(ledger, {
+        reviewProfile: "pr-convergence",
+        baseRef: sha,
+        reviewAttemptId: "missing-scope-binding",
+        reviewResultJson: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation:
+            "Inspected the candidate diff and confirmed the complete result.",
+          overall_confidence_score: 1,
+        }),
+        waveId: String(wave.wave_id),
+        lane: "contract",
+      }),
+    ).toThrow("review wave scope binding is invalid");
+    wave.scope_binding = originalBinding;
+    wave.scope_class = "document";
+    expect(() =>
+      recordSubagentReviewState(ledger, {
+        reviewProfile: "pr-convergence",
+        baseRef: sha,
+        reviewAttemptId: "scope-tamper",
+        reviewResultJson: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation:
+            "Inspected the candidate diff and confirmed the complete result.",
+          overall_confidence_score: 1,
+        }),
+        waveId: String(wave.wave_id),
+        lane: "contract",
+      }),
+    ).toThrow("review wave scope binding is invalid");
+    wave.scope_class = originalScope;
     for (const lane of lanes) {
+      if (lane.lane === "contract") {
+        const unavailable = recordSubagentReviewState(ledger, {
+          reviewProfile: "pr-convergence",
+          baseRef: sha,
+          reviewAttemptId: "contract-startup-1",
+          reviewResultJson: "",
+          terminalState: "unavailable",
+          unavailabilityClassification: "startup-unavailable",
+          waveId: String(wave.wave_id),
+          lane: lane.lane,
+        });
+        expect(unavailable.reused).toBe(false);
+        const unavailableReceipt = (
+          ledger.receipts as Record<string, unknown>[]
+        ).find((receipt) => receipt.kind === "review_attempt");
+        if (!unavailableReceipt)
+          throw new Error("unavailable receipt is missing");
+        expect(unavailableReceipt).toMatchObject({
+          review_execution_source: "parent-flow-request",
+          provenance_boundary: "parent-flow-request-and-startup-observation",
+          evidence_source: "parent-request-and-startup-observation",
+        });
+        unavailableReceipt.requested_profile = {
+          model: "tampered-model",
+          effort: "tampered-effort",
+        };
+        expect(() =>
+          recordSubagentReviewState(ledger, {
+            reviewProfile: "pr-convergence",
+            baseRef: sha,
+            reviewAttemptId: "contract-startup-1",
+            reviewResultJson: "",
+            terminalState: "unavailable",
+            unavailabilityClassification: "startup-unavailable",
+            waveId: String(wave.wave_id),
+            lane: lane.lane,
+          }),
+        ).toThrow("review attempt receipt integrity is invalid");
+        unavailableReceipt.requested_profile = {
+          model: "gpt-6-luna",
+          effort: "max",
+        };
+        unavailableReceipt.scope_class = "document";
+        expect(() =>
+          recordSubagentReviewState(ledger, {
+            reviewProfile: "pr-convergence",
+            baseRef: sha,
+            reviewAttemptId: "contract-startup-1",
+            reviewResultJson: "",
+            terminalState: "unavailable",
+            unavailabilityClassification: "startup-unavailable",
+            waveId: String(wave.wave_id),
+            lane: lane.lane,
+          }),
+        ).toThrow("review attempt receipt integrity is invalid");
+        unavailableReceipt.scope_class = "code";
+        unavailableReceipt.review_receipt_schema = 6;
+        expect(() =>
+          recordSubagentReviewState(ledger, {
+            reviewProfile: "pr-convergence",
+            baseRef: sha,
+            reviewAttemptId: "contract-startup-1",
+            reviewResultJson: JSON.stringify({
+              findings: [],
+              overall_correctness: "patch is correct",
+              overall_explanation:
+                "Inspected the candidate diff and confirmed the completed result.",
+              overall_confidence_score: 1,
+            }),
+            waveId: String(wave.wave_id),
+            lane: lane.lane,
+          }),
+        ).toThrow("review attempt receipt integrity is invalid");
+        unavailableReceipt.review_receipt_schema = 7;
+        unavailableReceipt.reported_profile = {
+          model: "reviewer-claim",
+          effort: "reviewer-claim",
+        };
+        expect(() =>
+          recordSubagentReviewState(ledger, {
+            reviewProfile: "pr-convergence",
+            baseRef: sha,
+            reviewAttemptId: "contract-startup-1",
+            reviewResultJson: "",
+            terminalState: "unavailable",
+            unavailabilityClassification: "startup-unavailable",
+            waveId: String(wave.wave_id),
+            lane: lane.lane,
+          }),
+        ).toThrow("review receipt contains unsupported fields");
+        delete unavailableReceipt.reported_profile;
+      }
       const result = recordSubagentReviewState(ledger, {
         reviewProfile: "pr-convergence",
         baseRef: sha,
-        reviewModel: lane.model,
-        reviewEffort: lane.effort,
+        reviewAttemptId: `attempt-${lane.lane}`,
         reviewResultJson: JSON.stringify({
           findings: [],
           overall_correctness: "patch is correct",
@@ -435,6 +664,62 @@ describe("acceptance and review state", () => {
       });
       expect(result.reused).toBe(false);
     }
+    const contractReceipt = (ledger.receipts as Record<string, unknown>[]).find(
+      (receipt) => receipt.kind === "review" && receipt.lane === "contract",
+    );
+    expect(contractReceipt).toMatchObject({
+      review_receipt_schema: 7,
+      requested_profile: { model: "gpt-6-luna", effort: "max" },
+      profile_verification: "request_recorded",
+      effective_profile: null,
+      attempt_key: "attempt-contract",
+    });
+    expect(contractReceipt).not.toHaveProperty("reported_profile");
+    if (!contractReceipt) throw new Error("contract receipt is missing");
+    contractReceipt.requested_profile = {
+      model: "tampered-model",
+      effort: "tampered-effort",
+    };
+    expect(() =>
+      recordSubagentReviewState(ledger, {
+        reviewProfile: "pr-convergence",
+        baseRef: sha,
+        reviewAttemptId: "attempt-contract",
+        reviewResultJson: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation:
+            "Inspected the candidate diff and tests; the patch is correct.",
+          overall_confidence_score: 1,
+        }),
+        waveId: String(wave.wave_id),
+        lane: "contract",
+      }),
+    ).toThrow("review receipt requested profile integrity is invalid");
+    contractReceipt.requested_profile = {
+      model: "gpt-6-luna",
+      effort: "max",
+    };
+    for (const claim of ["reported_profile", "effective_model"]) {
+      contractReceipt[claim] = {
+        model: "reviewer-claim",
+        effort: "reviewer-claim",
+      };
+      expect(() =>
+        finalizeReviewWaveState(ledger, String(wave.wave_id), {
+          groups: [],
+          invariants: ["all lanes covered"],
+          coverage: lanes.map(({ lane }) => lane),
+          conflicts: [],
+          acceptance: [],
+        }),
+      ).toThrow(
+        claim === "reported_profile"
+          ? "review receipt must not contain reviewer profile claims"
+          : "review receipt contains unsupported fields",
+      );
+      delete contractReceipt[claim];
+    }
     const finalized = finalizeReviewWaveState(ledger, String(wave.wave_id), {
       groups: [],
       invariants: ["all lanes covered"],
@@ -444,6 +729,422 @@ describe("acceptance and review state", () => {
     });
     expect(finalized.next).toBe("merge-ready");
     expect((finalized.blockers as unknown[]).length).toBe(0);
+    expect(
+      (ledger.receipts as Record<string, unknown>[]).filter(
+        (receipt) => receipt.kind === "review_attempt",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("blocks clear when startup unavailability is the only lane result", () => {
+    const ledger = initialLedger("review-unavailable-run", "fast-track", sha, sha, null);
+    ledger.review_assessment = {
+      tier: 3,
+      reason: "startup unavailable coverage",
+      assessed_at: "2026-10-27T00:00:00.000Z",
+      assessed_head_sha: sha,
+      source: "agent-assessment",
+    };
+    const lanes = [
+      { lane: "contract", model: "gpt-6-luna", effort: "max" },
+      { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
+      { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
+      { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
+    ];
+    const opened = openReviewWaveState(ledger, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: sha,
+      laneSpecs: lanes,
+    });
+    const wave = opened.wave as Record<string, unknown>;
+    recordSubagentReviewState(ledger, {
+      reviewProfile: "pr-convergence",
+      baseRef: sha,
+      reviewAttemptId: "startup-only",
+      reviewResultJson: "",
+      terminalState: "unavailable",
+      unavailabilityClassification: "startup-unavailable",
+      waveId: String(wave.wave_id),
+      lane: "contract",
+    });
+    expect(() =>
+      finalizeReviewWaveState(ledger, String(wave.wave_id), {
+        groups: [],
+        invariants: ["all lanes covered"],
+        coverage: lanes.map(({ lane }) => lane),
+        conflicts: [],
+        acceptance: [],
+      }),
+    ).toThrow("review wave requires terminal receipts");
+  });
+
+  test("keeps schema 6 review receipts historical and blocks fresh clear", () => {
+    const ledger = initialLedger("legacy-review-run", "fast-track", sha, sha, null);
+    ledger.review_assessment = {
+      tier: 3,
+      reason: "historical compatibility",
+      assessed_at: "2026-10-27T00:00:00.000Z",
+      assessed_head_sha: sha,
+      source: "agent-assessment",
+    };
+    const lanes = [
+      { lane: "contract", model: "gpt-6-luna", effort: "max" },
+      { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
+      { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
+      { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
+    ];
+    const opened = openReviewWaveState(ledger, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: sha,
+      laneSpecs: lanes,
+    });
+    const wave = opened.wave as Record<string, unknown>;
+    for (const lane of lanes)
+      recordSubagentReviewState(ledger, {
+        reviewProfile: "pr-convergence",
+        baseRef: sha,
+        reviewAttemptId: `historical-${lane.lane}`,
+        reviewResultJson: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation:
+            "Reviewed the historical candidate diff and confirmed the complete result.",
+          overall_confidence_score: 1,
+        }),
+        waveId: String(wave.wave_id),
+        lane: lane.lane,
+      });
+
+    const disguisedCurrent = structuredClone(ledger) as Record<string, unknown>;
+    const disguisedReview = disguisedCurrent.review as Record<string, unknown>;
+    const disguisedWave = (
+      disguisedReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    delete disguisedWave.scope_binding;
+    for (const lane of Object.values(
+      disguisedWave.lanes as Record<string, Record<string, unknown>>,
+    ))
+      delete lane.requested_profile;
+    for (const receipt of disguisedCurrent.receipts as Record<string, unknown>[])
+      if (receipt.kind === "review") receipt.review_receipt_schema = 6;
+    const disguisedReceipt = (
+      disguisedCurrent.receipts as Record<string, unknown>[]
+    ).find((receipt) => receipt.lane === "contract");
+    if (!disguisedReceipt) throw new Error("disguised review receipt is missing");
+    disguisedReceipt.review_clear = false;
+    disguisedReceipt.overall_correctness = "patch is incorrect";
+    disguisedReceipt.finding_fingerprints = ["blocking-finding"];
+    expect(() =>
+      openReviewWaveState(disguisedCurrent, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(disguisedWave.state).toBe("open");
+    const malformedCurrent = structuredClone(ledger) as Record<string, unknown>;
+    const malformedReceipt = (
+      malformedCurrent.receipts as Record<string, unknown>[]
+    ).find((receipt) => receipt.lane === "contract");
+    if (!malformedReceipt) throw new Error("malformed review receipt is missing");
+    malformedReceipt.review_result_sha256 = "tampered-result-hash";
+    expect(() =>
+      openReviewWaveState(malformedCurrent, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "c".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+
+    const historical = structuredClone(ledger) as Record<string, unknown>;
+    historical.schema_version = 6;
+    const historicalReceipts = (
+      historical.receipts as Record<string, unknown>[]
+    ).map((receipt) => {
+      const legacy = { ...receipt };
+      if (legacy.kind !== "review") return legacy;
+      for (const key of [
+        "requested_profile",
+        "profile_verification",
+        "effective_profile",
+        "reported_profile",
+        "attempt_key",
+        "scope_class",
+      ])
+        delete legacy[key];
+      legacy.review_receipt_schema = 6;
+      legacy.review_model = "legacy-model-self-report";
+      legacy.review_effort = "legacy-effort-self-report";
+      legacy.resolved_model = "legacy-model-self-report";
+      legacy.resolved_effort = "legacy-effort-self-report";
+      legacy.profile_resolution = {
+        preferred: {
+          model: "gpt-6-luna",
+          effort: "max",
+        },
+        resolved: {
+          model: "legacy-model-self-report",
+          effort: "legacy-effort-self-report",
+        },
+        fallback_reason: null,
+        attempts: 1,
+      };
+      legacy.profile_proof_status = "sub-agent-declared";
+      legacy.review_execution_source = "sub-agent";
+      legacy.provenance_boundary = "sub-agent-structured-result";
+      legacy.evidence_source = "sub-agent-structured-result";
+      legacy.receipt_id = stableHash([
+        String(historical.run_id),
+        "sub-agent-review",
+        legacy.wave_proof_key,
+        legacy.review_result_sha256,
+      ]);
+      return legacy;
+    });
+    historical.receipts = historicalReceipts;
+    const malformedHistorical = structuredClone(historical) as Record<
+      string,
+      unknown
+    >;
+    const malformedHistoricalReview = malformedHistorical.review as Record<
+      string,
+      unknown
+    >;
+    const malformedHistoricalWave = (
+      malformedHistoricalReview.waves as Record<
+        string,
+        Record<string, unknown>
+      >
+    )[String(wave.wave_id)];
+    delete malformedHistoricalWave.scope_binding;
+    for (const [laneName, lane] of Object.entries(
+      malformedHistoricalWave.lanes as Record<string, Record<string, unknown>>,
+    )) {
+      delete lane.requested_profile;
+      const receipt = (
+        malformedHistorical.receipts as Record<string, unknown>[]
+      ).find((candidate) => candidate.lane === laneName);
+      if (receipt) lane.receipt_id = receipt.receipt_id;
+    }
+    const malformedHistoricalReceipt = (
+      malformedHistorical.receipts as Record<string, unknown>[]
+    ).find((receipt) => receipt.kind === "review");
+    if (!malformedHistoricalReceipt)
+      throw new Error("malformed historical receipt is missing");
+    delete malformedHistoricalReceipt.review_result;
+    expect(() =>
+      openReviewWaveState(malformedHistorical, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "b".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    const historicalReview = historical.review as Record<string, unknown>;
+    const historicalWave = (
+      historicalReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    for (const [laneName, lane] of Object.entries(
+      historicalWave.lanes as Record<string, Record<string, unknown>>,
+    )) {
+      const receipt = historicalReceipts.find(
+        (candidate) => candidate.lane === laneName,
+      );
+      if (receipt) lane.receipt_id = receipt.receipt_id;
+    }
+    delete historicalWave.scope_binding;
+    for (const lane of Object.values(
+      historicalWave.lanes as Record<string, Record<string, unknown>>,
+    ))
+      delete lane.requested_profile;
+    const historicalSnapshot = structuredClone(historicalReceipts);
+    const normalized = normalizeLedger(historical);
+    expect(normalized.receipts).toEqual(historicalSnapshot);
+    expect(normalized.schema_version).toBe(6);
+    expect(normalized.legacy_schema_version).toBe(6);
+    const forgedSchema7 = structuredClone(historical) as Record<
+      string,
+      unknown
+    >;
+    forgedSchema7.schema_version = 7;
+    forgedSchema7.legacy_compatibility = true;
+    forgedSchema7.legacy_schema_version = 6;
+    expect(() =>
+      openReviewWaveState(forgedSchema7, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    const malformedHistoricalProof = structuredClone(normalized) as Record<
+      string,
+      unknown
+    >;
+    const malformedHistoricalProofReceipt = (
+      malformedHistoricalProof.receipts as Record<string, unknown>[]
+    ).find((receipt) => receipt.kind === "review");
+    if (!malformedHistoricalProofReceipt)
+      throw new Error("malformed historical proof receipt is missing");
+    malformedHistoricalProofReceipt.proof_key = "tampered-proof-key";
+    expect(() =>
+      openReviewWaveState(malformedHistoricalProof, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(() =>
+      finalizeReviewWaveState(normalized, String(wave.wave_id), {
+        groups: [],
+        invariants: ["all lanes covered"],
+        coverage: lanes.map(({ lane }) => lane),
+        conflicts: [],
+        acceptance: [],
+      }),
+    ).toThrow("review receipt integrity is invalid");
+
+    const sameCandidate = structuredClone(normalized) as Record<string, unknown>;
+    const sameCandidateWave = (
+      sameCandidate.review as Record<string, unknown>
+    ).waves as Record<string, Record<string, unknown>>;
+    const sameCandidateOldWave = sameCandidateWave[String(wave.wave_id)];
+    const sameCandidateFresh = openReviewWaveState(sameCandidate, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      });
+    expect(sameCandidateOldWave.state).toBe("retired");
+    expect(sameCandidateFresh.next).toBe("record-review");
+    expect(sameCandidate.schema_version).toBe(7);
+
+    const danglingReceipt = structuredClone(normalized) as Record<
+      string,
+      unknown
+    >;
+    const danglingWave = (
+      danglingReceipt.review as Record<string, unknown>
+    ).waves as Record<string, Record<string, unknown>>;
+    const danglingLane = (
+      danglingWave[String(wave.wave_id)].lanes as Record<
+        string,
+        Record<string, unknown>
+      >
+    ).contract;
+    danglingLane.receipt_id = "missing-review-receipt";
+    expect(() =>
+      openReviewWaveState(danglingReceipt, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+
+    const unfinishedSameCandidate = structuredClone(normalized) as Record<
+      string,
+      unknown
+    >;
+    const unfinishedWave = (
+      unfinishedSameCandidate.review as Record<string, unknown>
+    ).waves as Record<string, Record<string, unknown>>;
+    const unfinishedLane = (
+      unfinishedWave[String(wave.wave_id)].lanes as Record<
+        string,
+        Record<string, unknown>
+      >
+    )["test-platform"];
+    unfinishedLane.state = "pending";
+    unfinishedLane.receipt_id = null;
+    expect(() =>
+      openReviewWaveState(unfinishedSameCandidate, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+
+    const freshHead = "b".repeat(40);
+    const partial = structuredClone(normalized) as Record<string, unknown>;
+    const partialReview = partial.review as Record<string, unknown>;
+    const partialWave = (
+      partialReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    const partialLane = (
+      partialWave.lanes as Record<string, Record<string, unknown>>
+    )["test-platform"];
+    partialLane.receipt_id = null;
+    partialLane.state = "pending";
+    expect(() =>
+      openReviewWaveState(partial, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: freshHead,
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(partialWave.state).toBe("open");
+
+    const fresh = openReviewWaveState(normalized, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: freshHead,
+      laneSpecs: lanes,
+    });
+    const freshWave = fresh.wave as Record<string, unknown>;
+    expect(freshWave.wave_id).not.toBe(wave.wave_id);
+    expect(freshWave.head_sha).toBe(freshHead);
+    expect(historicalWave.state).toBe("retired");
+    expect(
+      Object.values(freshWave.lanes as Record<string, Record<string, unknown>>).every(
+        (lane) =>
+          canonicalJson(lane.requested_profile) ===
+          canonicalJson({ model: "gpt-6-luna", effort: "max" }),
+      ),
+    ).toBe(true);
+    delete (
+      freshWave.lanes as Record<string, Record<string, unknown>>
+    )["test-platform"];
+    expect(() =>
+      finalizeReviewWaveState(normalized, String(freshWave.wave_id), {
+        groups: [],
+        invariants: ["all lanes covered"],
+        coverage: lanes.map(({ lane }) => lane),
+        conflicts: [],
+        acceptance: [],
+      }),
+    ).toThrow("required review wave lane topology");
+  });
+
+  test("rejects retired fixed lane profiles instead of falling back", () => {
+    const ledger = initialLedger("review-profile-run", "fast-track", sha, sha, null);
+    ledger.review_assessment = {
+      tier: 3,
+      reason: "profile request contract",
+      assessed_at: "2026-10-27T00:00:00.000Z",
+      assessed_head_sha: sha,
+      source: "agent-assessment",
+    };
+    expect(() =>
+      openReviewWaveState(ledger, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: [
+          { lane: "contract", model: "gpt-5.6-luna", effort: "medium" },
+          { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
+          { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
+          { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
+        ],
+      }),
+    ).toThrow("requested gpt-6-luna + max profile");
   });
 });
 
