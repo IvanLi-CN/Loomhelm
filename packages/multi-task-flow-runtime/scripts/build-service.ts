@@ -53,7 +53,10 @@ requireCondition(
   "Bun runtime must be a trusted regular file",
 );
 mkdirSync(output, { recursive: true, mode: 0o700 });
-const files: Record<string, string> = copySkillSources(root, output, { dependencies: true });
+const files: Record<string, string> = copySkillSources(root, output, {
+  dependencies: true,
+  sourceRef: source.stdout.toString().trim(),
+});
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const runtimeSha = digest(readFileSync(executable));
 const manifest = {

@@ -1,7 +1,8 @@
 #!/usr/bin/env -S bun --no-install
 import { readFileSync, writeFileSync } from "node:fs";
+import { sourceResources } from "../lib/source-resources.ts";
 
-const manifest = JSON.parse(readFileSync("skills/resource-manifest.json", "utf8"));
+const manifest = sourceResources(process.cwd());
 const files = manifest.files;
 const dependencyConditions = {
   "git-sync": "topic branch synchronization or detached-HEAD alignment",

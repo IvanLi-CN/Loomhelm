@@ -287,7 +287,7 @@ check_client() {
 	mkdir -p "$TMPDIR" "$HOME" "$CODEX_HOME" "$BUN_INSTALL_CACHE_DIR"
 	run_command "Skills frozen dependencies" bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy
 	run_command "Dashboard frozen dependencies" bun install --cwd packages/multi-task-flow-runtime --frozen-lockfile --ignore-scripts --backend=copy
-	run_command "Migrated source inventory" bun packages/multi-task-flow-runtime/scripts/check-client-skills.ts
+	run_command "Source resource discovery" bun packages/multi-task-flow-runtime/scripts/check-client-skills.ts
 	run_command "Dashboard browser assets only" bun run skills:build
 	run_command "Playwright Chromium runtime" bun packages/multi-task-flow-runtime/node_modules/playwright/cli.js install chromium
 	run_command "Shared viewer browser authentication regression" bun packages/multi-task-flow-runtime/scripts/verify-service-browser.ts "$repo_root/.tmp/client-tests/browser-evidence"

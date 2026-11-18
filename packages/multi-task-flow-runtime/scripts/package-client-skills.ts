@@ -11,10 +11,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { sourceResources, verifySourceBytes } from "../lib/source-resources.ts";
 
 const root = resolve(import.meta.dirname, "../../..");
 const target = resolve(root, "clients/typescript/resources");
-const manifest = JSON.parse(readFileSync(resolve(root, "skills/resource-manifest.json"), "utf8"));
 const packageMetadata = JSON.parse(
   readFileSync(resolve(root, "clients/typescript/package.json"), "utf8"),
 );
@@ -145,6 +145,8 @@ if (
   (dirty || mergeShaValue === null || mergeShaValue !== sourceSha)
 )
   throw new Error("Release package builds require a clean checkout at the exact merge SHA");
+const manifest = sourceResources(root, dirty ? undefined : sourceSha);
+const sourceEntries = new Map(manifest.files.map((file) => [file.path, file]));
 const gitTag = process.env.LOOMHELM_GIT_TAG?.trim() || null;
 if (gitTag !== null && gitTag !== `multi-task-flow-v${buildVersion}`)
   throw new Error("LOOMHELM_GIT_TAG does not match package version");
@@ -204,6 +206,8 @@ function copy(
   )
     throw new Error("Unsafe toolkit resource: " + path);
   const contents = readFileSync(source);
+  const entry = sourceEntries.get(path);
+  if (entry) verifySourceBytes(entry, contents);
   const digest = createHash("sha256").update(contents).digest("hex");
   if (expected && digest !== expected)
     throw new Error("Toolkit resource checksum mismatch: " + path);
@@ -244,16 +248,13 @@ function copyPackageManifest(): void {
       (file) => !packageOmissionPaths.has(file.path) && isRuntimeResource(file.path),
     ),
   );
-  const additions = packagedResources(
-    (manifest.additions ?? []).filter(
-      (file) => !packageOmissionPaths.has(file.path) && isRuntimeResource(file.path),
-    ),
-  );
   const packageManifest = {
-    ...manifest,
+    schemaVersion: 1,
     skills: [packagedSkill],
-    files,
-    additions,
+    files: files.map((file) => ({
+      path: file.path,
+      installedSha256: outputs.get(file.path)!.sha256,
+    })),
     packageOmissions,
   };
   writeGenerated(
@@ -275,11 +276,11 @@ function writeToolkitPackageMetadata(): void {
   writeFileSync(resolve(target, "package.json"), JSON.stringify(metadata, null, 2) + "\n");
 }
 for (const file of packagedResources(
-  [...manifest.files, ...(manifest.additions ?? [])].filter(
+  manifest.files.filter(
     (file) => !packageOmissionPaths.has(file.path) && isRuntimeResource(file.path),
   ),
 ))
-  copy(file.path, file.installedSha256, false, file.sourcePath ?? file.path);
+  copy(file.path, undefined, false, file.sourcePath ?? file.path);
 copyPackageManifest();
 writeToolkitPackageMetadata();
 writeGenerated(

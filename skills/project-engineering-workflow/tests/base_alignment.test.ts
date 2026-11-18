@@ -1,3 +1,4 @@
+import { sourceResources } from "../../../packages/multi-task-flow-runtime/lib/source-resources.ts";
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -43,10 +44,7 @@ function facts(overrides: Partial<AlignmentFacts> = {}): AlignmentFacts {
 }
 
 test("base alignment implementation stays inside its owning Skill", () => {
-  const manifest = JSON.parse(
-    readFileSync(join(import.meta.dir, "../../resource-manifest.json"), "utf8"),
-  ) as { files: Array<{ path: string }> };
-  const paths = manifest.files.map((file) => file.path);
+  const paths = sourceResources(join(import.meta.dir, "../../..")).files.map((file) => file.path);
   expect(paths).toContain(
     "skills/project-engineering-workflow/scripts/base_alignment.ts",
   );
