@@ -530,6 +530,13 @@ function validateCanonicalLifecycleRoles(candidate: Plan, options: PlanValidatio
 
 export function validatePlan(candidate: Plan, options: PlanValidationOptions = {}): void {
   validatePlanHandoff(candidate);
+  if (options.allowLegacyLifecycleRoleInference !== true)
+    for (const atom of candidate.group_atoms)
+      requireCondition(
+        explicitLifecycleRoleOf(atom) !== null,
+        "ATOMIC_GRAPH_INCOMPLETE",
+        `Delivery-unit atom ${atom.id} must declare lifecycle_role explicitly in current contracts`,
+      );
   if (candidate.revision) {
     const changeCount =
       candidate.revision.change_set.added.length +

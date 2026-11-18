@@ -649,7 +649,6 @@ export type LifecycleRoleValidationOptions = {
   /** Keep the four-role Delivery Unit lifecycle readable during contract-3/4/5 migration. */
   allowLegacyDeliveryUnitLifecycleWithoutIntegration?: boolean;
 };
-
 function validatePresetLifecycleEdges(
   atoms: readonly any[],
   edges: readonly any[],
@@ -720,7 +719,10 @@ function validatePresetLifecycleEdges(
       ]),
     );
     const presentSuffixes = suffixes.filter((suffix) => bySuffix.get(suffix));
-    if (!presentSuffixes.length) continue;
+    if (!presentSuffixes.length) {
+      if (ownerKey !== "group_id" || options.allowLegacyLifecycleRoleInference === true) continue;
+      throw new Error(`${ownerLabel} ${ownerId} must declare lifecycle roles`);
+    }
     const requiredSuffixes = suffixes.filter(
       (suffix) =>
         suffix !== "integrate" ||

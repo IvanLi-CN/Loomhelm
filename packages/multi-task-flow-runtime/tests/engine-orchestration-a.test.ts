@@ -266,7 +266,17 @@ describe("orchestration state", () => {
         ),
       ),
     ).toThrow("integrated before parent PR publication");
-    groupAtom("integrate").status = "completed";
+    for (const state of ["running", "completed"] as const)
+      apply(
+        ledger,
+        "group-atom-update",
+        request(
+          ledger,
+          `group-integrate-${state}`,
+          { group_id: "g", atom_id: groupAtom("integrate").id, state },
+          groupActor,
+        ),
+      );
     apply(
       ledger,
       "publish-pr-claim",

@@ -445,8 +445,25 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
         );
       if (targetType === "group") {
         const lifecycleRole = (atom: any) => lifecycleRoleOf({ ...atom, group_id: targetId });
+        const historicalLifecycle =
+          ledger.contract_version < 6 ||
+          (ledger.contract_version === 6 &&
+            (ledger.upgrade?.migration_audit?.source_contract ?? 6) < 6);
         const integrationAtom = target.atoms.find(
           (atom: any) => lifecycleRole(atom) === "integrate",
+        );
+        const parentPrAtom = target.atoms.find((atom: any) => lifecycleRole(atom) === "create-pr");
+        requireCondition(
+          historicalLifecycle || !!integrationAtom,
+          "INTEGRATION_PENDING",
+          "Delivery-unit lifecycle must declare an integrate atom before parent PR publication",
+          4,
+        );
+        requireCondition(
+          historicalLifecycle || !!parentPrAtom,
+          "INTEGRATION_PENDING",
+          "Delivery-unit lifecycle must declare a create-pr atom before parent PR publication",
+          4,
         );
         requireCondition(
           !integrationAtom || integrationAtom.status === "completed",
@@ -454,7 +471,6 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
           "Delivery-unit content must be integrated before parent PR publication",
           4,
         );
-        const parentPrAtom = target.atoms.find((atom: any) => lifecycleRole(atom) === "create-pr");
         requireCondition(
           !parentPrAtom ||
             target.atoms
