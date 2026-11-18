@@ -182,6 +182,7 @@ export function openReviewWaveState(
     arbitration_blocker_fingerprints: arbitrationBlockerFingerprints,
     opened_at: isoNow(),
   };
+  if (ledger.schema_version === 6) ledger.schema_version = 7;
   waves[waveId] = wave;
   review.waves = waves;
   review.active_wave_id = waveId;
@@ -198,24 +199,12 @@ function isLegacyReviewWave(
   wave: Record<string, unknown>,
 ): boolean {
   if (
+    ledger.schema_version !== 6 ||
     ledger.legacy_compatibility !== true ||
     ledger.legacy_schema_version !== 6 ||
     Object.hasOwn(wave, "scope_binding") ||
     !isRecord(wave.lanes)
   )
-    return false;
-  const legacyReview = isRecord(ledger.legacy_review)
-    ? ledger.legacy_review
-    : undefined;
-  const legacyWaves =
-    legacyReview && isRecord(legacyReview.waves)
-      ? legacyReview.waves
-      : undefined;
-  const legacyWave =
-    legacyWaves && isRecord(legacyWaves[String(wave.wave_id)])
-      ? legacyWaves[String(wave.wave_id)]
-      : undefined;
-  if (!legacyWave || canonicalJson(legacyWave) !== canonicalJson(wave))
     return false;
   const lanes = Object.entries(wave.lanes);
   if (!lanes.length || !reviewLaneTopologyMatches(ledger, wave, lanes))

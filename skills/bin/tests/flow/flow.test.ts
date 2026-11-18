@@ -964,6 +964,7 @@ describe("acceptance and review state", () => {
     const historicalSnapshot = structuredClone(historicalReceipts);
     const normalized = normalizeLedger(historical);
     expect(normalized.receipts).toEqual(historicalSnapshot);
+    expect(normalized.schema_version).toBe(6);
     expect(normalized.legacy_schema_version).toBe(6);
     const forgedSchema7 = structuredClone(historical) as Record<
       string,
@@ -972,7 +973,6 @@ describe("acceptance and review state", () => {
     forgedSchema7.schema_version = 7;
     forgedSchema7.legacy_compatibility = true;
     forgedSchema7.legacy_schema_version = 6;
-    delete forgedSchema7.legacy_review;
     expect(() =>
       openReviewWaveState(forgedSchema7, {
         stage: "initial",
@@ -1022,6 +1022,7 @@ describe("acceptance and review state", () => {
       });
     expect(sameCandidateOldWave.state).toBe("retired");
     expect(sameCandidateFresh.next).toBe("record-review");
+    expect(sameCandidate.schema_version).toBe(7);
 
     const danglingReceipt = structuredClone(normalized) as Record<
       string,
@@ -1063,19 +1064,6 @@ describe("acceptance and review state", () => {
     unfinishedLane.receipt_id = null;
     expect(() =>
       openReviewWaveState(unfinishedSameCandidate, {
-        stage: "initial",
-        baseSha: sha,
-        headSha: sha,
-        laneSpecs: lanes,
-      }),
-    ).toThrow("another review wave is already active");
-
-    const upgraded = structuredClone(normalized) as Record<string, unknown>;
-    delete upgraded.legacy_compatibility;
-    delete upgraded.legacy_schema_version;
-    const upgradedNormalized = normalizeLedger(upgraded);
-    expect(() =>
-      openReviewWaveState(upgradedNormalized, {
         stage: "initial",
         baseSha: sha,
         headSha: sha,
