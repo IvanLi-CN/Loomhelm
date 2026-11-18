@@ -583,25 +583,51 @@ export function deliveryUnitOriginalParentMergeSha(
   }
   return null;
 }
-
-function planAddsTask(plan: Plan, taskId: string): boolean {
-  return Boolean(
-    plan.revision?.change_set.added.some((entry) => entry.path === `tasks[${taskId}]`),
-  );
+function planRevisionChainAddsTask(ledger: Ledger, taskId: string): boolean {
+  let plan: Plan | undefined = executionPlan(ledger);
+  const visited = new Set<string>();
+  let added = false;
+  const taskPath = `tasks[${taskId}]`;
+  while (plan && !visited.has(plan.id)) {
+    visited.add(plan.id);
+    added ||= Boolean(plan.revision?.change_set.added.some((entry) => entry.path === taskPath));
+    if (!plan.supersedes_id) return added;
+    plan = ledger.plans.find((item) => item.id === plan.supersedes_id);
+  }
+  return false;
 }
-
+function deliveryUnitMergeShas(ledger: Ledger, group: Ledger["groups"][number]): Set<string> {
+  const shas = new Set<string>();
+  for (const operation of ledger.operations) {
+    if (
+      operation.kind !== "merge" ||
+      operation.target_id !== group.id ||
+      operation.status !== "succeeded" ||
+      !operation.receipt_fact_id
+    )
+      continue;
+    if (!["parent", "parent-followup"].includes(operation.request.mode)) continue;
+    const fact = ledger.facts.find((item) => item.id === operation.receipt_fact_id);
+    if (fact?.kind !== "pr_merged" || fact.status !== "passed") continue;
+    const verifiedHead =
+      fact.receipt?.head_sha && fact.receipt.head_sha === operation.request.expected_head_sha
+        ? fact.receipt.head_sha
+        : null;
+    for (const sha of [fact.sha, verifiedHead]) if (sha) shas.add(sha);
+  }
+  return shas;
+}
 export function isMergedGroupContinuation(
   ledger: Ledger,
   group: Ledger["groups"][number],
 ): boolean {
   if (group.state !== "merged" || !deliveryUnitPrMergedFromLedger(ledger, group)) return false;
-  const plan = executionPlan(ledger);
   return ledger.tasks.some(
     (task) =>
       task.group_id === group.id &&
       isContributionKind(task.kind) &&
       task.disposition === "active" &&
-      planAddsTask(plan, task.id),
+      planRevisionChainAddsTask(ledger, task.id),
   );
 }
 
@@ -609,12 +635,16 @@ export function isMergedContributionContinuation(
   ledger: Ledger,
   group: Ledger["groups"][number],
   task: Ledger["tasks"][number],
+  requireLineage = true,
 ): boolean {
   return (
     task.group_id === group.id &&
     isContributionKind(task.kind) &&
+    task.disposition === "active" &&
     isMergedGroupContinuation(ledger, group) &&
-    planAddsTask(executionPlan(ledger), task.id)
+    planRevisionChainAddsTask(ledger, task.id) &&
+    (!requireLineage ||
+      (task.base_sha !== null && deliveryUnitMergeShas(ledger, group).has(task.base_sha)))
   );
 }
 
