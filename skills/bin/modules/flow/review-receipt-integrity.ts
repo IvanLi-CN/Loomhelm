@@ -1,5 +1,6 @@
 import {
   FlowError,
+  REVIEW_SCOPE_CLASSES,
   REVIEW_RECEIPT_SCHEMA_VERSION,
   canonicalJson,
   isRecord,
@@ -57,6 +58,12 @@ export function assertReviewReceiptIntegrity(
     receipt.wave_proof_key !== `${receipt.proof_key}:${waveId}:${laneName}`
   )
     throw new FlowError("review receipt provenance integrity is invalid");
+  if (
+    typeof wave.scope_class !== "string" ||
+    !REVIEW_SCOPE_CLASSES.has(wave.scope_class) ||
+    receipt.scope_class !== wave.scope_class
+  )
+    throw new FlowError("review receipt scope integrity is invalid");
   const requestedProfile = laneRequestedProfile(laneState);
   if (!isFormalReviewRequestProfile(requestedProfile))
     throw new FlowError(
@@ -108,6 +115,7 @@ export function assertReviewReceiptIntegrity(
     "sub-agent-review",
     receipt.wave_proof_key,
     receipt.review_result_sha256,
+    receipt.attempt_key,
   ]);
   if (
     receipt.receipt_id !== expectedId ||

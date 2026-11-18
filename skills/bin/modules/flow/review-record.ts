@@ -1,5 +1,6 @@
 import {
   FlowError,
+  REVIEW_SCOPE_CLASSES,
   canonicalJson,
   isoNow,
   isRecord,
@@ -57,6 +58,9 @@ export function recordSubagentReviewState(
     throw new FlowError(
       "review lane requested profile does not match the formal request",
     );
+  const scopeClass = wave.scope_class;
+  if (typeof scopeClass !== "string" || !REVIEW_SCOPE_CLASSES.has(scopeClass))
+    throw new FlowError("review wave scope is invalid");
   const headSha = options.headSha ?? String(wave.head_sha);
   const baseSha = options.baseSha ?? String(wave.base_sha);
   if (headSha !== wave.head_sha || baseSha !== wave.base_sha)
@@ -86,6 +90,7 @@ export function recordSubagentReviewState(
       headSha,
       baseSha,
       requestedProfile,
+      scopeClass,
     );
   if (terminal !== "completed")
     throw new FlowError(
@@ -100,11 +105,13 @@ export function recordSubagentReviewState(
   const parsed = parseReviewResultJson(options.reviewResultJson);
   if (repoPath)
     validateReviewFindingLocations(parsed.result, repoPath, baseSha, headSha);
+  const attemptKey = reviewAttemptKey(options);
   const receiptId = stableHash([
     ledger.run_id,
     "sub-agent-review",
     waveProofKey,
     parsed.resultSha256,
+    attemptKey,
   ]);
   const existingLaneId = laneState.receipt_id;
   if (existingLaneId) {
@@ -128,8 +135,9 @@ export function recordSubagentReviewState(
     head_sha: headSha,
     base_sha: baseSha,
     review_profile: options.reviewProfile,
-    attempt_key: reviewAttemptKey(options),
+    attempt_key: attemptKey,
     requested_profile: requestedProfile,
+    scope_class: scopeClass,
     profile_verification: "request_recorded",
     effective_profile: null,
     reported_profile: reportedProfile(options),
@@ -172,6 +180,7 @@ function recordUnavailable(
   headSha: string,
   baseSha: string,
   requestedProfile: { model: string; effort: string },
+  scopeClass: string,
 ): Record<string, unknown> {
   if (options.reviewResultJson.trim())
     throw new FlowError(
@@ -185,6 +194,7 @@ function recordUnavailable(
   const identity = stableHash([
     "sub-agent-review-unavailable",
     waveProofKey,
+    scopeClass,
     requestedProfile.model,
     requestedProfile.effort,
     attemptKey,
@@ -207,6 +217,7 @@ function recordUnavailable(
     review_profile: options.reviewProfile,
     attempt_key: attemptKey,
     requested_profile: requestedProfile,
+    scope_class: scopeClass,
     profile_verification: "request_recorded",
     effective_profile: null,
     reported_profile: reportedProfile(options),

@@ -13,3 +13,5 @@ Schema 7 的 unavailable attempt 使用父流程 `review-attempt-id` 作为幂�
 后续兼容收紧要求旧 active wave 的 lane 形状、receipt pointer 与当前 wave/lane/base/head 全部可核验；malformed profile 或跨 wave receipt 不会被自动修复，退休时保留 active epoch 与 repair budget。
 
 Repair Batch 补充了父流程 formal pair 的 record/integrity 双重校验，以及同候选 legacy recovery 的 fresh wave identity；旧 receipt 和 retired wave 保持历史只读，不会被 fresh wave 覆盖或复用。
+
+后续完整性收紧补充 scope 与 attempt identity 绑定，并拒绝带有任一 malformed lane profile 的 mixed legacy wave；单一合法 schema 6 receipt 不再足以退休损坏的 active wave。

@@ -117,6 +117,7 @@ export function openReviewWaveState(
     options.stage,
     options.headSha,
     options.baseSha,
+    scopeClass,
     options.laneSpecs,
   ];
   let waveGeneration = 0;
@@ -210,6 +211,7 @@ function isLegacyReviewWave(
     ([, rawLane]) =>
       isRecord(rawLane) && !Object.hasOwn(rawLane, "requested_profile"),
   );
+  if (!legacyLaneShape) return false;
   for (const [laneName, rawLane] of lanes) {
     if (
       !isRecord(rawLane) ||
@@ -230,9 +232,6 @@ function isLegacyReviewWave(
         return false;
       if (![6, 7].includes(Number(receipt.review_receipt_schema))) return false;
     }
-    if (isRecord(rawLane.requested_profile)) continue;
-    if (hasSchemaSixReceipt || (migratedSchemaSix && legacyLaneShape)) continue;
-    return false;
   }
   return hasSchemaSixReceipt || (migratedSchemaSix && legacyLaneShape);
 }

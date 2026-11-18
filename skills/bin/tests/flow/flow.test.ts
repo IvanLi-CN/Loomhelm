@@ -559,6 +559,7 @@ describe("acceptance and review state", () => {
         model: "reported-model-does-not-authorize",
         effort: "reported-effort",
       },
+      scope_class: "code",
     });
     if (!contractReceipt) throw new Error("contract receipt is missing");
     const integrityTampered = structuredClone(ledger) as Record<string, unknown>;
@@ -584,6 +585,45 @@ describe("acceptance and review state", () => {
         contractReceipt,
       ),
     ).toThrow("formal request");
+    const attemptTampered = structuredClone(ledger) as Record<string, unknown>;
+    const attemptReview = attemptTampered.review as Record<string, unknown>;
+    const attemptWave = (
+      attemptReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    const attemptReceipt = (
+      attemptTampered.receipts as Record<string, unknown>[]
+    ).find((receipt) => receipt.kind === "review" && receipt.lane === "contract");
+    if (!attemptReceipt) throw new Error("attempt receipt is missing");
+    attemptReceipt.attempt_key = "tampered-attempt";
+    expect(() =>
+      assertReviewReceiptIntegrity(
+        attemptTampered,
+        String(wave.wave_id),
+        "contract",
+        (attemptWave.lanes as Record<string, Record<string, unknown>>).contract,
+        attemptReceipt,
+      ),
+    ).toThrow("identity integrity");
+
+    const scopeTampered = structuredClone(ledger) as Record<string, unknown>;
+    const scopeReview = scopeTampered.review as Record<string, unknown>;
+    const scopeWave = (
+      scopeReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    scopeWave.scope_class = "document";
+    const scopeReceipt = (
+      scopeTampered.receipts as Record<string, unknown>[]
+    ).find((receipt) => receipt.kind === "review" && receipt.lane === "contract");
+    if (!scopeReceipt) throw new Error("scope receipt is missing");
+    expect(() =>
+      assertReviewReceiptIntegrity(
+        scopeTampered,
+        String(wave.wave_id),
+        "contract",
+        (scopeWave.lanes as Record<string, Record<string, unknown>>).contract,
+        scopeReceipt,
+      ),
+    ).toThrow("scope integrity");
     const finalized = finalizeReviewWaveState(ledger, String(wave.wave_id), {
       groups: [],
       invariants: ["all lanes covered"],
@@ -748,6 +788,24 @@ describe("acceptance and review state", () => {
         laneSpecs: lanes,
       }),
     ).toThrow("another review wave is already active");
+
+    const mixedMalformed = structuredClone(normalized) as Record<string, unknown>;
+    const mixedMalformedReview = mixedMalformed.review as Record<string, unknown>;
+    const mixedMalformedWave = (
+      mixedMalformedReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    (
+      mixedMalformedWave.lanes as Record<string, Record<string, unknown>>
+    ).contract.requested_profile = null;
+    expect(() =>
+      openReviewWaveState(mixedMalformed, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: "m".repeat(40),
+        laneSpecs: lanes,
+      }),
+    ).toThrow("another review wave is already active");
+    expect(mixedMalformedReview.active_wave_id).toBe(wave.wave_id);
 
     const malformedMigrated = structuredClone(normalized) as Record<
       string,

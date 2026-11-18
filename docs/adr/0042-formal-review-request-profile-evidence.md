@@ -21,3 +21,5 @@ Review result 不能可靠证明 provider 最终使用的 model/effort。现有 
 审计记录能够准确回答“父流程请求了什么”和“review 结果是否完整有效”，不会错误声称实际 provider 模型。需要实际模型身份证明的场景必须在未来增加独立平台能力，不由当前 review receipt 推断。
 
 Schema 7 新增请求与结果证据分离字段；schema 6 历史记录保持只读兼容，新候选不能使用旧自报字段满足 clear。
+
+Schema 7 receipt 同时绑定 review scope 和 parent attempt identity；历史 wave 的退休要求所有 lane 形状与绑定 receipt 都完整合法，不能因单个 lane 的旧 receipt 而放行混合损坏状态。
