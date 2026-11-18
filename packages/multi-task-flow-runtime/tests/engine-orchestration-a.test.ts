@@ -3,6 +3,7 @@ import { canonicalizeContract3Plan } from "../lib/atomic-orchestration";
 import {
   apply,
   deliveryUnitPrMerged,
+  execute,
   type Request,
   ready,
   requireGroupDispatchGate,
@@ -309,6 +310,36 @@ describe("orchestration state", () => {
         ),
       ),
     ).toThrow("must declare an integrate atom");
+    const migratedLedger = v2Fixture() as any;
+    migratedLedger.contract_version = 6;
+    migratedLedger.runtime_identity = { ...fixtureIdentity };
+    migratedLedger.groups[0].lifecycle.workspace_ready = "passed";
+    migratedLedger.groups[0].atoms = defaultGroupAtoms("g").map((atom) => {
+      const { lifecycle_role: _role, ...legacy } = atom;
+      return { ...legacy, status: "completed" as const };
+    });
+    expect(() =>
+      execute(
+        migratedLedger,
+        "publish-pr-claim",
+        request(
+          migratedLedger,
+          "migrated-group-pr-before-integration",
+          {
+            action_id: "publish-group-pr",
+            target_type: "group",
+            target_id: "g",
+            branch: "parent",
+            target_branch: "main",
+            expected_base_sha: base,
+            expected_head_sha: base,
+            pr: parentPr.pr,
+            operation_id: "migrated-group-pr-before-integration-op",
+          },
+          groupActor,
+        ),
+      ),
+    ).toThrow("must declare an integrate atom");
     ledger.tasks[1].atoms[0].status = "planned";
     expect(() =>
       apply(
@@ -334,6 +365,30 @@ describe("orchestration state", () => {
           groupActor,
         ),
       );
+    ledger.tasks[1].atoms[0].status = "planned";
+    expect(() =>
+      apply(
+        ledger,
+        "publish-pr-claim",
+        request(
+          ledger,
+          "group-pr-after-new-content",
+          {
+            action_id: "publish-group-pr",
+            target_type: "group",
+            target_id: "g",
+            branch: "parent",
+            target_branch: "main",
+            expected_base_sha: base,
+            expected_head_sha: base,
+            pr: parentPr.pr,
+            operation_id: "publish-group-pr-after-new-content-op",
+          },
+          groupActor,
+        ),
+      ),
+    ).toThrow("Contribution task atoms must complete before parent PR publication");
+    ledger.tasks[1].atoms[0].status = "completed";
     apply(
       ledger,
       "publish-pr-claim",
