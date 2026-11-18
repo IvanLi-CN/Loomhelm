@@ -873,6 +873,18 @@ test("an unverified parent merge head cannot authorize continuation lineage", ()
   expect(isMergedContributionContinuation(ledger, group, task)).toBe(false);
 });
 
+test("child and follow merge commits cannot authorize continuation lineage", () => {
+  for (const mode of ["child", "follow"] as const) {
+    const { ledger, group, task } = postMergeContinuationFixture();
+    const parentMerge = ledger.operations.find(
+      (operation) => operation.id === "group-parent-merge-op",
+    )!;
+    parentMerge.request.mode = mode;
+
+    expect(isMergedContributionContinuation(ledger, group, task)).toBe(false);
+  }
+});
+
 test("an invalid continuation revision chain never qualifies", () => {
   for (const [name, supersedesId] of [
     ["missing predecessor", "plan-missing"],

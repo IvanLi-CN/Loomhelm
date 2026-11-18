@@ -606,12 +606,11 @@ function deliveryUnitMergeShas(ledger: Ledger, group: Ledger["groups"][number]):
       !operation.receipt_fact_id
     )
       continue;
+    if (!["parent", "parent-followup"].includes(operation.request.mode)) continue;
     const fact = ledger.facts.find((item) => item.id === operation.receipt_fact_id);
     if (fact?.kind !== "pr_merged" || fact.status !== "passed") continue;
     const verifiedHead =
-      fact.receipt?.head_sha &&
-      ["parent", "parent-followup"].includes(operation.request.mode) &&
-      fact.receipt.head_sha === operation.request.expected_head_sha
+      fact.receipt?.head_sha && fact.receipt.head_sha === operation.request.expected_head_sha
         ? fact.receipt.head_sha
         : null;
     for (const sha of [fact.sha, verifiedHead]) if (sha) shas.add(sha);
