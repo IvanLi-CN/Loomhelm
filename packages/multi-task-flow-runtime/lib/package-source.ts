@@ -9,10 +9,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { sourceResources } from "./source-resources.ts";
+import { sourceResources, verifySourceBytes } from "./source-resources.ts";
 export const digest = (value) => createHash("sha256").update(value).digest("hex");
-export function copySkillSources(root, output, { dependencies = false } = {}) {
-  const manifest = sourceResources(root);
+export function copySkillSources(
+  root,
+  output,
+  { dependencies = false, sourceRef = undefined as string | undefined } = {},
+) {
+  const manifest = sourceResources(root, sourceRef);
+  const sourceEntries = new Map(manifest.files.map((file) => [file.path, file]));
   const skill = "multi-task-flow";
   const selected = (resource) =>
     resource.path === `skills/${skill}` || resource.path.startsWith(`skills/${skill}/`);
@@ -38,6 +43,8 @@ export function copySkillSources(root, output, { dependencies = false } = {}) {
     )
       throw new Error("Unsafe source resource: " + path);
     const contents = readFileSync(source);
+    const entry = sourceEntries.get(path);
+    if (entry) verifySourceBytes(entry, contents);
     const sha256 = digest(contents);
     if (expected && expected !== sha256)
       throw new Error("Source resource checksum mismatch: " + path);

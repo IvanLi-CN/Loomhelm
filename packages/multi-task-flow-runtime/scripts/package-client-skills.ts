@@ -11,11 +11,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { sourceResources } from "../lib/source-resources.ts";
+import { sourceResources, verifySourceBytes } from "../lib/source-resources.ts";
 
 const root = resolve(import.meta.dirname, "../../..");
 const target = resolve(root, "clients/typescript/resources");
-const manifest = sourceResources(root);
 const packageMetadata = JSON.parse(
   readFileSync(resolve(root, "clients/typescript/package.json"), "utf8"),
 );
@@ -146,6 +145,8 @@ if (
   (dirty || mergeShaValue === null || mergeShaValue !== sourceSha)
 )
   throw new Error("Release package builds require a clean checkout at the exact merge SHA");
+const manifest = sourceResources(root, dirty ? undefined : sourceSha);
+const sourceEntries = new Map(manifest.files.map((file) => [file.path, file]));
 const gitTag = process.env.LOOMHELM_GIT_TAG?.trim() || null;
 if (gitTag !== null && gitTag !== `multi-task-flow-v${buildVersion}`)
   throw new Error("LOOMHELM_GIT_TAG does not match package version");
@@ -205,6 +206,8 @@ function copy(
   )
     throw new Error("Unsafe toolkit resource: " + path);
   const contents = readFileSync(source);
+  const entry = sourceEntries.get(path);
+  if (entry) verifySourceBytes(entry, contents);
   const digest = createHash("sha256").update(contents).digest("hex");
   if (expected && digest !== expected)
     throw new Error("Toolkit resource checksum mismatch: " + path);

@@ -10,7 +10,8 @@ import { sourceResources } from "../lib/source-resources.ts";
 export function checkSkillsInstallation(root, { probe = false } = {}) {
   root = resolve(root);
   const inventory = resolve(root, "skills/resource-manifest.json");
-  const manifest = existsSync(inventory)
+  const generatedInventory = existsSync(inventory);
+  const manifest = generatedInventory
     ? JSON.parse(readFileSync(inventory, "utf8"))
     : sourceResources(root);
   const localPath = (resource) => {
@@ -42,7 +43,7 @@ export function checkSkillsInstallation(root, { probe = false } = {}) {
     .filter((file) => {
       const path = localPath(file);
       return (
-        file.installedSha256 &&
+        generatedInventory &&
         !missing.includes(path) &&
         createHash("sha256")
           .update(readFileSync(resolve(root, path)))
