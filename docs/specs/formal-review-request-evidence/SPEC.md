@@ -12,7 +12,7 @@
 
 ### REQ-FRPE-001：父流程拥有请求参数
 
-父流程 MUST 为每个 required lane 选择并保存 `requested_profile`，并把相同的 model/effort 原样传给 native review 工具；缺失或替换锁定 pair MUST 被拒绝；工具拒绝启动 MUST 作为 parent-observed unavailable attempt 记录。
+父流程 MUST 为每个 required lane 选择并保存 `requested_profile`，并把相同的 model/effort 原样传给 native review 工具；record 和 receipt integrity 路径 MUST 再次将持久化 lane profile 与本仓库 formal request pair 比较，不能只信任可变 lane state；缺失或替换锁定 pair MUST 被拒绝；工具拒绝启动 MUST 作为 parent-observed unavailable attempt 记录。
 
 ### REQ-FRPE-002：仓库 Formal review 请求固定
 
@@ -28,7 +28,7 @@ Review 结果 MUST NOT 授权、否决或覆盖父流程的 requested profile；
 
 ### REQ-FRPE-005：历史 schema 兼容不升级事实
 
-Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 self-reported profile MUST NOT 转换为 schema 7 的启动事实，也 MUST NOT 满足新候选 clear gate。新候选 MUST 通过 fresh review wave 恢复，旧 active wave 只有在 lane 仍是旧形状且其 receipt pointer 明确绑定当前 wave、lane、base 和 head 时才可由运行时标记 retired；malformed requested profile、跨 wave receipt 或未绑定 receipt MUST 继续阻塞。退休过程 MUST 保留既有 active epoch 和 repair budget。失败重试 MUST 使用同一 requested pair 和父流程 `review-attempt-id`，保留独立 attempt，且不得重复启动活动 lane。
+Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 self-reported profile MUST NOT 转换为 schema 7 的启动事实，也 MUST NOT 满足新候选 clear gate。新候选 MUST 通过 fresh review wave 恢复，旧 active wave 只有在 lane 仍是旧形状且其 receipt pointer 明确绑定当前 wave、lane、base 和 head 时才可由运行时标记 retired；malformed requested profile、跨 wave receipt 或未绑定 receipt MUST 继续阻塞。退休过程 MUST 保留既有 active epoch 和 repair budget，并为同一候选重新打开的 fresh wave 分配不重复的 wave identity，确保历史 wave 和 schema 6 receipt 不被覆盖或复用。失败重试 MUST 使用同一 requested pair 和父流程 `review-attempt-id`，保留独立 attempt，且不得重复启动活动 lane。
 
 ## Verification
 

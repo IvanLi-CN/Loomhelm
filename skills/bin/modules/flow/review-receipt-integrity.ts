@@ -9,6 +9,7 @@ import {
   parseReviewResultJson,
   validateReviewFindingLocations,
 } from "./review-result";
+import { isFormalReviewRequestProfile } from "./review-profile-policy";
 
 export function assertReviewReceiptIntegrity(
   ledger: Record<string, unknown>,
@@ -57,6 +58,10 @@ export function assertReviewReceiptIntegrity(
   )
     throw new FlowError("review receipt provenance integrity is invalid");
   const requestedProfile = laneRequestedProfile(laneState);
+  if (!isFormalReviewRequestProfile(requestedProfile))
+    throw new FlowError(
+      "review lane requested profile does not match the formal request",
+    );
   if (
     !isRecord(receipt.requested_profile) ||
     canonicalJson(receipt.requested_profile) !== canonicalJson(requestedProfile)

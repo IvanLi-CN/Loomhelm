@@ -14,6 +14,8 @@ Review result 不能可靠证明 provider 最终使用的 model/effort。现有 
 
 本仓库 formal runtime review 请求 `gpt-6-luna + max`；通用 direct-review policy 的六项 allowlist 仍用于请求策略选择。该边界不声称 provider 内部 routing，也不建设 provider attestation。
 
+请求 pair 在记录 review result 和验证 receipt integrity 时都必须重新与仓库 formal request 比较；legacy schema 6 wave 退休后，同一候选的 fresh wave 必须使用不重复的 identity，保留旧 wave 和 receipt 的历史边界。
+
 ## Consequences
 
 审计记录能够准确回答“父流程请求了什么”和“review 结果是否完整有效”，不会错误声称实际 provider 模型。需要实际模型身份证明的场景必须在未来增加独立平台能力，不由当前 review receipt 推断。

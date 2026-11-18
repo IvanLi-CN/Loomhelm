@@ -22,6 +22,7 @@ import {
   recordSubagentReviewState,
   finalizeReviewWaveState,
 } from "../../modules/flow/review-ledger";
+import { assertReviewReceiptIntegrity } from "../../modules/flow/review-record";
 import {
   initialLedger,
   normalizePostMergeEvidence,
@@ -418,6 +419,34 @@ describe("acceptance and review state", () => {
       laneSpecs: lanes,
     });
     const wave = opened.wave as Record<string, unknown>;
+    const tamperedProfile = structuredClone(ledger) as Record<string, unknown>;
+    const tamperedReview = tamperedProfile.review as Record<string, unknown>;
+    const tamperedWave = (
+      tamperedReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    const tamperedLane = (
+      tamperedWave.lanes as Record<string, Record<string, unknown>>
+    ).contract;
+    tamperedLane.model = "gpt-5.6-luna";
+    tamperedLane.effort = "max";
+    tamperedLane.requested_profile = {
+      model: "gpt-5.6-luna",
+      effort: "max",
+    };
+    expect(() =>
+      recordSubagentReviewState(tamperedProfile, {
+        reviewProfile: "pr-convergence",
+        baseRef: sha,
+        reviewResultJson: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation: "The candidate is correct.",
+          overall_confidence_score: 1,
+        }),
+        waveId: String(wave.wave_id),
+        lane: "contract",
+      }),
+    ).toThrow("formal request");
     const malformed = structuredClone(ledger) as Record<string, unknown>;
     const malformedReview = malformed.review as Record<string, unknown>;
     const malformedWave = (
@@ -531,6 +560,30 @@ describe("acceptance and review state", () => {
         effort: "reported-effort",
       },
     });
+    if (!contractReceipt) throw new Error("contract receipt is missing");
+    const integrityTampered = structuredClone(ledger) as Record<string, unknown>;
+    const integrityReview = integrityTampered.review as Record<string, unknown>;
+    const integrityWave = (
+      integrityReview.waves as Record<string, Record<string, unknown>>
+    )[String(wave.wave_id)];
+    const integrityLane = (
+      integrityWave.lanes as Record<string, Record<string, unknown>>
+    ).contract;
+    integrityLane.model = "gpt-5.6-luna";
+    integrityLane.effort = "max";
+    integrityLane.requested_profile = {
+      model: "gpt-5.6-luna",
+      effort: "max",
+    };
+    expect(() =>
+      assertReviewReceiptIntegrity(
+        integrityTampered,
+        String(wave.wave_id),
+        "contract",
+        integrityLane,
+        contractReceipt,
+      ),
+    ).toThrow("formal request");
     const finalized = finalizeReviewWaveState(ledger, String(wave.wave_id), {
       groups: [],
       invariants: ["all lanes covered"],
@@ -747,6 +800,42 @@ describe("acceptance and review state", () => {
     ).toBe(2);
 
     const freshHead = "b".repeat(40);
+    const sameHeadLedger = structuredClone(normalized) as Record<string, unknown>;
+    const sameHead = openReviewWaveState(sameHeadLedger, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: sha,
+      laneSpecs: lanes,
+    });
+    const sameHeadWave = sameHead.wave as Record<string, unknown>;
+    expect(sameHeadWave.wave_id).not.toBe(wave.wave_id);
+    const sameHeadReview = sameHeadLedger.review as Record<string, unknown>;
+    const sameHeadEpoch = (
+      sameHeadReview.epochs as Record<string, unknown>[]
+    ).find((item) => item.epoch_id === sameHeadReview.active_epoch_id);
+    if (!sameHeadEpoch) throw new Error("same-head recovery epoch is missing");
+    expect(new Set(sameHeadEpoch.waves as string[]).size).toBe(
+      (sameHeadEpoch.waves as string[]).length,
+    );
+    const sameHeadReceipt = recordSubagentReviewState(sameHeadLedger, {
+      reviewProfile: "pr-convergence",
+      baseRef: sha,
+      reviewResultJson: JSON.stringify({
+        findings: [],
+        overall_correctness: "patch is correct",
+        overall_explanation:
+          "Inspected the fresh candidate implementation and recorded it independently.",
+        overall_confidence_score: 1,
+      }),
+      waveId: String(sameHeadWave.wave_id),
+      lane: "contract",
+    });
+    expect(sameHeadReceipt.reused).toBe(false);
+    expect(
+      (sameHeadWave.lanes as Record<string, Record<string, unknown>>).contract
+        .receipt_id,
+    ).toBe((sameHeadReceipt.receipt as Record<string, unknown>).receipt_id);
+
     const fresh = openReviewWaveState(normalized, {
       stage: "initial",
       baseSha: sha,

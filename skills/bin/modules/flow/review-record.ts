@@ -10,6 +10,7 @@ import {
   parseReviewResultJson,
   validateReviewFindingLocations,
 } from "./review-result";
+import { isFormalReviewRequestProfile } from "./review-profile-policy";
 
 export interface SubagentReviewOptions {
   reviewProfile: string;
@@ -52,6 +53,10 @@ export function recordSubagentReviewState(
     throw new FlowError(`review lane does not exist: ${lane}`);
   const laneState = wave.lanes[lane];
   const requestedProfile = laneRequestedProfile(laneState);
+  if (!isFormalReviewRequestProfile(requestedProfile))
+    throw new FlowError(
+      "review lane requested profile does not match the formal request",
+    );
   const headSha = options.headSha ?? String(wave.head_sha);
   const baseSha = options.baseSha ?? String(wave.base_sha);
   if (headSha !== wave.head_sha || baseSha !== wave.base_sha)

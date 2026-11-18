@@ -14,6 +14,16 @@ export const FORMAL_REVIEW_REQUEST_PROFILE = {
   effort: "max",
 } as const;
 
+export function isFormalReviewRequestProfile(
+  value: unknown,
+): value is typeof FORMAL_REVIEW_REQUEST_PROFILE {
+  return (
+    isRecord(value) &&
+    value.model === FORMAL_REVIEW_REQUEST_PROFILE.model &&
+    value.effort === FORMAL_REVIEW_REQUEST_PROFILE.effort
+  );
+}
+
 const COMPLEXITY_INDEX: Record<string, number> = {
   ordinary: 0,
   complex: 2,

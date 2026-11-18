@@ -110,14 +110,25 @@ export function openReviewWaveState(
   );
   if (!Array.isArray(epoch.waves)) epoch.waves = [];
   if (!Array.isArray(epoch.permits)) epoch.permits = [];
-  const waveId = stableHash([
+  const waves = isRecord(review.waves) ? review.waves : {};
+  const waveIdSeed = [
     ledger.run_id,
     epoch.epoch_id,
     options.stage,
     options.headSha,
     options.baseSha,
     options.laneSpecs,
-  ]).slice(0, 20);
+  ];
+  let waveGeneration = 0;
+  let waveId = stableHash(waveIdSeed).slice(0, 20);
+  while (Object.hasOwn(waves, waveId)) {
+    waveGeneration += 1;
+    waveId = stableHash([
+      ...waveIdSeed,
+      "fresh-wave-generation",
+      waveGeneration,
+    ]).slice(0, 20);
+  }
   const lanes = Object.fromEntries(
     options.laneSpecs.map((lane) => [
       lane.lane,
@@ -156,9 +167,9 @@ export function openReviewWaveState(
         : null,
     arbitration_conflicts: arbitrationConflicts,
     arbitration_blocker_fingerprints: arbitrationBlockerFingerprints,
+    wave_generation: waveGeneration,
     opened_at: isoNow(),
   };
-  const waves = isRecord(review.waves) ? review.waves : {};
   waves[waveId] = wave;
   review.waves = waves;
   review.active_wave_id = waveId;
