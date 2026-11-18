@@ -1,13 +1,11 @@
 ---
 name: gui-escalation-gate
-description: "Route simple Codex Desktop Web Demo previews and complex browser work to the right surface; gate DevTools or Computer Use."
+description: "Choose the browser for local previews or formal browser work, and gate DevTools or Computer Use."
 ---
 
 # Browser and GUI Routing Gate
 
-Use this skill when a task may need the Codex Desktop built-in browser, `$ego-browser`, `chrome-devtools`, or Computer Use. Use the built-in browser for ordinary isolated Web Demo previews; use `$ego-browser` for complex browser work.
-
-This skill keeps browser and GUI automation narrow, auditable, and aligned with the repository's default browser route.
+Use the task-specific browser route first when one is defined, such as for a `multi-task-flow` dashboard. Use this skill for default browser selection and for DevTools or Computer Use escalation.
 
 ## Decision Ladder
 
@@ -16,20 +14,20 @@ Evaluate lower-intrusion paths first:
 1. Files, source, logs, configs, manifests, local caches.
 2. Shell commands, project-native scripts, tests, builds, linters, formatters.
 3. MCP/API/source-of-truth tools for the target service.
-4. Codex Desktop's built-in browser for ordinary isolated Web Demo previews.
+4. The host built-in browser for ordinary isolated Web Demo previews.
 5. `$ego-browser` for complex rendered browser state or interaction.
 6. `chrome-devtools` only through its explicit exception gate.
 7. `Computer Use`.
 
-## Codex Desktop Built-in Browser
+## Open a Local Preview
 
-When running in Codex Desktop and the current host exposes its built-in browser, use it for a one-off, login-free, read-only Web Demo or local preview that only needs to be opened and inspected.
+To open and inspect an isolated, login-free, read-only local preview, select the built-in browser from the current host's browser inventory and open the page there. This preview route takes precedence over the general Ego preference. If the host does not expose a suitable built-in browser, follow `$ego-browser`.
 
-This route is for isolated preview browsing, not complex interaction. Use `$ego-browser` when the task needs multi-step interaction, login or authenticated context, form input, data extraction, debugging, QA, or formal browser validation and capture. If the built-in browser is unavailable, use `$ego-browser` when the task fits its route or report the blocker.
+Confirm the selected browser renders the preview. A failed open warrants diagnosis; it does not establish that the browser is unavailable.
 
 ## Ego Browser Standard
 
-For complex browser work, authenticated or stateful interaction, and formal browser validation, use `$ego-browser` once the lower-intrusion paths cannot provide the required rendered state or interaction.
+For general browser work beyond opening and inspecting a local preview, use `$ego-browser` once the lower-intrusion paths cannot provide the required rendered state or interaction. This includes non-local pages, authentication, form input, data extraction, debugging, formal verification, and evidence capture.
 
 1. Read and follow the selected `$ego-browser` skill before its first command.
 2. Use one Ego TaskSpace for the user goal, and keep its URL and interaction scope limited to that goal.
@@ -49,22 +47,7 @@ When the DevTools exception path is used:
 - Use at most one isolated context per `task_scope_id`; later pages for the same task must reuse it.
 - Block any attempt to create a second isolated context for the same `task_scope_id` unless the caller explicitly starts a new task scope.
 
-For a one-off, login-free local Web Demo preview in Codex Desktop, use the built-in browser. For complex operations or formal browser validation, use `$ego-browser`. DevTools is not a generic fallback after either route fails.
-
-## Allowed Routes
-
-`Codex Desktop's built-in browser` is the preferred route when all conditions are true:
-
-- The task is running in Codex Desktop and the current host exposes the built-in browser.
-- The target is a one-off, login-free, read-only local Web Demo or preview.
-- The task only needs the rendered preview to be opened and inspected.
-
-`$ego-browser` is the preferred route when at least one condition is true:
-
-- The task requires visible browser state or interaction beyond an isolated preview that files, scripts, and source-of-truth tools cannot provide.
-- The user asks to open, inspect, test, or interact with a non-local, authenticated, stateful, or complex web page.
-- The task requires a local preview or a deterministic browser-validation surface for formal validation or capture.
-- The task needs complex interaction, authentication, state changes, data extraction, debugging, QA, or formal browser validation and capture.
+## Computer Use Gate
 
 `Computer Use` is allowed only when at least one condition is true:
 
@@ -74,7 +57,7 @@ For a one-off, login-free local Web Demo preview in Codex Desktop, use the built
 
 For browser work, use `chrome-devtools` only with the explicit exception rationale above. Generic statements such as “当前线程里没有可调用的 ego-browser” do not authorize a DevTools fallback.
 
-If neither the Codex Desktop built-in browser nor `$ego-browser` can satisfy the task, report the blocker or evaluate Computer Use through this gate.
+If the browser routes cannot satisfy the task, report the blocker or evaluate Computer Use through this gate.
 
 ## Required Pre-Use Disclosure
 
@@ -90,7 +73,6 @@ If `risk` includes `submit`, `delete`, `permission`, `login-state`, or `real-scr
 
 - Do not use Computer Use just because it is visible or enabled.
 - Do not use Computer Use only because the prompt says "open", "test", "view", "check", or "screenshot"; first determine whether the built-in browser or `$ego-browser` satisfies the task.
-- Use the built-in browser only for one-off, login-free, read-only local Web Demo previews; route complex, authenticated, stateful, or formal validation work to `$ego-browser`.
 - Do not offer `chrome-devtools` as the next step for an ordinary page-open task after `$ego-browser` fails.
 - Do not use `Computer Use` as a browser fallback while `$ego-browser` remains viable.
 - Do not treat a freshly launched Chrome/Chromium/`9222` debugging instance as valid evidence that the repo-owned DevTools Surface was available all along; that is `Synthetic DevTools Bootstrap`, and it is blocked by default.

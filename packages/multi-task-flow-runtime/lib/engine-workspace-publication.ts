@@ -62,6 +62,7 @@ const {
   ready,
   deliveryUnitPrMerged,
   deliveryUnitPrMergedFromLedger,
+  isMergedGroupContinuation,
   requireHandoffAcknowledged,
   requireGroupDispatchGate,
   ownerOfTask,
@@ -253,6 +254,8 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
       }
       requireLifecycle(ledger, targetType, targetId, "workspace_ready");
       const target = lifecycleTarget(ledger, targetType, targetId) as any;
+      const mergedContinuation =
+        targetType === "group" && isMergedGroupContinuation(ledger, target);
       const branch = string(payload.branch);
       exactApprovedAction(
         ledger,
@@ -268,7 +271,7 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
         .parse(payload.expected_head_sha);
       requireCondition(
         targetType === "group"
-          ? target.state === "active"
+          ? target.state === "active" || mergedContinuation
           : taskExecutionState(target) === "running",
         "TARGET_NOT_ACTIVE",
         "Publication target is not active",
@@ -298,12 +301,22 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
         "Branch publication is already pending",
         4,
       );
+      requireCondition(
+        targetType !== "group" ||
+          !ledger.operations.some(
+            (item) => item.kind === "merge" && item.target_id === targetId && activeOperation(item),
+          ),
+        "MERGE_PENDING",
+        "A merge into this group is already pending",
+        4,
+      );
       const op = addOperation(ledger, request, "publish_branch", targetId, expectedSha);
       op.request.target_type = targetType;
       op.request.branch = branch;
       op.request.expected_head_sha = expectedSha;
       op.request.expected_base_sha = targetType === "group" ? target.current_sha : target.base_sha;
       op.request.action_id = payload.action_id;
+      op.request.continuation = mergedContinuation;
       addEvent(ledger, request, "publish_branch_claimed", targetId, {
         operation_id: op.id,
         target_type: targetType,
@@ -422,6 +435,8 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
       requireDevelopmentTarget(ledger, targetType, targetId);
       requireLifecycle(ledger, targetType, targetId, "workspace_ready");
       const target = lifecycleTarget(ledger, targetType, targetId) as any;
+      const mergedContinuation =
+        targetType === "group" && isMergedGroupContinuation(ledger, target);
       const branch = string(payload.branch);
       const headSha = z
         .string()
@@ -429,7 +444,7 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
         .parse(payload.expected_head_sha);
       requireCondition(
         targetType === "group"
-          ? target.state === "active"
+          ? target.state === "active" || mergedContinuation
           : taskExecutionState(target) === "running",
         "TARGET_NOT_ACTIVE",
         "Publication target is not active",
@@ -460,6 +475,13 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
       );
       const pr = parse(externalRef, payload.pr);
       checkPR(ledger, pr);
+      if (mergedContinuation)
+        requireCondition(
+          payload.target_branch === ledger.repository.target_branch,
+          "TARGET_MISMATCH",
+          "A post-merge continuation PR must target the repository branch",
+          3,
+        );
       exactApprovedAction(
         ledger,
         parse(id, payload.action_id),
@@ -477,6 +499,15 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
         "PR publication is already pending",
         4,
       );
+      requireCondition(
+        targetType !== "group" ||
+          !ledger.operations.some(
+            (item) => item.kind === "merge" && item.target_id === targetId && activeOperation(item),
+          ),
+        "MERGE_PENDING",
+        "A merge into this group is already pending",
+        4,
+      );
       const op = addOperation(ledger, request, "publish_pr", targetId, headSha);
       op.request.target_type = targetType;
       op.request.branch = branch;
@@ -485,6 +516,7 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
       op.request.expected_base_sha = baseSha;
       op.request.expected_head_sha = headSha;
       op.request.action_id = payload.action_id;
+      op.request.continuation = mergedContinuation;
       addEvent(ledger, request, "publish_pr_claimed", targetId, {
         operation_id: op.id,
         target_type: targetType,
@@ -540,6 +572,7 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
           sha: receipt.head_sha,
           evidence_ref: receipt.evidence_ref,
           receipt,
+          ...(op.request.continuation === true ? { continuation: true } : {}),
         });
         ledger.facts.push(observed);
         op.receipt_fact_id = observed.id;
@@ -554,6 +587,13 @@ export function executeWorkspacePublicationCommand(context: CommandContext): unk
         );
         if (targetType === "group") {
           if (ledger.contract_version < 3) target.parent_pr = receipt.pr;
+          else if (op.request.continuation === true)
+            requireCondition(
+              target.state === "merged",
+              "GROUP_STATE_CHANGED",
+              "Post-merge continuation publication cannot change the delivery-unit state",
+              5,
+            );
           else
             target.pr = {
               state: "published",

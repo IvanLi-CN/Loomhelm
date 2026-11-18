@@ -23,7 +23,7 @@ export const executionProfile = z.object({ model: text, thinking: text }).strict
 export const optionalExecutionProfile = executionProfile.nullable().default(null);
 const defaultExecutionProfile = { model: "gpt-5.6-luna", thinking: "max" };
 const timestamp = z.iso.datetime({ offset: false });
-const sha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+export const sha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const nullableText = text.nullable();
 const requirementsPath = nullableText.refine(
@@ -512,6 +512,8 @@ export const fact = z
     observed_at: timestamp,
     sha: sha.nullable(),
     evidence_ref: nullableText,
+    /** Continuation publications are explicit so older readers reject them instead of misclassifying them as canonical PR facts. */
+    continuation: z.literal(true).optional(),
     quality: z
       .object({
         task_id: id,
