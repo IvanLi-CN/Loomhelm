@@ -651,10 +651,87 @@ test("post-merge follow-up publication preserves the original parent PR receipt"
   ).toThrow("Protected action delivery_unit_merge approval has already been used");
 });
 
-test("post-merge follow-up publication waits for new contribution atoms", () => {
+test("post-merge follow-up publication waits across continuation revisions", () => {
   const { ledger, group, originalMerge, followUpPr, followUpHead } = postMergeContinuationFixture();
+  const firstPlan = ledger.plans[0]!;
+  const firstTask = ledger.tasks.find((task) => task.id === "task-followup")!;
+  const secondTask = structuredClone(firstTask);
+  secondTask.id = "task-followup-2";
+  secondTask.title = "Second post-merge contribution";
+  secondTask.branch = secondTask.id;
+  secondTask.atoms = defaultTaskAtoms(secondTask.id);
+  ledger.tasks.push(secondTask);
+  const secondNode = {
+    ...structuredClone(firstPlan.nodes.find((node) => node.ref_id === firstTask.id)),
+    id: "node-followup-2",
+    ref_id: secondTask.id,
+    label: secondTask.title,
+  };
+  const secondPlan = structuredClone(firstPlan);
+  secondPlan.id = "plan-followup-2";
+  secondPlan.supersedes_id = firstPlan.id;
+  secondPlan.nodes.push(secondNode);
+  secondPlan.atoms.push(
+    ...secondTask.atoms.map((atom) => ({
+      id: atom.id,
+      title: atom.title,
+      task_id: secondTask.id,
+      purpose: "second post-merge contribution atom",
+      output: "second post-merge contribution output",
+      lifecycle_stage: atom.lifecycle_stage,
+      lifecycle_role: atom.lifecycle_role,
+    })),
+  );
+  secondPlan.atomic_nodes.push(
+    ...secondTask.atoms.map((atom) => ({
+      kind: "work" as const,
+      id: atom.id,
+      title: atom.title,
+      purpose: "second post-merge contribution atom",
+      output: "second post-merge contribution output",
+      acceptance: [],
+      activity_type: "contribution" as const,
+      state: "planned" as const,
+      scope: { kind: "task" as const, task_id: secondTask.id, delivery_unit_id: group.id },
+      lifecycle_role: atom.lifecycle_role,
+    })),
+  );
+  secondPlan.atomic_edges.push(
+    ...secondTask.atoms.slice(1).map((atom, index) => ({
+      id: `${secondTask.id}-edge-${index}`,
+      from_node_id: secondTask.atoms[index]!.id,
+      to_node_id: atom.id,
+      requires: { kind: "source_terminal_success" as const },
+    })),
+  );
+  secondPlan.revision = {
+    ...firstPlan.revision!,
+    affected_task_ids: [secondTask.id],
+    affected_node_ids: [secondNode.id],
+    affected_edge_ids: [],
+    change_set: {
+      added: [
+        { path: `tasks[${secondTask.id}]`, new_value: structuredClone(secondTask) },
+        { path: `plan.nodes[${secondNode.id}]`, new_value: structuredClone(secondNode) },
+      ],
+      removed: [],
+      modified: [],
+    },
+  };
+  firstPlan.lifecycle = "superseded";
+  ledger.plans.push(secondPlan);
+  ledger.active_plan_id = secondPlan.id;
+  ledger.execution_plan_id = secondPlan.id;
+  const approvalEvent = ledger.events.find((event) => event.type === "plan_approved")!;
+  ledger.events.push({
+    ...structuredClone(approvalEvent),
+    id: "plan-followup-2-approved",
+    subject_id: secondPlan.id,
+    data: { ...structuredClone(approvalEvent.data), approval_id: secondPlan.approval_id },
+  });
   group.current_sha = followUpHead;
   for (const task of ledger.tasks) task.state = "integrated";
+  for (const atom of secondTask.atoms) atom.status = "completed";
 
   apply(
     ledger,
