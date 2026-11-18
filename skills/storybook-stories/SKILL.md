@@ -236,7 +236,8 @@ If visual verification is needed:
 - lease/verify the port via `$global-port-manager` before startup;
 - if the goal is same-turn browser verification only, a `live exec preview` via Codex native background terminals is acceptable;
 - if the goal includes owner-facing localhost handoff or a stable review URL, the Agent must obtain and retain a Codex native background terminal/session for the current workspace, register the host-provided `agent_session` when available, and do not hand off a URL still tied only to a foreground live exec; the Skill does not create, infer or replace that host session, so a missing supported background route is a handoff blocker;
-- for browser validation, use `$ego-browser` in one task-scoped TaskSpace.
+- for formal browser validation, use `$ego-browser` in one task-scoped TaskSpace;
+- to open a local Storybook preview for the owner to inspect, follow the preview route in `$gui-escalation-gate`.
 
 ### 9) Final delivery report
 

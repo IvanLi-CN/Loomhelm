@@ -719,6 +719,7 @@
       "files": 3,
       "internalSkills": [
         "global-port-manager",
+        "gui-escalation-gate",
         "storybook-screenshots",
         "ui-visual-evidence"
       ],
@@ -766,6 +767,7 @@
       "entry": "skills/ui-visual-evidence/SKILL.md",
       "files": 9,
       "internalSkills": [
+        "gui-escalation-gate",
         "storybook-screenshots",
         "storybook-stories"
       ],
