@@ -64,6 +64,8 @@ TTY 默认由 JSON 改为 human 是可观察兼容性变化；机器消费者应
 
 当前合同的 `init`、`plan-propose`、`plan-approve` 遇到无法核对的原子边或里程碑门禁时返回 `UNSUPPORTED_ATOMIC_CRITERION`，指出位置及条件类型。用节点完成、PR 发布或合并定义可执行门禁；原子内部验收可以保留在工作说明中。
 
+节点门禁引用不存在的节点或形成循环时，分别返回 `UNKNOWN_NODE` 或 `CYCLE`。旧合同需先升级才能在新计划中定义可执行门禁。
+
 `lifecycle-record workspace_ready` 可同时提供 `baseline` 和 `baseline_sync`；后者包含 `mode`、`dispatch_operation_id`、`expected_previous_baseline`、`expected_lineage_sha` 和 `lineage_event_id`。命令复用基线同步校验，只接受事先登记的资源，并在一次提交中完成准备原子和生命周期。原分步命令仍可用。
 
 `merge-observe` 由目标负责人提交已登记 PR 的 provider 合并回执；可用 `supersedes` 修正同一 PR 的上一条有效观测。结果提示使用既有操作对账或说明未认领、冲突。观测不会追加成功事实、推进 SHA 或满足依赖。

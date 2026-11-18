@@ -222,8 +222,19 @@ export function atomicConditionEvaluator(ledger: Ledger, plan: Plan) {
     if (criterion.kind === "node_satisfied") return nodeSatisfied(criterion.node_id);
     const prRef = stable(criterion.pr_ref);
     const fact = ledger.facts
-      .filter((item) => item.kind === criterion.kind && stable(item.receipt?.pr) === prRef)
-      .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
+      .filter((item) => {
+        const receipt = item.receipt;
+        if (item.kind !== criterion.kind || !receipt) return false;
+        if (receipt.pr) return stable(receipt.pr) === prRef;
+        return (
+          item.status !== "passed" &&
+          receipt.resource_type === "pr" &&
+          receipt.provider === criterion.pr_ref.provider &&
+          receipt.repository === criterion.pr_ref.repository &&
+          receipt.resource_id === criterion.pr_ref.id
+        );
+      })
+      .sort((left, right) => Date.parse(left.observed_at) - Date.parse(right.observed_at))
       .at(-1);
     return (
       fact?.status === "passed" &&
