@@ -153,7 +153,8 @@ export function modernFixture(): Ledger {
   ledger.execution_plan_id = plan.id;
   plan.lifecycle = "approved";
   const approval = ledger.events.find((event) => event.type === "plan_approved");
-  if (approval) approval.data.authorized_actions = ["dispatch", "publish_branch", "publish_pr"];
+  if (approval)
+    approval.data.authorized_actions = ["dispatch", "publish_branch", "publish_pr", "merge"];
   plan.actions = [
     {
       id: "publish-group-branch",

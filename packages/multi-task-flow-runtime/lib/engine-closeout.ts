@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { lifecycleStageOf } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
+import { continuationPublicationPending } from "../lib/publication-facts";
 import { externalRef, id, isContributionKind, ledgerSchema } from "../lib/schema";
 import type { CommandContext } from "./engine-command-context";
 import * as core from "./engine-support-core";
@@ -325,6 +326,23 @@ export function executeCloseoutCommand(context: CommandContext): unknown | undef
         ),
         "FOLLOW_PR_PENDING",
         "Known follow PRs are incomplete",
+        4,
+      );
+      requireCondition(
+        !ledger.operations.some(
+          (item) =>
+            item.target_id === groupId &&
+            ["merge", "publish_branch", "publish_pr"].includes(item.kind) &&
+            activeOperation(item),
+        ),
+        "OPERATION_PENDING",
+        "Delivery-unit merge or publication is still pending",
+        4,
+      );
+      requireCondition(
+        !continuationPublicationPending(ledger, groupId),
+        "CONTINUATION_PR_PENDING",
+        "A post-merge continuation PR has not been merged",
         4,
       );
       owner.state = "closed";

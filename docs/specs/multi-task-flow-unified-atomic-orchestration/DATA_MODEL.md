@@ -285,6 +285,8 @@ DeliveryUnitDefinition 不把 Task 作为子对象，也不保存 task_ids、ato
 
 `closed` external fact 不携带合并结果；`pr_merged` capability 由独立且不可覆盖的 `pr_merged` evidence、`merge_sha` 和对应里程碑计算。Provider 后续关闭 PR 时，不能删除或覆盖这些合并事实；没有合并事实的 `closed` PR 不能满足 `requires: merged`。
 
+parent PR 合并后的 continuation `pr_published` fact 必须携带 `continuation: true`，以便当前 reader 保留原始 canonical parent PR，旧 reader 遇到未知字段时 fail closed；DeliveryUnit closeout 只有在对应 `parent-followup` merge operation 成功后才可继续。
+
 #### 派生读取：DeliveryUnitProjection
 
 ```ts

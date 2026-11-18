@@ -10,7 +10,7 @@ The CLI checker persists `checked_at`, `next_check_at`, compatible/latest candid
 
 Gateway updates replace the daemon/Gateway package through a staged health-checked restart on the same fixed port and preserve all run/version mappings. Worker releases are side-by-side; a run changes worker version only through an explicit run-scoped operation with compatibility evidence, request draining and an auditable version mapping. There is no global worker upgrade that silently changes existing runs.
 
-The public command surface is exactly `multi-task-flow gateway upgrade <version|tag>` and `multi-task-flow orchestration upgrade --run-id <run-id> <version|tag>`. `--dry-run [version|tag]` only checks release and compatibility; `--rollback [version|tag]` restores a previously verified target. Gateway upgrade changes only the public entry process. Orchestration upgrade writes only the named run's version sidecar through the CLI and remains valid when the daemon is unavailable; concurrency identity is internal, and a best-effort daemon refresh notification may follow. Workers have no update command or self-update capability.
+`multi-task-flow gateway upgrade <version|tag>` 只替换共享入口，Gateway 的 `--dry-run` 检查发行与兼容性，`--rollback` 恢复已验证的目标。单次编排的 `multi-task-flow orchestration upgrade --run-id <run-id> <version|tag>` 按 [CLI 合同](cli-contract.md) 原子发布目标 run，支持 `--dry-run`，不支持编排 rollback。该命令不依赖 daemon 在线，完成后可尽力通知 daemon 刷新。Worker 没有更新命令，也不会自行升级。
 
 The formal root is `~/.local/share/multi-task-flow/`: `config/`, `data/runs/`, `releases/`, `state/`, `logs/`. `CODEX_HOME` and the invoking worktree do not select a formal instance. `MULTI_TASK_FLOW_PROFILE=test|development` requires an absolute `MULTI_TASK_FLOW_ROOT`, distinct from the formal root. Isolated profiles derive separate launchd labels, port scopes and registry roots. `TASK_ORCHESTRATION_DATA_ROOT` is an explicit ledger-only fixture override; never use it to create a second formal authority.
 
@@ -110,3 +110,15 @@ Re-running the exact command is idempotent. A prepared journal after source seal
 服务 label 从 `cn.ivan.multi-task-flow.viewer` 改为 `cc.ivanli.loomhelm.multi-task-flow.viewer`；隔离实例保留原有 profile 后缀。已有安装使用新 bundle 的维护 CLI 执行显式 `upgrade`，卸载当前 profile 的新旧 label，再生成新 plist 并启动。普通 `ensure` 遇到旧 plist 时要求升级，不自动迁移。数据根目录、端口 registry scope、凭据和运行账本保持原位。
 
 展示服务使用 launchd 的 `Interactive` 进程分类：它直接响应用户的 HTTP 操作，不使用 XPC 活动驱动的 `Adaptive` 分类。`Background` 的 I/O 限流会拖慢完整资源校验。启动、升级与恢复使用单调时钟限定 60 秒健康等待窗口，单次 HTTP 探测最多另占 1.5 秒；临时维护租约为 90 秒，在原生启动前后分别续租，覆盖整个健康等待窗口，结束或恢复失败后释放。已有 Agent／浏览器租约的期限不延长。超时仍执行既有失败恢复，完整性校验不跳过。
+
+## 运行展示与资源生命周期
+
+拥有后台生命周期，不要求管理员权限，也不会在登录时自动启动。独立的 main-thread/run lease 有效期为 60 分钟；相关成功编排命令会续租。长时间等待期间显式 renew。已连接浏览器页面每 60 秒续租一次，TTL 为五分钟。收口时只释放本次运行的 Agent lease；不能停止共享服务或释放其他运行的 lease。最后一个 lease 过期会触发退出但不会删除数据；下一次 `ensure` 可恢复崩溃。未完成账本不会保持进程存活。
+
+使用可选 `run_id` 调用 `login` 获取一次性的 60 秒浏览器入口。把该 URL 当作凭据，不能写入普通日志、账本或 PR。稳定的 run/plan 链接不包含凭据。登录后，`/` 列出运行，`?plan=<plan-id>` 选择历史计划。服务校验 Host/Origin，并使用 HttpOnly/SameSite 浏览器会话。服务链接不可用时先按身份诊断规则检查，再决定是否可调用 `ensure`。只有当前订阅的运行持有文件监听器。
+
+每运行的自定义 HTML/CSS/JS 仍支持放在 `data/runs/<run-id>/view/`。必须包含 `{ "api_version": 1, "frontend_contract": 1 }` 的 `view.manifest.json`。声明缺失或不兼容时保留文件，并带警告回退到共享模板。相对 API/资源路径必须留在 `/runs/<run-id>/` 内；这属于同一用户信任域。页面需要保留依赖图、计划/实际时间线、group 归属、状态、阻塞原因、PR、需求和真实对话链接。对话链接使用真实 ID 和 canonical `codex://threads/<thread-id>` anchor。
+
+对于示例和外部 fixture，使用通用的只读源目录 viewer。它接受绝对的源运行数据目录，校验账本和文件系统身份，分配随机的 `view-<id>` 展示身份，并通过同一个 singleton 提供服务。它原地读取源目录，不在正式 `data/runs` 下发布，不允许编排写入，并在显式浏览器 view lease 过期时移除映射。不能增加 example 专用服务模式，也不能把源视图当作真实运行。
+
+显式安装的共享用户服务使用系统服务例外管理后台生命周期；不要求 Codex background session。维护仍须对具体动作明确授权，普通运行不从用户侧源码构建或复制 bundle。受控候选测试需要安装依赖或构建本地资源时，在 `<skill>` 目录执行 `bun install --frozen-lockfile` 与 `bun --no-install run build`；这不授权升级用户安装。

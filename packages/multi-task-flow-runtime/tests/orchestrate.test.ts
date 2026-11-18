@@ -728,8 +728,10 @@ describe("orchestrate init", () => {
       "utf8",
     );
 
-    expect(skill).toContain("正式多对话运行");
-    expect(skill).toContain("只读审查、诊断和计划工作使用源检查或 `show`/`view`");
+    expect(skill).toContain("创建或继续正式运行并交付仪表板");
+    expect(skill).toContain("只做 proposal 或只读查询，不初始化、不创建对话");
+    expect(skill).toContain("`show`/`view` 读取一致快照");
+    expect(skill).toContain("该命令写账本，不创建对话");
     expect(design).toContain("失败返回 `INVALID_INITIAL_STATE`");
     expect(design).toContain("不创建任务会话");
   });

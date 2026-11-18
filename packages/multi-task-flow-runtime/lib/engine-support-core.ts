@@ -51,6 +51,7 @@ import {
   validateSchedulablePlan,
   validateTaskExecutionPolicies,
 } from "../lib/schema";
+import { latestPublicationFact } from "./publication-facts";
 
 export const actorSchema = z
   .object({
@@ -94,6 +95,16 @@ export function stable(value: any): string {
       .map((key) => `${JSON.stringify(key)}:${stable(value[key])}`)
       .join(",")}}`;
   return JSON.stringify(value);
+}
+export function protectedActionTargetDigest(value: unknown): string {
+  return createHash("sha256").update(stable(value)).digest("hex");
+}
+export function parseProtectedActionDigest(value: unknown): string | null {
+  if (value == null) return null;
+  return z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .parse(value);
 }
 function activeOperation(item: Ledger["operations"][number]): boolean {
   return item.status === "claimed" || item.status === "unknown";
@@ -285,6 +296,14 @@ export function authorizedAction(ledger: Ledger, action: string): void {
       event.data.approval_id === current.approval_id,
   );
   requireCondition(approval, "ACTION_NOT_APPROVED", `Action ${action} is not approved`, 4);
+  if (ledger.contract_version >= 3)
+    requireCondition(
+      Array.isArray(approval.data.authorized_actions) &&
+        approval.data.authorized_actions.includes(action),
+      "ACTION_NOT_APPROVED",
+      `Action ${action} is not approved`,
+      4,
+    );
 }
 export function legacyLedger(ledger: Ledger): boolean {
   return ledger.source_schema_version === 1 && ledger.contract_version !== 2;
@@ -336,6 +355,7 @@ export function requireContributionDispatchGate(
   requireParentPr = false,
   requireParentPrAbsenceEvidence = false,
   retryAction: "dispatch-claim" | "task-update" = "dispatch-claim",
+  allowMergedContinuation = false,
 ): void {
   if (legacyLedger(ledger)) return;
   const workspaceAtom = owner.atoms.find((atom) => lifecycleStageOf(atom) === "workspace_ready");
@@ -344,8 +364,9 @@ export function requireContributionDispatchGate(
   if (owner.lifecycle.workspace_ready !== "passed" || workspaceAtom?.status !== "completed")
     missing.push("workspace_ready");
   const parentPrRequired =
-    requireParentPr ||
-    (requireParentPrAbsenceEvidence && !parentPrDefinitivelyAbsent(ledger, owner));
+    !allowMergedContinuation &&
+    (requireParentPr ||
+      (requireParentPrAbsenceEvidence && !parentPrDefinitivelyAbsent(ledger, owner)));
   if (parentPrRequired && !parentPrReady(ledger, owner, prAtom)) missing.push("parent_pr");
   if (missing.length)
     throw new ContractError(
@@ -520,6 +541,7 @@ export function protectedActionApproved(
   kind: "delivery_unit_merge" | "delivery_unit_recovery" | "release" | "deploy",
   targetId: string,
   approvalId: string,
+  targetDigest: string | null = null,
 ): void {
   requireCondition(
     ledger.events.some(
@@ -527,12 +549,25 @@ export function protectedActionApproved(
         event.type === "protected_action_approved" &&
         event.subject_id === targetId &&
         event.data.kind === kind &&
-        event.data.approval_id === approvalId,
+        event.data.approval_id === approvalId &&
+        (event.data.target_digest ?? null) === targetDigest,
     ),
     "PROTECTED_ACTION_NOT_APPROVED",
     `Protected action ${kind} is not approved`,
     4,
   );
+  if (kind === "delivery_unit_merge")
+    requireCondition(
+      !ledger.operations.some(
+        (operation) =>
+          operation.kind === "merge" &&
+          operation.request.owner_approval_id === approvalId &&
+          operation.status !== "failed",
+      ),
+      "PROTECTED_ACTION_REPLAY",
+      `Protected action ${kind} approval has already been used`,
+      4,
+    );
 }
 
 export function historicalGroupLineageContains(
@@ -557,13 +592,9 @@ export function latestPublication(
   ledger: Ledger,
   targetId: string,
   kind: "branch_published" | "pr_published",
+  includeContinuation = true,
 ): Ledger["facts"][number] | null {
-  return (
-    ledger.facts
-      .filter((item) => item.kind === kind && item.subject_id === targetId)
-      .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
-      .at(-1) ?? null
-  );
+  return latestPublicationFact(ledger, targetId, kind, includeContinuation);
 }
 export function branchReceipt(
   ledger: Ledger,
@@ -586,8 +617,9 @@ export function prReceipt(
   baseSha?: string,
   headSha?: string,
   receiptState?: z.infer<typeof providerReceipt>["state"],
+  includeContinuation = true,
 ): boolean {
-  const latest = latestPublication(ledger, targetId, "pr_published");
+  const latest = latestPublication(ledger, targetId, "pr_published", includeContinuation);
   return (
     latest?.status === "passed" &&
     latest.receipt?.resource_type === "pr" &&
@@ -607,13 +639,13 @@ export function parentPrReady(
 ): boolean {
   const pr = deliveryUnitPr(owner);
   const canonicalState = owner.pr && "state" in owner.pr ? owner.pr.state : null;
-  const receipt = latestPublication(ledger, owner.id, "pr_published")?.receipt;
+  const receipt = latestPublication(ledger, owner.id, "pr_published", false)?.receipt;
   return (
     owner.lifecycle.pr_created === "passed" &&
     prAtom?.status === "completed" &&
     !!pr &&
     (canonicalState === null || canonicalState === "published") &&
-    prReceipt(ledger, owner.id, pr, undefined, undefined, "open") &&
+    prReceipt(ledger, owner.id, pr, undefined, undefined, "open", false) &&
     (ledger.contract_version < 3 ||
       !receipt ||
       owner.current_sha === null ||
@@ -624,7 +656,7 @@ export function parentPrReady(
   );
 }
 function parentPrDefinitivelyAbsent(ledger: Ledger, owner: Ledger["groups"][number]): boolean {
-  const latest = latestPublication(ledger, owner.id, "pr_published");
+  const latest = latestPublication(ledger, owner.id, "pr_published", false);
   const publicationPending = ledger.operations.some(
     (item) => item.kind === "publish_pr" && item.target_id === owner.id && activeOperation(item),
   );

@@ -71,6 +71,12 @@ DeliveryUnit merge capability 需要由统一的 engine/domain/view predicate �
 
 贡献 Task 使用 `TaskPrBinding` 表达 unbound/shared_delivery_unit/open/merged/closed。共享交付拓扑下，只有一个 contribution Task 的 DeliveryUnit 使用 `shared_delivery_unit`，Task 与 DeliveryUnit 共用 conversation、worktree、branch 和唯一 PR；多任务集成拓扑下才使用独立 child PR。普通贡献 work 原子或贡献 Task 进入 `starting` 前，所属 DeliveryUnit 必须有 active workspace、`parent_branch` 和 branch receipt；父 PR 只对显式 `delivery_policy: "parent_pr"` 的任务构成前置条件。交付单元的“集成交付内容”原子必须先完成，`publish-pr-claim` 才能创建父 PR；engine、atomic validator 和 viewer 必须共享 delivery policy 及外部 PR identity/state 判定。启动输入不要求提交 hash。DeliveryUnit 集成 PR 的 canonical 字段是 `pr`，旧 `parent_pr` 仅作为只读兼容输入。
 
+## Post-merge continuation
+
+`engine-merge-cut.ts` 将 `parent` 与 `parent-followup` 分成互斥状态边界：普通 parent merge 只接受 active DeliveryUnit，续作只接受 contract 3 或更高版本中已验证 merged capability 且有 approved plan revision 新增 active contribution 的 DeliveryUnit。续作 claim 保存原 parent PR/merge SHA、独立同仓库 follow-up PR、目标分支和预期 head/base，并要求 `protected_action_approved` 的一次性 SHA-256 目标摘要；同一审批不能再次 claim。
+
+`dispatch-bind-request` 与 `dispatch-claim` 共享同一 continuation gate，避免在原生请求绑定阶段绕过父 PR、plan revision 或 transport 门禁。`publish-branch-claim`、`publish-pr-claim` 与 `merge-claim` 互相排斥活动副作用，`group-close` 还检查活动 operation 及未被 follow-up merge 消费的 continuation publication fact。续作 `pr_published` fact 显式写入 `continuation: true`，读取投影据此保留 canonical parent PR；回归入口为 `tests/engine-follow-up.test.ts`，覆盖 40/64 位 SHA、绑定、审批动作、目标摘要、竞态和 closeout。
+
 ## Migration
 
 `packages/multi-task-flow-runtime/lib/store-migration.ts` 负责 contract 2 到 contract 3 的备份、revision fencing 和幂等迁移。Task.atoms 只有在 Task 与 DeliveryUnit 身份明确时才能机械转换为 contribution work；Group.atoms、coordination task/session 和无法确定语义的旧节点必须进入显式计划修订，不能猜测成 coordination 原子。

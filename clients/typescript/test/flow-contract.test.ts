@@ -56,6 +56,19 @@ test("flow schema exposes the versioned command contract", () => {
 	assert.equal(publicationReceipt.properties.repository.type, "string");
 	assert.equal(publicationReceipt.properties.branch.type, "string");
 	assert.equal(publicationReceipt.properties.evidence_ref.minLength, 1);
+	const lifecycleRecord = commands["lifecycle-record"].request.properties.payload;
+	assert.equal(lifecycleRecord.properties.branch.type, "string");
+	const protectedApprove = commands["protected-approve"].request.properties.payload;
+	assert.equal(protectedApprove.properties.target_digest.pattern, "^[a-f0-9]{64}$");
+	const mergeClaim = commands["merge-claim"].request.properties.payload;
+	assert.equal(
+		mergeClaim.properties.original_parent_merge_sha.pattern,
+		"^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+	);
+	assert.deepEqual(
+		mergeClaim.allOf.map((condition: any) => condition.then.required),
+		[["owner_approval_id"], ["owner_approval_id", "original_parent_pr", "original_parent_merge_sha"]],
+	);
 	assert.deepEqual(
 		commands["notification-reconcile"].response.success.oneOf[1].properties
 			.result.required,

@@ -6,6 +6,7 @@ import {
 } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
 import { sameRunIdentity } from "./orchestration-identity";
+import { isContinuationPublication } from "./publication-facts";
 import { collectCutAssignmentEvidence } from "./schema-cut";
 import {
   canonicalJson,
@@ -400,7 +401,10 @@ export function validateLedger(value: unknown): Ledger {
             : item.pr;
       const latest = parsed.facts
         .filter(
-          (candidate) => candidate.kind === "pr_published" && candidate.subject_id === item.id,
+          (candidate) =>
+            candidate.kind === "pr_published" &&
+            candidate.subject_id === item.id &&
+            !isContinuationPublication(parsed, candidate),
         )
         .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
         .at(-1);

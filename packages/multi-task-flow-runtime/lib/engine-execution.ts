@@ -75,6 +75,7 @@ const {
   ready,
   deliveryUnitPrMerged,
   deliveryUnitPrMergedFromLedger,
+  isMergedContributionContinuation,
   requireHandoffAcknowledged,
   requireGroupDispatchGate,
   ownerOfTask,
@@ -288,16 +289,18 @@ export function executeExecutionCommand(context: CommandContext): unknown | unde
       if (ledger.contract_version >= 3) {
         if (op.request.target_type === "group")
           requireGroupDispatchGate(ledger, dispatchTarget as Ledger["groups"][number]);
-        else if (isContributionKind((dispatchTarget as Ledger["tasks"][number]).kind))
+        else if (isContributionKind((dispatchTarget as Ledger["tasks"][number]).kind)) {
+          const taskTarget = dispatchTarget as Ledger["tasks"][number];
+          const group = find(ledger.groups, (item) => item.id === taskTarget.group_id, "Group");
           requireContributionDispatchGate(
             ledger,
-            find(
-              ledger.groups,
-              (item) => item.id === (dispatchTarget as Ledger["tasks"][number]).group_id,
-              "Group",
-            ),
-            (dispatchTarget as Ledger["tasks"][number]).delivery_policy === "parent_pr",
+            group,
+            taskTarget.delivery_policy === "parent_pr",
+            false,
+            "dispatch-claim",
+            isMergedContributionContinuation(ledger, group, taskTarget),
           );
+        }
         requireCondition(
           object(payload.creation_parameters ?? {}).transport === "codex-exec",
           "TRANSPORT_REQUIRED",

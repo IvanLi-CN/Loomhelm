@@ -19,6 +19,7 @@ import { parentPrReady, ready } from "../lib/engine";
 import { deliveryUnitPrMergedFromLedger } from "../lib/engine-support-gates";
 import { ContractError, requireCondition } from "../lib/errors";
 import { profileMigrationWarnings, profileProjection } from "../lib/execution-profile";
+import { isContinuationPublication } from "../lib/publication-facts";
 import { deriveExecutionPhase, evidenceRequired, reasonRequired } from "../lib/revisions";
 import {
   isContributionKind,
@@ -221,7 +222,12 @@ export function deliveryUnitPr(group: Ledger["groups"][number]) {
 
 export function latestParentPrFact(ledger: Ledger, groupId: string) {
   return ledger.facts
-    .filter((fact) => fact.kind === "pr_published" && fact.subject_id === groupId)
+    .filter(
+      (fact) =>
+        fact.kind === "pr_published" &&
+        fact.subject_id === groupId &&
+        !isContinuationPublication(ledger, fact),
+    )
     .sort((left, right) => left.observed_at.localeCompare(right.observed_at))
     .at(-1);
 }

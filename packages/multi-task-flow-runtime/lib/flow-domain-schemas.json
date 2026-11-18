@@ -5313,6 +5313,10 @@
           }
         ]
       },
+      "continuation": {
+        "type": "boolean",
+        "const": true
+      },
       "quality": {
         "anyOf": [
           {
@@ -13967,6 +13971,10 @@
                   "type": "null"
                 }
               ]
+            },
+            "continuation": {
+              "type": "boolean",
+              "const": true
             },
             "quality": {
               "anyOf": [

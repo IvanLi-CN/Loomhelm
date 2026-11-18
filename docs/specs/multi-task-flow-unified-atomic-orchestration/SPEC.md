@@ -206,8 +206,9 @@ Task 与 DeliveryUnit 是平级对象；delivery_unit_id 只是共同的分类�
 3. 集成交付内容：共享交付拓扑将内容写入交付单元父分支，多任务集成拓扑先合并已验收的 child PR，并核对当前父分支 SHA 和检查证据。
 4. 创建并发布交付单元 PR：使用 delivery_unit scope 的 milestone，显式要求 provider receipt；该步骤只能在“集成交付内容”原子完成后执行。共享交付拓扑下，该 PR 同时是唯一 contribution Task 的交付 PR。
 5. 合并交付单元 PR：使用 delivery_unit scope 的 milestone，显式要求前置原子完成和合并事实。
-6. 按计划执行 release、deployment 和线上 verification 原子；根据责任边界使用 Task scope 或 delivery_unit scope。
-7. 收口和资源清理：使用 delivery_unit scope 的 milestone，显式要求必要节点、外部资源和通知条件满足。
+6. 如果 parent PR 已合并后计划修订新增 active contribution work，交付 Agent 必须在 contract 3 或更高版本中使用 `parent-followup` 合并模式；该模式保留原 parent merge SHA、使用同仓库独立 PR、绑定一次性目标审批，并把 follow-up merge SHA 作为最终 `merge_sha`，不能让普通 `parent` 模式复用已合并状态。
+7. 按计划执行 release、deployment 和线上 verification 原子；根据责任边界使用 Task scope 或 delivery_unit scope。
+8. 收口和资源清理：使用 delivery_unit scope 的 milestone，显式要求必要节点、外部资源和通知条件满足；未合并的 continuation PR 或活动 merge/publication operation 必须阻止 closeout。
 
 交付单元的准备父分支、集成交付内容、创建父 PR、合并父 PR 和收口是交付单元预设 work 原子；它们不得与 Task 原子混用。额外的集成验收或质量检查仍应由 Agent 创建实际 work 或 milestone，并声明其 scope 和条件。旧账本中的 coordination task 和 coordination session 只读兼容，不自动猜测业务语义；迁移必须通过显式计划修订，将其转换为 contribution、documentation、verification、release、deployment 或适当的 milestone。
 

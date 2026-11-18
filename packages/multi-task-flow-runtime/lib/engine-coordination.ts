@@ -55,6 +55,7 @@ const {
   requireLifecycle,
   exactApprovedAction,
   protectedActionApproved,
+  parseProtectedActionDigest,
   historicalGroupLineageContains,
   externalMergeFactId,
   latestPublication,
@@ -94,7 +95,6 @@ const {
   groupRuntimeState,
   validateRevisionReason,
 } = support;
-
 export const coordinationCommands = [
   "binding-resolve",
   "link-verification",
@@ -107,7 +107,6 @@ export const coordinationCommands = [
   "dispatch-group-claim",
   "dispatch-resolve",
 ] as const;
-
 export function executeCoordinationCommand(context: CommandContext): unknown | undefined {
   const { ledger, command, request, payload, currentPlan } = context;
   switch (command) {
@@ -493,7 +492,7 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
       addEvent(ledger, request, "protected_action_approved", targetId, {
         kind,
         approval_id: approvalId,
-        target_digest: payload.target_digest ?? null,
+        target_digest: parseProtectedActionDigest(payload.target_digest),
       });
       return { target_id: targetId, kind, approval_id: approvalId };
     }
@@ -639,14 +638,15 @@ export function executeCoordinationCommand(context: CommandContext): unknown | u
         );
       } else {
         requireCondition(
-          owner.state === "active",
+          owner.state === "active" ||
+            support.isMergedContributionContinuation(ledger, owner, target),
           "GROUP_NOT_READY",
-          "Task group is not active",
+          "Task group is not active or approved for a post-merge continuation",
           4,
         );
       }
       if (isContributionKind(target.kind)) {
-        requireContributionDispatchGate(ledger, owner, target.delivery_policy === "parent_pr");
+        support.requireContributionTaskDispatchGate(ledger, owner, target);
         requireCondition(
           owner.parent_branch && target.base_sha && owner.current_sha === target.base_sha,
           "BASE_NOT_READY",
