@@ -57,15 +57,18 @@ export function openReviewWaveState(
     const active = isRecord(waves[review.active_wave_id])
       ? waves[review.active_wave_id]
       : undefined;
-    if (!active || !isLegacyReviewWave(ledger, active))
-      throw new FlowError("another review wave is already active");
+    const legacy = active ? isLegacyReviewWave(ledger, active) : false;
+    const sameCandidate =
+      active?.head_sha === options.headSha && active?.base_sha === options.baseSha;
     if (
-      active.head_sha === options.headSha &&
-      active.base_sha === options.baseSha
+      !active ||
+      (sameCandidate && (!legacy || !legacyWaveIsTerminal(active)))
     )
       throw new FlowError("another review wave is already active");
     active.state = "retired";
-    active.retirement_reason = "legacy-review-receipt-schema";
+    active.retirement_reason = legacy
+      ? "legacy-review-receipt-schema"
+      : "candidate-inputs-changed";
     active.retired_at = isoNow();
     review.active_wave_id = null;
   }
@@ -189,7 +192,8 @@ function isLegacyReviewWave(
   ledger: Record<string, unknown>,
   wave: Record<string, unknown>,
 ): boolean {
-  if (!isRecord(wave.lanes)) return false;
+  if (Object.hasOwn(wave, "scope_binding") || !isRecord(wave.lanes))
+    return false;
   const lanes = Object.entries(wave.lanes);
   if (!lanes.length || !legacyLaneTopologyMatches(ledger, wave, lanes))
     return false;
@@ -205,6 +209,17 @@ function isLegacyReviewWave(
       return false;
     return true;
   });
+}
+
+function legacyWaveIsTerminal(wave: Record<string, unknown>): boolean {
+  if (!isRecord(wave.lanes)) return false;
+  return Object.values(wave.lanes).every(
+    (lane) =>
+      isRecord(lane) &&
+      lane.state === "completed" &&
+      typeof lane.receipt_id === "string" &&
+      lane.receipt_id.trim().length > 0,
+  );
 }
 
 function legacyLaneTopologyMatches(

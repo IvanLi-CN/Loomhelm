@@ -13,6 +13,7 @@ import {
 } from "./review-result";
 import { isFormalReviewRequestProfile } from "./review-profile-policy";
 import { reviewWaveScopeBindingMatches } from "./review-wave-support";
+import { assertCurrentReviewReceiptFields } from "./review-receipt-integrity";
 
 export interface SubagentReviewOptions {
   reviewProfile: string;
@@ -229,6 +230,7 @@ function recordUnavailable(
     scopeClass,
   );
   if (existingAttempt) {
+    assertCurrentReviewReceiptFields(existingAttempt);
     if (existingAttempt.terminal_state !== "unavailable")
       throw new FlowError(
         "review attempt id is already recorded with a different terminal state",
@@ -258,7 +260,14 @@ function recordUnavailable(
         SUBAGENT_STARTUP_UNAVAILABLE ||
       existingAttempt.evidence_valid !== false ||
       existingAttempt.post_execution_clean !== true ||
-      existingAttempt.exit_code !== 75
+      existingAttempt.exit_code !== 75 ||
+      existingAttempt.review_result !== undefined ||
+      existingAttempt.review_result_sha256 !== undefined ||
+      existingAttempt.overall_explanation !== undefined ||
+      existingAttempt.review_clear !== false ||
+      canonicalJson(existingAttempt.finding_fingerprints) !== "[]" ||
+      canonicalJson(existingAttempt.review_findings) !== "[]" ||
+      existingAttempt.overall_correctness !== "unavailable"
     )
       throw new FlowError("review attempt receipt integrity is invalid");
     return { reused: true, receipt: existingAttempt };

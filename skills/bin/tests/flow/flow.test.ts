@@ -426,6 +426,31 @@ describe("acceptance and review state", () => {
         laneSpecs: lanes,
       }),
     ).toThrow("another review wave is already active");
+    const staleLedger = initialLedger(
+      "review-stale-wave-run",
+      "fast-track",
+      sha,
+      sha,
+      null,
+    );
+    staleLedger.review_assessment = ledger.review_assessment;
+    const staleOpened = openReviewWaveState(staleLedger, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: sha,
+      laneSpecs: lanes,
+    });
+    const staleWave = staleOpened.wave as Record<string, unknown>;
+    const refreshed = openReviewWaveState(staleLedger, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: "b".repeat(40),
+      laneSpecs: lanes,
+    });
+    expect(staleWave.state).toBe("retired");
+    expect((refreshed.wave as Record<string, unknown>).head_sha).toBe(
+      "b".repeat(40),
+    );
     const originalScope = wave.scope_class;
     const originalBinding = wave.scope_binding;
     delete wave.scope_binding;
@@ -507,6 +532,23 @@ describe("acceptance and review state", () => {
           model: "gpt-6-luna",
           effort: "max",
         };
+        unavailableReceipt.reported_profile = {
+          model: "reviewer-claim",
+          effort: "reviewer-claim",
+        };
+        expect(() =>
+          recordSubagentReviewState(ledger, {
+            reviewProfile: "pr-convergence",
+            baseRef: sha,
+            reviewAttemptId: "contract-startup-1",
+            reviewResultJson: "",
+            terminalState: "unavailable",
+            unavailabilityClassification: "startup-unavailable",
+            waveId: String(wave.wave_id),
+            lane: lane.lane,
+          }),
+        ).toThrow("review receipt contains unsupported fields");
+        delete unavailableReceipt.reported_profile;
       }
       const result = recordSubagentReviewState(ledger, {
         reviewProfile: "pr-convergence",
@@ -695,6 +737,7 @@ describe("acceptance and review state", () => {
     const historicalWave = (
       historicalReview.waves as Record<string, Record<string, unknown>>
     )[String(wave.wave_id)];
+    delete historicalWave.scope_binding;
     for (const lane of Object.values(
       historicalWave.lanes as Record<string, Record<string, unknown>>,
     ))
@@ -713,8 +756,37 @@ describe("acceptance and review state", () => {
       }),
     ).toThrow("review receipt integrity is invalid");
 
+    const sameCandidate = structuredClone(normalized) as Record<string, unknown>;
+    const sameCandidateWave = (
+      sameCandidate.review as Record<string, unknown>
+    ).waves as Record<string, Record<string, unknown>>;
+    const sameCandidateOldWave = sameCandidateWave[String(wave.wave_id)];
+    const sameCandidateFresh = openReviewWaveState(sameCandidate, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      });
+    expect(sameCandidateOldWave.state).toBe("retired");
+    expect(sameCandidateFresh.next).toBe("record-review");
+
+    const unfinishedSameCandidate = structuredClone(normalized) as Record<
+      string,
+      unknown
+    >;
+    const unfinishedWave = (
+      unfinishedSameCandidate.review as Record<string, unknown>
+    ).waves as Record<string, Record<string, unknown>>;
+    const unfinishedLane = (
+      unfinishedWave[String(wave.wave_id)].lanes as Record<
+        string,
+        Record<string, unknown>
+      >
+    )["test-platform"];
+    unfinishedLane.state = "pending";
+    unfinishedLane.receipt_id = null;
     expect(() =>
-      openReviewWaveState(normalized, {
+      openReviewWaveState(unfinishedSameCandidate, {
         stage: "initial",
         baseSha: sha,
         headSha: sha,
@@ -729,7 +801,7 @@ describe("acceptance and review state", () => {
     const upgradedFresh = openReviewWaveState(upgradedNormalized, {
       stage: "initial",
       baseSha: sha,
-      headSha: "c".repeat(40),
+      headSha: sha,
       laneSpecs: lanes,
     });
     expect(upgradedFresh.next).toBe("record-review");

@@ -47,6 +47,15 @@ const CURRENT_REVIEW_RECEIPT_KEYS = new Set([
   "recorded_at",
 ]);
 
+export function assertCurrentReviewReceiptFields(
+  receipt: Record<string, unknown>,
+): void {
+  if (
+    Object.keys(receipt).some((key) => !CURRENT_REVIEW_RECEIPT_KEYS.has(key))
+  )
+    throw new FlowError("review receipt contains unsupported fields");
+}
+
 export function assertReviewReceiptIntegrity(
   ledger: Record<string, unknown>,
   waveId: string,
@@ -92,10 +101,7 @@ export function assertReviewReceiptIntegrity(
     ].some((key) => Object.hasOwn(receipt, key))
   )
     throw new FlowError("review receipt must not contain reviewer profile claims");
-  if (
-    Object.keys(receipt).some((key) => !CURRENT_REVIEW_RECEIPT_KEYS.has(key))
-  )
-    throw new FlowError("review receipt contains unsupported fields");
+  assertCurrentReviewReceiptFields(receipt);
   const expectedProfile =
     wave.stage === "risk-arbitration"
       ? "risk-arbitration"
