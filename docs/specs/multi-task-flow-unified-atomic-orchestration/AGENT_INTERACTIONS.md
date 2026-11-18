@@ -42,7 +42,7 @@ Bootstrap DeliveryUnit 是唯一由主 Agent 持有的交付单元：其 `owner_
 
 AtomicNode/AtomicEdge 是唯一编排事实。Task 和 DeliveryUnit 状态是从原子、里程碑、外部 PR/CI/release/deployment/verification facts 推导的读取投影；Agent idle、连接状态、最新输出和观察器断开属于 runtime observation，不能覆盖业务状态。
 
-任务首次进入 `ready` 时账本生成可派发 notification；主 Agent 确认通知意图、发送 attempt 和 provider receipt，并重新评估依赖后才能调用 `dispatch-claim`；收件方（包括作为 owner 的 main Agent）通过自身绑定的对话产生 `notification-ack`。`waiting`、`blocked` 和 DeliveryUnit coordination state 表达依赖与门禁，不创建新的 coordination Task。创建、通知、发布、合并和部署出现 unknown 时保留 operation、claim、容量和原生身份，先 reconcile；不能用错误消息推断副作用未发生。
+任务首次进入 `ready` 时账本生成 notification；通知发送和收件方确认独立追踪，`dispatch-claim` 直接重算依赖、授权和容量。`waiting`、`blocked` 和 DeliveryUnit coordination state 表达依赖与门禁，不创建新的 coordination Task。创建、通知、发布、合并和部署出现 unknown 时保留 operation、claim、容量和原生身份，先 reconcile；不能用错误消息推断副作用未发生。
 
 ### Release、deployment、verification 与 closeout
 

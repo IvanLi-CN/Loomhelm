@@ -169,7 +169,7 @@ Agent 归属展示由 `web/execution-policy-model.ts` 将 `execution_owner` 与 
 | MTF-AUDIT-001 | unknown closeout 后仍满足下游 merge gate | `engine-core.test.ts` 验证业务状态保留 closed，最新 unknown 冻结下游 dispatch，仅匹配 provider merged 状态和原 merge SHA 的 valid 对账恢复 capability；矛盾证据拒绝且账本不变。 |
 | MTF-AUDIT-002 | 完成流绕过公开 conversation-create CLI | `agent-role-cli.test.ts` 与完成流通过隔离进程执行公开 CLI；验证正常创建、unknown/reconcile、重复 request、foreign actor、旧 revision 和 CLI_ONLY_DISPATCH。 |
 | MTF-AUDIT-003 | 直接构造 Task/DeliveryUnit merge facts 和完成状态 | 每个 child PR 都经 publish、quality、merge claim/resolve 与 Task closeout，再合并父 PR 并关闭 DeliveryUnit；无 receipt、closed receipt 均拒绝且账本不变，unknown merge 阻止提前 closeout。 |
-| MTF-AUDIT-004 | 未确认的 task-ready 通知允许 claim | `dispatch-readiness-ack.test.ts` 验证 pending/failed/sent/unknown 未确认时拒绝；只接受最新 ready 代次和当前 owner 的确认。初始 ready 直接发现路径不要求补建通知；一旦产生 ready 事件，其通知必须确认。同一命令的普通通知和 ready 通知分别持久化 intent。 |
+| MTF-AUDIT-004 | 任务就绪与通知投递必须独立 | `dispatch-readiness-ack.test.ts` 验证 pending/failed/sent/unknown 不阻断派发，领取仍受依赖、身份、占用和容量门禁约束；ack 只允许收件人。 |
 | MTF-AUDIT-005 | canonical PR 与自身比较 | `engine-core.test.ts` 验证缺失 receipt、resource ID、PR identity 或仓库不匹配时 merge capability 与下游 dispatch 均拒绝；viewer 的 `pr_merged_availability` 和 `merge_capability.status` 复用同一账本判定；`view.test.ts` 同时验证两个投影在缺失/不匹配 receipt、unknown closeout 和 valid 恢复时保持一致。 |
 
 修复保持账本 schema、角色、TaskKind 和状态集合不变；更严格的派发/证据门禁落实已有设计。全局安装资源未在源码修复中更新。

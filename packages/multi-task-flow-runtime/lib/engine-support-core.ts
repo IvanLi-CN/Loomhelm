@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { lifecycleStageOf } from "../lib/atomic-orchestration";
+import { type AtomicEdge, type AtomicNode, lifecycleStageOf } from "../lib/atomic-orchestration";
 import { ContractError, requireCondition } from "../lib/errors";
 import {
   effectiveProfile,
@@ -51,6 +51,7 @@ import {
   validateSchedulablePlan,
   validateTaskExecutionPolicies,
 } from "../lib/schema";
+import { canEvaluateAtomicCriterion, type MilestoneCriterion } from "./atomic-criteria";
 import { latestPublicationFact } from "./publication-facts";
 
 export const actorSchema = z
@@ -205,6 +206,76 @@ export function atomicNodeSatisfied(ledger: Ledger, node: any): boolean {
   const atom = atoms?.find((candidate) => candidate.id === node.id);
   return atom ? atom.status === "completed" : false;
 }
+export function atomicConditionEvaluator(ledger: Ledger, plan: Plan) {
+  const nodes = new Map(plan.atomic_nodes.map((node): [string, AtomicNode] => [node.id, node]));
+  const edges = plan.atomic_edges.filter((edge): edge is AtomicEdge => "from_node_id" in edge);
+  const inbound = new Map<string, AtomicEdge[]>();
+  for (const edge of edges) {
+    const incoming = inbound.get(edge.to_node_id);
+    if (incoming) incoming.push(edge);
+    else inbound.set(edge.to_node_id, [edge]);
+  }
+  const visiting = new Set<string>();
+  const cache = new Map<string, boolean>();
+  function criterionSatisfied(criterion: MilestoneCriterion): boolean {
+    if (!canEvaluateAtomicCriterion(criterion)) return false;
+    if (criterion.kind === "node_satisfied") return nodeSatisfied(criterion.node_id);
+    const prRef = stable(criterion.pr_ref);
+    const fact = ledger.facts
+      .filter((item) => {
+        const receipt = item.receipt;
+        if (item.kind !== criterion.kind || !receipt) return false;
+        if (receipt.pr) return stable(receipt.pr) === prRef;
+        return (
+          item.status !== "passed" &&
+          receipt.resource_type === "pr" &&
+          receipt.provider === criterion.pr_ref.provider &&
+          receipt.repository === criterion.pr_ref.repository &&
+          receipt.resource_id === criterion.pr_ref.id
+        );
+      })
+      .sort((left, right) => Date.parse(left.observed_at) - Date.parse(right.observed_at))
+      .at(-1);
+    return (
+      fact?.status === "passed" &&
+      (criterion.kind === "pr_published"
+        ? fact.receipt?.state === "open" || fact.receipt?.state === "merged"
+        : fact.receipt?.state === "merged" &&
+          fact.sha === criterion.merge_sha &&
+          fact.receipt.merge_sha === criterion.merge_sha)
+    );
+  }
+  function edgeSatisfied(edge: AtomicEdge): boolean {
+    return (
+      nodeSatisfied(edge.from_node_id) &&
+      (edge.requires.kind !== "source_evidence" || criterionSatisfied(edge.requires.criterion))
+    );
+  }
+  function nodeSatisfied(id: string): boolean {
+    if (cache.has(id)) return cache.get(id) ?? false;
+    const node = nodes.get(id);
+    if (!node || visiting.has(id)) return false;
+    const incoming = inbound.get(id) ?? [];
+    visiting.add(id);
+    const satisfied =
+      (node.kind === "milestone"
+        ? node.state === "planned" &&
+          incoming.length + node.acceptance.length > 0 &&
+          node.acceptance.every(criterionSatisfied)
+        : atomicNodeSatisfied(ledger, node)) && incoming.every(edgeSatisfied);
+    visiting.delete(id);
+    cache.set(id, satisfied);
+    return satisfied;
+  }
+  return { nodes, edges, edgeSatisfied, criterionSatisfied };
+}
+export function atomicPredecessorsPending(ledger: Ledger, plan: Plan, atomId: string): string[] {
+  const { nodes, edges, edgeSatisfied } = atomicConditionEvaluator(ledger, plan);
+  if (nodes.get(atomId)?.kind !== "work") return [atomId];
+  return edges.flatMap((edge) =>
+    edge.to_node_id === atomId && !edgeSatisfied(edge) ? [edge.from_node_id] : [],
+  );
+}
 export function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: string): boolean {
   const nodes = (plan.atomic_nodes ?? []) as any[];
   const edges = (plan.atomic_edges ?? []).filter((edge: any) => "from_node_id" in edge) as any[];
@@ -227,7 +298,10 @@ export function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: stri
     task.atoms.some((atom) => !taskNodes.some((node) => node.id === atom.id)) ||
     taskNodes.some((node) => {
       const atom = task.atoms.find((candidate) => candidate.id === node.id);
-      return !atom || (node.state === "completed" && atom.status !== "completed");
+      return (
+        !atom ||
+        (ledger.contract_version < 6 && node.state === "completed" && atom.status !== "completed")
+      );
     })
   )
     return false;
@@ -240,6 +314,7 @@ export function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: stri
   )
     return false;
   if (
+    ledger.contract_version < 6 &&
     task.atoms.some((atom, index) => {
       if (index === 0) return false;
       const node = taskNodes.find((candidate) => candidate.id === atom.id);
@@ -258,6 +333,8 @@ export function atomicDependenciesReady(ledger: Ledger, plan: Plan, taskId: stri
     )
       return false;
     const targetIndex = task.atoms.findIndex((candidate) => candidate.id === target.id);
+    if (ledger.contract_version >= 6)
+      return atomicPredecessorsPending(ledger, plan, target.id).length === 0;
     const incoming = edges.filter((edge) => edge.to_node_id === target.id);
     if (targetIndex > 0 && !incoming.length) return false;
     return incoming.every((edge) =>

@@ -6,6 +6,8 @@ version: 3.0.0
 
 # Multi-task flow
 
+从当前账本判断是否可派发；task-ready 通知确认独立追踪。普通进度可直接更正等待或阻塞。工作区准备可通过 `lifecycle-record workspace_ready` 和 `baseline_sync` 一次记账；未关联已授权操作的外部合并通过 `merge-observe` 留存观测，不推进依赖。
+
 ## 适用范围与授权
 
 用于主人批准的、具有明确依赖的正式多对话编排。明确要求使用本 Skill 时，创建或继续正式运行并交付仪表板；明确要求审查、诊断或仅制定计划时，只做 proposal 或只读查询，不初始化、不创建对话。生命周期为 `proposal → initialized run → scheduled run → completed run`。与 `$dev-plan` 独立，`init` 不接收其专用字段、plan digest 或 handoff envelope。
@@ -50,7 +52,7 @@ version: 3.0.0
 2. **交付仪表板**：按共享 viewer 合同核验配置、CLI、runtime 身份。身份一致且服务运行时执行 `service ensure → service login → 浏览器核验`；身份异常、服务缺失／停运只报告证据，不以 ensure、安装或升级修复。首次交付须有正式账本、主对话绑定、依赖图和渲染页面上的当前 revision；proposal、候选 `init-input.json` 或打开工具的成功回执均不算交付。
 3. **创建与派发**：Contract 3 唯一入口是 `dispatch-group-claim`／`dispatch-claim → conversation-create → native evidence reconcile → formal dispatch`。先核验精确版本 CLI、claim 与原生证据能力；缺失则报告 capability gap。任何 Agent 都不得调用 `mcp__codex_app__create_thread`、`fork_thread`、裸 `thread/start` 或 `thread/resume + turn/start` 绕过正式路径。发现 `orphan thread / orchestration violation` 或证据绕过时保留 claim 和容量，暂停受影响运行交给主人，不绑定、不 resolve、不 handoff、不作为依赖事实。
 4. **建立开发基线**：独立工作区、owner、资源与真实 SHA 核验后，执行 `resource-update`、`development-baseline-sync` 和 `lifecycle-record`。普通 regular 贡献任务只需 active workspace、parent branch 和成功的 branch receipt；显式 `delivery_policy: "parent_pr"` 的任务还必须有 provider 证明 open 的 parent PR。main-owned bootstrap 可在 provider 明确证明 parent PR `absent` 时继续，但集成和 parent PR 发布仍受原子图约束。`initial_head` 只是创建快照，不是开发基线。
-5. **调度与记账**：任务 Agent 收到正式派发即读取自身 `task-context`，按原子推进至 closeout，不等待固定握手或自行派发任务。用 `task-update`、`atom-update` 记录事实；普通阻塞留在负责对话与账本。活跃单元只要有 ready 且未绑定的贡献任务，就不能记 idle，必须派发／对账，或记录带任务引用的 waiting、带原因的 blocked。
+5. **调度与记账**：任务 Agent 收到正式派发即读取自身 `task-context`，按原子推进至 closeout。归属 Agent 可以直接把工作原子记为 `completed`，也可以改回 `planned` 或 `blocked`。填写 `running` 或 `completed` 时检查全部祖先及沿途门禁。只报告状态，无需登记原子内部过程或证明。上游撤回完成时保留下游已有报告，依赖链暂停放行，直到上游再次完成。活跃单元只要有 ready 且未绑定的贡献任务，就不能记 idle，必须派发／对账，或记录带任务引用的 waiting、带原因的 blocked。
 6. **合并与收口**：每次 merge 先 `merge-claim`，通过绑定 Git provider 核对 PR、head/base、检查和质量证据，外部执行后查询 provider，再 `merge-resolve`。单元须完成 parent merge、merge SHA 上的 CI、计划 post-merge 任务和全部已知 follow PR；所有单元关闭且无未解决 operation／follow PR 后才 `run-complete`。资源逐项登记，运行数据与必要服务保留到主人确认清理。
 
 所有创建、通知、合并或 cut 的结果不确定时，保留 `unknown`、claim、容量和已知资源，先用对应命令对账再重试；错误消息不证明失败。只有受审计的 `initialization-recover` 可以在原 thread/worktree 恢复一次固定初始化握手，不授权裸用原生恢复工具或重发正式任务。

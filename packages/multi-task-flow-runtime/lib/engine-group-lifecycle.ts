@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { lifecycleRoleOf, lifecycleStageOf } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
+import type { Ledger } from "../lib/schema";
 import { externalRef, fact, group, id, isContributionKind, providerReceipt } from "../lib/schema";
 import type { CommandContext } from "./engine-command-context";
 import * as core from "./engine-support-core";
@@ -122,6 +123,26 @@ function deliveryUnitAtomDependenciesReady(
   return owner.atoms.slice(0, index).every((item: any) => item.status === "completed");
 }
 
+function parseAtomReport(payload: unknown, freelyReportable: boolean) {
+  return freelyReportable
+    ? z.enum(["planned", "running", "blocked", "completed"]).parse(payload)
+    : z.enum(["running", "blocked", "completed"]).parse(payload);
+}
+
+function requiresCompletedAncestors(freelyReportable: boolean, state: string): boolean {
+  return !freelyReportable || state === "running" || state === "completed";
+}
+
+function requireAtomicAncestors(ledger: Ledger, atomId: string) {
+  const pending = core.atomicPredecessorsPending(ledger, executionPlan(ledger), atomId);
+  requireCondition(
+    pending.length === 0,
+    "ATOMS_PENDING",
+    `Atom ${atomId} cannot advance: satisfy the dependencies through ${pending.join(", ")} first`,
+    4,
+  );
+}
+
 export function executeGroupLifecycleCommand(context: CommandContext): unknown | undefined {
   const { ledger, command, request, payload, currentPlan } = context;
   switch (command) {
@@ -146,26 +167,32 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         request.actor.role === "group" &&
         ledger.groups.find((item) => item.id === target.group_id)?.agent_thread_id ===
           request.actor.thread_id;
+      const index = target.atoms.findIndex((item) => item.id === parse(id, payload.atom_id));
+      requireCondition(index >= 0, "NOT_FOUND", "Atom not found");
+      const atom = target.atoms[index]!;
+      const freelyReportable =
+        ledger.contract_version >= 6 && !lifecycleRoleOf({ ...atom, task_id: taskId });
       requireCondition(
         (request.actor.role === "task" ||
           mainOwned ||
           sharedOwned ||
           core.ownsDeliveryVerification(ledger, target, request.actor)) &&
-          taskCanUpdateAtoms(ledger, target),
+          (freelyReportable || taskCanUpdateAtoms(ledger, target)),
         "FORBIDDEN",
         "The task owner updates atoms while execution is active or completing closeout",
         3,
       );
-      const index = target.atoms.findIndex((item) => item.id === parse(id, payload.atom_id));
-      requireCondition(index >= 0, "NOT_FOUND", "Atom not found");
-      const atom = target.atoms[index]!;
-      const state = z.enum(["running", "blocked", "completed"]).parse(payload.state);
-      requireCondition(
-        target.atoms.slice(0, index).every((item) => item.status === "completed"),
-        "ATOMS_PENDING",
-        "Earlier atoms must complete first",
-        4,
-      );
+      const state = parseAtomReport(payload.state, freelyReportable);
+      if (ledger.contract_version >= 6) {
+        if (requiresCompletedAncestors(freelyReportable, state))
+          requireAtomicAncestors(ledger, atom.id);
+      } else
+        requireCondition(
+          target.atoms.slice(0, index).every((item) => item.status === "completed"),
+          "ATOMS_PENDING",
+          "Earlier atoms must complete first",
+          4,
+        );
       requireCondition(
         !(
           ledger.contract_version >= 3 &&
@@ -182,7 +209,12 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         blocked: ["running"],
       };
       requireCondition(
-        allowed[atom.status]?.includes(state),
+        freelyReportable ||
+          allowed[atom.status]?.includes(state) ||
+          (ledger.contract_version >= 6 &&
+            !lifecycleStageOf(atom) &&
+            state === "completed" &&
+            ["planned", "blocked"].includes(atom.status)),
         "INVALID_TRANSITION",
         "Invalid atom transition",
         3,
@@ -207,12 +239,6 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         "Only the Delivery coordinator or main conversation can update delivery-unit atoms",
         3,
       );
-      requireCondition(
-        owner.state !== "closed",
-        "GROUP_CLOSED",
-        "Closed delivery units cannot update atoms",
-        3,
-      );
       if (ledger.active_plan_id !== ledger.execution_plan_id)
         requireCondition(
           stable(activePlan(ledger).group_atoms.filter((atom) => atom.group_id === groupId)) ===
@@ -227,14 +253,33 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         "Delivery-unit atom",
       );
       const index = owner.atoms.indexOf(atom);
-      const state = z.enum(["running", "blocked", "completed"]).parse(payload.state);
+      const lifecycleRole = lifecycleRoleOf({ ...atom, group_id: groupId });
+      const freelyReportable = ledger.contract_version >= 6 && !lifecycleRole;
+      if (freelyReportable && request.actor.role === "main")
+        requireCondition(
+          owner.owner_kind === "main",
+          "FORBIDDEN",
+          "Only the assigned agent can report this atom's state",
+          3,
+        );
+      const state = parseAtomReport(payload.state, freelyReportable);
       requireCondition(
-        deliveryUnitAtomDependenciesReady(ledger, currentPlan(), owner, atom, index),
-        "ATOMS_PENDING",
-        "Earlier delivery-unit atoms must complete first",
-        4,
+        owner.state !== "closed" || freelyReportable,
+        "GROUP_CLOSED",
+        "Closed delivery units cannot update lifecycle atoms",
+        3,
       );
-      if (lifecycleRoleOf({ ...atom, group_id: groupId }) === "integrate")
+      if (ledger.contract_version >= 6) {
+        if (requiresCompletedAncestors(freelyReportable, state))
+          requireAtomicAncestors(ledger, atom.id);
+      } else
+        requireCondition(
+          deliveryUnitAtomDependenciesReady(ledger, currentPlan(), owner, atom, index),
+          "ATOMS_PENDING",
+          "Earlier delivery-unit atoms must complete first",
+          4,
+        );
+      if (lifecycleRole === "integrate")
         requireCondition(
           ledger.tasks
             .filter(
@@ -253,13 +298,18 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
         running: ["blocked", "completed"],
         blocked: ["running"],
       };
+      const lifecycleStage = lifecycleStageOf(atom);
       requireCondition(
-        allowed[atom.status]?.includes(state),
+        freelyReportable ||
+          allowed[atom.status]?.includes(state) ||
+          (ledger.contract_version >= 6 &&
+            !lifecycleStage &&
+            state === "completed" &&
+            ["planned", "blocked"].includes(atom.status)),
         "INVALID_TRANSITION",
         "Invalid delivery-unit atom transition",
         3,
       );
-      const lifecycleStage = lifecycleStageOf(atom);
       requireCondition(
         !(state === "completed" && lifecycleStage === "closed"),
         "GROUP_CLOSE_REQUIRED",
@@ -283,7 +333,10 @@ export function executeGroupLifecycleCommand(context: CommandContext): unknown |
           group_id: groupId,
           atom_id: atom.id,
           state,
-          reason: state === "blocked" ? string(payload.detail) : null,
+          reason:
+            state === "blocked" && (!freelyReportable || payload.detail !== undefined)
+              ? string(payload.detail)
+              : null,
         },
         payload.occurred_at ? z.iso.datetime({ offset: false }).parse(payload.occurred_at) : null,
       );

@@ -83,6 +83,27 @@ afterEach(() => {
   for (const root of createdRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 describe("orchestrate init", () => {
+  test("rejects an unsupported external milestone before creating the ledger", async () => {
+    const root = temporaryRoot();
+    const input = structuredClone(initialInput);
+    input.payload.initial_plan.atomic_nodes = [
+      {
+        id: "check-deployment",
+        kind: "milestone",
+        title: "Check deployment",
+        scope: { kind: "delivery_unit", delivery_unit_id: input.payload.groups[0].id },
+        state: "planned",
+        acceptance: [
+          { kind: "deployment_succeeded", environment: "staging", artifact_digest: "digest" },
+        ],
+      },
+    ];
+    const result = await runInit(root, input);
+    expect(result.output).toMatchObject({ ok: false, code: "UNSUPPORTED_ATOMIC_CRITERION" });
+    expect(JSON.stringify(result.output)).toContain("Milestone check-deployment");
+    expect(existsSync(join(root, "runs", input.run_id, "ledger.json"))).toBe(false);
+  });
+
   test("creates an unbound revision-zero ledger without task conversations", async () => {
     const root = temporaryRoot();
     const input = structuredClone(initialInput);

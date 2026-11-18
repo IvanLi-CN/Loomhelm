@@ -31,6 +31,8 @@ import {
 } from "../lib/schema";
 import { createAtomProjection } from "../lib/view-atoms";
 import { type AgentOutput, initialOutput } from "../web/agent-output";
+import { taskDispatchEligibility } from "./dispatch-eligibility";
+import { atomicConditionEvaluator } from "./engine-support-core";
 import type { PlannedInterval, ReadinessBlocker } from "./view-readiness";
 import * as viewHelpers from "./view-readiness";
 
@@ -411,6 +413,7 @@ export function buildView(
     baseAtomicEdges,
   );
   const atomicNodeById = new Map(canonicalAtomicNodes.map((node) => [node.id, node]));
+  const conditions = ledger.contract_version >= 6 ? atomicConditionEvaluator(ledger, plan) : null;
   const milestoneEvaluations = new Map<string, MilestoneEvaluation>();
   for (const milestone of canonicalAtomicNodes.filter(
     (node): node is Extract<AtomicNode, { kind: "milestone" }> => node.kind === "milestone",
@@ -419,7 +422,9 @@ export function buildView(
       .filter((edge) => edge.to_node_id === milestone.id)
       .map((edge) => {
         const source = atomicNodeById.get(edge.from_node_id);
-        const satisfied = source?.kind === "work" ? source.state === "completed" : false;
+        const satisfied =
+          conditions?.edgeSatisfied(edge) ??
+          (source?.kind === "work" && source.state === "completed");
         return {
           satisfied,
           blocked: source?.kind === "work" && source.state === "blocked",
@@ -429,8 +434,8 @@ export function buildView(
               : [],
         };
       });
-    const acceptance = milestone.acceptance.map(() => ({
-      satisfied: false,
+    const acceptance = milestone.acceptance.map((criterion) => ({
+      satisfied: conditions?.criterionSatisfied(criterion) ?? false,
       evidence_refs: [] as string[],
     }));
     try {
@@ -450,6 +455,11 @@ export function buildView(
     .filter((task) => selectedTaskIds.has(task.id))
     .map((task) => {
       const owner = ledger.groups.find((item) => item.id === task.group_id);
+      const dispatchEligibility = taskDispatchEligibility(ledger, task);
+      const separateDispatch =
+        ledger.contract_version >= 6 &&
+        ["planned", "ready"].includes(task.state) &&
+        task.conversation_policy === "task_agent";
       let isReady = false;
       const isHeld =
         activePlan.revision?.paused_task_ids.includes(task.id) === true &&
@@ -488,6 +498,7 @@ export function buildView(
       );
       return {
         ...task,
+        dispatch_eligibility: separateDispatch ? dispatchEligibility : null,
         pr: taskPrProjection(task, owner),
         ...(() => {
           const gateDiagnostics =
@@ -497,6 +508,7 @@ export function buildView(
           return { gateDiagnostics };
         })(),
         dispatch_diagnostics: [
+          ...(separateDispatch && dispatchEligibility.blocker ? [dispatchEligibility.blocker] : []),
           ...taskExecutionPolicyIssues(task),
           ...(owner && owner.delivery_unit_kind === "regular" && !owner.agent_thread_id
             ? [
@@ -510,10 +522,13 @@ export function buildView(
             ? deliveryGateDiagnostics(ledger, owner, task)
             : []),
         ],
-        dispatch_readiness:
-          task.execution_owner === null &&
-          task.conversation_policy === null &&
-          task.delivery_policy === null
+        dispatch_readiness: separateDispatch
+          ? dispatchEligibility.allowed
+            ? "ready"
+            : "blocked"
+          : task.execution_owner === null &&
+              task.conversation_policy === null &&
+              task.delivery_policy === null
             ? "unknown"
             : taskExecutionPolicyIssues(task).length > 0
               ? "blocked"

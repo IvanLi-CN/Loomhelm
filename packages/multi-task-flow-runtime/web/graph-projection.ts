@@ -1,6 +1,7 @@
 import { type AtomicEdge, type AtomicNode, lifecycleRoleOf } from "../lib/atomic-orchestration";
 import { type StateIconName, stateIconName, stateLabel } from "./labels";
 import type { Node, Task, View } from "./model";
+import { taskDispatchStatus } from "./task-dispatch-status";
 
 export const HIDDEN_BOUNDARY_KINDS = new Set([
   "main_start",
@@ -654,7 +655,9 @@ export function buildGraphProjection(
       plannedGroupId: plannedGroupId(node),
       taskKind: canonicalTaskKind(task?.kind ?? null),
       state: task?.state ?? null,
-      stateLabel: task ? stateLabel(task.state, task.is_ready) : null,
+      stateLabel: task
+        ? (taskDispatchStatus(task, true) ?? stateLabel(task.state, task.is_ready))
+        : null,
       stateIcon: task ? stateIconName(task.state, task.is_ready) : null,
       title,
       graphLabel: fitGraphLabel(title, labelLimit(nodeKind)),

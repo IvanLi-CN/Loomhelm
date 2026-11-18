@@ -19,6 +19,7 @@ import type { AtomicTask, Group, Task, View } from "./model";
 import { renderGroupPreview, renderTaskPreview } from "./preview-content";
 import { createProfileEditor, type ProfileEditorContext } from "./profile-editor";
 import { renderStatusRow } from "./status-row";
+import { taskDispatchStatus } from "./task-dispatch-status";
 import { formatDuration, fullLocalTime } from "./time";
 import { renderTimestamp } from "./timestamp";
 import { attachTooltip } from "./tooltip";
@@ -646,11 +647,12 @@ export function createDetailContent(context: DetailContentContext) {
     field(
       facts,
       "调度状态",
-      task.dispatch_readiness === "blocked"
-        ? `不可调度：${task.dispatch_diagnostics?.map((item) => item.message).join("；") || "未知原因"}`
-        : task.dispatch_readiness === "ready"
-          ? "可调度"
-          : "未知",
+      taskDispatchStatus(task) ??
+        (task.dispatch_readiness === "blocked"
+          ? `不可调度：${task.dispatch_diagnostics?.map((item) => item.message).join("；") || "未知原因"}`
+          : task.dispatch_readiness === "ready"
+            ? "可调度"
+            : "未知"),
     );
     field(facts, "任务要求", requirementsValue(task.requirements_path, "task", task.id));
     for (const follow of data.follow_prs.filter((item) => item.origin_task_id === task.id)) {

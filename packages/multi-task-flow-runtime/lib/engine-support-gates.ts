@@ -66,6 +66,7 @@ const {
   approved,
   atomicDependenciesReady,
   atomicNodeSatisfied,
+  atomicPredecessorsPending,
   legacyLedger,
   deliveryUnitPr,
   taskPrRef,
@@ -819,6 +820,8 @@ export function taskMergePrerequisitesComplete(ledger: Ledger, task: Task): bool
       node.scope.task_id === task.id,
   );
   if (!mergeNode) return false;
+  if (ledger.contract_version >= 6)
+    return atomicPredecessorsPending(ledger, currentPlan, mergeNode.id).length === 0;
   const incoming = new Map<string, any[]>();
   for (const edge of edges)
     incoming.set(edge.to_node_id, [...(incoming.get(edge.to_node_id) ?? []), edge]);

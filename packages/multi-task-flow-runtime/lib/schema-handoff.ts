@@ -14,6 +14,7 @@ import {
 } from "../lib/atomic-orchestration";
 import { requireCondition } from "../lib/errors";
 import { topologicalOrder, validateGrouping } from "../lib/graph";
+import { canEvaluateAtomicCriterion, type MilestoneCriterion } from "./atomic-criteria";
 import {
   type atomEdge,
   executionPhase,
@@ -493,6 +494,50 @@ export function validateInitialRuntimeState(
 export type PlanValidationOptions = LifecycleRoleValidationOptions & {
   requireCanonicalLifecycleGraph?: boolean;
 };
+
+// Admission only: previously stored plans must remain readable and repairable.
+export function validateExecutableAtomicCriteria(candidate: Plan, contractVersion = 6): void {
+  const nodeIds = candidate.atomic_nodes.map((node) => node.id);
+  const nodes = new Set(nodeIds);
+  const conditionEdges: { from: string; to: string }[] = [];
+  function requireSupported(criterion: MilestoneCriterion, location: string, target: string): void {
+    requireCondition(
+      canEvaluateAtomicCriterion(criterion),
+      "UNSUPPORTED_ATOMIC_CRITERION",
+      `${location} requires ${criterion.kind}, which cannot be verified from current ledger receipts. Revise the plan to use a supported gate, or use reported work completion for internal work.`,
+    );
+    requireCondition(
+      contractVersion >= 6,
+      "UNSUPPORTED_ATOMIC_CRITERION",
+      `${location} requires ${criterion.kind}. Upgrade the orchestration before adding explicit atomic gates.`,
+    );
+    if (criterion.kind !== "node_satisfied") return;
+    requireCondition(
+      nodes.has(criterion.node_id),
+      "UNKNOWN_NODE",
+      `${location} requires unknown atomic node ${criterion.node_id}. Refer to a node in this plan.`,
+    );
+    conditionEdges.push({ from: criterion.node_id, to: target });
+  }
+  for (const edge of candidate.atomic_edges) {
+    if ("from_node_id" in edge && edge.requires.kind === "source_evidence")
+      requireSupported(edge.requires.criterion, `Atomic edge ${edge.id}`, edge.to_node_id);
+  }
+  for (const node of candidate.atomic_nodes) {
+    if (node.kind === "milestone")
+      for (const criterion of node.acceptance)
+        requireSupported(criterion, `Milestone ${node.id}`, node.id);
+  }
+  if (conditionEdges.length)
+    topologicalOrder(nodeIds, [
+      ...candidate.atomic_edges.map((edge) =>
+        "from_node_id" in edge
+          ? { from: edge.from_node_id, to: edge.to_node_id }
+          : { from: edge.from_atom_id, to: edge.to_atom_id },
+      ),
+      ...conditionEdges,
+    ]);
+}
 
 export function historicalLifecycleCompatibility(value: {
   contract_version: number;

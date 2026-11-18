@@ -527,12 +527,29 @@ add(
 		"branch",
 		"resource_ids",
 		"baseline",
+		"baseline_sync",
 		"evidence_ref",
 	],
 	["target_type", "target_id", "stage"],
 	{
-		optionalPayload: ["baseline"],
-		payloadOverrides: { branch: stringValue },
+		optionalPayload: ["baseline", "baseline_sync"],
+		payloadIfThen: [{ when: { required: ["baseline_sync"] }, required: ["baseline"] }],
+		payloadOverrides: {
+			branch: stringValue,
+			baseline: domainRef("baseline_receipt"),
+			baseline_sync: {
+				type: "object",
+				additionalProperties: false,
+				required: ["mode", "dispatch_operation_id", "expected_previous_baseline", "expected_lineage_sha", "lineage_event_id"],
+				properties: {
+					mode: { enum: ["initial", "refresh"] },
+					dispatch_operation_id: id,
+					expected_previous_baseline: { oneOf: [domainRef("baseline_receipt"), { type: "null" }] },
+					expected_lineage_sha: { oneOf: [shaValue, { type: "null" }] },
+					lineage_event_id: textValue,
+				},
+			},
+		},
 	},
 );
 add(
@@ -638,16 +655,25 @@ add(
 		},
 	},
 );
+const atomReportState = { enum: ["planned", "running", "blocked", "completed"] };
 add(
 	"atom-update",
 	["task_id", "atom_id", "state"],
 	["task_id", "atom_id", "state"],
+	{
+		payloadOverrides: { state: atomReportState },
+		resultOverrides: { state: atomReportState },
+	},
 );
 add(
 	"group-atom-update",
 	["group_id", "atom_id", "state", "detail", "occurred_at"],
 	["group_id", "atom_id", "state"],
-	{ optionalPayload: ["detail", "occurred_at"] },
+	{
+		optionalPayload: ["detail", "occurred_at"],
+		payloadOverrides: { state: atomReportState },
+		resultOverrides: { state: atomReportState },
+	},
 );
 add(
 	"group-execution-update",
@@ -754,6 +780,35 @@ add(
 				],
 			},
 		],
+	},
+);
+add(
+	"merge-observe",
+	["target_type", "target_id", "provider_observation", "supersedes"],
+	["observation_id", "status", "operation_id"],
+	{
+		optionalPayload: ["supersedes"],
+		payloadOverrides: {
+			provider_observation: {
+				...publicationReceipt,
+				required: [...publicationReceipt.required, "merge_sha"],
+				properties: {
+					...publicationReceipt.properties,
+					resource_type: { const: "pr" },
+					state: { const: "merged" },
+					target_branch: textValue,
+					pr: externalRefValue,
+					base_sha: shaValue,
+					head_sha: shaValue,
+					merge_sha: shaValue,
+				},
+			},
+		},
+		resultOverrides: {
+			observation_id: id,
+			status: { enum: ["reconcile_required", "already_recorded", "conflict", "unclaimed"] },
+			operation_id: nullableId,
+		},
 	},
 );
 add(
@@ -1303,8 +1358,10 @@ export const FLOW_CONTRACT = Object.freeze({
 		"TRANSPORT_REQUIRED",
 		"UNKNOWN",
 		"UNKNOWN_COMMAND",
+		"UNKNOWN_NODE",
 		"UNKNOWN_REQUIRES_RECONCILIATION",
 		"UNKNOWN_TASK",
+		"UNSUPPORTED_ATOMIC_CRITERION",
 		"VIEWER_BINDING_INVALID",
 		"VIEWER_RENEWAL_FAILED",
 		"WAIT_REASON_REQUIRED",

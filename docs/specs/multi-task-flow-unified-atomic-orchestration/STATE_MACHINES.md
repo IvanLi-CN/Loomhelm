@@ -21,15 +21,15 @@ stateDiagram-v2
     implementation --> completed: 必要工作已收口
 ```
 
-AtomicNode 的工作生命周期：
+当前合同中工作原子的报告状态：
 
 ```mermaid
 stateDiagram-v2
-    [*] --> design
-    design --> planned: 范围已绑定
-    planned --> starting: 依赖已满足
-    starting --> running: 已观察到执行
-    running --> completed: 结果与证据齐备
+    [*] --> planned
+    planned --> running: 祖先及沿途门禁满足
+    planned --> completed: 归属 Agent 直接报告完成，祖先及沿途门禁满足
+    running --> completed: 归属 Agent 报告完成，祖先及沿途门禁满足
+    completed --> planned: 归属 Agent 撤回完成
 ```
 
 TaskStatus 的派生状态：
@@ -78,16 +78,17 @@ stateDiagram-v2
 
 ### 2.2 非正常流程状态机
 
-AtomicNode 的阻塞与恢复：
+工作原子的报告可以从任意状态切换；下图列出常见的阻塞与恢复路径。切换到 `planned` 或 `blocked` 不检查祖先。上游撤回完成会让下游的依赖判定失效，但保留下游已报状态。由运行时管理的流程节点按对应的操作门禁推进。
 
 ```mermaid
 stateDiagram-v2
     [*] --> planned
     planned --> blocked: 依赖或证据失败
-    starting --> blocked: 运行时或证据失败
-    running --> blocked: 运行时或证据失败
-    blocked --> starting: 受保护重试已批准
-    blocked --> running: 受保护恢复已批准
+    running --> blocked: 归属 Agent 报告阻塞
+    completed --> blocked: 归属 Agent 更正报告
+    blocked --> planned: 归属 Agent 放回待办
+    blocked --> running: 祖先及沿途门禁满足
+    blocked --> completed: 归属 Agent 报告完成，祖先及沿途门禁满足
 ```
 
 TaskStatus 的异常投影：
