@@ -43,6 +43,18 @@ export function assertReviewReceiptIntegrity(
     receipt.evidence_source !== "parent-request-and-subagent-result"
   )
     throw new FlowError("review receipt integrity is invalid");
+  if (
+    [
+      "reported_profile",
+      "review_model",
+      "review_effort",
+      "resolved_model",
+      "resolved_effort",
+      "profile_resolution",
+      "profile_proof_status",
+    ].some((key) => Object.hasOwn(receipt, key))
+  )
+    throw new FlowError("review receipt must not contain reviewer profile claims");
   const expectedProfile =
     wave.stage === "risk-arbitration"
       ? "risk-arbitration"
@@ -74,8 +86,6 @@ export function assertReviewReceiptIntegrity(
     receipt.scope_class !== wave.scope_class
   )
     throw new FlowError("review receipt scope integrity is invalid");
-  if (!validReportedProfile(receipt.reported_profile))
-    throw new FlowError("review receipt reported profile is invalid");
   if (
     repoPath !== undefined &&
     receipt.proof_key !==
@@ -148,15 +158,5 @@ function laneRequestedProfile(
   }
   throw new FlowError(
     "review lane requested profile is missing; open a fresh review wave",
-  );
-}
-
-function validReportedProfile(value: unknown): boolean {
-  if (value === null) return true;
-  if (!isRecord(value) || Object.keys(value).sort().join(",") !== "effort,model")
-    return false;
-  return (
-    (value.model === null || typeof value.model === "string") &&
-    (value.effort === null || typeof value.effort === "string")
   );
 }

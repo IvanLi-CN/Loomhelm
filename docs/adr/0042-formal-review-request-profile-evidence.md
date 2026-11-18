@@ -10,7 +10,7 @@ Review result 不能可靠证明 provider 最终使用的 model/effort。现有 
 
 ## Decision
 
-父流程保存并传递 requested profile，review receipt 只记录该请求事实和候选内容证据。`effective_profile` 保持未知；reviewer 自报 profile 只能作为可选审计字段。所有 required lane 仍必须产生完整 terminal result，任何缺失、malformed、stale 或 unavailable 结果都阻塞 clear。Runtime 拒绝不触发自动 fallback 或跨模型替换。
+父流程保存并传递 requested profile，review receipt 只记录该请求事实和候选内容证据，不要求或保存 reviewer profile claim。`effective_profile` 保持未知。所有 required lane 仍必须产生完整 terminal result，任何缺失、malformed、stale 或 unavailable 结果都阻塞 clear。Runtime 拒绝不触发自动 fallback 或跨模型替换。
 
 本仓库 formal runtime review 请求 `gpt-6-luna + max`；通用 direct-review policy 的六项 allowlist 仍用于请求策略选择。该边界不声称 provider 内部 routing，也不建设 provider attestation。
 

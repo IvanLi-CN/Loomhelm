@@ -132,10 +132,10 @@ describe("flow receipt CLI replay", () => {
       expect(recorded.receipt).toMatchObject({
         requested_profile: { model: "gpt-6-luna", effort: "max" },
         attempt_key: "cli-attempt",
-        reported_profile: null,
         profile_verification: "request_recorded",
         effective_profile: null,
       });
+      expect(recorded.receipt).not.toHaveProperty("reported_profile");
 
       expectCliFailure(
         root,

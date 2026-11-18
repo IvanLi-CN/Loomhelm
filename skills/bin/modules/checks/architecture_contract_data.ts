@@ -158,8 +158,6 @@ export const activeReviewSpecs = {
       "requested_profile",
       "profile_verification=request_recorded",
       "effective_profile=null",
-      "reported_profile",
-      "reviewer self-report",
     ],
     [],
   ],

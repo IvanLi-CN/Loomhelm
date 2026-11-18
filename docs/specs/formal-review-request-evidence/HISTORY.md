@@ -2,7 +2,7 @@
 
 ## Current
 
-将 review profile 从 reviewer 自报和 fallback resolution 改为父流程 requested profile；将实际 effective profile 保持为未知；将内容 evidence 与 profile request 分开记录，并以父流程 attempt ID 区分失败重试。
+取消 reviewer profile claim 和 fallback resolution，改为由父流程保存 requested profile；将实际 effective profile 保持为未知；将内容 evidence 与 profile request 分开记录，并以父流程 attempt ID 区分失败重试。
 
 ## Compatibility
 

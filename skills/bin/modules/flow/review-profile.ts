@@ -10,8 +10,6 @@ export interface DirectWaveLaneProfileOptions {
   reviewProfile: string;
   declaredModel: string;
   declaredEffort: string;
-  reviewModel: string;
-  reviewEffort: string;
 }
 
 export function directWaveLaneProfileAuthorized(

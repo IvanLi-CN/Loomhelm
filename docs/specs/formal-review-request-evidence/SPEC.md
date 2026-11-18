@@ -6,7 +6,7 @@
 
 ## Terms and Interfaces
 
-`requested_profile` 是父流程锁定并传给 native review 工具的 model/effort pair；`reported_profile` 是可选的 reviewer 自报附注；`effective_profile` 保持未知。Review receipt 必须绑定当前候选的 repo、base、head、scope、lane、terminal、clean、findings、locations、摘要和结果完整性。
+`requested_profile` 是父流程锁定并传给 native review 工具的 model/effort pair；`effective_profile` 保持未知。Review receipt 必须绑定当前候选的 repo、base、head、scope、lane、terminal、clean、findings、locations、摘要和结果完整性。
 
 ## Requirements
 
@@ -20,7 +20,7 @@
 
 ### REQ-FRPE-003：结果不证明实际模型
 
-Review 结果 MUST NOT 授权、否决或覆盖父流程的 requested profile；新 receipt MUST 写入 schema 7、`profile_verification=request_recorded`、`effective_profile=null` 和可选 `reported_profile`。Reviewer self-report MUST NOT 被解释为 provider 的 effective model 证明。
+Review 结果 MUST NOT 授权、否决或覆盖父流程的 requested profile；新 receipt MUST 写入 schema 7、`profile_verification=request_recorded` 和 `effective_profile=null`，且不得包含 reviewer profile claim。Review 结果只提供内容证据，不能证明 provider 的 effective model。
 
 ### REQ-FRPE-004：内容和完整性门禁保持有效
 
@@ -28,7 +28,7 @@ Review 结果 MUST NOT 授权、否决或覆盖父流程的 requested profile；
 
 ### REQ-FRPE-005：历史 schema 兼容不升级事实
 
-Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 self-reported profile MUST NOT 转换为 schema 7 的启动事实，也 MUST NOT 满足新候选 clear gate。新候选 MUST 通过 fresh review wave 恢复；父流程为每次 review attempt 提供非空 `review-attempt-id`，失败重试 MUST 使用同一 requested pair、保留独立 attempt，且不得重复启动活动 lane。
+Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 profile claim MUST NOT 转换为 schema 7 的启动事实，也 MUST NOT 满足新候选 clear gate。新候选 MUST 通过 fresh review wave 恢复；父流程为每次 review attempt 提供非空 `review-attempt-id`，失败重试 MUST 使用同一 requested pair、保留独立 attempt，且不得重复启动活动 lane。
 
 ## Verification
 
@@ -42,7 +42,7 @@ Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 self-repo
 
 - covers: `REQ-FRPE-003`, `REQ-FRPE-004`
 - Method: review record、receipt integrity、wave finalize 和 required-lane 失败路径测试。
-- Pass condition: 无 self-report 的完整结果可验收；不同 self-report 不改变 clear；缺失或 malformed 结果、任一未完成 lane、候选绑定错误和不完整内容均阻塞。
+- Pass condition: 不含 profile claim 的完整结果可验收；缺失或 malformed 结果、任一未完成 lane、候选绑定错误和不完整内容均阻塞。
 
 ### VER-FRPE-003
 

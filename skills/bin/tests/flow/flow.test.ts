@@ -431,8 +431,6 @@ describe("acceptance and review state", () => {
         const unavailable = recordSubagentReviewState(ledger, {
           reviewProfile: "pr-convergence",
           baseRef: sha,
-          reviewModel: "reported-model-does-not-authorize",
-          reviewEffort: "reported-effort",
           reviewAttemptId: "contract-startup-1",
           reviewResultJson: "",
           terminalState: "unavailable",
@@ -470,9 +468,6 @@ describe("acceptance and review state", () => {
       const result = recordSubagentReviewState(ledger, {
         reviewProfile: "pr-convergence",
         baseRef: sha,
-        reviewModel:
-          lane.lane === "contract" ? "reported-model-does-not-authorize" : undefined,
-        reviewEffort: lane.lane === "contract" ? "reported-effort" : undefined,
         reviewAttemptId: `attempt-${lane.lane}`,
         reviewResultJson: JSON.stringify({
           findings: [],
@@ -494,12 +489,24 @@ describe("acceptance and review state", () => {
       requested_profile: { model: "gpt-6-luna", effort: "max" },
       profile_verification: "request_recorded",
       effective_profile: null,
-      reported_profile: {
-        model: "reported-model-does-not-authorize",
-        effort: "reported-effort",
-      },
       attempt_key: "attempt-contract",
     });
+    expect(contractReceipt).not.toHaveProperty("reported_profile");
+    if (!contractReceipt) throw new Error("contract receipt is missing");
+    contractReceipt.reported_profile = {
+      model: "reviewer-claim",
+      effort: "reviewer-claim",
+    };
+    expect(() =>
+      finalizeReviewWaveState(ledger, String(wave.wave_id), {
+        groups: [],
+        invariants: ["all lanes covered"],
+        coverage: lanes.map(({ lane }) => lane),
+        conflicts: [],
+        acceptance: [],
+      }),
+    ).toThrow("review receipt must not contain reviewer profile claims");
+    delete contractReceipt.reported_profile;
     const finalized = finalizeReviewWaveState(ledger, String(wave.wave_id), {
       groups: [],
       invariants: ["all lanes covered"],

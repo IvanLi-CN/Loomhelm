@@ -16,8 +16,6 @@ import { isFormalReviewRequestProfile } from "./review-profile-policy";
 export interface SubagentReviewOptions {
   reviewProfile: string;
   baseRef: string;
-  reviewModel?: string | undefined;
-  reviewEffort?: string | undefined;
   reviewAttemptId?: string | undefined;
   reviewResultJson: string;
   terminalState?: "completed" | "unavailable" | undefined;
@@ -159,7 +157,6 @@ export function recordSubagentReviewState(
     requested_profile: requestedProfile,
     profile_verification: "request_recorded",
     effective_profile: null,
-    reported_profile: reportedProfile(options),
     review_execution_source: "parent-flow-request",
     provenance_boundary: "parent-flow-request-and-subagent-result",
     evidence_source: "parent-request-and-subagent-result",
@@ -272,7 +269,6 @@ function recordUnavailable(
     requested_profile: requestedProfile,
     profile_verification: "request_recorded",
     effective_profile: null,
-    reported_profile: reportedProfile(options),
     review_execution_source: "parent-flow-request",
     provenance_boundary: "parent-flow-request-and-subagent-result",
     evidence_source: "parent-request-and-subagent-result",
@@ -346,17 +342,6 @@ function reviewAttemptKey(options: SubagentReviewOptions): string {
       "sub-agent review requires a parent-supplied review attempt id",
     );
   return options.reviewAttemptId.trim();
-}
-
-function reportedProfile(
-  options: SubagentReviewOptions,
-): Record<string, string | null> | null {
-  if (options.reviewModel === undefined && options.reviewEffort === undefined)
-    return null;
-  return {
-    model: options.reviewModel ?? null,
-    effort: options.reviewEffort ?? null,
-  };
 }
 
 export { assertReviewReceiptIntegrity } from "./review-receipt-integrity";
