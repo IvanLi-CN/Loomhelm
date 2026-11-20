@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { checkConvergenceBoundaries } from "../../modules/checks/architecture_review_contracts";
+import { checkReviewContracts, checkConvergenceBoundaries } from "../../modules/checks/architecture_review_contracts";
 
 const relative = "skills/project-engineering-workflow/references/review-proof-short-contract.md";
 const source = readFileSync(resolve(import.meta.dir, "../../../..", relative), "utf8");
@@ -23,6 +23,9 @@ test("review policy guards reject loss of coverage, independence, and refresh ob
     for (const rule of Object.keys(requirements)) {
       expect(checkConvergenceBoundaries(directory).some((finding) => finding.endsWith(`rule=${rule}`))).toBe(false);
     }
+    expect(checkReviewContracts(directory).filter((finding) => finding.startsWith("DIRECT_REVIEW_CONTRACT_MISSING"))).toEqual([]);
+    writeFileSync(target, source.replace("`gpt-5.6-luna + medium`", "removed profile"));
+    expect(checkReviewContracts(directory)).toContain("DIRECT_REVIEW_CONTRACT_MISSING phrase=gpt-5.6-luna + medium");
     for (const [rule, phrase] of Object.entries(requirements)) {
       writeFileSync(target, source.replace(phrase, "removed requirement"));
       expect(checkConvergenceBoundaries(directory)).toContain(`CONVERGENCE_BOUNDARY_MISSING owner=${relative} rule=${rule}`);
