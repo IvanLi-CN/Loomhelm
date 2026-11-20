@@ -65,7 +65,7 @@
 | Local merge cleanup closeout | active | 已实现 | `local-merge-cleanup-closeout/SPEC.md` | - | 收紧 local-merge cleanup 决策树与恢复语义 |
 | Global port preview governance | active | 已实现 | `global-port-preview-governance/SPEC.md` | - | 统一本地长驻服务的端口归属检查、稳定随机分配、冲突处理与预览 URL 交付规则 |
 | Flow continue lock guard | active | 已实现 | `flow-continue-lock-guard/SPEC.md` | - | 固化锁定 flow 优先级，阻止热更新文案把旧 session 误改路由到 local-merge |
-| PR convergence batching | active | 已实现 | `pr-convergence-batching/SPEC.md` | `0016-bind-review-repairs-to-approved-scope.md`, `0017-review-readiness-and-runtime-launch.md` | CI remains SHA-bound; Review Readiness gates runtime formal launch, scoped findings form one Repair Batch, and only the final Candidate refreshes affected lanes |
+| PR convergence batching | active | 已实现 | `pr-convergence-batching/SPEC.md` | `0016-bind-review-repairs-to-approved-scope.md`, `0017-review-readiness-and-runtime-launch.md` | CI remains SHA-bound; Review Readiness gates runtime formal launch, scoped findings form one Repair Batch, and only the final Candidate refreshes comprehensive review and affected specialists |
 | PR post-open scope freeze | active | 已实现 | `pr-post-open-scope-freeze/SPEC.md` | - | PR 打开后默认冻结范围，允许 behind/main-sync 必要兼容修复 |
 | PR skill diagnosis thinning | superseded | 已实现 | `pr-skill-diagnosis-thinning/SPEC.md` | `agent-instruction-architecture/SPEC.md` | focused PR 规则已并入统一 instruction architecture 与共享 references |
 | Dev plan flow lock option guidance cleanup | active | 已实现 | `dev-plan-flow-lock-options/SPEC.md` | - | 移除 `flow_type` 选项完备性的硬约束，只保留完整列表建议与 local-merge 别名兼容 |

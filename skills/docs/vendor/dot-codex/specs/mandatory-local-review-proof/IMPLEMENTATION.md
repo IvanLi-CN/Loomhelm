@@ -29,3 +29,5 @@
 - The instruction architecture checker asserts this canonical Spec's disposition, evidence, Candidate-anchor fields, and behavioral boundary in isolated-copy tests.
 - The checker also guards the readiness vocabulary and the `0017` ADR binding across the active review Specs.
 - The flow receipt TypeScript adapter remains validation/lifecycle infrastructure; its review orchestration is listed for later removal in `../workflow-execution-receipts/contracts/review-orchestration-retirement.md`.
+
+综合 review 使用每轮全新的独立子代理覆盖完整当前差异；Tier 4 按具体风险增加专项 reviewer。四个通用维度作为覆盖清单，修复后综合 review 必须刷新，只有可证明未受影响的专项证据可在当前运行中保留。历史 review-wave ledger 工具不参与当前直接交付审查，其旧 topology 仅作兼容保留。

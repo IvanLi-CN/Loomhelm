@@ -84,7 +84,7 @@ Disposition input is equally closed: only the three canonical finding dispositio
 - 但若能证明当前仓库/当前 SHA 本来就不期望自动 checks，则 absence 只能记为事实，不得单独上抛 blocker。
 - 正式 review 首轮覆盖全部 required lanes；修复前必须等待该 Formal Review Wave 全部终态。主代理随后按批准行为、验收和安全边界为每条 finding 写入一种 disposition，并应用共享的 priority-aware repair threshold：首次 Formal Review Wave 中最高只有 P2 时允许可选 P2 修复；后续只有 P0/P1 或可归因于当前 Candidate 的代码、测试或配置 CI 失败时，才允许把同批次、同范围的 P2 顺手修复。P2/P3 低优先级结果可以用 `repair_not_required_low_priority` 通过并在下一停靠点报告；P3 不成为独立修复目标。`Design-Returning Review Finding` 立即停止普通收敛并返回设计，`Review Observation` 只报告且不启动新 formal review wave。中间 local commit 不启动 reviewer，只有最终 Candidate 进入新的 review boundary。
 - 父代理自主处置授权范围内的 repair；接近三批或同一根因反复出现时，先诊断范围、基线、方案与测试，再决定下一步，不按批次数停止或请求逐批授权。
-- Tier 3/4 的 lane profile 遵循共享 [Workflow Agent Model Selection](../workflow-agent-model-selection/SPEC.md) exact six-profile direct-review allowlist，并按 lane 独立选择；四至六条 lane 不会改写该名单。完整 owner `model + effort` pair 原样交给 runtime，runtime 负责支持与错误，flow 不做 capability precheck 或 fallback。
+- Tier 3/4 的 lane profile 遵循共享 [Workflow Agent Model Selection](../workflow-agent-model-selection/SPEC.md) exact six-profile direct-review allowlist，并按 lane 独立选择；综合与专项 reviewer 的数量不会改写该名单。完整 owner `model + effort` pair 原样交给 runtime，runtime 负责支持与错误，flow 不做 capability precheck 或 fallback。
 
 ### REQ-PR-CONVERGENCE-DISPOSITION
 

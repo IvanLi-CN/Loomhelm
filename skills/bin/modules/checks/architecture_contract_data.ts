@@ -13,6 +13,11 @@ export const convergenceBoundaryContracts: Record<
   },
   "skills/project-engineering-workflow/references/review-proof-short-contract.md":
     {
+      "comprehensive-default": "Tier 3: one comprehensive read-only reviewer",
+      "specialist-risk": "record each selected lane's concrete risk and scope",
+      "fresh-round": "Every new formal review round launches a fresh `fork_turns=none`",
+      "full-diff-repair": "Every changed Candidate refreshes the comprehensive lane",
+      "dimension-evidence": "dimensions are not separate reviewers or independent review evidence",
       "behavioral-readiness":
         "(?:stateful|concurrent)\\b[^.]*\\b(?:executed|run|passed)\\b[^.]*behavioral (?:validation|tests)\\b[^.]*\\bboundaries\\b",
       "pre-write-count":
