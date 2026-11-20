@@ -107,16 +107,13 @@ Each formal lane is a read-only sub-agent review in the current candidate worktr
 
 ### Autonomous direct-review profiles
 
-The `code-review` flow has exactly this ordered allowlist for autonomous selection:
+Choose one complete requested pair per reviewer based on the review scope. The recommended profiles for autonomous direct review are:
 
-1. `gpt-6-luna + high`
-2. `gpt-6-luna + max`
-3. `gpt-5.6-luna + xhigh`
-4. `gpt-5.6-luna + max`
-5. `gpt-6.1-terra + xhigh`
-6. `gpt-6.1-sol + medium`
+- `gpt-5.6-luna + medium` for routine review of a small, clear diff.
+- `gpt-5.6-luna + xhigh` for rigorous review, including review policy changes and complex repairs.
+- `gpt-6.1-sol + low` when the review needs stronger cross-file reasoning with a low effort budget.
 
-Ordinary review may use profiles 1-3 and defaults to profile 1 when no stronger distinction is available. Complex or rigorous review should use profiles 3-4. Special or high-risk review should use profiles 5-6 and MUST record the lane-specific reason for escalation. The reason may be natural language, but it must identify the affected lane and the escalation rationale; natural-language or non-English lane aliases are valid when they identify the affected boundary; no fixed `lane=...; reason=...` serialization is required. These are flow policy profiles, not a runtime capability table; a runtime-supported pair does not enter this allowlist automatically. There is no concurrency limit imposed by this workflow. Autonomous direct-review selection remains strictly limited to the six profiles above; only a complete owner `model + effort` override may bypass that flow allowlist. The former four to six concurrent lanes heuristic, including its `gpt-5.6-luna + medium` recommendation, is retired and does not select a profile. For this repository's formal runtime review, the parent flow requests `gpt-6-luna + max` for every required lane; this request policy does not assert the provider's effective model.
+Each repository may apply a more specific request policy. Record the reason when choosing a profile for a specialist or escalating beyond routine review. An explicit complete owner override applies as described below. These recommendations are request policy, not provider capability or effective-profile evidence. A runtime rejection remains unavailable; never silently substitute a pair.
 
 Every formal lane records its parent-owned requested profile independently. The `comprehensive` lane and any selected specialist lane do not inherit a profile from another lane, and the invocation's lane count does not turn the selection into a global profile. Plan text provides guidance but never fixes reviewer identity; the runtime records the requested pair and leaves the effective pair unknown. Historical coordinator v2 inputs that reach Step 5C use this same Tier 3/4 Review Readiness and fresh-lane launch contract. Their task dispatch locks remain a separate compatibility policy and do not select or name formal review lanes.
 

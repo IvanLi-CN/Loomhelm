@@ -10,7 +10,7 @@ const requirements = {
   "comprehensive-default": "Tier 3: one comprehensive read-only reviewer",
   "specialist-risk": "record each selected lane's concrete risk and scope",
   "fresh-round": "Every new formal review round launches a fresh `fork_turns=none`",
-  "full-diff-repair": "Every changed Candidate refreshes the comprehensive lane",
+  "full-diff-repair": "reviewing the complete current diff",
   "dimension-evidence": "dimensions are not separate reviewers or independent review evidence",
 };
 

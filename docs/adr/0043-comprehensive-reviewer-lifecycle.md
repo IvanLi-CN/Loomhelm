@@ -18,4 +18,4 @@ Accepted。
 
 ## Consequences
 
-默认减少 reviewer 数量，综合 reviewer 承担完整覆盖责任；风险边界无法覆盖时必须补充专项审查，不能将缺失覆盖判为 clear。模型请求策略、CI 门禁和 findings 处置保持原合同。
+默认减少 reviewer 数量，综合 reviewer 承担完整覆盖责任；风险边界无法覆盖时必须补充专项审查，不能将缺失覆盖判为 clear。实际审查按共享合同从 `gpt-5.6-luna + medium`、`gpt-5.6-luna + xhigh` 与 `gpt-6.1-sol + low` 选择请求档位。本条取代 ADR 0042 对当前直接交付固定 `gpt-6-luna + max` 的要求，保留父流程请求和结果证据分离。CI 门禁和 findings 处置沿用原合同。

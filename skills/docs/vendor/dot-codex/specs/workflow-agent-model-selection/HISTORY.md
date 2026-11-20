@@ -27,3 +27,5 @@
 ## Wave Thread 移除
 
 Wave Thread 专属三档 Profile 与派发回放已经删除。直接 Review 和现行多任务流程的 Profile 规则继续由各自合同负责。
+
+当前请求建议收敛为 `gpt-5.6-luna + medium`、`gpt-5.6-luna + xhigh` 和 `gpt-6.1-sol + low`；每轮综合审查使用全新实例并检查完整差异。旧 adapter 请求规则保持兼容。

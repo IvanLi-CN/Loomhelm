@@ -14,7 +14,7 @@
 - `review_tier`: `Tier 3`
 - `review_rationale`: `当前 PR candidate 需要 direct review evidence。`
 - `runtime_review_strategy`: `readiness 和验证完成后运行时创建 required lanes。`
-- `review_profile_recommendation`: `综合 formal review 建议使用 gpt-6-luna + high pair。`
+- `review_profile_recommendation`: `综合 formal review 建议使用 gpt-5.6-luna + medium pair。`
 - 开发基线：`origin/main`
 - 收口条件：`merge-ready / Step 5C Ready`
 

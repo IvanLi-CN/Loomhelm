@@ -14,22 +14,14 @@ Workflow launch settings remain explicit while direct review evidence stays inde
 
 Runtime formal review requires Review Readiness: approved behavior and acceptance, scope, and required contracts are stable; no design decision is unresolved; and the current Candidate has completed applicable validation and visual evidence. Plans recommend a tier-consistent strategy and supported profile set, while each formal reviewer identity is created fresh at runtime.
 
-The retired review-orchestration ladder in the flow receipt adapter is outside this active policy and remains unchanged; this Spec does not restore or reclassify it.
+The six-profile legacy review-orchestration ladder in the flow receipt adapter is outside this active policy and remains unchanged; this Spec does not restore or reclassify it.
 
 ## Requirements
 
 ### REQ-DIRECT-REVIEW-MODEL
 
-- `code-review` MUST use exactly this ordered allowlist for autonomous selection:
-  1. `gpt-6-luna + high`
-  2. `gpt-6-luna + max`
-  3. `gpt-5.6-luna + xhigh`
-  4. `gpt-5.6-luna + max`
-  5. `gpt-6.1-terra + xhigh`
-  6. `gpt-6.1-sol + medium`
-- Ordinary review MAY use profiles 1-3 and MUST default to profile 1 when no stronger distinction is available. Complex or rigorous review SHOULD use profiles 3-4. Special or high-risk review SHOULD use profiles 5-6 and MUST record a natural-language lane-specific escalation reason; the contract does not require a fixed serialization such as `lane=...; reason=...`.
-- The actual supported model/effort pair is recorded in each review result. Autonomous selection uses `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna`, or `gpt-5.6-luna`. A current task's explicit `agent-model: <model>` directive remains a session-scoped model-family selection; it is not a complete direct-review owner override. A direct-review exception requires an explicit complete `model + effort` pair. Direct plan guidance names a supported pair without fixing reviewer identity; runtime launch resolves the actual pair on the current host. A higher model or effort records a lane-specific escalation reason.
-- The workflow does not impose a concurrency cap. Autonomous direct-review selection remains strictly limited to the six profiles above; only a complete owner `model + effort` override may bypass that flow allowlist. An unavailable reviewer is never treated as clear.
+- The parent chooses a complete requested pair per formal lane using the shared review-proof recommendations. Record that request separately from reviewer content. The effective provider profile remains unknown.
+- The runtime reports unavailable requests without silent substitution.
 - Autonomous delegated launches are limited to `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna`, and `gpt-5.6-luna`. A non-autonomous supported model requires the exact standalone first non-empty prompt line `agent-model: <model>`; `agent-model: auto` removes the override. The override is session-scoped until replaced or removed and is not inherited by a fresh task.
 
 - A live lane is waited on or relayed; a terminal agent is retired and is not reused for formal review. A changed candidate receives a fresh `fork_turns=none` reviewer. Elapsed time alone is not review failure, and an exhausted orchestration wait budget remains a non-terminal blocker until the owner continues or explicitly stops the lane. An owner-stopped lane is not retried by continuation without a new owner instruction or changed candidate; live-lane uniqueness is scoped to the current flow invocation/thread. A
@@ -50,15 +42,7 @@ The retired review-orchestration ladder in the flow receipt adapter is outside t
 
 ### REQ-CODE-REVIEW-PROFILES
 
-- `code-review` MUST allow exactly these ordered profiles for autonomous selection:
-  1. `gpt-6-luna + high`
-  2. `gpt-6-luna + max`
-  3. `gpt-5.6-luna + xhigh`
-  4. `gpt-5.6-luna + max`
-  5. `gpt-6.1-terra + xhigh`
-  6. `gpt-6.1-sol + medium`
-- Ordinary review MAY use profiles 1-3 and MUST default to profile 1 when no stronger distinction is available. Complex or rigorous review SHOULD use profiles 3-4. Special or high-risk review SHOULD use profiles 5-6 and MUST record the escalation reason.
-- Every formal Code Review lane MUST select its profile independently. Each fixed or selected dynamic lane MAY use the complete six-profile allowlist, and a named owner override applies only to its named lane.
+- The shared review-proof contract recommends `gpt-5.6-luna + medium` for routine review, `gpt-5.6-luna + xhigh` for rigorous review, and `gpt-6.1-sol + low` for cross-file reasoning with low effort. Each comprehensive or specialist lane independently records its requested pair.
 - covers: VER-FLOW-PROFILE-POLICY
 
 ### REQ-TRANSPORT-NEUTRAL-EVIDENCE

@@ -1,6 +1,6 @@
 # Workflow Agent Model Selection Implementation
 
-- The shared project-engineering direct-review contract now exposes the exact six-profile autonomous allowlist, independent lane-local selection, complete invocation-wide or named-lane owner overrides, and runtime-owned rejection without silent fallback.
+- The shared project-engineering direct-review contract now exposes the three recommended request profiles, independent lane-local selection, complete invocation-wide or named-lane owner overrides, and runtime-owned rejection without silent fallback.
 
 - `bin/modules/flow/review-profile-policy.ts` owns direct-review complexity mapping and exact owner-pair forwarding without importing the runtime capability table.
 - The direct-review selector requires lane-specific reasons for special or high-risk profiles and resolves invocation-wide versus named-lane overrides across the complete lane set.

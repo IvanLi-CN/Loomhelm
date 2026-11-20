@@ -16,7 +16,7 @@
 
 ### REQ-FRPE-002：仓库 Formal review 请求固定
 
-本仓库正式 runtime review MUST 请求 `gpt-6-luna + max`；通用 direct-review policy MUST 保留六项 allowlist、lane topology、复杂度选择、完整 owner override 和精确转发规则；不得以 provider capability 探测、自动 fallback 或跨模型替换改变请求。
+本仓库父流程 MUST 按共享 review-proof 合同选择完整请求 pair，并保留独立 lane 选择、完整 owner override 和精确转发。Runtime 拒绝必须如实记录，禁止自动 fallback。历史 adapter 的固定请求规则仅适用于其兼容路径。
 
 ### REQ-FRPE-003：结果不证明实际模型
 
@@ -36,7 +36,7 @@ Schema 6 receipt MUST 保持原始字段并可读取和展示；旧的 profile c
 
 - covers: `REQ-FRPE-001`, `REQ-FRPE-002`
 - Method: policy 单测、mock native 参数测试、CLI 回放和固定 lane 负例。
-- Pass condition: 六项通用策略和完整 owner override 正确转发；正式 lane 请求固定 pair；省略、替换、旧 ladder 或 fallback 均被拒绝或如实记录。
+- Pass condition: 父流程选择并原样转发完整 pair 或完整 owner override。历史 adapter 保持其固定 pair 校验和历史回放行为。
 
 ### VER-FRPE-002
 

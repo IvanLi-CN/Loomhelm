@@ -10,4 +10,4 @@
 
 验证覆盖 flow receipt、lane topology、完整 required lane、无 profile claim 的结果、malformed/stale/unavailable、schema 6/7 读取和历史 fresh-wave 恢复。Provider 内部实际 routing 不作测试承诺。
 
-当前直接交付通过共享 review-proof 合同启动综合和专项 reviewer，每轮使用全新 `fork_turns=none` 实例，并保持本仓库 `gpt-6-luna + max` 请求策略。历史 adapter 不调度或门禁当前 review，其旧 topology 不约束新合同。
+当前直接交付通过共享 review-proof 合同启动综合和专项 reviewer，每轮使用全新 `fork_turns=none` 实例，并按共享合同的推荐档位选择完整的请求 pair。历史 adapter 不调度或门禁当前 review，其旧 topology 不约束新合同。

@@ -65,16 +65,7 @@ The main Agent MUST record `resolution=current_pr|deferred_follow_up` and the in
 
 ### REQ-DIRECT-REVIEW-MODEL
 
-Direct review inherits the exact six-profile allowlist and lane-local selection contract from [Workflow Agent Model Selection](../workflow-agent-model-selection/SPEC.md): ordinary review uses profiles 1-3 and defaults to profile 1, complex or rigorous review uses profiles 3-4, and special or high-risk review uses profiles 5-6 with a lane-specific escalation reason. Each formal lane binds its own profile; reviewer count does not replace that policy with a shared profile.
-
-The ordered allowlist is:
-
-1. `gpt-6-luna + high`
-2. `gpt-6-luna + max`
-3. `gpt-5.6-luna + xhigh`
-4. `gpt-5.6-luna + max`
-5. `gpt-6.1-terra + xhigh`
-6. `gpt-6.1-sol + medium`
+Direct review follows the [shared review-proof profile policy](../../../../project-engineering-workflow/references/review-proof-short-contract.md). The parent chooses and records one recommended pair per comprehensive or specialist lane. The request does not prove the effective profile.
 
 Only a complete owner-specified `model + effort` pair is an override. The flow passes that exact pair to runtime without capability prechecking or fallback; runtime support or rejection remains authoritative. Model-only or effort-only text is not an override.
 
