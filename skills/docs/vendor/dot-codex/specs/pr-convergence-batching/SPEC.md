@@ -84,7 +84,7 @@ Disposition input is equally closed: only the three canonical finding dispositio
 - 但若能证明当前仓库/当前 SHA 本来就不期望自动 checks，则 absence 只能记为事实，不得单独上抛 blocker。
 - 正式 review 首轮覆盖全部 required lanes；修复前必须等待该 Formal Review Wave 全部终态。主代理随后按批准行为、验收和安全边界为每条 finding 写入一种 disposition，并应用共享的 priority-aware repair threshold：首次 Formal Review Wave 中最高只有 P2 时允许可选 P2 修复；后续只有 P0/P1 或可归因于当前 Candidate 的代码、测试或配置 CI 失败时，才允许把同批次、同范围的 P2 顺手修复。P2/P3 低优先级结果可以用 `repair_not_required_low_priority` 通过并在下一停靠点报告；P3 不成为独立修复目标。`Design-Returning Review Finding` 立即停止普通收敛并返回设计，`Review Observation` 只报告且不启动新 formal review wave。中间 local commit 不启动 reviewer，只有最终 Candidate 进入新的 review boundary。
 - 父代理自主处置授权范围内的 repair；接近三批或同一根因反复出现时，先诊断范围、基线、方案与测试，再决定下一步，不按批次数停止或请求逐批授权。
-- Tier 3/4 的 lane profile 遵循共享 [Workflow Agent Model Selection](../workflow-agent-model-selection/SPEC.md) exact six-profile direct-review allowlist，并按 lane 独立选择；四至六条 lane 不会改写该名单。完整 owner `model + effort` pair 原样交给 runtime，runtime 负责支持与错误，flow 不做 capability precheck 或 fallback。
+- Tier 3/4 的 lane profile 遵循共享 [Workflow Agent Model Selection](../workflow-agent-model-selection/SPEC.md) 的共享 direct-review 请求策略，并按 lane 独立选择；综合与专项 reviewer 的数量不会改写该名单。完整 owner `model + effort` pair 原样交给 runtime，runtime 负责支持与错误，flow 不做 capability precheck 或 fallback。
 
 ### REQ-PR-CONVERGENCE-DISPOSITION
 
@@ -177,7 +177,7 @@ An authorized concrete handoff removes only that item's source-review blocker, n
 
 - Given 同一根因反复出现 When 下一次修复尚未开始 Then 先复核目标、原有契约和新引入的复杂度，再决定是否简化实现；新增设计要求返回设计。
 
-- Given 当前 Candidate 的正式 lane 返回有效 blocker When required lanes 已全部终态且 blocker 在 scope 内 Then 按根因形成一个 Repair Batch；最终 Candidate 只刷新受影响 lane，未知/高风险或实际采纳新 review base 则刷新全部 required lanes 并绑定新 base。仅观察到主干推进不在轮内触发刷新。
+- Given 当前 Candidate 的正式 lane 返回有效 blocker When required lanes 已全部终态且 blocker 在 scope 内 Then 按根因形成一个 Repair Batch；最终 Candidate 总是由全新综合 reviewer 审查完整差异，专项按影响刷新，未知/高风险或实际采纳新 review base 则刷新全部 required lanes 并绑定新 base。仅观察到主干推进不在轮内触发刷新。
 
 - Given 当前 Candidate 的正式 lane 返回一条 observation 或 design-returning finding When required lanes 已全部终态 Then observation 只进入报告，design-returning finding 停止普通 repair；二者都不得被当作自动修复任务。
 

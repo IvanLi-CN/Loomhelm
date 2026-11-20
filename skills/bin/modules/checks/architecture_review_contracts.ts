@@ -165,7 +165,9 @@ function checkCanonicalReview(root: string, findings: string[]): void {
       );
   missingPhrases(findings, "DIRECT_REVIEW_CONTRACT_MISSING", source, [
     "no `flow_receipt.ts` command",
-    "no concurrency limit",
+    "gpt-5.6-luna + medium",
+    "gpt-5.6-luna + xhigh",
+    "gpt-6.1-sol + low",
     "unknown scope",
     "base drift",
     "repo_root",

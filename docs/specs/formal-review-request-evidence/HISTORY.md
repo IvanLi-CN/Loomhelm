@@ -7,3 +7,5 @@
 ## Compatibility
 
 Schema 6 记录保持只读兼容。旧记录中的 `review_model`、`review_effort`、`resolved_model`、`resolved_effort` 和 `profile_proof_status` 继续用于历史解释，但不参与新候选的 profile authorization 或 clear 判定。
+
+当前直接交付改为使用共享合同的三档请求建议。历史 adapter 的固定 pair 和 receipt 格式继续用于兼容读取和回放。

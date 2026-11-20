@@ -15,7 +15,7 @@
 - `review_tier`: `Tier 3`
 - `review_rationale`: `v2 状态、事件和兼容适配需要当前候选的完整 formal review。`
 - `runtime_review_strategy`: `Review Readiness 通过后创建 required formal lanes。`
-- `review_profile_recommendation`: `四个 formal lane 建议使用 gpt-5.6-luna + xhigh，不预设审查者身份。`
+- `review_profile_recommendation`: `综合 formal review 建议使用 gpt-5.6-luna + xhigh，不预设审查者身份。`
 - 开发基线：`origin/main`
 - 收口条件：`merge-ready / Step 5C Ready`
 

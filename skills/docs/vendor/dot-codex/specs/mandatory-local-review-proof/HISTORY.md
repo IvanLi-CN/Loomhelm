@@ -15,3 +15,7 @@
 - Malformed or missing structured finding kinds now fail closed before terminal evidence is recorded.
 - Terminal clear evidence may contain a blocking finding; `unchecked` is reserved for missing, stale, malformed, or unavailable review output.
 - Repair eligibility now uses a priority-aware threshold: an initial-wave P2-only finding may be repaired optionally, later P2 repair requires a P0/P1 or qualifying current-Candidate CI trigger, and P2/P3-only results may clear with a recorded low-priority resolution and next-stop owner report.
+
+综合 review 使用每轮全新的独立子代理覆盖完整当前差异；Tier 4 按具体风险增加专项 reviewer。四个通用维度作为覆盖清单，修复后综合 review 必须刷新，只有可证明未受影响的专项证据可在当前运行中保留。历史 review-wave ledger 工具不参与当前直接交付审查，其旧 topology 仅作兼容保留。
+
+当前请求建议收敛为 `gpt-5.6-luna + medium`、`gpt-5.6-luna + xhigh` 和 `gpt-6.1-sol + low`；每轮综合审查使用全新实例并检查完整差异。旧 adapter 请求规则保持兼容。

@@ -14,10 +14,14 @@ When the direct plan declares `empirical_acceptance=required`, Review Readiness 
 
 - Tier 1: no code review is required.
 - Tier 2: advisory review is optional and never a delivery gate.
-- Tier 3: fresh clear review evidence from the four fixed lanes is required.
-- Tier 4: the four fixed lanes plus one or two relevant dynamic lanes are required. Dynamic lanes are `ui-accessibility`, `security`, `database-migration`, and `release-infra`.
+- Tier 3: one comprehensive read-only reviewer is required.
+- Tier 4: one comprehensive read-only reviewer plus one or two risk-selected specialist reviewers is required. Specialist lanes are `ui-accessibility`, `security`, `database-migration`, and `release-infra`; record each selected lane's concrete risk and scope.
 
-Formal lanes are created at runtime after readiness for the current Candidate. For a direct PR, formal lanes launch after exact live PR head/base binding in the same first round as the CI tracker. For local-merge, formal lanes complete before Step 5L. Tier 3's four fixed lanes define the initial complete coverage, and Tier 4 adds one or two selected dynamic lanes. This lane count is not a fixed reviewer count for every later Repair Batch. Every changed Candidate uses a fresh `fork_turns=none` reviewer for each refreshed lane; a terminal reviewer is retired and never reused.
+The `comprehensive` lane reviews the complete base-to-head Candidate diff and relevant surrounding contracts and call paths. Its coverage checklist is `contract`, `state-concurrency`, `failure-data-safety`, and `test-platform`; report coverage or a reason for non-applicability for every dimension. These dimensions are not separate reviewers or independent review evidence. Missing coverage remains `unchecked`. A specialist supplements comprehensive coverage rather than replacing it. If the comprehensive reviewer cannot cover a material boundary, the main Agent resolves the coverage gap and selects Tier 4 when specialist review is needed before clear.
+
+Formal lanes are created at runtime after readiness for the current Candidate. For a direct PR, formal lanes launch after exact live PR head/base binding in the same first round as the CI tracker. For local-merge, formal lanes complete before Step 5L. Every new formal review round launches a fresh `fork_turns=none` sub-agent for every launched lane, including specialists; terminal reviewers are retired and never resumed or reused. Supply the approved scope, contracts, exact repo/base/head, validation evidence, and coverage checklist explicitly. Repair rounds also receive the Scope Envelope and Repair Manifest and independently inspect the complete current base-to-head diff, including interactions and newly introduced regressions; checking only the previous findings or repair delta is insufficient. Prior approval is not current proof.
+
+Continue waiting on an unfinished matching round instead of spawning a duplicate. A completed review for an unchanged Candidate and review base remains reusable within its valid active run; a new round requires a new review need, not merely another continuation invocation.
 
 ### 3. Wait for the complete round
 
@@ -87,7 +91,7 @@ The parent flow counts each batch before its first repair write; CI-only behavio
 
 Validate the root-cause repairs before reviewing the batch's final candidate.
 
-After complete initial coverage, refresh affected lanes when the Git delta proves their scope. Retain unaffected results only within the active run while source base/head, structured result, and relevant delta remain inspectable; refreshed results bind the current head. Unknown scope, security, schema, transaction, protocol, concurrency, persistence, migration, or shared review-contract changes refresh every required lane. Base drift observed during a round follows PR diagnosis §3; actually adopting a different review base refreshes every required lane and replaces active `base_sha` before new evidence. Missing new-base evidence is `unchecked`; automatic cross-base proof reuse is unavailable.
+Every changed Candidate refreshes the comprehensive lane with a new sub-agent reviewing the complete current diff. Refresh affected specialist lanes when the Git delta proves their scope; retain unaffected specialist results only within the active run while source base/head, structured result, and relevant delta remain inspectable. Reassess specialist selection when risk changes. Unknown scope, security, schema, transaction, protocol, concurrency, persistence, migration, or shared review-contract changes refresh every required lane. Base drift observed during a round follows PR diagnosis §3; actually adopting a different review base refreshes every required lane and replaces active `base_sha` before new evidence. Missing new-base evidence is `unchecked`; automatic cross-base proof reuse is unavailable.
 
 Once current evidence is clear, Step 5C or Step 5L continues with factual base/head, CI, validation, repository rules, and clean-candidate checks; it does not add another AI review.
 
@@ -103,17 +107,16 @@ Each formal lane is a read-only sub-agent review in the current candidate worktr
 
 ### Autonomous direct-review profiles
 
-The `code-review` flow has exactly this ordered allowlist for autonomous selection:
+Choose one complete requested pair per reviewer based on the review scope. The recommended profiles for autonomous direct review are:
 
-1. `gpt-6-luna + high`
-2. `gpt-6-luna + max`
-3. `gpt-5.6-luna + xhigh`
-4. `gpt-5.6-luna + max`
-5. `gpt-6.1-terra + xhigh`
-6. `gpt-6.1-sol + medium`
+- `gpt-5.6-luna + medium` for routine review of a small, clear diff.
+- `gpt-5.6-luna + xhigh` for rigorous review, including review policy changes and complex repairs.
+- `gpt-6.1-sol + low` when the review needs stronger cross-file reasoning with a low effort budget.
 
-Ordinary review may use profiles 1-3 and defaults to profile 1 when no stronger distinction is available. Complex or rigorous review should use profiles 3-4. Special or high-risk review should use profiles 5-6 and MUST record the lane-specific reason for escalation. The reason may be natural language, but it must identify the affected lane and the escalation rationale; natural-language or non-English lane aliases are valid when they identify the affected boundary; no fixed `lane=...; reason=...` serialization is required. These are flow policy profiles, not a runtime capability table; a runtime-supported pair does not enter this allowlist automatically. There is no concurrency limit imposed by this workflow. Autonomous direct-review selection remains strictly limited to the six profiles above; only a complete owner `model + effort` override may bypass that flow allowlist. The former four to six concurrent lanes heuristic, including its `gpt-5.6-luna + medium` recommendation, is retired and does not select a profile. For this repository's formal runtime review, the parent flow requests `gpt-6-luna + max` for every required lane; this request policy does not assert the provider's effective model.
+Each repository may apply a more specific request policy. Record the reason when choosing a profile for a specialist or escalating beyond routine review. An explicit complete owner override applies as described below. These recommendations are request policy, not provider capability or effective-profile evidence. A runtime rejection remains unavailable; never silently substitute a pair.
 
-Every formal lane records its parent-owned requested profile independently. The fixed `contract`, `state-concurrency`, `failure-data-safety`, and `test-platform` lanes and any selected dynamic lane do not inherit a profile from another lane, and the invocation's lane count does not turn the selection into a global profile. Plan text provides guidance but never fixes reviewer identity; the runtime records the requested pair and leaves the effective pair unknown. Historical coordinator v2 inputs that reach Step 5C use this same Tier 3/4 Review Readiness and fresh-lane launch contract. Their task dispatch locks remain a separate compatibility policy and do not select or name formal review lanes.
+Every formal lane records its parent-owned requested profile independently. The `comprehensive` lane and any selected specialist lane do not inherit a profile from another lane, and the invocation's lane count does not turn the selection into a global profile. Plan text provides guidance but never fixes reviewer identity; the runtime records the requested pair and leaves the effective pair unknown. Historical coordinator v2 inputs that reach Step 5C use this same Tier 3/4 Review Readiness and fresh-lane launch contract. Their task dispatch locks remain a separate compatibility policy and do not select or name formal review lanes.
 
-An invocation-wide owner override applies to every formal lane in that invocation unless the owner names a narrower lane. A lane-named override applies only to that lane. An override is complete only when it contains both `model` and `effort`; a model-only or effort-only instruction is not an override. Where the selected repository policy permits an override, explicit owner authorization is required; the flow passes that exact pair to the runtime and records the request without pre-checking whether it is executable. Runtime acceptance or rejection is authoritative and is reported as is; the flow MUST NOT silently replace a failed pair. Overrides do not change the allowlist and are not inherited by another flow, task, or invocation.
+An invocation-wide owner override applies to every formal lane in that invocation unless the owner names a narrower lane. A lane-named override applies only to that lane. An override is complete only when it contains both `model` and `effort`; a model-only or effort-only instruction is not an override. Where the selected repository policy permits an override, explicit owner authorization is required; the flow passes that exact pair to the runtime and records the request without pre-checking whether it is executable. Runtime acceptance or rejection is authoritative and is reported as is; the flow MUST NOT silently replace a failed pair. Overrides do not change the recommendations and are not inherited by another flow, task, or invocation.
+
+拓扑与 reviewer 生命周期的决策依据见 [ADR 0043](../../../docs/adr/0043-comprehensive-reviewer-lifecycle.md)。旧 review-wave ledger adapter 的四 lane topology 仅为历史兼容，按 retirement inventory 保留，不约束当前直接交付。
