@@ -10,7 +10,6 @@ import { reviewFindingFingerprint } from "../../modules/flow/review-result";
 import { MAX_REVIEW_ROUNDS, sha256Bytes } from "../../modules/flow/common";
 
 const sha = "a".repeat(40);
-const nextSha = "b".repeat(40);
 const lanes = [
   { lane: "comprehensive", model: "gpt-6-luna", effort: "max" },
 ];
@@ -128,20 +127,30 @@ describe("review round budget", () => {
     ).toThrow("review round budget is exhausted");
   });
 
-  test("a bare string is not authorization", () => {
+  test("a malformed authorization object is rejected", () => {
     const l = ledger();
     for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
-    l.review.active_wave_id = null;
-    l.review.active_epoch_id = null;
+    const auth = authorization("bad");
+
+    // A non-owner reference is rejected by the owner-ref check.
     expect(() =>
-      openReviewWaveState(l, {
-        stage: "initial",
-        baseSha: sha,
-        headSha: sha,
-        laneSpecs: lanes,
-        ownerReviewRoundAuthorization: "owner said yes",
+      authorizeReviewRound(l, { ...auth, authorizationRef: "user:someone" }),
+    ).toThrow("owner ref");
+    // A digest that does not match the reason text is rejected.
+    expect(() =>
+      authorizeReviewRound(l, {
+        ...auth,
+        authorizationTextSha256: "f".repeat(64),
       }),
-    ).toThrow();
+    ).toThrow("matching reason digest");
+    // A missing user message id is rejected.
+    expect(() =>
+      authorizeReviewRound(l, { ...auth, userMessageId: "  " }),
+    ).toThrow("owner ref");
+    // Nothing was consumed by the rejected attempts.
+    const cumulative = l.review.cumulative as Record<string, unknown>;
+    expect(cumulative.review_rounds_paid_ahead ?? 0).toBe(0);
+    expect(cumulative.review_rounds_authorization_ids ?? []).toEqual([]);
   });
 
   test("one authorization buys exactly one round", () => {
@@ -209,9 +218,44 @@ describe("review round budget", () => {
     const auth = authorization("one");
     for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
     authorizeReviewRound(l, auth);
-    expect(() => authorizeReviewRound(l, auth)).toThrow(
-      "already consumed",
-    );
+    const cumulative = l.review.cumulative as Record<string, unknown>;
+    expect(cumulative.review_rounds_paid_ahead).toBe(1);
+
+    // Spend the credit on the round it bought.
+    l.review.active_wave_id = null;
+    l.review.active_epoch_id = null;
+    openReviewWaveState(l, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: sha,
+      laneSpecs: lanes,
+    });
+    cumulative.review_rounds_paid_ahead = 0;
+
+    // Replaying the same owner message is refused.
+    expect(() => authorizeReviewRound(l, auth)).toThrow("already consumed");
+    expect(() => authorizeReviewRound(l, authorization("two"))).not.toThrow();
+  });
+
+  test("an unspent credit is honoured by the next open", () => {
+    const l = ledger();
+    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
+    authorizeReviewRound(l, authorization("stranded"));
+    const cumulative = l.review.cumulative as Record<string, unknown>;
+    expect(cumulative.review_rounds_paid_ahead).toBe(1);
+
+    // The authorized round never reached finalize. The credit must still admit
+    // the next open rather than demanding a second owner message.
+    l.review.active_wave_id = null;
+    l.review.active_epoch_id = null;
+    expect(() =>
+      openReviewWaveState(l, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+      }),
+    ).not.toThrow();
   });
 
   test("a mismatched reason digest is rejected", () => {

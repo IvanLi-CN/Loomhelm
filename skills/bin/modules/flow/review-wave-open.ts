@@ -465,6 +465,16 @@ export function authorizeReviewRound(
       );
     return;
   }
+  // An unspent credit already pays for this round. Reaching here with one still
+  // pending means the previous run of this gate never consumed it, so honour it
+  // instead of demanding a second owner message.
+  if (Number(cumulative.review_rounds_paid_ahead ?? 0) > 0) {
+    if (authorization)
+      throw new FlowError(
+        "a review round credit is already available; it is consumed by this round",
+      );
+    return;
+  }
   if (!authorization)
     throw new FlowError(
       `review round budget is exhausted after ${MAX_REVIEW_ROUNDS} non-clearing rounds; owner authorization is required for another round`,
