@@ -54,7 +54,7 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 
 ### REQ-MVR-011：Oidrune 失败通知
 
-独立通知流程 MUST 使用 owner 确认的 IvanLi-CN/oidrune SHA-pinned reusable workflow（GitHub OIDC，无调用方静态凭据），按 release identity（reservation 前按 workflow run 身份）投递一次变更正文；正文 MUST 含 repository、workflow、conclusion、event、ref、head SHA、run URL、run attempt、actor 与恢复入口。流程 MUST 使用最小权限（`id-token: write` 加 ledger 写），对带 release identity 的 `Manual Release`／`Release` 失败在 release ledger 记录 `pending`／`handoff-accepted`／`failed-or-unknown`，并把 `202` 只当作 durable handoff；`Skill Runtime Release` 与 `Runtime Core Release` 无产品 identity，按 run 级 metadata-only 投递且不写 ledger。通知失败 MUST 独立记录，不更改发布或部署事实；MUST NOT 创建或更新 GitHub Issue。
+独立通知流程 MUST 使用 owner 确认的 IvanLi-CN/oidrune SHA-pinned reusable workflow（GitHub OIDC，无调用方静态凭据），按 release identity（reservation 前按 workflow run 身份）投递一次变更正文；正文 MUST 含 repository、workflow、conclusion、event、ref、head SHA、run URL、run attempt、actor 与恢复入口。流程 MUST 使用最小权限（`id-token: write` 加 ledger 写），对带 release identity 的 `Manual Release`／`Release` 失败在 release ledger 记录 `pending`／`handoff-accepted`／`failed-or-unknown`，并把 `202` 只当作 durable handoff；`Skill Runtime Release` 与 `Runtime Core Release` 无产品 identity，按 run 级 metadata-only 投递且不写 ledger。同一失败 run 与 stage 的 handoff 一旦 accepted，该 run 的后续 attempt 重跑不再投递；新的失败 run（例如重新 dispatch）另行投递一次。通知失败 MUST 独立记录，不更改发布或部署事实；MUST NOT 创建或更新 GitHub Issue。
 
 ## Verification
 
@@ -122,7 +122,7 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 
 - covers: `REQ-MVR-011`
 - Method: checked-in transport gate 与 workflow route contract test、ledger phase 状态测试，以及一次 `workflow_dispatch` smoke handoff 验证。
-- Pass condition: 每个 workflow 在 gate 中有唯一 route，同一 run 的同一 sidecar attempt 至多写一个 `pending`，每次实际发生的 handoff 都收敛到恰好一个 handoff-accepted 或 failed-or-unknown，handoff 已 accepted 后重跑不再投递，202 不被写成 Telegram 送达，通知内容无凭据与无关数据。
+- Pass condition: 每个 workflow 在 gate 中有唯一 route；同一失败 run 与 stage 至多一个未收敛的 `pending`，且每个 sidecar run／attempt 至多写一个 `pending` 与一个终态，使每次实际发生的 handoff 都落到 handoff-accepted 或 failed-or-unknown；handoff 已 accepted 后该失败 run 不再投递，202 不被写成 Telegram 送达，通知内容无凭据与无关数据。
 
 ## Related ADRs
 

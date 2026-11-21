@@ -207,14 +207,15 @@ def notify_failure(record, ledger, repo, run_id, stage, phase, result=None):
                run_attempt=os.environ.get('FAILURE_RUN_ATTEMPT') or os.environ.get('GITHUB_RUN_ATTEMPT', ''),
                actor={'login': os.environ.get('FAILURE_ACTOR') or os.environ.get('GITHUB_ACTOR', 'unknown')})
     same = [e for e in record['events'] if e['kind'] == 'notification' and e.get('run') == run_id and e.get('stage') == stage]
-    attempt = os.environ.get('GITHUB_RUN_ATTEMPT')
     accepted = [e for e in same if e.get('status') == 'handoff-accepted']
     pending = [e for e in same if e.get('status') == 'pending']
-    # Keyed by the sidecar attempt: re-running only the failed notify job keeps
-    # the earlier attempt's pending, so a count-based guard would drop the
-    # verdict for the handoff that actually happened.
     converged = [e for e in same if e.get('status') in ('handoff-accepted', 'failed-or-unknown')]
-    delivered = [e for e in same if e.get('status') in ('pending', 'handoff-accepted', 'failed-or-unknown') and e.get('workflow_attempt') == attempt]
+    # Delivery decisions are identity-level: one page per failed run and stage.
+    # Sent-attempt ownership is keyed by the exact sidecar run and attempt, so a
+    # retried job settles its own verdict and a later sidecar run is never
+    # mistaken for an attempt that already reported.
+    delivered = [e for e in same if e.get('status') in ('pending', 'handoff-accepted', 'failed-or-unknown')
+                 and e.get('workflow_run') == os.environ.get('GITHUB_RUN_ID') and e.get('workflow_attempt') == os.environ.get('GITHUB_RUN_ATTEMPT')]
     if phase == 'prepare':
         # Reuse an outstanding pending from an aborted attempt instead of
         # orphaning it; never mint two for the same attempt.

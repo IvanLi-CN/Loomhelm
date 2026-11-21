@@ -60,7 +60,7 @@ jobs:
           { echo "identity=$(jq -r '.identity' "$RUNNER_TEMP/prepared.json")"; echo "stage=$(jq -r '.stage' "$RUNNER_TEMP/prepared.json")"; echo "deliver=$(jq -r '.deliver' "$RUNNER_TEMP/prepared.json")"; } >> "$GITHUB_OUTPUT"
   notify:
     needs: prepare
-    if: needs.prepare.result == 'success' && needs.prepare.outputs.deliver != 'false'
+    if: github.event_name == 'workflow_run' && needs.prepare.outputs.summary != '' && needs.prepare.outputs.deliver != 'false'
     permissions:
       id-token: write
     uses: IvanLi-CN/oidrune/.github/workflows/notify.yml@4b5901a8827731ea06a05211dc6edf06e46783bc
@@ -72,7 +72,7 @@ jobs:
       oidc_audience: ${{ vars.OIDRUNE_OIDC_AUDIENCE }}
   record:
     needs: [prepare, notify]
-    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.deliver != 'false' && needs.prepare.outputs.identity != ''
+    if: always() && github.event_name == 'workflow_run' && needs.prepare.outputs.deliver != 'false' && needs.prepare.outputs.identity != ''
     permissions:
       contents: write
     runs-on: ubuntu-24.04

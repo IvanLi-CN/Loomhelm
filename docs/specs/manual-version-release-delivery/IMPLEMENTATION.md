@@ -20,7 +20,7 @@ Implementation: 统一发布合同及原生包入口已实现。Owner 指定并�
 
 准备阶段的 reconcile 以实际 diff、owner、理由和证据核验原发版意图，签名追加 preparation_revisions，不覆盖原始 reservation。main 的历史 VERSION 和已合并 PR 决定版本是否固定，不把缺失 bound 回执或 main 后来换版本当作可换源码的许可。bind 和 Release 适配读取最新已核验准备修订；临时 Git 历史测试覆盖重复接续、原身份恢复、意图外拒绝、投影字节及主干绑定边界。
 
-准备分支合入其他 base 不等于版本落 main；主干历史和已合并 main PR 的拒绝条件继续有效。非 object 的 assessment 在 provider 或 ledger 写入前返回受控错误。失败 sidecar 将缺失或空的身份附件按可信 workflow-run 元数据通知，非空但损坏的附件继续拒绝；同一 run 与 stage 的每个 sidecar attempt 至多写一个 `pending` 并收敛到一个终态，只重跑失败 job 时按该 attempt 补写 handoff 判定，已 accepted 的 handoff 重跑不再重复投递，不编造产品身份。
+准备分支合入其他 base 不等于版本落 main；主干历史和已合并 main PR 的拒绝条件继续有效。非 object 的 assessment 在 provider 或 ledger 写入前返回受控错误。失败 sidecar 将缺失或空的身份附件按可信 workflow-run 元数据通知，非空但损坏的附件继续拒绝；同一失败 run 与 stage 至多一个未收敛的 `pending`，每个 sidecar run／attempt 至多写一个 `pending` 与一个终态；只重跑失败 job 时由 record 按该 sidecar run／attempt 补写 handoff 判定，已 accepted 的失败 run 重跑不再重复投递，不编造产品身份。
 
 ## Verification
 

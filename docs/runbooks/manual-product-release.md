@@ -48,7 +48,7 @@ Server/Worker、Go 客户端、TS 客户端和 Web 的 Linux amd64 产物均为�
 | 原构建 artifact 过期 | 从 draft 复核已持久资产；缺失冻结原件阻断，不重建 |
 | Release 已公开但 completion 丢失 | 查询原 tag、SHA 与资产集合，通过后补记 |
 | tag 或资产被另一身份占用 | 停止，不改写、不自动选择 successor |
-| 通知失败 | 独立记录失败，重跑通知流程时必须选择 Re-run all jobs（只重跑失败 job 不会重算 prepare 输出，`pending` 也不会重新结算）；不修改发布或部署结果 |
+| 通知失败 | 独立记录失败；只重跑失败的 job 即可由 record 按该 sidecar run／attempt 补记 handoff 判定，Re-run all jobs 会重跑 prepare 与 notify 并对同一失败再投递一次；不修改发布或部署结果 |
 | reservation 前失败且身份附件为空 | 按可信 workflow run 身份投递 Oidrune 通知，不编造 release identity；非空但损坏的附件拒绝执行 |
 | 显式终止 | 开始公开前可取消并保留墓碑；公开意图已写入后只能恢复完成，不再允许终止 |
 
@@ -56,7 +56,7 @@ Server/Worker、Go 客户端、TS 客户端和 Web 的 Linux amd64 产物均为�
 
 ## 失败通知与兼容性
 
-独立 Release Failure Notification 工作流从可信默认分支执行，只将失败 run 的身份附件作为数据读取，并以 prepare／notify／record 三阶段完成投递：prepare 生成 caller-owned summary 并记录 pending，notify 调用 SHA-pinned Oidrune reusable workflow（GitHub OIDC，无调用方 secret），record 依 handoff 结果写入 handoff-accepted 或 failed-or-unknown，并按 sidecar attempt 结算，使只重跑失败 job 的补投也能落到新的终态。202 只表示 Oidrune 已 durable handoff，不代表 Telegram 已送达；通知失败不产生 Issue、不修改发布或部署事实。正文仅包含 identity、阶段、run、SHA/attempt、actor 和恢复信息，不包含凭据及本地路径。
+独立 Release Failure Notification 工作流从可信默认分支执行，只将失败 run 的身份附件作为数据读取，并以 prepare／notify／record 三阶段完成投递：prepare 生成 caller-owned summary 并记录 pending，notify 调用 SHA-pinned Oidrune reusable workflow（GitHub OIDC，无调用方 secret），record 依 handoff 结果写入 handoff-accepted 或 failed-or-unknown，并按 sidecar run／attempt 结算，使只重跑失败 job 的补投也能落到新的终态。202 只表示 Oidrune 已 durable handoff，不代表 Telegram 已送达；通知失败不产生 Issue、不修改发布或部署事实。正文仅包含 identity、阶段、run、SHA/attempt、actor 和恢复信息，不包含凭据及本地路径。
 
 首批联网保证同版本。Go 客户端、Web 与后续 TS 联网适配使用 /version 与 X-Loomhelm-Version；REST、MCP、事件和 gateway 服务端门禁拒绝缺失或不兼容版本。拒绝返回 426 / PRODUCT_VERSION_INCOMPATIBLE，不产生业务副作用。TS 本地模式不依赖联网版本。跨版本放行必须另有明确合同与矩阵验证，不凭 SemVer 的 major/minor 推断兼容。
 
