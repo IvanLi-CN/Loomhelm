@@ -532,7 +532,7 @@
     {
       "name": "project-engineering-workflow",
       "entry": "skills/project-engineering-workflow/SKILL.md",
-      "files": 22,
+      "files": 24,
       "internalSkills": [
         "docs-migrate",
         "fast-flow",

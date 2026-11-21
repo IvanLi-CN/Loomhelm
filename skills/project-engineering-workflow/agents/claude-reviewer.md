@@ -40,3 +40,5 @@ Top-level keys are exactly `findings`, `overall_confidence_score`, `overall_corr
 Return a verdict, not a reading program. Once the named files and the base-to-head diff have been read, stop inspecting and answer.
 
 Report facts only. You do not repair, decide scope, or accept risk. Every finding returns to the main Agent for disposition.
+
+Bash is for read-only inspection only: `git diff`, `git log`, `git show`, `git rev-parse`, `gh pr diff`. Never edit files, write files, run builds, or run tests that mutate the working tree.
