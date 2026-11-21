@@ -210,6 +210,58 @@ describe("review round budget", () => {
     ).toThrow("review round budget is exhausted");
   });
 
+  test("a credit-paid blocker wave is not charged twice", () => {
+    const l = ledger();
+    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
+    l.review.active_wave_id = null;
+    l.review.active_epoch_id = null;
+    openReviewWaveState(l, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: sha,
+      laneSpecs: lanes,
+      ownerReviewRoundAuthorization: authorization("double-charge"),
+    });
+    const cumulative = l.review.cumulative as Record<string, unknown>;
+    const before = cumulative.review_rounds;
+    const waveId = String((l.review.active_wave_id as string) ?? "");
+    const wave = (l.review.waves as Record<string, Record<string, unknown>>)[
+      waveId
+    ];
+    // The open gate marks the round as already paid for.
+    expect(wave?.review_round_paid_by_credit).toBe(true);
+
+    recordSubagentReviewState(l, {
+      reviewProfile: "pr-convergence",
+      baseRef: sha,
+      reviewAttemptId: "double-charge",
+      reviewResultJson: JSON.stringify({
+        findings: [blockingFinding],
+        overall_correctness: "patch is incorrect",
+        overall_explanation: "Reviewed the candidate diff and found a defect.",
+        overall_confidence_score: 0.9,
+      }),
+      waveId,
+      lane: "comprehensive",
+    });
+    finalizeReviewWaveState(l, waveId, {
+      groups: [
+        {
+          group_id: "budget",
+          finding_fingerprints: [blockingFingerprint],
+          blocker: true,
+          invariant: "review round budget is counted",
+        },
+      ],
+      invariants: ["review round budget is counted"],
+      coverage: ["comprehensive"],
+      conflicts: [],
+      acceptance: [],
+    });
+    // A credit-paid round was charged at open, so finalize must not add another.
+    expect(cumulative.review_rounds).toBe(before);
+  });
+
   test("a mismatched reason digest is rejected", () => {
     const l = ledger();
     for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
