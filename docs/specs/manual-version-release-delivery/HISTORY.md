@@ -43,3 +43,7 @@ Owner 明确否定 main 前进就作废预留版本的处理：版本未落 main
 PR #92 实现意图核验后，原 0.1.0 reservation 经签名追加修订继续使用；PR #86 将该版本固定到 f2d268f462f7dd91d5b7bbeda45873c18d82b7f6。Release run 42450011670 完成完整八项资产、公开及 completion；完成后同身份只读恢复下载复核全部原件，未改 ledger、版本、SHA 或 digest。已落主干的 0.1.0 不因后续修复而重建。
 
 按 owner 的先合并、低优先问题独立 follow-up 授权，修复非 main 合并误阻断、assessment 类型错误和实际发生的空身份附件通知失败，保留原主干绑定、来源校验、Issue 对账和 fail-closed 边界。未执行的真实故障注入仍保留为验收缺口。
+
+## 失败通知 transport 切换
+
+2026-11-21：Owner 指出 Issue 自动创建并非其要求（当时已积累 50 条 Skill release 与 4 条 Product release open Issue），要求删除该功能并改由 IvanLi-CN/oidrune 通知。实现删除 `GitHub.issues`/`GitHub.notify` 与 sidecar 的 Issue 对账，新增 `.github/release-failure-notification.json` 作为 transport gate 与 workflow route allowlist，sidecar 改为 prepare/notify/record 三阶段（`id-token: write`、SHA-pinned reusable workflow、`202` 仅表示 durable handoff），ledger 记录 `pending`／`handoff-accepted`／`failed-or-unknown`，并保留 `workflow_dispatch` smoke 入口；历史 Issue 一并 close。

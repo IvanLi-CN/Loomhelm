@@ -1,23 +1,32 @@
 name: Release Failure Notification
 on:
   workflow_run:
-    workflows: [Manual Release, Release, Skill Runtime Release]
+    workflows: [Manual Release, Release, Skill Runtime Release, Runtime Core Release]
     types: [completed]
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: loomhelm-release-failure-sidecar
   cancel-in-progress: false
 jobs:
-  notify:
+  prepare:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     permissions:
       contents: write
-      issues: write
       actions: read
-    if: github.event.workflow_run.conclusion != 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
+    outputs:
+      summary: ${{ steps.prepare.outputs.summary }}
+      identity: ${{ steps.prepare.outputs.identity }}
+      stage: ${{ steps.prepare.outputs.stage }}
     steps:
       - name: Checkout trusted default-branch notifier only
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -42,5 +51,56 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/failed-release-receipt
-      - name: Reconcile Issue notification
-        run: python3 tools/release/notify_failure.py
+      - name: Prepare notification summary
+        id: prepare
+        run: |
+          python3 tools/release/notify_failure.py prepare > "$RUNNER_TEMP/prepared.json"
+          { echo "summary<<LOOMHELM_SUMMARY"; jq -r '.summary' "$RUNNER_TEMP/prepared.json"; echo "LOOMHELM_SUMMARY"; } >> "$GITHUB_OUTPUT"
+          { echo "identity=$(jq -r '.identity' "$RUNNER_TEMP/prepared.json")"; echo "stage=$(jq -r '.stage' "$RUNNER_TEMP/prepared.json")"; } >> "$GITHUB_OUTPUT"
+  notify:
+    needs: prepare
+    permissions:
+      id-token: write
+    uses: IvanLi-CN/oidrune/.github/workflows/notify.yml@4b5901a8827731ea06a05211dc6edf06e46783bc
+    with:
+      outcome: failure
+      on_gateway_failure: fail
+      summary: ${{ needs.prepare.outputs.summary }}
+      gateway_url: ${{ vars.OIDRUNE_GATEWAY_URL }}
+      oidc_audience: ${{ vars.OIDRUNE_OIDC_AUDIENCE }}
+  record:
+    needs: [prepare, notify]
+    if: always() && needs.prepare.outputs.identity != ''
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout trusted default-branch notifier only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Record handoff result
+        env:
+          NOTIFICATION_IDENTITY: ${{ needs.prepare.outputs.identity }}
+          RELEASE_FAILURE_STAGE: ${{ needs.prepare.outputs.stage }}
+          FAILURE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: python3 tools/release/notify_failure.py record --result ${{ needs.notify.result == 'success' && 'accepted' || 'failed' }}
+  smoke:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      id-token: write
+    uses: IvanLi-CN/oidrune/.github/workflows/notify.yml@4b5901a8827731ea06a05211dc6edf06e46783bc
+    with:
+      outcome: failure
+      on_gateway_failure: fail
+      summary: |
+        Loomhelm release failure notification smoke test
+        Repository: ${{ github.repository }}
+        Dispatched by: ${{ github.actor }}
+        This is a manual transport check; no release failed.
+      gateway_url: ${{ vars.OIDRUNE_GATEWAY_URL }}
+      oidc_audience: ${{ vars.OIDRUNE_OIDC_AUDIENCE }}

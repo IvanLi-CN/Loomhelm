@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "transport_selection": {
+    "transport": "oidrune-reusable-workflow",
+    "selection_evidence": "explicit-owner-decision",
+    "transport_owner": "IvanLi-CN (Oidrune operator console)",
+    "configuration_owner": "IvanLi-CN (Loomhelm repository settings)",
+    "required_secrets": [],
+    "required_permissions": ["id-token: write"],
+    "optional_variables": ["OIDRUNE_GATEWAY_URL", "OIDRUNE_OIDC_AUDIENCE"],
+    "notify_workflow": "IvanLi-CN/oidrune/.github/workflows/notify.yml@4b5901a8827731ea06a05211dc6edf06e46783bc",
+    "handoff_status": 202,
+    "when_unselected": "block-rollout",
+    "implicit_external_notifier": "forbidden",
+    "missing_selected_configuration": "fail"
+  },
+  "workflow_routes": {
+    "Manual Release": {"route": "release", "identity": "product-ledger"},
+    "Release": {"route": "release", "identity": "product-ledger"},
+    "Skill Runtime Release": {"route": "release", "identity": "skill-receipt"},
+    "Runtime Core Release": {"route": "release", "identity": "none"},
+    "Blue-Green Baseline": {"route": "excluded", "reason": "contract gate on main, operator-visible"},
+    "Branch Preview": {"route": "excluded", "reason": "preview infrastructure"},
+    "Candidate CI": {"route": "excluded", "reason": "ordinary PR CI"},
+    "Go Client Release Compatibility": {"route": "excluded", "reason": "deliberate fail-closed redirect stub"},
+    "Release Candidate": {"route": "excluded", "reason": "deliberate fail-closed redirect stub"},
+    "Release Failure Notification": {"route": "excluded", "reason": "notifier must never notify itself"},
+    "Skill Release Gate": {"route": "excluded", "reason": "PR label gate"},
+    "V01 Joint Acceptance": {"route": "excluded", "reason": "manual acceptance experiment"}
+  }
+}
