@@ -15,7 +15,7 @@ export const convergenceBoundaryContracts: Record<
     {
       "comprehensive-default": "Tier 3: one comprehensive read-only reviewer",
       "specialist-risk": "record each selected lane's concrete risk and scope",
-      "fresh-round": "Every new formal review round launches a fresh `fork_turns=none`",
+      "fresh-round": "Every new formal review round launches a fresh, isolated reviewer",
       "full-diff-repair": "Every changed Candidate refreshes the comprehensive lane[^.]*reviewing the complete current diff",
       "dimension-evidence": "dimensions are not separate reviewers or independent review evidence",
       "behavioral-readiness":
