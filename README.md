@@ -37,7 +37,7 @@ Multi-task Flow 的系统设计与行为契约见 [主题设计规格](docs/spec
 
 ## Development
 
-工具版本见 [tools/versions.env](tools/versions.env)。在仓库根目录运行 `scripts/setup` 检查 Git、固定版本的 Go/Bun/sqlc 和 Python 3.9+，准备 Markdown 工具、补齐缺失的 `.env.local` 并安装前端依赖；缺失、版本不匹配或安装失败会汇总后以非零状态退出。重复执行保留已有环境配置和 Git 钩子，linked worktree 与自定义 Git common directory 均受支持。Docker/Compose 在初始化时可选，运行数据库工作流时必需；sqlc 下载与摘要校验方式见 [开发说明](docs/development.md)。
+工具版本见 [tools/versions.env](tools/versions.env)。在仓库根目录运行 `scripts/setup` 检查 Git、固定版本的 Go/Bun/sqlc 和 Python 3.9+，准备 Markdown 工具、补齐缺失的 `.env.local`，并安装前端依赖与 `skills/` 独立锁文件的依赖；缺失、版本不匹配或安装失败会汇总后以非零状态退出。重复执行保留已有环境配置和 Git 钩子，linked worktree 与自定义 Git common directory 均受支持。Docker/Compose 在初始化时可选，运行数据库工作流时必需；sqlc 下载与摘要校验方式见 [开发说明](docs/development.md)。
 
 前端使用 Bun 1.4.4：`bun run dev` 启动中性工程验证页，`bun run storybook` 查看基础组件。`bun run typecheck` 检查类型，`bun run build` 构建 Web/PWA，`bun run build:storybook` 构建 Storybook；`bun run check` 顺序执行这三项检查。Agent 的完整构建和运行验证使用会话 Agent VM，本机长驻预览服务先按端口租约约定启动。`scripts/dev` 按实际工作树路径隔离 Compose 项目、网络和数据卷；每个工作树仍须配置自己的获配端口。
 
