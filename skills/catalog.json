@@ -519,7 +519,7 @@
     {
       "name": "project-doc-promote",
       "entry": "skills/project-doc-promote/SKILL.md",
-      "files": 1,
+      "files": 2,
       "internalSkills": [
         "docs-migrate"
       ],
