@@ -54,7 +54,7 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 
 ### REQ-MVR-011：Oidrune 失败通知
 
-独立通知流程 MUST 使用 owner 确认的 IvanLi-CN/oidrune SHA-pinned reusable workflow（GitHub OIDC，无调用方静态凭据），按 release identity（reservation 前按 workflow run 身份）投递一次变更正文；正文 MUST 含 repository、workflow、conclusion、event、ref、head SHA、run URL、run attempt、actor 与恢复入口。流程 MUST 使用最小权限（`id-token: write` 加 ledger 写）、在 release ledger 记录 `pending`／`handoff-accepted`／`failed-or-unknown`，并把 `202` 只当作 durable handoff。通知失败 MUST 独立记录，不更改发布或部署事实；MUST NOT 创建或更新 GitHub Issue。
+独立通知流程 MUST 使用 owner 确认的 IvanLi-CN/oidrune SHA-pinned reusable workflow（GitHub OIDC，无调用方静态凭据），按 release identity（reservation 前按 workflow run 身份）投递一次变更正文；正文 MUST 含 repository、workflow、conclusion、event、ref、head SHA、run URL、run attempt、actor 与恢复入口。流程 MUST 使用最小权限（`id-token: write` 加 ledger 写），对带 release identity 的 `Manual Release`／`Release` 失败在 release ledger 记录 `pending`／`handoff-accepted`／`failed-or-unknown`，并把 `202` 只当作 durable handoff；`Skill Runtime Release` 与 `Runtime Core Release` 无产品 identity，按 run 级 metadata-only 投递且不写 ledger。通知失败 MUST 独立记录，不更改发布或部署事实；MUST NOT 创建或更新 GitHub Issue。
 
 ## Verification
 

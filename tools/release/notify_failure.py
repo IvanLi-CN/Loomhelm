@@ -60,8 +60,12 @@ def safe_metadata(record, key):
 
 
 def load_record():
-    path = Path(os.environ['RUNNER_TEMP']) / 'failed-release-record/identity.json'
-    record = read_failure_record(path)
+    # Product and Manual Release upload identity.json; Skill Runtime Release uploads
+    # release-identity.json under the same artifact name.
+    root = Path(os.environ['RUNNER_TEMP']) / 'failed-release-record'
+    record = read_failure_record(root / 'identity.json')
+    if record is None:
+        record = read_failure_record(root / 'release-identity.json')
     receipt_path = Path(os.environ['RUNNER_TEMP']) / 'failed-release-receipt/skill-release-receipt.json'
     if record is not None and receipt_path.is_file():
         try:
@@ -96,16 +100,18 @@ def prepare():
     validate(run)
     record = load_record()
     if run['name'] == 'Skill Runtime Release':
-        return dict(summary=failure_report.summary(run, skill_tail(record)), identity='', stage=run['name'])
+        return dict(summary=failure_report.summary(run, skill_tail(record)), identity='', stage=run['name'], deliver=True)
     identity = None if record is None else record['id']
     if identity is not None and run['name'] in PRODUCT:
         result = subprocess.run(
             ['scripts/product-release', 'notify', '--identity', identity, '--phase', 'prepare'],
             capture_output=True, text=True, check=True,
-            env=dict(os.environ, RELEASE_FAILURE_STAGE=run['name'], FAILURE_RUN_ID=str(run['id'])),
+            env=dict(os.environ, RELEASE_FAILURE_STAGE=run['name'], FAILURE_RUN_ID=str(run['id']),
+                     FAILURE_HEAD_SHA=run['head_sha'], FAILURE_RUN_ATTEMPT=str(run['run_attempt']),
+                     FAILURE_ACTOR=(run.get('actor') or {}).get('login', '')),
         )
         return json.loads(result.stdout)
-    return dict(summary=failure_report.summary(run, GENERIC_TAIL), identity='', stage=run['name'])
+    return dict(summary=failure_report.summary(run, GENERIC_TAIL), identity='', stage=run['name'], deliver=True)
 
 
 def record(result):

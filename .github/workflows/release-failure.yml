@@ -27,6 +27,7 @@ jobs:
       summary: ${{ steps.prepare.outputs.summary }}
       identity: ${{ steps.prepare.outputs.identity }}
       stage: ${{ steps.prepare.outputs.stage }}
+      deliver: ${{ steps.prepare.outputs.deliver }}
     steps:
       - name: Checkout trusted default-branch notifier only
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -56,9 +57,10 @@ jobs:
         run: |
           python3 tools/release/notify_failure.py prepare > "$RUNNER_TEMP/prepared.json"
           { echo "summary<<LOOMHELM_SUMMARY"; jq -r '.summary' "$RUNNER_TEMP/prepared.json"; echo "LOOMHELM_SUMMARY"; } >> "$GITHUB_OUTPUT"
-          { echo "identity=$(jq -r '.identity' "$RUNNER_TEMP/prepared.json")"; echo "stage=$(jq -r '.stage' "$RUNNER_TEMP/prepared.json")"; } >> "$GITHUB_OUTPUT"
+          { echo "identity=$(jq -r '.identity' "$RUNNER_TEMP/prepared.json")"; echo "stage=$(jq -r '.stage' "$RUNNER_TEMP/prepared.json")"; echo "deliver=$(jq -r '.deliver' "$RUNNER_TEMP/prepared.json")"; } >> "$GITHUB_OUTPUT"
   notify:
     needs: prepare
+    if: needs.prepare.outputs.deliver == 'true'
     permissions:
       id-token: write
     uses: IvanLi-CN/oidrune/.github/workflows/notify.yml@4b5901a8827731ea06a05211dc6edf06e46783bc
@@ -70,7 +72,7 @@ jobs:
       oidc_audience: ${{ vars.OIDRUNE_OIDC_AUDIENCE }}
   record:
     needs: [prepare, notify]
-    if: always() && needs.prepare.outputs.identity != ''
+    if: always() && needs.prepare.outputs.deliver == 'true' && needs.prepare.outputs.identity != ''
     permissions:
       contents: write
     runs-on: ubuntu-24.04

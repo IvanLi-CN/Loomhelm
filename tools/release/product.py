@@ -199,23 +199,33 @@ def notify_failure(record, ledger, repo, run_id, stage, phase, result=None):
         raise ReleaseError('unsupported failure stage')
     if not run_id.isdigit():
         raise ReleaseError('invalid failed workflow run')
+    # The sidecar forwards the failed run's own metadata; the notifier's own
+    # attempt and SHA would describe the wrong run.
     run = dict(name=stage, conclusion='failure', event='workflow_dispatch', head_branch='main',
-               head_sha=record.get('merge_sha') or os.environ.get('GITHUB_SHA', ''),
+               head_sha=os.environ.get('FAILURE_HEAD_SHA', ''),
                html_url=f'https://github.com/{repo}/actions/runs/{run_id}',
-               run_attempt=os.environ.get('GITHUB_RUN_ATTEMPT', ''),
-               actor={'login': os.environ.get('GITHUB_ACTOR', 'unknown')})
+               run_attempt=os.environ.get('FAILURE_RUN_ATTEMPT') or os.environ.get('GITHUB_RUN_ATTEMPT', ''),
+               actor={'login': os.environ.get('FAILURE_ACTOR') or os.environ.get('GITHUB_ACTOR', 'unknown')})
     same = [e for e in record['events'] if e['kind'] == 'notification' and e.get('run') == run_id and e.get('stage') == stage]
+    accepted = [e for e in same if e.get('status') == 'handoff-accepted']
+    pending = [e for e in same if e.get('status') == 'pending']
+    converged = [e for e in same if e.get('status') in ('handoff-accepted', 'failed-or-unknown')]
     if phase == 'prepare':
-        if not any(e.get('status') in ('pending', 'handoff-accepted') for e in same):
+        deliver = not accepted
+        if deliver and len(pending) <= len(converged):
             transition(record, 'notification', status='pending', run=run_id, stage=stage)
             ledger.append(ledger.state)
         tail = ['Product release ' + record['version'], 'Identity: ' + record['id'], 'Stage: ' + stage,
                 'Recovery: rerun Release with this identity; do not allocate a successor.']
-        return dict(summary=failure_report.summary(run, tail), identity=record['id'], stage=stage)
+        return dict(summary=failure_report.summary(run, tail), identity=record['id'], stage=stage, deliver=deliver)
     if result not in ('accepted', 'failed'):
         raise ReleaseError('notification result required')
-    if not any(e.get('status') == 'pending' for e in same):
+    if not pending:
         raise ReleaseError('no pending notification for this run')
+    # One failed run converges once. A duplicate record call must not append a
+    # second terminal verdict for the same run and stage.
+    if len(pending) <= len(converged):
+        return
     transition(record, 'notification', status='handoff-accepted' if result == 'accepted' else 'failed-or-unknown', run=run_id, stage=stage)
     ledger.append(ledger.state)
 

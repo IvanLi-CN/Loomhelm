@@ -46,20 +46,22 @@ class FailureNotificationTests(unittest.TestCase):
 
     def test_skill_failure_summary_contains_receipt_context(self):
         self.run.update(name='Skill Runtime Release', path='.github/workflows/skill-release-publish.yml')
-        self.path.write_text(json.dumps({'id': 'b'*64, 'state': 'processing-timeout', 'packageName': '@loomhelm/multi-task-flow',
-                                         'packageVersion': '0.2.8', 'compatibilityLine': 'compat-v1', 'mergeSha': 'c'*40,
-                                         'buildId': 'd'*64, 'tag': 'multi-task-flow-v0.2.8', 'canonicalDigest': 'e'*64,
-                                         'rawIntegrity': 'sha512-test', 'registryObservation': 'processing'}))
+        # The Skill workflow uploads release-identity.json under the same artifact name.
+        receipt_record = self.root/'failed-release-record/release-identity.json'
+        receipt_record.write_text(json.dumps({'id': 'b'*64, 'state': 'processing-timeout', 'packageName': '@loomhelm/multi-task-flow',
+                                              'packageVersion': '0.2.8', 'compatibilityLine': 'compat-v1', 'mergeSha': 'c'*40,
+                                              'buildId': 'd'*64, 'tag': 'multi-task-flow-v0.2.8', 'canonicalDigest': 'e'*64,
+                                              'rawIntegrity': 'sha512-test', 'registryObservation': 'processing'}))
         receipt = self.root/'failed-release-receipt/skill-release-receipt.json'
         receipt.parent.mkdir()
         receipt.write_text(json.dumps({'state': 'processing-timeout'}))
         prepared, delegate = self.invoke()
         delegate.assert_not_called()
-        self.assertEqual((prepared['identity'], prepared['stage']), ('', 'Skill Runtime Release'))
+        self.assertEqual((prepared['identity'], prepared['stage'], prepared['deliver']), ('', 'Skill Runtime Release', True))
         lines = prepared['summary'].splitlines()
         self.assertEqual(lines[0], 'Loomhelm release failure')
-        for expected in ('Workflow: Skill Runtime Release', 'Package: @loomhelm/multi-task-flow@0.2.8', 'State: processing-timeout',
-                         'Run: https://github.com/owner/repo/actions/runs/123', 'Actor: owner'):
+        for expected in ('Repository: owner/repo', 'Workflow: Skill Runtime Release', 'Package: @loomhelm/multi-task-flow@0.2.8',
+                         'State: processing-timeout', 'Run: https://github.com/owner/repo/actions/runs/123', 'Actor: owner'):
             self.assertIn(expected, lines)
         self.assertNotIn('No verified release identity', prepared['summary'])
 
@@ -73,7 +75,7 @@ class FailureNotificationTests(unittest.TestCase):
         self.run.update(name='Runtime Core Release', path='.github/workflows/runtime-core-release.yml')
         prepared, delegate = self.invoke()
         delegate.assert_not_called()
-        self.assertEqual(prepared['identity'], '')
+        self.assertEqual((prepared['identity'], prepared['deliver']), ('', True))
         self.assertNotIn('Product release', prepared['summary'])
         self.assertIn('Workflow: Runtime Core Release', prepared['summary'])
 
@@ -81,14 +83,16 @@ class FailureNotificationTests(unittest.TestCase):
         identity = 'a'*64
         self.path.write_text(json.dumps({'id': identity}))
         self.event.write_text(json.dumps({'workflow_run': self.run}))
-        stdout = json.dumps(dict(summary='s', identity=identity, stage='Manual Release'))
+        stdout = json.dumps(dict(summary='s', identity=identity, stage='Manual Release', deliver=True))
         out = io.StringIO()
         with patch.dict(os.environ, GITHUB_REPOSITORY='owner/repo', GITHUB_EVENT_PATH=str(self.event), RUNNER_TEMP=str(self.root)), \
              patch('notify_failure.subprocess.run', Mock(return_value=Mock(stdout=stdout))) as delegate, contextlib.redirect_stdout(out):
             main(['prepare'])
         self.assertEqual(delegate.call_args.args[0], ['scripts/product-release', 'notify', '--identity', identity, '--phase', 'prepare'])
-        self.assertEqual((delegate.call_args.kwargs['env']['RELEASE_FAILURE_STAGE'], delegate.call_args.kwargs['env']['FAILURE_RUN_ID']), ('Manual Release', '123'))
-        self.assertEqual(json.loads(out.getvalue()), dict(summary='s', identity=identity, stage='Manual Release'))
+        environment = delegate.call_args.kwargs['env']
+        self.assertEqual((environment['RELEASE_FAILURE_STAGE'], environment['FAILURE_RUN_ID']), ('Manual Release', '123'))
+        self.assertEqual((environment['FAILURE_HEAD_SHA'], environment['FAILURE_RUN_ATTEMPT'], environment['FAILURE_ACTOR']), ('a'*40, '1', 'owner'))
+        self.assertEqual(json.loads(out.getvalue()), dict(summary='s', identity=identity, stage='Manual Release', deliver=True))
 
     def test_untrusted_failure_does_not_prepare_or_execute(self):
         for change in ({'head_repository': {'full_name': 'other/repo'}}, {'head_branch': 'th/release'}, {'event': 'push'},
