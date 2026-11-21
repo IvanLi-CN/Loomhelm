@@ -71,9 +71,11 @@ jobs:
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
           go-version-file: go.mod
+      - name: Read pinned tool versions
+        run: grep -E '^BUN_VERSION=' tools/versions.env >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: release-identity

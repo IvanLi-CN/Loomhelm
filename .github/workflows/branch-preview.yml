@@ -50,10 +50,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Read pinned tool versions
+        run: grep -E '^BUN_VERSION=' tools/versions.env >> "$GITHUB_ENV"
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
       - name: Build candidate once
         run: scripts/build-candidate --source-sha "$CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-candidate"
       - name: Record candidate identity
