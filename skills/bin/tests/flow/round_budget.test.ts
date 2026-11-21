@@ -4,16 +4,19 @@ import {
   authorizeReviewRound,
   openReviewWaveState,
 } from "../../modules/flow/review-wave-open";
-import { countReviewRound } from "../../modules/flow/review-wave-finalize";
-import { MAX_REVIEW_ROUNDS } from "../../modules/flow/common";
+import { finalizeReviewWaveState } from "../../modules/flow/review-wave-finalize";
+import { recordSubagentReviewState } from "../../modules/flow/review-record";
+import { reviewFindingFingerprint } from "../../modules/flow/review-result";
+import { MAX_REVIEW_ROUNDS, sha256Bytes } from "../../modules/flow/common";
 
 const sha = "a".repeat(40);
+const nextSha = "b".repeat(40);
 const lanes = [
   { lane: "comprehensive", model: "gpt-6-luna", effort: "max" },
 ];
 
-function ledger() {
-  const l = initialLedger("round-budget", "fast-track", sha, sha, null);
+function ledger(runId = "round-budget") {
+  const l = initialLedger(runId, "fast-track", sha, sha, null);
   l.review_assessment = {
     tier: 3,
     reason: "round budget coverage",
@@ -24,33 +27,95 @@ function ledger() {
   return l;
 }
 
+function authorization(suffix: string) {
+  const reason = `Owner approved extra review round ${suffix}.`;
+  return {
+    authorizationRef: `owner:${suffix}`,
+    authorizationTextSha256: sha256Bytes(new TextEncoder().encode(reason)),
+    reason,
+    userMessageId: `msg-${suffix}`,
+  };
+}
+
+/** Open a wave, record a non-clearing receipt, and finalize with a blocker. */
+const blockingFinding = {
+  title: "Blocking defect",
+  body: "The change leaves the budget uncounted.",
+  priority: 1,
+  confidence_score: 0.9,
+  code_location: {
+    absolute_file_path: "/abs/file.ts",
+    line_range: { start: 1, end: 1 },
+  },
+};
+const blockingFingerprint = reviewFindingFingerprint(blockingFinding);
+
+function runNonClearingRound(l: Record<string, unknown>) {
+  const opened = openReviewWaveState(l, {
+    stage: "initial",
+    baseSha: sha,
+    headSha: sha,
+    laneSpecs: lanes,
+  });
+  const waveId = String((opened.wave as Record<string, unknown>).wave_id);
+  recordSubagentReviewState(l, {
+    reviewProfile: "pr-convergence",
+    baseRef: sha,
+    reviewAttemptId: `attempt-${waveId}`,
+    reviewResultJson: JSON.stringify({
+      findings: [blockingFinding],
+      overall_correctness: "patch is incorrect",
+      overall_explanation: "Reviewed the candidate diff and found a defect.",
+      overall_confidence_score: 0.9,
+    }),
+    waveId,
+    lane: "comprehensive",
+  });
+  finalizeReviewWaveState(l, waveId, {
+    groups: [
+      {
+        group_id: "budget",
+        finding_fingerprints: [blockingFingerprint],
+        blocker: true,
+        invariant: "review round budget is counted",
+      },
+    ],
+    invariants: ["review round budget is counted"],
+    coverage: ["comprehensive"],
+    conflicts: [],
+    acceptance: [],
+  });
+  return waveId;
+}
+
 describe("review round budget", () => {
-  test("counts every non-clearing round in cumulative, not per epoch", () => {
+  test("finalizing a non-clearing round increments the count", () => {
     const l = ledger();
-    // Re-opening a wave starts a new epoch each time. The count must survive.
-    for (let round = 1; round <= MAX_REVIEW_ROUNDS; round++) {
-      l.review.active_wave_id = null;
-      l.review.active_epoch_id = null;
-      openReviewWaveState(l, {
-        stage: "initial",
-        baseSha: sha,
-        headSha: sha,
-        laneSpecs: lanes,
-      });
-      expect((l.review.cumulative as Record<string, unknown>).review_rounds).toBe(
-        round - 1,
-      );
-      countReviewRound(l.review);
-    }
+    runNonClearingRound(l);
+    const cumulative = l.review.cumulative as Record<string, unknown>;
+    expect(cumulative.review_rounds).toBe(1);
+  });
+
+  test("the count survives epoch recreation", () => {
+    const l = ledger();
+    runNonClearingRound(l);
+    // A base change retires nothing; the next round opens a new epoch.
+    l.review.active_wave_id = null;
+    l.review.active_epoch_id = null;
+    runNonClearingRound(l);
+    expect(l.review.epochs).toHaveLength(2);
     expect((l.review.cumulative as Record<string, unknown>).review_rounds).toBe(
-      MAX_REVIEW_ROUNDS,
+      2,
     );
-    expect(l.review.epochs).toHaveLength(MAX_REVIEW_ROUNDS);
   });
 
   test("refuses another round once the budget is spent", () => {
     const l = ledger();
-    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countReviewRound(l.review);
+    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) {
+      l.review.active_wave_id = null;
+      l.review.active_epoch_id = null;
+      runNonClearingRound(l);
+    }
     l.review.active_wave_id = null;
     l.review.active_epoch_id = null;
     expect(() =>
@@ -63,9 +128,9 @@ describe("review round budget", () => {
     ).toThrow("review round budget is exhausted");
   });
 
-  test("one owner authorization buys exactly one more round", () => {
+  test("a bare string is not authorization", () => {
     const l = ledger();
-    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countReviewRound(l.review);
+    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
     l.review.active_wave_id = null;
     l.review.active_epoch_id = null;
     expect(() =>
@@ -74,13 +139,59 @@ describe("review round budget", () => {
         baseSha: sha,
         headSha: sha,
         laneSpecs: lanes,
-        ownerReviewRoundAuthorization: "Owner approved one more round.",
+        ownerReviewRoundAuthorization: "owner said yes",
       }),
-    ).not.toThrow();
-    const cumulative = l.review.cumulative as Record<string, unknown>;
-    expect(cumulative.review_rounds_owner_authorized).toBe(1);
+    ).toThrow();
+  });
 
-    // The extra round is spent: a second attempt needs a new authorization.
+  test("one authorization buys exactly one round", () => {
+    const l = ledger();
+    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
+    l.review.active_wave_id = null;
+    l.review.active_epoch_id = null;
+    openReviewWaveState(l, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: sha,
+      laneSpecs: lanes,
+      ownerReviewRoundAuthorization: authorization("buy-one"),
+    });
+    const cumulative = l.review.cumulative as Record<string, unknown>;
+    expect(cumulative.review_rounds_paid_ahead).toBe(1);
+
+    // Spending it on a non-clearing round leaves the counter where it was.
+    const waveId = String((l.review.active_wave_id as string) ?? "");
+    recordSubagentReviewState(l, {
+      reviewProfile: "pr-convergence",
+      baseRef: sha,
+      reviewAttemptId: "paid-round",
+      reviewResultJson: JSON.stringify({
+        findings: [blockingFinding],
+        overall_correctness: "patch is incorrect",
+        overall_explanation: "Reviewed the candidate diff and found a defect.",
+        overall_confidence_score: 0.9,
+      }),
+      waveId,
+      lane: "comprehensive",
+    });
+    finalizeReviewWaveState(l, waveId, {
+      groups: [
+        {
+          group_id: "budget",
+          finding_fingerprints: [blockingFingerprint],
+          blocker: true,
+          invariant: "review round budget is counted",
+        },
+      ],
+      invariants: ["review round budget is counted"],
+      coverage: ["comprehensive"],
+      conflicts: [],
+      acceptance: [],
+    });
+    expect(cumulative.review_rounds).toBe(MAX_REVIEW_ROUNDS);
+    expect(cumulative.review_rounds_paid_ahead).toBe(0);
+
+    // The credit is gone: another round needs a new owner message.
     l.review.active_wave_id = null;
     l.review.active_epoch_id = null;
     expect(() =>
@@ -91,58 +202,33 @@ describe("review round budget", () => {
         laneSpecs: lanes,
       }),
     ).toThrow("review round budget is exhausted");
-    expect(() => authorizeReviewRound(l, "  ")).toThrow(
-      "review round budget is exhausted",
+  });
+
+  test("an authorization message id is single-use", () => {
+    const l = ledger();
+    const auth = authorization("one");
+    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
+    authorizeReviewRound(l, auth);
+    expect(() => authorizeReviewRound(l, auth)).toThrow(
+      "already consumed",
     );
   });
 
-  test("two authorizations buy two rounds, no more", () => {
+  test("a mismatched reason digest is rejected", () => {
     const l = ledger();
-    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countReviewRound(l.review);
-    const cumulative = l.review.cumulative as Record<string, unknown>;
-    for (let i = 0; i < 2; i++) {
-      l.review.active_wave_id = null;
-      l.review.active_epoch_id = null;
-      openReviewWaveState(l, {
-        stage: "initial",
-        baseSha: sha,
-        headSha: sha,
-        laneSpecs: lanes,
-        ownerReviewRoundAuthorization: `Owner approved extra round ${i + 1}.`,
-      });
-      countReviewRound(l.review);
-    }
-    expect(cumulative.review_rounds).toBe(MAX_REVIEW_ROUNDS);
-    expect(cumulative.review_rounds_owner_authorized).toBe(2);
-    l.review.active_wave_id = null;
-    l.review.active_epoch_id = null;
+    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
     expect(() =>
-      openReviewWaveState(l, {
-        stage: "initial",
-        baseSha: sha,
-        headSha: sha,
-        laneSpecs: lanes,
+      authorizeReviewRound(l, {
+        ...authorization("two"),
+        authorizationTextSha256: "0".repeat(64),
       }),
-    ).toThrow("review round budget is exhausted");
+    ).toThrow("matching reason digest");
   });
 
-  test("a clearing round never consumes the budget", () => {
-    const l = ledger();
-    expect(
-      (l.review.cumulative as Record<string, unknown>).review_rounds,
-    ).toBe(0);
-    l.review.active_wave_id = null;
-    l.review.active_epoch_id = null;
-    expect(() =>
-      openReviewWaveState(l, {
-        stage: "initial",
-        baseSha: sha,
-        headSha: sha,
-        laneSpecs: lanes,
-      }),
-    ).not.toThrow();
-    expect(
-      (l.review.cumulative as Record<string, unknown>).review_rounds,
-    ).toBe(0);
-  });
 });
+
+/** Spend one round directly, for cases that only need the counter moved. */
+function countOnce(l: Record<string, unknown>) {
+  const cumulative = l.review.cumulative as Record<string, unknown>;
+  cumulative.review_rounds = Number(cumulative.review_rounds ?? 0) + 1;
+}

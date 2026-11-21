@@ -5,6 +5,7 @@ import { canonicalJson, FlowError } from "./modules/flow/common";
 import { gitCommit, requireCleanCurrentHead } from "./modules/flow/git";
 import { FlowLedger, gitLedgerRoot } from "./modules/flow/ledger";
 import { parseLaneSpec } from "./modules/flow/review";
+import type { ReviewRoundAuthorization } from "./modules/flow/review-wave-open";
 
 function value(
   options: Map<string, string | true>,
@@ -40,6 +41,31 @@ function jsonOption(
   } catch (error) {
     throw new FlowError(`${name} JSON is not valid`, { cause: error });
   }
+}
+
+function reviewRoundAuthorization(
+  options: Map<string, string | true>,
+): ReviewRoundAuthorization | undefined {
+  const authorizationRef = value(options, "authorization-ref", false);
+  const authorizationTextSha256 = value(
+    options,
+    "authorization-text-sha256",
+    false,
+  );
+  const reason = value(options, "reason", false);
+  const userMessageId = value(options, "user-message-id", false);
+  if (!authorizationRef && !authorizationTextSha256 && !userMessageId)
+    return undefined;
+  if (!authorizationRef || !authorizationTextSha256 || !reason || !userMessageId)
+    throw new Error(
+      "review round authorization requires --authorization-ref, --authorization-text-sha256, --reason and --user-message-id",
+    );
+  return {
+    authorizationRef,
+    authorizationTextSha256,
+    reason,
+    userMessageId,
+  };
 }
 
 function fileJson(repo: string, path: string | undefined): unknown {
@@ -142,11 +168,7 @@ async function main(argv: string[]): Promise<number> {
             argv,
             "arbitration-blocker-fingerprint",
           ),
-          ownerReviewRoundAuthorization: value(
-            parsed.options,
-            "owner-review-round-authorization",
-            false,
-          ),
+          ownerReviewRoundAuthorization: reviewRoundAuthorization(parsed.options),
         }),
       );
       return 0;

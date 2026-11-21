@@ -17,6 +17,7 @@ import { authorizeRepairState } from "./review-repair";
 import { recordSubagentReviewState } from "./review-record";
 import { bindingForLedger, readLivePullRequest } from "../hosting/pull-request";
 import type { FlowLedger } from "./ledger";
+import type { ReviewRoundAuthorization } from "./review-wave-open";
 
 export function assessReviewNecessity(
   ledger: FlowLedger,
@@ -117,7 +118,7 @@ export function openReviewWave(
     highRequirement?: boolean | undefined;
     arbitrationConflicts?: string[] | undefined;
     arbitrationBlockerFingerprints?: string[] | undefined;
-    ownerReviewRoundAuthorization?: string | undefined;
+    ownerReviewRoundAuthorization?: ReviewRoundAuthorization | undefined;
   },
 ): Record<string, unknown> {
   if (!ledger.repo)

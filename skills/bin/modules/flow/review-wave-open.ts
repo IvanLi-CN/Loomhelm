@@ -9,6 +9,7 @@ import {
   canonicalJson,
   isoNow,
   isRecord,
+  sha256Bytes,
   stableHash,
 } from "./common";
 import { normalizeAcceptanceManifest } from "./acceptance";
@@ -33,7 +34,7 @@ export function openReviewWaveState(
     highRequirement?: boolean | undefined;
     arbitrationConflicts?: string[] | undefined;
     arbitrationBlockerFingerprints?: string[] | undefined;
-    ownerReviewRoundAuthorization?: string | undefined;
+    ownerReviewRoundAuthorization?: ReviewRoundAuthorization | undefined;
   },
 ): Record<string, unknown> {
   const assessment = isRecord(ledger.review_assessment)
@@ -443,24 +444,62 @@ function matchesRetiredTopology(
  * did not clear the candidate; it lives in `review.cumulative` so a new epoch
  * cannot reset it. Past the cap, one explicit owner authorization unlocks
  * exactly one more round.
+ *
+ * The authorization is bound to an owner message the same way
+ * `reopenConvergence` is: `owner:<ref>` reference, a sha256 of the reason text,
+ * and a user message id consumed once. A bare non-empty string is not
+ * authorization, because the caller being bounded would otherwise author its
+ * own approval.
  */
 export function authorizeReviewRound(
   ledger: Record<string, unknown>,
-  ownerAuthorization?: string | undefined,
+  authorization?: ReviewRoundAuthorization | undefined,
 ): void {
   const review = reviewState(ledger);
   const cumulative = isRecord(review.cumulative) ? review.cumulative : {};
   const used = Number(cumulative.review_rounds ?? 0);
-  if (used < MAX_REVIEW_ROUNDS) return;
-  const reason = ownerAuthorization?.trim() ?? "";
-  if (!reason)
+  if (used < MAX_REVIEW_ROUNDS) {
+    if (authorization)
+      throw new FlowError(
+        "owner review round authorization is only valid after the round budget is exhausted",
+      );
+    return;
+  }
+  if (!authorization)
     throw new FlowError(
       `review round budget is exhausted after ${MAX_REVIEW_ROUNDS} non-clearing rounds; owner authorization is required for another round`,
     );
-  // Mark this round as paid for; the non-clearing round consumes the mark.
+  const { authorizationRef, authorizationTextSha256, reason, userMessageId } =
+    authorization;
+  if (
+    !/^owner:[A-Za-z0-9-]+(?::[^\s:]+)?$/.test(authorizationRef.trim()) ||
+    !/^[0-9a-f]{64}$/i.test(authorizationTextSha256) ||
+    sha256Bytes(new TextEncoder().encode(reason)) !==
+      authorizationTextSha256.toLowerCase() ||
+    !userMessageId.trim() ||
+    !reason.trim()
+  )
+    throw new FlowError(
+      "review round authorization requires an owner ref, a matching reason digest, and a user message id",
+    );
+  const consumed = Array.isArray(cumulative.review_rounds_authorization_ids)
+    ? (cumulative.review_rounds_authorization_ids as string[])
+    : [];
+  if (consumed.includes(userMessageId))
+    throw new FlowError(
+      "review round authorization user message id was already consumed",
+    );
+  cumulative.review_rounds_authorization_ids = [...consumed, userMessageId];
   cumulative.review_rounds_paid_ahead =
     Number(cumulative.review_rounds_paid_ahead ?? 0) + 1;
   cumulative.review_rounds_owner_authorized =
     Number(cumulative.review_rounds_owner_authorized ?? 0) + 1;
-  cumulative.review_rounds_owner_authorization_reason = reason;
+  cumulative.review_rounds_owner_authorization_reason = reason.trim();
+}
+
+export interface ReviewRoundAuthorization {
+  authorizationRef: string;
+  authorizationTextSha256: string;
+  reason: string;
+  userMessageId: string;
 }

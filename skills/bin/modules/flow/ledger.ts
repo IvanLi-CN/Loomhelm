@@ -96,18 +96,9 @@ export class FlowLedger extends ReceiptStorage {
     );
   }
 
-  openReviewWave(options: {
-    stage: string;
-    baseRef: string;
-    headSha?: string | undefined;
-    laneSpecs: { lane: string; model: string; effort: string }[];
-    scopeClass?: string | undefined;
-    previousHeadSha?: string | undefined;
-    repairPermitId?: string | undefined;
-    highRequirement?: boolean | undefined;
-    arbitrationConflicts?: string[] | undefined;
-    arbitrationBlockerFingerprints?: string[] | undefined;
-  }): Record<string, unknown> {
+  openReviewWave(
+    options: Parameters<typeof openReviewWave>[1],
+  ): Record<string, unknown> {
     return this.withLifecycleLock(() => openReviewWave(this, options));
   }
 

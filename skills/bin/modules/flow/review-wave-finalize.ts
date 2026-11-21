@@ -233,6 +233,9 @@ export function finalizeReviewWaveState(
     epoch.status = blockers.length ? "repair_pending" : "complete";
   }
   if (blockers.length) countReviewRound(review);
+  else if (review.cumulative && isRecord(review.cumulative))
+    // A credit is spent by the round that bought it, or not at all.
+    review.cumulative.review_rounds_paid_ahead = 0;
   if (!blockers.length && wave.stage !== "risk-arbitration") {
     epoch.review_proof_wave_id = waveId;
     review.active_epoch_id = null;
