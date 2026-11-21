@@ -232,10 +232,7 @@ export function finalizeReviewWaveState(
     recordReviewHistory(review, epoch, waveId, blockers, synthesis);
     epoch.status = blockers.length ? "repair_pending" : "complete";
   }
-  if (blockers.length) countReviewRound(review);
-  else if (review.cumulative && isRecord(review.cumulative))
-    // A credit is spent by the round that bought it, or not at all.
-    review.cumulative.review_rounds_paid_ahead = 0;
+  if (blockers.length) countReviewRound(review, wave);
   if (!blockers.length && wave.stage !== "risk-arbitration") {
     epoch.review_proof_wave_id = waveId;
     review.active_epoch_id = null;
@@ -267,16 +264,15 @@ export function finalizeReviewWaveState(
  * base change, candidate change, legacy retirement, or owner reopen still
  * consumes review budget.
  */
-export function countReviewRound(review: Record<string, unknown>): number {
+export function countReviewRound(
+  review: Record<string, unknown>,
+  wave?: Record<string, unknown> | undefined,
+): number {
   if (!isRecord(review.cumulative)) return 0;
   const cumulative = review.cumulative;
   const used = Number(cumulative.review_rounds ?? 0);
-  // An owner-authorized round was already paid for when it opened.
-  const paidAhead = Number(cumulative.review_rounds_paid_ahead ?? 0);
-  if (paidAhead > 0) {
-    cumulative.review_rounds_paid_ahead = paidAhead - 1;
-    return used;
-  }
+  // The credit was already spent at open; this round must not charge twice.
+  if (wave?.review_round_paid_by_credit === true) return used;
   cumulative.review_rounds = used + 1;
   return cumulative.review_rounds as number;
 }

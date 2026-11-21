@@ -51,7 +51,10 @@ export function openReviewWaveState(
     tier,
     options.highRequirement ?? false,
   );
-  authorizeReviewRound(ledger, options.ownerReviewRoundAuthorization);
+  const creditPaid = authorizeReviewRound(
+    ledger,
+    options.ownerReviewRoundAuthorization,
+  );
   const arbitrationConflicts = sortedStrings(
     options.arbitrationConflicts,
     "arbitration conflicts",
@@ -166,6 +169,7 @@ export function openReviewWaveState(
     wave_id: waveId,
     epoch_id: epoch.epoch_id,
     state: "open",
+    review_round_paid_by_credit: creditPaid,
     stage: options.stage,
     base_sha: options.baseSha,
     base_ref: options.baseRef ?? null,
@@ -454,7 +458,7 @@ function matchesRetiredTopology(
 export function authorizeReviewRound(
   ledger: Record<string, unknown>,
   authorization?: ReviewRoundAuthorization | undefined,
-): void {
+): boolean {
   const review = reviewState(ledger);
   const cumulative = isRecord(review.cumulative) ? review.cumulative : {};
   const used = Number(cumulative.review_rounds ?? 0);
@@ -463,17 +467,20 @@ export function authorizeReviewRound(
       throw new FlowError(
         "owner review round authorization is only valid after the round budget is exhausted",
       );
-    return;
+    return false;
   }
-  // An unspent credit already pays for this round. Reaching here with one still
-  // pending means the previous run of this gate never consumed it, so honour it
-  // instead of demanding a second owner message.
-  if (Number(cumulative.review_rounds_paid_ahead ?? 0) > 0) {
+  // An unspent credit already pays for this round. Consume it here, at open,
+  // so it authorizes exactly one round: the gate is what a retry re-enters, so
+  // deferring the spend to finalize would let one credit admit round after
+  // round when a wave never finalizes.
+  const credits = Number(cumulative.review_rounds_paid_ahead ?? 0);
+  if (credits > 0) {
     if (authorization)
       throw new FlowError(
         "a review round credit is already available; it is consumed by this round",
       );
-    return;
+    cumulative.review_rounds_paid_ahead = credits - 1;
+    return true;
   }
   if (!authorization)
     throw new FlowError(
@@ -500,11 +507,12 @@ export function authorizeReviewRound(
       "review round authorization user message id was already consumed",
     );
   cumulative.review_rounds_authorization_ids = [...consumed, userMessageId];
-  cumulative.review_rounds_paid_ahead =
-    Number(cumulative.review_rounds_paid_ahead ?? 0) + 1;
   cumulative.review_rounds_owner_authorized =
     Number(cumulative.review_rounds_owner_authorized ?? 0) + 1;
   cumulative.review_rounds_owner_authorization_reason = reason.trim();
+  // The authorization pays for the round that is opening now; no balance is
+  // left behind, so a stray retry cannot reuse it.
+  return true;
 }
 
 export interface ReviewRoundAuthorization {

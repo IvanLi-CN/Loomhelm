@@ -153,7 +153,39 @@ describe("review round budget", () => {
     expect(cumulative.review_rounds_authorization_ids ?? []).toEqual([]);
   });
 
-  test("one authorization buys exactly one round", () => {
+  test("an authorization message id is single-use", () => {
+    const l = ledger();
+    const auth = authorization("one");
+    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
+    // One authorization pays for the round that opens now; no balance remains.
+    l.review.active_wave_id = null;
+    l.review.active_epoch_id = null;
+    openReviewWaveState(l, {
+      stage: "initial",
+      baseSha: sha,
+      headSha: sha,
+      laneSpecs: lanes,
+      ownerReviewRoundAuthorization: auth,
+    });
+    const cumulative = l.review.cumulative as Record<string, unknown>;
+    expect(cumulative.review_rounds_paid_ahead ?? 0).toBe(0);
+    expect(cumulative.review_rounds_owner_authorized).toBe(1);
+
+    // The message id cannot be replayed.
+    l.review.active_wave_id = null;
+    l.review.active_epoch_id = null;
+    expect(() =>
+      openReviewWaveState(l, {
+        stage: "initial",
+        baseSha: sha,
+        headSha: sha,
+        laneSpecs: lanes,
+        ownerReviewRoundAuthorization: auth,
+      }),
+    ).toThrow("already consumed");
+  });
+
+  test("one authorization admits exactly one open", () => {
     const l = ledger();
     for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
     l.review.active_wave_id = null;
@@ -163,44 +195,9 @@ describe("review round budget", () => {
       baseSha: sha,
       headSha: sha,
       laneSpecs: lanes,
-      ownerReviewRoundAuthorization: authorization("buy-one"),
+      ownerReviewRoundAuthorization: authorization("once"),
     });
-    const cumulative = l.review.cumulative as Record<string, unknown>;
-    expect(cumulative.review_rounds_paid_ahead).toBe(1);
-
-    // Spending it on a non-clearing round leaves the counter where it was.
-    const waveId = String((l.review.active_wave_id as string) ?? "");
-    recordSubagentReviewState(l, {
-      reviewProfile: "pr-convergence",
-      baseRef: sha,
-      reviewAttemptId: "paid-round",
-      reviewResultJson: JSON.stringify({
-        findings: [blockingFinding],
-        overall_correctness: "patch is incorrect",
-        overall_explanation: "Reviewed the candidate diff and found a defect.",
-        overall_confidence_score: 0.9,
-      }),
-      waveId,
-      lane: "comprehensive",
-    });
-    finalizeReviewWaveState(l, waveId, {
-      groups: [
-        {
-          group_id: "budget",
-          finding_fingerprints: [blockingFingerprint],
-          blocker: true,
-          invariant: "review round budget is counted",
-        },
-      ],
-      invariants: ["review round budget is counted"],
-      coverage: ["comprehensive"],
-      conflicts: [],
-      acceptance: [],
-    });
-    expect(cumulative.review_rounds).toBe(MAX_REVIEW_ROUNDS);
-    expect(cumulative.review_rounds_paid_ahead).toBe(0);
-
-    // The credit is gone: another round needs a new owner message.
+    // A second open with no fresh authorization is refused.
     l.review.active_wave_id = null;
     l.review.active_epoch_id = null;
     expect(() =>
@@ -211,51 +208,6 @@ describe("review round budget", () => {
         laneSpecs: lanes,
       }),
     ).toThrow("review round budget is exhausted");
-  });
-
-  test("an authorization message id is single-use", () => {
-    const l = ledger();
-    const auth = authorization("one");
-    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
-    authorizeReviewRound(l, auth);
-    const cumulative = l.review.cumulative as Record<string, unknown>;
-    expect(cumulative.review_rounds_paid_ahead).toBe(1);
-
-    // Spend the credit on the round it bought.
-    l.review.active_wave_id = null;
-    l.review.active_epoch_id = null;
-    openReviewWaveState(l, {
-      stage: "initial",
-      baseSha: sha,
-      headSha: sha,
-      laneSpecs: lanes,
-    });
-    cumulative.review_rounds_paid_ahead = 0;
-
-    // Replaying the same owner message is refused.
-    expect(() => authorizeReviewRound(l, auth)).toThrow("already consumed");
-    expect(() => authorizeReviewRound(l, authorization("two"))).not.toThrow();
-  });
-
-  test("an unspent credit is honoured by the next open", () => {
-    const l = ledger();
-    for (let i = 0; i < MAX_REVIEW_ROUNDS; i++) countOnce(l);
-    authorizeReviewRound(l, authorization("stranded"));
-    const cumulative = l.review.cumulative as Record<string, unknown>;
-    expect(cumulative.review_rounds_paid_ahead).toBe(1);
-
-    // The authorized round never reached finalize. The credit must still admit
-    // the next open rather than demanding a second owner message.
-    l.review.active_wave_id = null;
-    l.review.active_epoch_id = null;
-    expect(() =>
-      openReviewWaveState(l, {
-        stage: "initial",
-        baseSha: sha,
-        headSha: sha,
-        laneSpecs: lanes,
-      }),
-    ).not.toThrow();
   });
 
   test("a mismatched reason digest is rejected", () => {
