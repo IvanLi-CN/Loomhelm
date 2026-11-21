@@ -1,6 +1,7 @@
 ---
 name: kaisoumail-deployment-inventory
 description: "Use when Codex needs to identify where KaisouMail is currently deployed, which public entrypoints and runtime resources are live, how current provider resources differ from repo config, or which control-plane page should be checked first during ops work. Treat the hosting provider as current verified state, not as a permanent project identity."
+disable-model-invocation: true
 ---
 
 # KaisouMail Deployment Inventory

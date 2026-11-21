@@ -1,6 +1,7 @@
 ---
 name: normal-flow
 description: "Normal delivery flow ending at local can-open-PR handoff."
+disable-model-invocation: true
 ---
 
 # Normal flow

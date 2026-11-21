@@ -1,6 +1,7 @@
 ---
 name: flow-continue
 description: "Resume the current engineering flow from the next unfinished hard gate."
+disable-model-invocation: true
 ---
 
 # Flow continue

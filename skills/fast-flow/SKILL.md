@@ -1,6 +1,7 @@
 ---
 name: fast-flow
 description: "Fast-track delivery to merge-ready PR, merged-only, or merged+cleanup by intent."
+disable-model-invocation: true
 ---
 
 # Fast flow

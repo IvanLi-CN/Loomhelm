@@ -1,6 +1,7 @@
 ---
 name: git-worktree
 description: "Create, inspect, and remove git worktrees safely."
+disable-model-invocation: true
 ---
 
 # Git worktree

@@ -71,7 +71,7 @@
     {
       "name": "fast-flow",
       "entry": "skills/fast-flow/SKILL.md",
-      "files": 1,
+      "files": 2,
       "internalSkills": [
         "dev-plan",
         "multi-task-flow",
@@ -132,7 +132,7 @@
     {
       "name": "flow-continue",
       "entry": "skills/flow-continue/SKILL.md",
-      "files": 1,
+      "files": 2,
       "internalSkills": [
         "dev-plan",
         "fast-flow",
@@ -192,7 +192,7 @@
     {
       "name": "git-branch",
       "entry": "skills/git-branch/SKILL.md",
-      "files": 1,
+      "files": 2,
       "internalSkills": [
         "git-cleanup",
         "project-engineering-workflow"
@@ -218,7 +218,7 @@
     {
       "name": "git-cleanup",
       "entry": "skills/git-cleanup/SKILL.md",
-      "files": 9,
+      "files": 10,
       "internalSkills": [
         "git-branch",
         "git-worktree",
@@ -265,7 +265,7 @@
     {
       "name": "git-worktree",
       "entry": "skills/git-worktree/SKILL.md",
-      "files": 1,
+      "files": 2,
       "internalSkills": [
         "git-branch",
         "git-cleanup",
@@ -355,7 +355,7 @@
     {
       "name": "implement-only-flow",
       "entry": "skills/implement-only-flow/SKILL.md",
-      "files": 1,
+      "files": 2,
       "internalSkills": [
         "dev-plan"
       ],
@@ -391,7 +391,7 @@
     {
       "name": "local-merge-flow",
       "entry": "skills/local-merge-flow/SKILL.md",
-      "files": 1,
+      "files": 2,
       "internalSkills": [
         "git-cleanup",
         "project-engineering-workflow"
@@ -421,7 +421,7 @@
     {
       "name": "multi-task-flow",
       "entry": "skills/multi-task-flow/SKILL.md",
-      "files": 169,
+      "files": 170,
       "internalSkills": [
         "dev-plan",
         "fast-flow",
@@ -464,7 +464,7 @@
     {
       "name": "normal-flow",
       "entry": "skills/normal-flow/SKILL.md",
-      "files": 1,
+      "files": 2,
       "internalSkills": [
         "project-engineering-workflow"
       ],
