@@ -25,12 +25,7 @@ export const DIRECT_REVIEW_FLOW_TYPES = new Set([
   "local-merge",
 ]);
 export const PR_BOUND_FLOW_TYPES = new Set(["fast-track", "normal"]);
-export const FIXED_REVIEW_LANES = new Set([
-  "contract",
-  "state-concurrency",
-  "failure-data-safety",
-  "test-platform",
-]);
+export const FIXED_REVIEW_LANES = new Set(["comprehensive"]);
 export const DYNAMIC_REVIEW_LANES = new Set([
   "ui-accessibility",
   "security",

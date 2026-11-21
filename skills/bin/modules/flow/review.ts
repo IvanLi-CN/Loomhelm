@@ -2,6 +2,7 @@ import {
   DYNAMIC_REVIEW_LANES,
   FIXED_REVIEW_LANES,
   FlowError,
+  MAX_DYNAMIC_REVIEW_LANES,
   REVIEW_RECEIPT_SCHEMA_VERSION,
   canonicalJson,
   isRecord,
@@ -14,19 +15,7 @@ import {
 } from "./review-profile-policy";
 
 export const DIRECT_REVIEW_LANE_PROFILES: Record<string, [string, string]> = {
-  contract: [
-    FORMAL_REVIEW_REQUEST_PROFILE.model,
-    FORMAL_REVIEW_REQUEST_PROFILE.effort,
-  ],
-  "state-concurrency": [
-    FORMAL_REVIEW_REQUEST_PROFILE.model,
-    FORMAL_REVIEW_REQUEST_PROFILE.effort,
-  ],
-  "failure-data-safety": [
-    FORMAL_REVIEW_REQUEST_PROFILE.model,
-    FORMAL_REVIEW_REQUEST_PROFILE.effort,
-  ],
-  "test-platform": [
+  comprehensive: [
     FORMAL_REVIEW_REQUEST_PROFILE.model,
     FORMAL_REVIEW_REQUEST_PROFILE.effort,
   ],
@@ -100,7 +89,7 @@ export function validateLaneSpecs(
   const valid =
     [...FIXED_REVIEW_LANES].every((name) => names.has(name)) &&
     dynamic.every((name) => DYNAMIC_REVIEW_LANES.has(name)) &&
-    dynamic.length <= 2 &&
+    dynamic.length <= MAX_DYNAMIC_REVIEW_LANES &&
     (tier !== 3 || dynamic.length === 0) &&
     (tier !== 4 || dynamic.length >= 1);
   if (!valid)

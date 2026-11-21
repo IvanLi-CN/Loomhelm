@@ -1,4 +1,11 @@
-import { REVIEW_NECESSITY_TIERS, isRecord, stableHash } from "./common";
+import {
+  DYNAMIC_REVIEW_LANES,
+  FIXED_REVIEW_LANES,
+  MAX_DYNAMIC_REVIEW_LANES,
+  REVIEW_NECESSITY_TIERS,
+  isRecord,
+  stableHash,
+} from "./common";
 
 export function reviewTier(ledger: Record<string, unknown>): number | null {
   if (typeof ledger.flow_type !== "string") return null;
@@ -49,22 +56,10 @@ export function isCurrentClearWave(
     : tier === 4
       ? fixed &&
         dynamic.length >= 1 &&
-        dynamic.length <= 2 &&
+        dynamic.length <= MAX_DYNAMIC_REVIEW_LANES &&
         dynamic.every((name) => DYNAMIC_REVIEW_LANES.has(name))
       : false;
 }
 
 const DIRECT_REVIEW_TYPES = new Set(["fast-track", "normal", "local-merge"]);
 
-const FIXED_REVIEW_LANES = new Set([
-  "contract",
-  "state-concurrency",
-  "failure-data-safety",
-  "test-platform",
-]);
-const DYNAMIC_REVIEW_LANES = new Set([
-  "ui-accessibility",
-  "security",
-  "database-migration",
-  "release-infra",
-]);
