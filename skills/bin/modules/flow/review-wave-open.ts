@@ -3,6 +3,7 @@ import {
   FIXED_REVIEW_LANES,
   FlowError,
   MAX_DYNAMIC_REVIEW_LANES,
+  RETIRED_REVIEW_LANES,
   REVIEW_SCOPE_CLASSES,
   canonicalJson,
   isoNow,
@@ -397,6 +398,11 @@ function reviewLaneTopologyMatches(
     : undefined;
   if (wave.stage === "risk-arbitration")
     return names.size === 1 && names.has("risk-arbitration");
+  if (
+    ledger.schema_version === 6 &&
+    matchesRetiredTopology(names, assessment)
+  )
+    return true;
   const fixed = [...FIXED_REVIEW_LANES].every((lane) => names.has(lane));
   const dynamic = [...names].filter((lane) => !FIXED_REVIEW_LANES.has(lane));
   return (
@@ -407,4 +413,24 @@ function reviewLaneTopologyMatches(
       ? dynamic.length === 0
       : assessment?.tier === 4 && dynamic.length >= 1)
   );
+}
+
+/**
+ * The four-lane topology retired by ADR 0043. It stays recognizable so a
+ * schema-6 ledger written by the published runtime can still reach its
+ * historical branch instead of failing closed as "already active".
+ */
+function matchesRetiredTopology(
+  names: Set<string>,
+  assessment: Record<string, unknown> | undefined,
+): boolean {
+  if (!assessment || (assessment.tier !== 3 && assessment.tier !== 4))
+    return false;
+  if (![...RETIRED_REVIEW_LANES].every((lane) => names.has(lane))) return false;
+  const dynamic = [...names].filter((lane) => !RETIRED_REVIEW_LANES.has(lane));
+  return assessment.tier === 3
+    ? dynamic.length === 0
+    : dynamic.length >= 1 &&
+        dynamic.length <= MAX_DYNAMIC_REVIEW_LANES &&
+        dynamic.every((lane) => DYNAMIC_REVIEW_LANES.has(lane));
 }

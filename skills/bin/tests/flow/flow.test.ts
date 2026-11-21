@@ -24,6 +24,7 @@ import {
 } from "../../modules/flow/review-ledger";
 import {
   initialLedger,
+  isCurrentClearWave,
   normalizePostMergeEvidence,
   normalizeLedger,
 } from "../../modules/flow/state";
@@ -771,6 +772,48 @@ describe("acceptance and review state", () => {
         acceptance: [],
       }),
     ).toThrow("review wave requires terminal receipts");
+  });
+
+  test("recognizes the retired four-lane topology only for schema 6", () => {
+    const synthesis = {
+      groups: [],
+      invariants: [],
+      coverage: [],
+      conflicts: [],
+      acceptance: [],
+    };
+    const wave = (lanes: Record<string, unknown>) => ({
+      stage: "initial",
+      state: "finalized",
+      head_sha: sha,
+      base_sha: sha,
+      synthesis,
+      synthesis_sha256: stableHash(synthesis),
+      lanes,
+    });
+    const historicalLanes = Object.fromEntries(
+      [
+        "contract",
+        "state-concurrency",
+        "failure-data-safety",
+        "test-platform",
+      ].map((name) => [name, { state: "completed" }]),
+    );
+    const currentLanes = { comprehensive: { state: "completed" } };
+
+    expect(
+      isCurrentClearWave(wave(historicalLanes), sha, sha, 3, {
+        legacySchema: true,
+      }),
+    ).toBe(true);
+    // A current ledger never re-authorizes the retired lanes.
+    expect(isCurrentClearWave(wave(historicalLanes), sha, sha, 3)).toBe(false);
+    expect(isCurrentClearWave(wave(currentLanes), sha, sha, 3)).toBe(true);
+    expect(
+      isCurrentClearWave(wave(currentLanes), sha, sha, 3, {
+        legacySchema: true,
+      }),
+    ).toBe(true);
   });
 
   test("keeps schema 6 review receipts historical and blocks fresh clear", () => {

@@ -26,6 +26,17 @@ export const DIRECT_REVIEW_FLOW_TYPES = new Set([
 ]);
 export const PR_BOUND_FLOW_TYPES = new Set(["fast-track", "normal"]);
 export const FIXED_REVIEW_LANES = new Set(["comprehensive"]);
+/**
+ * Lane set retired by ADR 0043. A schema-6 ledger written by the published
+ * runtime still carries these lanes, so historical detection must recognize
+ * them even though no current wave may use them.
+ */
+export const RETIRED_REVIEW_LANES = new Set([
+  "contract",
+  "state-concurrency",
+  "failure-data-safety",
+  "test-platform",
+]);
 export const DYNAMIC_REVIEW_LANES = new Set([
   "ui-accessibility",
   "security",

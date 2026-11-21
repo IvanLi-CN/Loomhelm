@@ -25,7 +25,7 @@ Read a reference only when entering its phase:
 - PR diagnosis: `references/pr-diagnosis-short-contract.md`
 - CI tracking: `references/ci-tracking-short-contract.md`
 - tiered local review proof: `references/review-proof-short-contract.md`
-- reviewer lane prompt, result schema and launch rule: `references/reviewer-lane.md`
+- reviewer lane prompt, result schema, launch rule and per-runtime support: `references/reviewer-lane.md`; portable lane definitions are `agents/reviewer.md` (OMP) and `agents/claude-reviewer.md` (Claude Code)
 - optional advisory review: `references/advisory-review-short-contract.md`
 - validation receipts: `references/execution-receipt-short-contract.md`
 - pre-merge release decision: `references/release-planning-short-contract.md`
