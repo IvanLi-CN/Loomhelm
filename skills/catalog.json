@@ -27,7 +27,7 @@
     {
       "name": "dev-plan",
       "entry": "skills/dev-plan/SKILL.md",
-      "files": 267,
+      "files": 269,
       "internalSkills": [
         "fast-flow",
         "flow-continue",
@@ -46,10 +46,10 @@
     {
       "name": "docs-migrate",
       "entry": "skills/docs-migrate/SKILL.md",
-      "files": 11,
+      "files": 30,
       "internalSkills": [
         "git-worktree",
-        "spec-sync"
+        "topic-spec"
       ],
       "externalSkills": [],
       "externalCommands": [
@@ -62,6 +62,25 @@
       "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
+        "skills/docs-migrate/scripts/_runtime/compatibility_cli.ts",
+        "skills/docs-migrate/scripts/_runtime/compatibility_docs.ts",
+        "skills/docs-migrate/scripts/_runtime/compatibility_shared.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/checks/replay.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/git.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/hardware_ingest.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/hardware_locks.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/legacy_spec_id.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/migration_common.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/next_plan_support.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/next_plan.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/spec_contract.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_helpers.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_legacy.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_paths.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_types.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift_validation.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/spec_drift.ts",
+        "skills/docs-migrate/scripts/_runtime/modules/docs/spec_migration.ts",
         "skills/docs-migrate/scripts/gen_legacy_spec_id.ts",
         "skills/docs-migrate/scripts/specs_migrate_guard.ts",
         "skills/docs-migrate/scripts/test_gen_legacy_spec_id.ts",
@@ -100,36 +119,6 @@
       "scripts": []
     },
     {
-      "name": "find-next-plan",
-      "entry": "skills/find-next-plan/SKILL.md",
-      "files": 4,
-      "internalSkills": [],
-      "externalSkills": [],
-      "externalCommands": [
-        {
-          "command": "git",
-          "strength": "required-when-applicable",
-          "condition": "repository inspection or Git operations"
-        },
-        {
-          "command": "gh",
-          "strength": "required-when-applicable",
-          "condition": "GitHub backend PR, check or release operations only"
-        },
-        {
-          "command": "tea",
-          "strength": "required-when-applicable",
-          "condition": "Gitea backend operations only"
-        }
-      ],
-      "hostCapabilities": [],
-      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
-      "scripts": [
-        "skills/find-next-plan/scripts/find_next_plan.ts",
-        "skills/find-next-plan/scripts/test_find_next_plan.ts"
-      ]
-    },
-    {
       "name": "flow-continue",
       "entry": "skills/flow-continue/SKILL.md",
       "files": 2,
@@ -140,7 +129,7 @@
         "local-merge-flow",
         "multi-task-flow",
         "normal-flow",
-        "spec-sync"
+        "topic-spec"
       ],
       "externalSkills": [
         {
@@ -173,7 +162,7 @@
     {
       "name": "fresh-thread-dispatch",
       "entry": "skills/fresh-thread-dispatch/SKILL.md",
-      "files": 3,
+      "files": 4,
       "internalSkills": [
         "fast-flow"
       ],
@@ -195,6 +184,7 @@
       "files": 2,
       "internalSkills": [
         "git-cleanup",
+        "git-worktree",
         "project-engineering-workflow"
       ],
       "externalSkills": [
@@ -218,7 +208,7 @@
     {
       "name": "git-cleanup",
       "entry": "skills/git-cleanup/SKILL.md",
-      "files": 10,
+      "files": 12,
       "internalSkills": [
         "git-branch",
         "git-worktree",
@@ -292,7 +282,7 @@
     {
       "name": "global-port-manager",
       "entry": "skills/global-port-manager/SKILL.md",
-      "files": 3,
+      "files": 4,
       "internalSkills": [],
       "externalSkills": [],
       "externalCommands": [],
@@ -335,7 +325,7 @@
     {
       "name": "hardware-doc-ingest",
       "entry": "skills/hardware-doc-ingest/SKILL.md",
-      "files": 4,
+      "files": 23,
       "internalSkills": [],
       "externalSkills": [],
       "externalCommands": [],
@@ -348,6 +338,25 @@
       ],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
+        "skills/hardware-doc-ingest/scripts/_runtime/compatibility_cli.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/compatibility_docs.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/compatibility_shared.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/checks/replay.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/git.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/hardware_ingest.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/hardware_locks.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/legacy_spec_id.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/migration_common.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/next_plan_support.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/next_plan.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_contract.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_helpers.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_legacy.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_paths.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_types.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift_validation.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_drift.ts",
+        "skills/hardware-doc-ingest/scripts/_runtime/modules/docs/spec_migration.ts",
         "skills/hardware-doc-ingest/scripts/ingest_mineru_extract.ts",
         "skills/hardware-doc-ingest/scripts/verify_doc_locks.ts"
       ]
@@ -421,7 +430,7 @@
     {
       "name": "multi-task-flow",
       "entry": "skills/multi-task-flow/SKILL.md",
-      "files": 170,
+      "files": 342,
       "internalSkills": [
         "dev-plan",
         "fast-flow",
@@ -450,15 +459,32 @@
       ],
       "platform": "macOS launchd for installed viewer; POSIX ledger/HTTP on macOS/Linux",
       "scripts": [
-        "skills/multi-task-flow/scripts/preview-source.ts",
+        "skills/multi-task-flow/scripts/build-gateway-ui.ts",
         "skills/multi-task-flow/scripts/build-service.ts",
         "skills/multi-task-flow/scripts/build.ts",
+        "skills/multi-task-flow/scripts/catalog-client-skills.ts",
+        "skills/multi-task-flow/scripts/check-client-skills.ts",
+        "skills/multi-task-flow/scripts/check-skills-installation.ts",
         "skills/multi-task-flow/scripts/demo-static.ts",
         "skills/multi-task-flow/scripts/diagnose-candidate-sandbox.ts",
+        "skills/multi-task-flow/scripts/export-gateway-recovery.ts",
+        "skills/multi-task-flow/scripts/generate-flow-domain-schemas.ts",
         "skills/multi-task-flow/scripts/orchestrate.ts",
+        "skills/multi-task-flow/scripts/package-client-skills.ts",
+        "skills/multi-task-flow/scripts/preview-gateway-recovery.ts",
+        "skills/multi-task-flow/scripts/preview-source.ts",
         "skills/multi-task-flow/scripts/service.ts",
+        "skills/multi-task-flow/scripts/test-skills-artifact.ts",
+        "skills/multi-task-flow/scripts/test-skills-native.ts",
+        "skills/multi-task-flow/scripts/test-viewer-source.ts",
         "skills/multi-task-flow/scripts/verify-service-browser.ts",
-        "skills/multi-task-flow/scripts/verify-service-native.ts"
+        "skills/multi-task-flow/scripts/verify-service-native.ts",
+        "skills/multi-task-flow/scripts/verify-skills-modules.ts",
+        "skills/multi-task-flow/scripts/viewer-gateway.ts",
+        "skills/multi-task-flow/scripts/viewer-runtime.ts",
+        "skills/multi-task-flow/scripts/viewer-socket.ts",
+        "skills/multi-task-flow/scripts/viewer-worker-process.ts",
+        "skills/multi-task-flow/scripts/viewer-worker.ts"
       ]
     },
     {
@@ -498,13 +524,7 @@
         "docs-migrate"
       ],
       "externalSkills": [],
-      "externalCommands": [
-        {
-          "command": "git",
-          "strength": "required-when-applicable",
-          "condition": "repository inspection or Git operations"
-        }
-      ],
+      "externalCommands": [],
       "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
@@ -512,7 +532,7 @@
     {
       "name": "project-engineering-workflow",
       "entry": "skills/project-engineering-workflow/SKILL.md",
-      "files": 20,
+      "files": 21,
       "internalSkills": [
         "docs-migrate",
         "fast-flow",
@@ -561,9 +581,9 @@
       "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": [
-        "skills/project-engineering-workflow/scripts/base_alignment.ts",
         "skills/project-engineering-workflow/scripts/base_alignment_actions.ts",
         "skills/project-engineering-workflow/scripts/base_alignment_helper.ts",
+        "skills/project-engineering-workflow/scripts/base_alignment.ts",
         "skills/project-engineering-workflow/scripts/merge_preflight.ts",
         "skills/project-engineering-workflow/scripts/test_base_alignment_helper.ts",
         "skills/project-engineering-workflow/scripts/test_merge_preflight.ts"
@@ -610,37 +630,10 @@
         "project-doc-promote"
       ],
       "externalSkills": [],
-      "externalCommands": [
-        {
-          "command": "git",
-          "strength": "required-when-applicable",
-          "condition": "repository inspection or Git operations"
-        }
-      ],
+      "externalCommands": [],
       "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
       "scripts": []
-    },
-    {
-      "name": "spec-sync",
-      "entry": "skills/spec-sync/SKILL.md",
-      "files": 5,
-      "internalSkills": [],
-      "externalSkills": [],
-      "externalCommands": [
-        {
-          "command": "git",
-          "strength": "required-when-applicable",
-          "condition": "repository inspection or Git operations"
-        }
-      ],
-      "hostCapabilities": [],
-      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
-      "scripts": [
-        "skills/spec-sync/scripts/spec_drift_check.sh",
-        "skills/spec-sync/scripts/spec_drift_check.ts",
-        "skills/spec-sync/scripts/test_spec_drift_check.ts"
-      ]
     },
     {
       "name": "srv-101-ops",
@@ -667,38 +660,12 @@
       ]
     },
     {
-      "name": "storybook-screenshots",
-      "entry": "skills/storybook-screenshots/SKILL.md",
-      "files": 2,
-      "internalSkills": [
-        "storybook-stories",
-        "ui-visual-evidence"
-      ],
-      "externalSkills": [],
-      "externalCommands": [
-        {
-          "command": "bun",
-          "strength": "required-when-applicable",
-          "condition": "original Storybook project build scripts when the selected project uses Bun"
-        },
-        {
-          "command": "ego-browser",
-          "strength": "required-when-applicable",
-          "condition": "browser operations after reading the external ego-browser Skill"
-        }
-      ],
-      "hostCapabilities": [],
-      "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
-      "scripts": []
-    },
-    {
       "name": "storybook-stories",
       "entry": "skills/storybook-stories/SKILL.md",
-      "files": 3,
+      "files": 5,
       "internalSkills": [
         "global-port-manager",
         "gui-escalation-gate",
-        "storybook-screenshots",
         "ui-visual-evidence"
       ],
       "externalSkills": [
@@ -722,11 +689,10 @@
     {
       "name": "topic-spec",
       "entry": "skills/topic-spec/SKILL.md",
-      "files": 14,
+      "files": 38,
       "internalSkills": [
         "dev-plan",
-        "docs-migrate",
-        "project-doc-promote"
+        "docs-migrate"
       ],
       "externalSkills": [],
       "externalCommands": [
@@ -738,15 +704,37 @@
       ],
       "hostCapabilities": [],
       "platform": "POSIX; specialty tools and host capabilities as declared by the original Skill",
-      "scripts": []
+      "scripts": [
+        "skills/topic-spec/scripts/_runtime/compatibility_cli.ts",
+        "skills/topic-spec/scripts/_runtime/compatibility_docs.ts",
+        "skills/topic-spec/scripts/_runtime/compatibility_shared.ts",
+        "skills/topic-spec/scripts/_runtime/modules/checks/replay.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/git.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/hardware_ingest.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/hardware_locks.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/legacy_spec_id.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/migration_common.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/next_plan_support.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/next_plan.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/spec_contract.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/spec_drift_helpers.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/spec_drift_legacy.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/spec_drift_paths.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/spec_drift_types.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/spec_drift_validation.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/spec_drift.ts",
+        "skills/topic-spec/scripts/_runtime/modules/docs/spec_migration.ts",
+        "skills/topic-spec/scripts/spec_drift_check.sh",
+        "skills/topic-spec/scripts/spec_drift_check.ts",
+        "skills/topic-spec/scripts/test_spec_drift_check.ts"
+      ]
     },
     {
       "name": "ui-visual-evidence",
       "entry": "skills/ui-visual-evidence/SKILL.md",
-      "files": 9,
+      "files": 13,
       "internalSkills": [
         "gui-escalation-gate",
-        "storybook-screenshots",
         "storybook-stories"
       ],
       "externalSkills": [

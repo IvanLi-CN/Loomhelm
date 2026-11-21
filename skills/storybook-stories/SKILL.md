@@ -33,9 +33,13 @@ Treat Storybook as the primary UI delivery surface for components, fragments, an
 7. If mobile acceptance has no owner, project, spec, or selected-source viewport, the Storybook surface used for evidence must bind and verify the default `393x852` CSS px viewport.
 8. A Story selected for component evidence provides its own presentation surface; this is an evidence-source contract, not additional `play`, test, or CI coverage.
 
-## Read this reference only when needed
+## References
 
-- State coverage matrix and docs layout guidance: [references/state-coverage.md](./references/state-coverage.md)
+Read only when entering the matching step:
+
+- authoring, docs layout, `play`, verification: `references/story-authoring.md`
+- state matrix defaults: `references/state-coverage.md`
+- evidence surface and viewport binding: `references/evidence-surface.md`
 
 ## Workflow
 
@@ -104,142 +108,15 @@ This classification drives the minimum coverage expectation:
 
 Existing page-level stories are not the preferred long-term expansion path. If a task touches an area with existing page stories, update them only as much as needed to avoid stale/broken Storybook coverage; prefer `ui_demo` for new full-page visual evidence.
 
-### 4) Choose deterministic file locations
+### 4) Author stories, docs, and `play` coverage
 
-For a source file `X`:
+Follow `references/story-authoring.md` for file placement, the state matrix, docs-first gallery, `play` coverage, and repo-native verification.
 
-- if the target area already has co-located stories/docs, keep them co-located;
-- else if the repo clearly uses a central stories/docs directory, use that directory;
-- else default to co-locating next to `X`.
+### 5) Provide evidence surfaces when selected
 
-All chosen paths must match the configured story globs in `.storybook/main.*`.
+Follow `references/evidence-surface.md` for the source-managed presentation surface and viewport-bound scenarios. Only the selected evidence entry needs it.
 
-If a docs page is required:
-
-- prefer the repo's existing docs style;
-- if the repo uses MDX docs pages, create/update an MDX page near the target;
-- if the repo uses autodocs/custom docs in stories, update the story file accordingly instead of forcing MDX.
-
-### 5) Create or update stories with strong default coverage
-
-Always prefer the repo's existing syntax and patterns.
-
-For `component` or `fragment`, default to covering the applicable major states from the reference matrix, for example:
-
-- default/resting
-- disabled
-- loading or skeleton
-- empty or missing-content
-- error or destructive
-- success/positive
-- selected/active
-- hover/focus only when the repo already documents pseudo-state visuals this way
-
-For `page-fallback`, cover the complete page/app-shell states required for acceptance, for example:
-
-- happy path
-- loading/skeleton
-- empty
-- error/failure fallback
-- auth/permission/forbidden
-- partial data or degraded mode
-
-Do not treat this as permission to invent irrelevant states. Only include states that make sense for the target and its acceptance criteria.
-
-Each docs-exposed state should still map back to a stable, independently addressable story.
-
-### 5.1) Provide a source-managed presentation surface when component evidence is selected
-
-Only the Story/docs entry selected for component, fragment, or reusable-state evidence needs this contract. Do not add a generic screenshot wrapper to every Story.
-
-- The outer source element declares `data-visual-evidence-surface`; the contained evidence boundary declares `data-visual-evidence-target`.
-- Pass stable selectors for those two declared elements to `$storybook-screenshots`. The target must include every visible component effect, including any intentional shadow or overflow that belongs to the component.
-- The surface owns the component's real outer margin. Its computed background is one opaque, uniform, solid theme color already natural to that Story; it is not an evidence-only swatch.
-- The surface must not introduce a border, radius, shadow, gradient, image background, new card boundary, or nested-card presentation. It should read as the Story's natural canvas, not a frame around the component.
-- Choose the real spacing deliberately. `$storybook-screenshots` measures it once as `clamp(round(long_edge * 0.02), 16, 48)` px and accepts each side only within that range; do not add padding when existing component spacing already satisfies it.
-- Keep the target fully inside the surface. If it cannot be made compliant naturally, report the Storybook blocker instead of relying on screenshot-time padding, style changes, or image analysis.
-- This contract does not require a `play` function, test configuration, CI assertion, stored measurement receipt, or owner-facing measurement field.
-
-### 5.2) Encode viewport-dependent scenarios into the selected evidence source
-
-- Resolve mobile viewport precedence from owner, project, spec, and the selected source. When none defines a size, use `393x852` CSS px and bind it to the Storybook story/docs surface selected for evidence.
-- If acceptance or later visual evidence depends on a specific mobile/tablet/desktop size, create or update a stable `ui_demo` scenario or authorized Storybook fallback entry that already expresses that viewport or responsive scenario.
-- For Storybook fallback, prefer the repo's existing Storybook viewport conventions first (`globals.viewport`, `parameters.viewport`, named viewport presets, or an equivalent repo-native surface).
-- If the selected source does not expose viewport presets, still make the responsive scenario discoverable through a clearly named scenario instead of telling downstream capture to resize the browser window ad hoc.
-- Later screenshot flows must be able to verify and carry `requested_viewport` from the selected evidence surface itself; when the default applies, record `requested_viewport=393x852`.
-
-### 6) Docs are required when the repo supports them
-
-For components/fragments:
-
-- provide a docs-first overview page that shows multiple major states together;
-- docs should be optimized for visual scanning, not for tweaking knobs;
-- default to a static gallery/grid layout, usually 1-3 columns depending on viewport and state count.
-
-For `page-fallback` stories:
-
-- provide a docs page that explains the main scenarios and presents the complete page states or flows needed for acceptance;
-- when it helps clarity, group stories by scenario instead of by prop permutation.
-- when the work is mainly about reviewing multiple visual states in one place, prefer a single curated state gallery/docs surface over many standalone state stories.
-- keep sidebar noise low: do not create a separate story for every purely presentational state if those states are already covered well inside the gallery.
-- retain standalone stories only when they add durable value outside the gallery, such as interaction-specific `play` coverage, reusable entry points for debugging, or flows that benefit from isolated review.
-
-Docs defaults:
-
-- prefer Storybook docs blocks, autodocs, or MDX in the repo's existing style;
-- do not default to a controls-heavy playground;
-- if Controls are already part of the repo convention, keep them available, but the docs page should still read as a curated overview rather than a sandbox.
-
-### 7) Add `play` coverage where behavior matters
-
-Default expectation:
-
-- `page-fallback`: include `play` coverage for key acceptance behavior, usually at least 1 happy path and 1 key negative/boundary path when those behaviors exist
-- interactive `component` / `fragment`: add `play` when it validates real behavior, not just rendering
-- purely static leaf UI: `play` is optional
-
-Use the repo's existing testing patterns first:
-
-- `play`
-- `beforeEach`
-- `storybook/test`
-- args spies, mocked modules, mock data factories
-- router/provider wrappers already used elsewhere
-
-Use `play` to validate things Storybook is good at:
-
-- interaction sequences
-- state transitions
-- mocked data loading
-- permission/auth branches
-- validation or failure messaging
-
-### 8) Verify with repo-native checks
-
-Determine package manager by lockfile:
-
-- `pnpm-lock.yaml` => `pnpm`
-- `yarn.lock` => `yarn`
-- otherwise => `npm`
-
-Preferred Storybook checks: run the first available script in `package.json`:
-
-1. `test-storybook`
-2. `storybook:ci`
-3. `build-storybook`
-
-If none exist, run the repo's standard typecheck/lint steps that compile stories/docs.
-
-If visual verification is needed:
-
-- treat Storybook as a long-lived local service;
-- lease/verify the port via `$global-port-manager` before startup;
-- if the goal is same-turn browser verification only, a `live exec preview` via Codex native background terminals is acceptable;
-- if the goal includes owner-facing localhost handoff or a stable review URL, the Agent must obtain and retain a Codex native background terminal/session for the current workspace, register the host-provided `agent_session` when available, and do not hand off a URL still tied only to a foreground live exec; the Skill does not create, infer or replace that host session, so a missing supported background route is a handoff blocker;
-- for formal browser validation, use `$ego-browser` in one task-scoped TaskSpace;
-- to open a local Storybook preview for the owner to inspect, follow the preview route in `$gui-escalation-gate`.
-
-### 9) Final delivery report
+### 6) Final delivery report
 
 Always include:
 

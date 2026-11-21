@@ -29,5 +29,5 @@ Use this mode to improve existing topic Specs and, when explicitly approved, nor
 
 - All active new-style directories have the three companion files.
 - Catalog paths resolve, lifecycle values are valid, and `Successor` paths are real for superseded rows.
-- Git rename detection and explicit paths are preferred by `$spec-sync`; legacy ID matching remains read-only compatibility.
+- Git rename detection and explicit paths are preferred by `$topic-spec` sync mode; legacy ID matching remains read-only compatibility.
 - The diff is docs-only.
