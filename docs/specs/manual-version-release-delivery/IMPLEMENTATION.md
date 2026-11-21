@@ -25,7 +25,7 @@ Implementation: 统一发布合同及原生包入口已实现。Owner 指定并�
 ## Verification
 
 - `python3 -m unittest discover -s tools/release -p 'test_*.py'`
-- `GOTOOLCHAIN=go1.27.2 go test ./internal/buildinfo ./internal/platform ./internal/gateway`
+- `GOTOOLCHAIN=go1.27.4 go test ./internal/buildinfo ./internal/platform ./internal/gateway`
 - `bun test clients/typescript/test/version.test.ts`
 - `bun run typecheck` 与 `bun run build`
 - `actionlint` 检查本主题新增或修改工作流。

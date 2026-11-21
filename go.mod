@@ -1,6 +1,6 @@
 module github.com/IvanLi-CN/Loomhelm
 
-go 1.27.2
+go 1.27.4
 
 require (
 	github.com/coder/websocket v1.8.15
