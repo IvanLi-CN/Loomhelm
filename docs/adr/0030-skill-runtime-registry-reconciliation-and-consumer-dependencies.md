@@ -20,7 +20,7 @@ registry exact identity 只有在 exact-visible、registry tarball 可下载、n
 
 schema v2 reader/release tool 保留 legacy verifier。缺少 current algorithm 的历史 artifact 只验证 raw integrity、manifest identity 和可读形状，canonical digest 标记为未验证；`0.2.7` 只能只读对账，不能通过新 workflow 重新上传或覆盖。
 
-失败通知继续使用 `github-issue` transport。default-branch metadata-only sidecar 只信任 workflow name/path、workflow_dispatch、protected main repository 和失败结论，消费 release identity artifact，幂等创建或更新带 run marker 的 Issue；通知失败不覆盖原 workflow failure，且 Issue 不会把 candidate、published 或 completed 伪装成外部事实。
+失败通知改用 owner 确认的 IvanLi-CN/oidrune SHA-pinned reusable workflow（原 github-issue 方案已撤销，调用方无静态凭据、只需 id-token: write）。default-branch metadata-only sidecar 只信任 workflow name/path、workflow_dispatch、protected main repository 和 failure conclusion，消费 release identity artifact，按 run/attempt 生成一次 caller-owned summary；202 只表示 durable handoff，通知失败不覆盖原 workflow failure，也不创建或更新 Issue。
 
 ## Consequences
 
@@ -38,7 +38,7 @@ resume workflow 只能下载指定旧 run 的 candidate artifact 和 receipt con
 
 ## Verification
 
-验证映射由 [skill runtime release SPEC](../specs/skill-runtime-release/SPEC.md) 的 `VER-SRR-001`、`VER-SRR-002`、`VER-SRR-021` 至 `VER-SRR-026` 提供；实现测试必须覆盖 schema v3 dependency projection、tarball 无 `node_modules`、path-byte digest、schema v2 legacy read-only、registry state machine、same-candidate resume、monotonic read-back、`published/completed` receipt 和幂等失败 Issue。
+验证映射由 [skill runtime release SPEC](../specs/skill-runtime-release/SPEC.md) 的 `VER-SRR-001`、`VER-SRR-002`、`VER-SRR-021` 至 `VER-SRR-026` 提供；实现测试必须覆盖 schema v3 dependency projection、tarball 无 `node_modules`、path-byte digest、schema v2 legacy read-only、registry state machine、same-candidate resume、monotonic read-back、`published/completed` receipt 和幂等失败通知 handoff。
 
 ## References
 

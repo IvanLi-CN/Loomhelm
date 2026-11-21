@@ -52,9 +52,9 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 
 正式发布产物、manifest、校验和 MUST 长期保留；未完成发布的冻结产物 MUST 保留至恢复完成或维护者显式终止。保留合同 MUST 不依赖 Actions artifact 的短期有效期。原产物丢失 MUST 阻断该身份恢复，不能通过重建冒充原产物。终止 MUST 留存可审计状态；版本未固定到 main 时 MAY 经明确意图核验恢复原身份使用原版本，不自动释放给不同意图；版本已固定到 main 时 MUST NOT 重新分配给不同代码。公开前 MUST 用原子更新持久化公开意图；此前允许取消，此后即使失败也只能恢复原身份完成，MUST NOT 再终止。
 
-### REQ-MVR-011：GitHub Issue 失败通知
+### REQ-MVR-011：Oidrune 失败通知
 
-独立通知流程 MUST 使用 GitHub Issue，按 release identity 创建或更新故障记录，包含失败阶段、run 链接及恢复入口。流程 MUST 使用最小仓库权限、持久记录投递状态并在结果未知时先对账，避免盲目重复创建。通知失败 MUST 独立记录，不更改发布或部署事实；本合同不授权本次需求整理实际创建 Issue。
+独立通知流程 MUST 使用 owner 确认的 IvanLi-CN/oidrune SHA-pinned reusable workflow（GitHub OIDC，无调用方静态凭据），按 release identity（reservation 前按 workflow run 身份）投递一次变更正文；正文 MUST 含 repository、workflow、conclusion、event、ref、head SHA、run URL、run attempt、actor 与恢复入口。流程 MUST 使用最小权限（`id-token: write` 加 ledger 写），对带 release identity 的 `Manual Release`／`Release` 失败在 release ledger 记录 `pending`／`handoff-accepted`／`failed-or-unknown`，并把 `202` 只当作 durable handoff；`Skill Runtime Release` 与 `Runtime Core Release` 无产品 identity，按 run 级 metadata-only 投递且不写 ledger。通知失败 MUST 独立记录，不更改发布或部署事实；MUST NOT 创建或更新 GitHub Issue。
 
 ## Verification
 
@@ -121,8 +121,8 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 ### VER-MVR-011
 
 - covers: `REQ-MVR-011`
-- Method: 故障通知模拟及结果未知／权限不足场景验证。
-- Pass condition: 同一身份更新可关联故障记录，未知结果先对账；通知失败不覆盖发布结果，内容无凭据或无关数据。
+- Method: checked-in transport gate 与 workflow route contract test、ledger phase 状态测试，以及一次 `workflow_dispatch` smoke handoff 验证。
+- Pass condition: 每个 workflow 在 gate 中有唯一 route，同一 run 的同一 sidecar attempt 至多写一个 `pending`，每次实际发生的 handoff 都收敛到恰好一个 handoff-accepted 或 failed-or-unknown，handoff 已 accepted 后重跑不再投递，202 不被写成 Telegram 送达，通知内容无凭据与无关数据。
 
 ## Related ADRs
 
