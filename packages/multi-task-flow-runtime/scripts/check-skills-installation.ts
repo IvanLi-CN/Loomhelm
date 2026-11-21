@@ -68,9 +68,9 @@ export function checkSkillsInstallation(root, { probe = false } = {}) {
     missing.length === 0 && modified.length === 0 && escapedImports.length === 0;
   const runtime = {
     name: "bun",
-    required: "1.4.4",
+    required: "1.4.5",
     actual: typeof Bun === "undefined" ? null : Bun.version,
-    available: typeof Bun !== "undefined" && Bun.version === "1.4.4",
+    available: typeof Bun !== "undefined" && Bun.version === "1.4.5",
   };
   const declared = sourceComplete
     ? (JSON.parse(readFileSync(resolve(root, "skills/package.json"), "utf8")).dependencies ?? {})

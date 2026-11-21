@@ -54,7 +54,7 @@ Defaults:
 ## Script
 
 - Path: `skills/global-port-manager/scripts/port_registry.ts`
-- Production runtime: Bun 1.4.4 executes the original TS script through the packaged client (`skills run skills/global-port-manager/scripts/port_registry.ts <arguments>`). Node.js and compiled JS entrypoints are unsupported.
+- Production runtime: Bun 1.4.5 executes the original TS script through the packaged client (`skills run skills/global-port-manager/scripts/port_registry.ts <arguments>`). Node.js and compiled JS entrypoints are unsupported.
 - Every command, flag, and output shape lives in `references/cli.md`.
 
 ## Default contract for long-lived local services

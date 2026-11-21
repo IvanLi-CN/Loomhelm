@@ -21,7 +21,7 @@
 
 ### REQ-SKILLS-002
 
-生产命令、计划校验与本地网页服务 MUST 仅使用固定 Bun 1.4.4 直接执行 TypeScript 源码，保持输入、退出码、副作用及恢复合同。生产入口 MUST NOT 依赖预生成的 JavaScript、自建 Node-API 模块或安装时 C 编译；类型检查不得发射生产 JavaScript，浏览器资源构建独立保留。
+生产命令、计划校验与本地网页服务 MUST 仅使用固定 Bun 1.4.5 直接执行 TypeScript 源码，保持输入、退出码、副作用及恢复合同。生产入口 MUST NOT 依赖预生成的 JavaScript、自建 Node-API 模块或安装时 C 编译；类型检查不得发射生产 JavaScript，浏览器资源构建独立保留。
 
 ### REQ-SKILLS-003
 

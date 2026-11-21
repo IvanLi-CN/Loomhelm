@@ -180,7 +180,7 @@ try {
     JSON.stringify({
       ok: true,
       schemaVersion: 2,
-      runtime: "bun@1.4.4",
+      runtime: "bun@1.4.5",
       sourceEntry: true,
       environmentPreserved: true,
       isolatedHttp: true,

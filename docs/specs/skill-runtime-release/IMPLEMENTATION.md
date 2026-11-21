@@ -15,7 +15,7 @@
 | Requirement | Current coverage | Gap or boundary |
 | - | - | - |
 | `REQ-SRR-001` | `clients/typescript/package.json`、`package-client-skills.ts` 和 package tests 提供 `@loomhelm/multi-task-flow`、`multi-task-flow` bin、完整 toolkit 资源，以及 `@loomhelm/runtime-core`、`playwright`、`sharp`、`zod` 的 consumer-install projection；构建器拒绝把 production `node_modules` 复制到 toolkit，`release.py validate-tarball` 还校验实际 npm archive 的 toolkit metadata、inventory、omissions 和未登记文件。 | 真实 registry publication 与干净外部安装仍需受保护 release workflow 的 artifact/registry receipt；workflow 已把独立 consumer install/import smoke 设为候选上传前门禁。 |
-| `REQ-SRR-002` | 仓库和 package 固定 Bun 1.4.4；build、manifest、CLI 和 native product smoke 会拒绝运行时或资源身份不匹配，smoke 同时保留 schema 2 bundled legacy 检查和 schema 3 consumer-install/no-toolkit-node_modules 检查，runtime 只检查消费者 package root 的精确 dependencies，缺失时不联网安装。 | 跨平台干净临时目录矩阵仍属于 CI/发布环境，不能由本地 source check 单独证明。 |
+| `REQ-SRR-002` | 仓库和 package 固定 Bun 1.4.5；build、manifest、CLI 和 native product smoke 会拒绝运行时或资源身份不匹配，smoke 同时保留 schema 2 bundled legacy 检查和 schema 3 consumer-install/no-toolkit-node_modules 检查，runtime 只检查消费者 package root 的精确 dependencies，缺失时不联网安装。 | 跨平台干净临时目录矩阵仍属于 CI/发布环境，不能由本地 source check 单独证明。 |
 | `REQ-SRR-003` | `build-info.ts`、`runtime-identity.ts`、`service-release.ts` 和 `release.py` 交叉校验 package、Skill、ledger、viewer、source/merge、tag、schema v3、`path-byte-v2`、canonical digest 和 raw integrity；schema v2 保留 legacy read-only verifier。 | registry/provider 的实际发布 receipt 仍未在本仓库产生。 |
 | `REQ-SRR-004` | package metadata 明确 SemVer 与 `compat-vN`，`release.py gate` 校验 projection、严格版本推进和 compatibility line 不回退。 | 兼容线历史清理和 breaking line 的实际发布仍需 owner-approved release decision。 |
 | `REQ-SRR-005` | `clients/typescript/src/cli/flow.ts` 提供 direct `flow COMMAND --input - [--socket PATH]`；ledger store/engine 覆盖锁、owner、revision、幂等和未知结果。 | 外部隔离安装与无 checkout 的 registry package 验收仍需真实 tarball/registry 流程。 |
@@ -44,10 +44,10 @@
 
 ## Rollout Facts
 
-- 当前源码通过 `@loomhelm/multi-task-flow` package projection 和 Bun 1.4.4 直接运行；本主题不改变现有用户级服务、安装目录或历史 ledger。
+- 当前源码通过 `@loomhelm/multi-task-flow` package projection 和 Bun 1.4.5 直接运行；本主题不改变现有用户级服务、安装目录或历史 ledger。
 - 当前 artifact manifest、runtime identity、release gate 和 tarball validation 能证明候选源码与内部 identity 的一致性，但不能单独证明 npm publication、protected merge provenance、registry bytes 或不可变 tag 已存在。
 - viewer compatibility 的双读、旧 reader 只读 fallback、机械迁移、维护 backup 和拒绝路径由 `client-skills`、ADR 0026/0028/0029 与当前 service tests 共同维护。
-- npm scope、registry、automation token/认证、Bun 1.4.4 和宿主服务权限属于外部前置；本主题不创建或写入这些凭据和用户服务。
+- npm scope、registry、automation token/认证、Bun 1.4.5 和宿主服务权限属于外部前置；本主题不创建或写入这些凭据和用户服务。
 
 ## Remaining Gaps
 

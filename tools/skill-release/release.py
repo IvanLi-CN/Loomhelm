@@ -593,7 +593,7 @@ def validate_tarball(
         raise ReleaseError("tarball does not contain an artifact manifest")
     artifact = _read_json_bytes(files[artifact_path], "artifact manifest")
     schema_version = artifact.get("schemaVersion")
-    if schema_version not in (2, 3) or artifact.get("runtime") != "bun@1.4.4":
+    if schema_version not in (2, 3) or artifact.get("runtime") != "bun@1.4.5":
         raise ReleaseError("artifact manifest has an unsupported schema or runtime")
     canonical_algorithm = artifact.get("canonicalDigestAlgorithm")
     if canonical_algorithm is not None and canonical_algorithm not in {

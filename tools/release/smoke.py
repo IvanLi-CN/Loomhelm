@@ -83,7 +83,7 @@ def runtime_smoke(tags, record):
 
 def validate_ts_manifest(root, manifest, record):
     schema_version=manifest.get('schemaVersion')
-    if manifest.get('candidateSha')!=record['merge_sha'] or manifest.get('dirty') or schema_version not in (2,3) or manifest.get('runtime')!='bun@1.4.4':
+    if manifest.get('candidateSha')!=record['merge_sha'] or manifest.get('dirty') or schema_version not in (2,3) or manifest.get('runtime')!='bun@1.4.5':
         raise ReleaseError('TS resource provenance differs from clean Candidate')
     if schema_version==2:
         if manifest.get('dependenciesBundled') is not True:
@@ -116,9 +116,9 @@ def smoke(directory,record):
                 run_version([str(root/'loomhelm-connector'),'--version'],record)
             elif path.name.startswith('ts-client-'):
                 package=json.loads((root/'package.json').read_text())
-                if package['version']!=record['version'] or package['engines'].get('bun')!='1.4.4' or not (root/'bun.lock').is_file():
+                if package['version']!=record['version'] or package['engines'].get('bun')!='1.4.5' or not (root/'bun.lock').is_file():
                     raise ReleaseError('TS package/runtime identity differs from source stamp')
-                if subprocess.check_output(['bun','--version'],text=True).strip()!='1.4.4':
+                if subprocess.check_output(['bun','--version'],text=True).strip()!='1.4.5':
                     raise ReleaseError('TS package requires the pinned Bun runtime')
                 manifest=json.loads((root/'resources/artifact-manifest.json').read_text())
                 validate_ts_manifest(root,manifest,record)

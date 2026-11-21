@@ -173,7 +173,7 @@ describe("flow compatibility primitives", () => {
         payload,
         {
           command: "bun run test:flow",
-          toolchainFingerprint: "bun@1.4.4",
+          toolchainFingerprint: "bun@1.4.5",
           inputFingerprint: "scope-hash",
           exitCode: 0,
           logPath: "",
@@ -211,7 +211,7 @@ describe("flow compatibility primitives", () => {
         payload,
         {
           command: "bun run test:flow",
-          toolchainFingerprint: "bun@1.4.4",
+          toolchainFingerprint: "bun@1.4.5",
           inputFingerprint: "scope-hash",
           inputPaths: ["README.md"],
           exitCode: 0,
@@ -253,7 +253,7 @@ describe("flow compatibility primitives", () => {
         blockedPayload,
         {
           command: "bun run test:flow",
-          toolchainFingerprint: "bun@1.4.4",
+          toolchainFingerprint: "bun@1.4.5",
           inputFingerprint: "scope-hash",
           inputPaths: ["README.md"],
           exitCode: 0,

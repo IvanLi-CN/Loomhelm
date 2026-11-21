@@ -28,7 +28,7 @@ try {
   const inventory = JSON.parse(
     readFileSync(join(isolated, "resources/artifact-manifest.json"), "utf8"),
   );
-  assert.equal(inventory.runtime, "bun@1.4.4");
+  assert.equal(inventory.runtime, "bun@1.4.5");
   assert.ok(inventory.files.every((file) => file.path.startsWith("skills/")));
   mkdirSync(join(isolated, "host"), { mode: 0o700 });
   const env = {

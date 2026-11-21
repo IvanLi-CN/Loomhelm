@@ -56,7 +56,7 @@
 
 ### REQ-SRR-002：Bun 与独立安装前置条件
 
-生产运行时 MUST 使用 Bun `1.4.4`，并直接执行包内声明的源代码或构建产物；Node、动态安装、缺失依赖时静默回退和父仓库源码回退均 MUST NOT 被视为成功。
+生产运行时 MUST 使用 Bun `1.4.5`，并直接执行包内声明的源代码或构建产物；Node、动态安装、缺失依赖时静默回退和父仓库源码回退均 MUST NOT 被视为成功。
 
 干净临时目录中的安装验证 MUST 能区分“包内容完整”与“外部 Bun 前置条件缺失”；缺失、版本不符、文件摘要不符或依赖闭包不完整 MUST fail closed，并给出可行动错误。
 
@@ -226,7 +226,7 @@ package-backed daemon MUST 只使用 package 自带 Skill/runtime/viewer 资源�
 
 ### VER-SRR-003
 
-- Method: 使用 Bun `1.4.4`、错误 Bun 版本、缺失依赖、Node-only 环境和含源 checkout 的临时目录执行安装与启动矩阵。
+- Method: 使用 Bun `1.4.5`、错误 Bun 版本、缺失依赖、Node-only 环境和含源 checkout 的临时目录执行安装与启动矩阵。
 - covers: `REQ-SRR-002`
 - Pass condition: 只有明确满足 Bun 与依赖前置条件的独立安装成功，其他场景输出可行动错误且不执行隐式安装或回退。
 

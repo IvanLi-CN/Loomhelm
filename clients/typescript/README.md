@@ -1,6 +1,6 @@
 # `@loomhelm/multi-task-flow`
 
-独立的 Multi-task Flow Skill runtime 与本地账本 CLI，与 Go 客户端并存。包的正式入口是 `multi-task-flow`，兼容别名 `loomhelm` 仍保留；生产运行时只支持 Bun 1.4.4，包直接执行 TypeScript 源码并携带完整 Skill、合同和 viewer 资源，production dependencies 由消费者安装。
+独立的 Multi-task Flow Skill runtime 与本地账本 CLI，与 Go 客户端并存。包的正式入口是 `multi-task-flow`，兼容别名 `loomhelm` 仍保留；生产运行时只支持 Bun 1.4.5，包直接执行 TypeScript 源码并携带完整 Skill、合同和 viewer 资源，production dependencies 由消费者安装。
 
 安装包不依赖父仓库 checkout、`~/.agents` 或全局 Skill 源包。`playwright`、`sharp`、`zod` 由 npm 根 package 声明并在消费者 `bun install` 时解析；React、ELK、vis 等只用于 workspace viewer build，Bun 是包外部前置条件，不由包自动安装或升级。
 
@@ -29,7 +29,7 @@ bunx --bun @loomhelm/multi-task-flow@<exact-version> --output json flow show --i
 
 ## 版本化安装与内部版本矩阵
 
-可重复的生产安装必须固定 package version；compatibility line 和 `latest` 不构成当前 CLI 身份或兼容性证明。运行前置条件是 `bun --version` 返回 `1.4.4`；Bun 由宿主提供，包不会替换或升级它。
+可重复的生产安装必须固定 package version；compatibility line 和 `latest` 不构成当前 CLI 身份或兼容性证明。运行前置条件是 `bun --version` 返回 `1.4.5`；Bun 由宿主提供，包不会替换或升级它。
 
 ```sh
 bunx --bun @loomhelm/multi-task-flow@0.2.55 --output json skills list
@@ -150,7 +150,7 @@ viewer 新包采用 v2 清单，覆盖启动 shell、TS、依赖及网页的逐�
 
 ## 平台与构建
 
-生产仅支持 Bun 1.4.4；Node 和旧 `dist/` CLI 不再受支持。使用 Bun 内置 `bun:ffi`，保留目录描述符相对操作、flock 和原子不覆盖重命名，不需要项目原生编译或 Python 辅助进程。发布与 CI 验证平台为 Linux x64 glibc；Windows 不受支持。专项 Skill 仍要求各自的外部工具与授权，发现源包不代表已具备其宿主能力。
+生产仅支持 Bun 1.4.5；Node 和旧 `dist/` CLI 不再受支持。使用 Bun 内置 `bun:ffi`，保留目录描述符相对操作、flock 和原子不覆盖重命名，不需要项目原生编译或 Python 辅助进程。发布与 CI 验证平台为 Linux x64 glibc；Windows 不受支持。专项 Skill 仍要求各自的外部工具与授权，发现源包不代表已具备其宿主能力。
 
 来源提交未包含独立 LICENSE 文件，不能据此推断公共再分发许可；保留源文件原有版权和许可内容及来源清单。
 

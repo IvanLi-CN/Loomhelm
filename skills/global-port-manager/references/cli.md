@@ -1,6 +1,6 @@
 # Port registry CLI
 
-Run through Bun 1.4.4 only. Define one wrapper per shell so every command shares the same invocation:
+Run through Bun 1.4.5 only. Define one wrapper per shell so every command shares the same invocation:
 
 ```bash
 port_registry() {

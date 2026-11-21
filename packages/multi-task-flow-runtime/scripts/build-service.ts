@@ -28,7 +28,7 @@ requireCondition(
   "Service bundles are produced by the protected release workflow; user-side builds are not supported",
 );
 requireCondition(!existsSync(output), "OUTPUT_EXISTS", "Build output must be a new directory");
-requireCondition(Bun.version === "1.4.4", "RUNTIME_REQUIRED", "Bun 1.4.4 is required");
+requireCondition(Bun.version === "1.4.5", "RUNTIME_REQUIRED", "Bun 1.4.5 is required");
 const root = resolve(import.meta.dir, "../../..");
 const source = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: root });
 requireCondition(
@@ -147,7 +147,7 @@ chmod 700 "$temporary/bun"
 actual=$(shasum -a 256 "$temporary/bun")
 [[ "\${actual%% *}" == ${quote(runtimeSha)} ]] || { echo BUN_RUNTIME_CHANGED >&2; exit 2; }
 version=$("$temporary/bun" --version)
-[[ "$version" == 1.4.4 ]] || { echo BUN_RUNTIME_REQUIRED >&2; exit 2; }
+[[ "$version" == 1.4.5 ]] || { echo BUN_RUNTIME_REQUIRED >&2; exit 2; }
 LOOMHELM_VIEWER_RELEASE="$viewer_dir" LOOMHELM_VIEWER_RUNTIME_TEMP="$temporary" exec "$temporary/bun" --preload=${quote(bootstrapUrl)} --no-install "$viewer_dir/skills/multi-task-flow/scripts/service.ts" "$@"
 `;
 
@@ -160,5 +160,5 @@ writeFileSync(
 );
 const verified = verifyRelease(output);
 console.log(
-  JSON.stringify({ ok: true, build_id: verified.build_id, output, runtime: "bun@1.4.4" }),
+  JSON.stringify({ ok: true, build_id: verified.build_id, output, runtime: "bun@1.4.5" }),
 );

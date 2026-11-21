@@ -4,7 +4,7 @@
 
 `git-branch`、`git-worktree`、`git-cleanup`、所有 `*-flow`、`flow-continue`、`dev-plan`、`docs-migrate` 和 `kaisoumail-deployment-inventory` 仅供显式调用。它们同时通过 `agents/openai.yaml` 的 `policy.allow_implicit_invocation: false` 和 `SKILL.md` frontmatter 的 `disable-model-invocation: true` 关闭 Codex 与 Claude Code、OMP、Pi 的默认发现注入；手动入口保留。此设置不移除其他文档中的显式引用，也不改变各 Skill 的授权与执行边界。
 
-生产仅支持 Bun 1.4.4；`bun clients/typescript/src/cli.ts skills list/check/run` 直接执行 TS。`skills run <资源相对路径>` 不改写脚本后缀；`LOOMHELM_TOOLKIT_ROOT` 指向包内 `toolkit/` 或本仓库资源根。vendor 仅检出 `skills/` 后，使用 Bun 和锁文件准备声明依赖即可运行脚本；浏览器资产单独构建，不要求本机 TS 编译、Node 或项目原生模块。专项操作仍需要原授权、外部工具和宿主能力。
+生产仅支持 Bun 1.4.5；`bun clients/typescript/src/cli.ts skills list/check/run` 直接执行 TS。`skills run <资源相对路径>` 不改写脚本后缀；`LOOMHELM_TOOLKIT_ROOT` 指向包内 `toolkit/` 或本仓库资源根。vendor 仅检出 `skills/` 后，使用 Bun 和锁文件准备声明依赖即可运行脚本；浏览器资产单独构建，不要求本机 TS 编译、Node 或项目原生模块。专项操作仍需要原授权、外部工具和宿主能力。
 
 This directory contains the Skill resources required by this Loomhelm runtime and its owner-facing workflow integration.
 
