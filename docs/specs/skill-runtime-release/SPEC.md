@@ -190,7 +190,7 @@ registry exact identity 只有在 exact-visible 且 tarball/raw integrity 对账
 
 运行时和发布日志 MUST 记录足以对账的 package version、compat line、merge SHA、build ID、tag、tarball digest、release identity、generation、PID、run 和 lease，而不得输出凭据或敏感内容。
 
-预期成功的 Skill release workflow 失败时，default-branch metadata-only sidecar MUST 复用 `github-issue` transport 创建或更新一个幂等 Issue，通知失败不得覆盖原 workflow 失败；Issue 只包含安全的 receipt context 和下一步对账动作，不得伪造外部 publication receipt。
+预期成功的 Skill release workflow 失败时，default-branch metadata-only sidecar MUST 通过 checked-in Oidrune reusable workflow 投递一次变更正文（`failure` conclusion，SHA-pinned tag 与 OIDC 认证），正文只含安全的 receipt context 和下一步对账动作；通知失败不得覆盖原 workflow 失败，MUST NOT 创建或更新 GitHub Issue，也不得伪造外部 publication receipt。
 
 候选构建完成后 MUST 在 publication 之前上传独立的 release identity artifact，使 verify 或 publish 任一阶段失败时 sidecar 都能读取同一候选身份；receipt 缺失或不一致 MUST 只产生可操作的失败上下文，不得推断外部 publication 成功。
 
@@ -358,7 +358,7 @@ package-backed daemon MUST 只使用 package 自带 Skill/runtime/viewer 资源�
 
 ### VER-SRR-025
 
-- Method: 从 CLI、README、操作手册、release receipt、失败 Issue 和发布日志检查消费者依赖安装、版本矩阵、服务边界、TTL、迁移、tag、label、回滚、`published/completed` 语义和失败恢复的完整性。
+- Method: 从 CLI、README、操作手册、release receipt、失败通知和发布日志检查消费者依赖安装、版本矩阵、服务边界、TTL、迁移、tag、label、回滚、`published/completed` 语义和失败恢复的完整性。
 - covers: `REQ-SRR-014`
 - Pass condition: 新维护者可以根据文档定位正式入口、消费者安装前置条件、receipt 恢复顺序和停止边界，不依赖隐含源 checkout 或危险的删除/force 操作。
 

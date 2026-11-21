@@ -13,7 +13,7 @@
     "ts-client-linux-amd64.tar.gz",
     "web.tar.gz"
   ],
-  "notification_transport": "github-issue",
+  "notification_transport": "oidrune-reusable-workflow",
   "compatibility": {
     "default": "exact-version",
     "allow": []

@@ -28,7 +28,7 @@ ADR 0030 将 registry 对账和消费者依赖边界收敛为当前实现：新 
 
 当前源码合同已同步到客户端 README、Multi-task Flow Skill 和 workflow README，覆盖精确 package/Bun 入口、`compat-vN` 与内部版本矩阵、direct ledger CLI、gateway/worker 边界、agent/browser TTL、latest reader 双读、旧 reader 只读 fallback、maintenance migration、rollback、label gate、exact merge SHA、single tarball、immutable tag、dist-tag promotion 和失败恢复。
 
-当前实现还同步记录 consumer-install dependencies、tarball 无 production `node_modules`、UTF-8 path-byte digest、legacy integrity authority、processing/409/timeout reconcile、dist-tag逐个 read-back、release receipt 和 `github-issue` failure sidecar 的边界。
+当前实现还同步记录 consumer-install dependencies、tarball 无 production `node_modules`、UTF-8 path-byte digest、legacy integrity authority、processing/409/timeout reconcile、dist-tag逐个 read-back、release receipt 和 Oidrune reusable-workflow failure sidecar 的边界。
 
 候选发布门禁现在进一步验证实际 npm archive 的 `toolkit/package.json`、artifact inventory、显式 npm omissions、未登记 toolkit 文件和 npm 自动省略的隐藏文件，并在干净临时目录用 Bun 1.4.4 安装候选包、导入客户端与 runtime-core、列出 `multi-task-flow` Skill；这些检查在 npm 写入前失败即停止。
 

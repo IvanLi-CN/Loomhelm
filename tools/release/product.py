@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import failure_report
 from policy import ReleaseError, Version, canonical, digest, reserve
 from ledger import Ledger, event, git, transition
 from github import GitHub
@@ -23,7 +24,7 @@ def contract():
     expected = dict(schema_version=1, policy='loomhelm-manual-v1', release_unit='loomhelm',
         target='semver-final-or-prerelease-without-build-metadata', baseline='verified-public-completed-final',
         ledger_ref='refs/heads/release-ledger', tag_prefix='v', single_active_reservation=True,
-        notification_transport='github-issue', compatibility={'default':'exact-version','allow':[]})
+        notification_transport='oidrune-reusable-workflow', compatibility={'default':'exact-version','allow':[]})
     artifacts = {'server-linux-amd64.tar.gz','go-client-linux-amd64.tar.gz','ts-client-linux-amd64.tar.gz','web.tar.gz'}
     if set(value) != set(expected) | {'artifacts'} or any(value.get(key) != expected[key] for key in expected) or len(value['artifacts']) != len(artifacts) or set(value['artifacts']) != artifacts:
         raise ReleaseError('unsupported or incomplete executable release policy')
@@ -192,6 +193,49 @@ def publish(api, ledger, record, directory):
     ledger.append(ledger.state)
 
 
+def notify_failure(record, ledger, repo, run_id, stage, phase, result=None):
+    # Oidrune owns delivery. The ledger records the handoff phase, never a delivery fact.
+    if stage not in ('Manual Release', 'Release'):
+        raise ReleaseError('unsupported failure stage')
+    if not run_id.isdigit():
+        raise ReleaseError('invalid failed workflow run')
+    # The sidecar forwards the failed run's own metadata; the notifier's own
+    # attempt and SHA would describe the wrong run.
+    run = dict(name=stage, conclusion='failure', event='workflow_dispatch', head_branch='main',
+               head_sha=os.environ.get('FAILURE_HEAD_SHA', ''),
+               html_url=f'https://github.com/{repo}/actions/runs/{run_id}',
+               run_attempt=os.environ.get('FAILURE_RUN_ATTEMPT') or os.environ.get('GITHUB_RUN_ATTEMPT', ''),
+               actor={'login': os.environ.get('FAILURE_ACTOR') or os.environ.get('GITHUB_ACTOR', 'unknown')})
+    same = [e for e in record['events'] if e['kind'] == 'notification' and e.get('run') == run_id and e.get('stage') == stage]
+    accepted = [e for e in same if e.get('status') == 'handoff-accepted']
+    pending = [e for e in same if e.get('status') == 'pending']
+    converged = [e for e in same if e.get('status') in ('handoff-accepted', 'failed-or-unknown')]
+    # Delivery decisions are identity-level: one page per failed run and stage.
+    # Sent-attempt ownership is keyed by the exact sidecar run and attempt, so a
+    # retried job settles its own verdict and a later sidecar run is never
+    # mistaken for an attempt that already reported.
+    delivered = [e for e in same if e.get('status') in ('pending', 'handoff-accepted', 'failed-or-unknown')
+                 and e.get('workflow_run') == os.environ.get('GITHUB_RUN_ID') and e.get('workflow_attempt') == os.environ.get('GITHUB_RUN_ATTEMPT')]
+    if phase == 'prepare':
+        # Reuse an outstanding pending from an aborted attempt instead of
+        # orphaning it; never mint two for the same attempt.
+        deliver = not accepted
+        if deliver and not any(e.get('status') == 'pending' for e in delivered) and len(pending) <= len(converged):
+            transition(record, 'notification', status='pending', run=run_id, stage=stage)
+            ledger.append(ledger.state)
+        tail = ['Product release ' + record['version'], 'Identity: ' + record['id'], 'Stage: ' + stage,
+                'Recovery: rerun Release with this identity; do not allocate a successor.']
+        return dict(summary=failure_report.summary(run, tail), identity=record['id'], stage=stage, deliver=deliver)
+    if result not in ('accepted', 'failed'):
+        raise ReleaseError('notification result required')
+    if not pending:
+        raise ReleaseError('no pending notification for this run')
+    if any(e.get('status') in ('handoff-accepted', 'failed-or-unknown') for e in delivered):
+        return
+    transition(record, 'notification', status='handoff-accepted' if result == 'accepted' else 'failed-or-unknown', run=run_id, stage=stage)
+    ledger.append(ledger.state)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['check','audit','project','reserve','prepare','reconcile','bind','inspect','verify','publish','notify','terminate','claim-build'])
@@ -202,6 +246,8 @@ def main():
     parser.add_argument('--reason')
     parser.add_argument('--preparation-sha')
     parser.add_argument('--assessment',type=Path)
+    parser.add_argument('--phase',choices=['prepare','result'],default='prepare')
+    parser.add_argument('--result',choices=['accepted','failed'])
     args = parser.parse_args()
     os.chdir(ROOT)
     if args.action == 'check':
@@ -313,23 +359,12 @@ def main():
             transition(record,'terminated',reason=args.reason)
             ledger.append(ledger.state)
         elif args.action == 'notify':
-            # Metadata only; secret-bearing sidecar passes allowlisted stage/run URL.
             stage = os.environ.get('RELEASE_FAILURE_STAGE','Release')
-            if stage not in ('Manual Release','Release'):
-                raise ReleaseError('unsupported failure stage')
             run_id = os.environ.get('FAILURE_RUN_ID','')
-            if not run_id.isdigit():
-                raise ReleaseError('invalid failed workflow run')
-            transition(record,'notification',status='pending',run=run_id,stage=stage)
-            ledger.append(ledger.state)
-            try:
-                issue = api.notify(record,f'https://github.com/{repo}/actions/runs/{run_id}',stage)
-            except ReleaseError:
-                transition(record,'notification',status='failed-or-unknown',run=run_id,stage=stage)
-                ledger.append(ledger.state)
-                raise
-            transition(record,'notification',status='delivered',issue=issue['number'],run=run_id,stage=stage)
-            ledger.append(ledger.state)
+            if args.phase == 'prepare':
+                print(json.dumps(notify_failure(record,ledger,repo,run_id,stage,'prepare'),sort_keys=True))
+                return
+            notify_failure(record,ledger,repo,run_id,stage,'result',args.result)
     print(json.dumps(record,sort_keys=True))
 
 
