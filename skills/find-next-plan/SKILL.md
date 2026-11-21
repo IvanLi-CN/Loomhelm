@@ -1,6 +1,7 @@
 ---
 name: find-next-plan
 description: "Choose the next implementable spec."
+disable-model-invocation: true
 ---
 
 # Find Next Spec

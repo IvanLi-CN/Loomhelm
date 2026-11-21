@@ -1,6 +1,7 @@
 ---
 name: local-merge-flow
 description: "Fast local delivery to merge-ready without creating a PR."
+disable-model-invocation: true
 ---
 
 # Local merge flow

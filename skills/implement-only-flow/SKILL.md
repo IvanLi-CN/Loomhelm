@@ -1,6 +1,7 @@
 ---
 name: implement-only-flow
 description: "Plan implementation without delivery steps."
+disable-model-invocation: true
 ---
 
 # Implement-only flow（仅实现流程）

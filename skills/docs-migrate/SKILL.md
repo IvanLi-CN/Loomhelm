@@ -1,6 +1,7 @@
 ---
 name: docs-migrate
 description: "Migrate legacy planning/spec docs or notes/learnings into canonical docs/specs or docs/solutions, batch-clean existing specs, or batch-promote stable project truth into repo-established human-facing project docs."
+disable-model-invocation: true
 ---
 
 # Docs migrate

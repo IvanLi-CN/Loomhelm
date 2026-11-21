@@ -1,6 +1,7 @@
 ---
 name: git-cleanup
 description: "Clean local branches, worktrees, port leases, and post-merge PR workspaces."
+disable-model-invocation: true
 ---
 
 # Git cleanup

@@ -1,6 +1,7 @@
 ---
 name: git-branch
 description: "Manage local git branches safely."
+disable-model-invocation: true
 ---
 
 # Git branch

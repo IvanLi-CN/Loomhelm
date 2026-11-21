@@ -1,6 +1,7 @@
 ---
 name: dev-plan
 description: Produce a decision-complete proposed plan.
+disable-model-invocation: true
 ---
 
 # Dev Plan
