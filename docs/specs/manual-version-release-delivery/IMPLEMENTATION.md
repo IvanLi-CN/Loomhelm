@@ -14,13 +14,13 @@ Implementation: 统一发布合同及原生包入口已实现。Owner 指定并�
 | REQ-MVR-005、009 | 原生构建 partition、完整 product manifest、独立资产 digest 和共同公开；Linux 包 CI 与 Bun 1.4.4 源码运行和 FFI 检查 |
 | REQ-MVR-006、010 | draft 原件保留、公开/完成分阶段、未知结果对账、原身份恢复、completed-only Deploy verify；故障注入测试 |
 | REQ-MVR-007 | Go/Web/TS 门禁、426 失败、不可变 build identity、Web 受控错误及 TS Local mode 独立；Go 和 TS 覆盖测试 |
-| REQ-MVR-008、011 | Go 独立版本旁路关闭，保留其实现与统一包；可信默认分支通知 sidecar 与身份 Issue 对账 |
+| REQ-MVR-008、011 | Go 独立版本旁路关闭，保留其实现与统一包；可信默认分支通知 sidecar 生成 caller-owned summary 并经 Oidrune reusable workflow 投递，ledger 只记 handoff 阶段 |
 
 缺失 ledger 时只将包含完整正式版或预发布版本及身份后缀的准备分支视为发布历史，普通开发分支不会阻断首发。正式发布从 bound 进入 staged 前必须已有持久构建 claim，manifest 的 run 与 attempt 必须与该来源一致；缺失或不符在上传前拒绝。
 
 准备阶段的 reconcile 以实际 diff、owner、理由和证据核验原发版意图，签名追加 preparation_revisions，不覆盖原始 reservation。main 的历史 VERSION 和已合并 PR 决定版本是否固定，不把缺失 bound 回执或 main 后来换版本当作可换源码的许可。bind 和 Release 适配读取最新已核验准备修订；临时 Git 历史测试覆盖重复接续、原身份恢复、意图外拒绝、投影字节及主干绑定边界。
 
-准备分支合入其他 base 不等于版本落 main；主干历史和已合并 main PR 的拒绝条件继续有效。非 object 的 assessment 在 provider 或 ledger 写入前返回受控错误。失败 sidecar 将缺失或空的身份附件按可信 workflow-run 元数据通知，非空但损坏的附件继续拒绝；既有 run marker 查询防止重复 Issue，不编造产品身份。
+准备分支合入其他 base 不等于版本落 main；主干历史和已合并 main PR 的拒绝条件继续有效。非 object 的 assessment 在 provider 或 ledger 写入前返回受控错误。失败 sidecar 将缺失或空的身份附件按可信 workflow-run 元数据通知，非空但损坏的附件继续拒绝；同一失败 run 与 stage 至多一个未收敛的 `pending`，每个 sidecar run／attempt 至多写一个 `pending` 与一个终态；只重跑失败 job 时由 record 按该 sidecar run／attempt 补写 handoff 判定，已 accepted 的失败 run 重跑不再重复投递，不编造产品身份。
 
 ## Verification
 
@@ -38,7 +38,7 @@ main 已有原生分支保护，required checks 共十一项，strict、签名�
 
 仓库当前禁止 Actions 创建 PR；保持该设置，版本准备分支由工作流创建，普通 PR 由 owner 或已获授权的 agent 用现有 gh 身份打开。内置令牌不能读取管理员级保护详情；CI 只验证可见 protected 与 required contexts，完整配置由 owner 现有 gh 审计并保留证据。发布运行另外拒绝无精确 main 合并 PR、无签名或检查不通过的真实源码。写权限与平台签名的真实行为必须在授权发布时观察；PR fixtures 不能证明真实发布成功。
 
-A6 的完整版本输入、授权、准确 Merge Receipt、真实首发和完成后同身份只读恢复已有证据。部分上传中断恢复、公开后丢失 completion 的真实故障注入及产品身份 Issue 投递仍未演练，不能因 fixtures 或成功首发而记为全部通过。旧 Manual Release run 42437677675 的空附件通知曾失败于 JSON 解析，独立修复补充回归测试；实际通知重试须另记平台结果。后续产品发版仍需 owner 指定 target，不自动选择 patch。GitHub API 不可见或无权限时保留 unknown。
+A6 的完整版本输入、授权、准确 Merge Receipt、真实首发和完成后同身份只读恢复已有证据。部分上传中断恢复、公开后丢失 completion 的真实故障注入及产品身份的 Oidrune 投递仍未演练，不能因 fixtures 或成功首发而记为全部通过。旧 Manual Release run 42437677675 的空附件通知曾失败于 JSON 解析，独立修复补充回归测试；实际通知重试须另记平台结果。后续产品发版仍需 owner 指定 target，不自动选择 patch。GitHub API 不可见或无权限时保留 unknown。
 
 ## Compatibility
 

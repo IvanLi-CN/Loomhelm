@@ -103,16 +103,6 @@ class GitHub:
             self.api("git/refs", "POST", dict(ref="refs/tags/v"+version, sha=sha))
         self.verify_tag(version, sha, required=True)
 
-    def issues(self):
-        result = []
-        page = 1
-        while True:
-            batch = self.api(f"issues?state=all&per_page=100&page={page}")
-            result.extend(batch)
-            if len(batch) < 100:
-                return result
-            page += 1
-
     def verify_seed(self, sha):
         # The seed is storage ancestry, not released product source. It needs
         # signed main ancestry, but no PR/check read permission in the notifier.
@@ -198,14 +188,3 @@ class GitHub:
         result = subprocess.run(['gh','release','upload',release['tag_name'],str(path),'--repo',self.repo], capture_output=True)
         if result.returncode:
             raise ReleaseError('asset upload uncertain; reconcile the same identity')
-
-    def notify(self, record, run_url, stage):
-        marker = '<!-- loomhelm-release:'+record['id']+' -->'
-        issues = self.issues()
-        body = f'{marker}\nProduct release {record["version"]}\nIdentity: {record["id"]}\nStage: {stage}\nRun: {run_url}\nRecovery: rerun Release with this identity; do not allocate a successor.'
-        matches = [i for i in issues if marker in (i.get('body') or '') and 'pull_request' not in i]
-        if len(matches) > 1:
-            raise ReleaseError('ambiguous notification identity')
-        if matches:
-            return self.api('issues/'+str(matches[0]['number']),'PATCH',dict(body=body))
-        return self.api('issues','POST',dict(title='Product release failed: '+record['version'],body=body))
