@@ -239,6 +239,7 @@ function requireComplete(
               String(ledger.head_sha),
               String(ledger.base_sha),
               tier,
+              { legacySchema: ledger.schema_version === 6 },
             ),
         )
       : undefined;

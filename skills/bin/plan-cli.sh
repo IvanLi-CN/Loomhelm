@@ -180,8 +180,8 @@ set +C
 /bin/chmod 700 "$runtime_copy"
 
 runtime_version="$(/usr/bin/env -u BUN_INSPECT_PRELOAD -u BUN_OPTIONS -u NODE_OPTIONS -u BUN_CONFIG -u BUN_CONFIG_PATH -u BUN_BIN "$runtime_copy" --version 2>/dev/null || true)"
-if [[ "$runtime_version" != 1.4.4 ]]; then
-  echo "ERROR: Bun 1.4.4 is required; found ${runtime_version:-unavailable}" >&2
+if [[ "$runtime_version" != 1.4.5 ]]; then
+  echo "ERROR: Bun 1.4.5 is required; found ${runtime_version:-unavailable}" >&2
   exit 2
 fi
 

@@ -167,6 +167,11 @@ if [ "$bun_ready" -eq 1 ]; then
 	else
 		fail "Bun dependency installation failed; fix the reported lockfile or network issue and rerun scripts/setup"
 	fi
+	if scripts/install-skills-deps; then
+		echo "skill dependencies are ready"
+	else
+		fail "Skill dependency installation failed; skills/ has its own lockfile and resolves @loomhelm/runtime-core separately, so fix the reported skills/ lockfile or network issue and rerun scripts/setup"
+	fi
 fi
 
 if command -v docker >/dev/null 2>&1; then

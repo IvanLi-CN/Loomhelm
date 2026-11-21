@@ -34,17 +34,7 @@ Ask only when the target worktree or branch cannot be uniquely identified.
 
 ## Scope ID
 
-Use the same deterministic scope rule across create/remove/cleanup:
-
-```text
-<project>--<repo_hash8>--<worktree_slug>
-```
-
-- `project`: basename of the Git repo root.
-- `repo_hash8`: first 8 chars of SHA256 over the absolute repo root path.
-- `worktree_slug`: the worktree's stable short slug.
-
-Never use a bare slug as `scope_id`.
+`$global-port-manager` owns the deterministic `scope_id` rule. Derive it there and reuse the same value across create/remove/cleanup; never use a bare slug.
 
 ## Create workflow
 
@@ -54,11 +44,7 @@ Before any create, reject `CODEX_MANAGED_TASK=yes`. For a native task conversati
    - `git rev-parse --show-toplevel`
    - `git status --short --branch`
    - `git worktree list`
-2. Resolve `BASE_REF`:
-   - explicit input first
-   - before using any remote-tracking ref, refresh that remote with `git fetch --prune <remote>`
-   - remote default branch if uniquely available after fetch
-   - otherwise ask one key question
+2. Resolve `BASE_REF` by the `$git-branch` rules: explicit input first; before using any remote-tracking ref, refresh that remote with `git fetch --prune <remote>`; the remote default branch when uniquely available after fetch; otherwise ask one key question.
 3. Resolve `WORKTREE_SLUG`, `BRANCH`, and absolute path:
    - default path: `<repo_parent>/<project>-wt-<WORKTREE_SLUG>`
 4. Do not overwrite an existing directory.

@@ -40,11 +40,11 @@ If `HEAD` is detached and a topic branch is needed, create it from explicit `BAS
 
 ### 2) Create a topic branch
 
-1. Resolve `BASE_REF`:
+1. Resolve `BASE_REF` — this is the canonical rule `$git-worktree` and `$git-cleanup` reuse:
    - Use explicit `BASE_REF` when provided.
    - Otherwise use current `HEAD` when the owner wants to preserve current context.
-   - Only use a remote default branch after it has been fetched and uniquely resolved.
-   - When a shared workflow caller already resolved the target repo mainline or another confirmed baseline, treat that explicit `BASE_REF` as the source of truth for branch creation.
+   - Before using any remote-tracking ref, refresh that remote with `git fetch --prune <remote>`; then use the remote default branch only when it resolves uniquely.
+   - When a shared workflow caller already resolved the target repo mainline or another confirmed baseline, that explicit `BASE_REF` is the source of truth.
 2. Derive a branch name from `PURPOSE` if `BRANCH` is not provided.
 3. Confirm the name does not already exist:
    - `git show-ref --verify --quiet refs/heads/<branch>`

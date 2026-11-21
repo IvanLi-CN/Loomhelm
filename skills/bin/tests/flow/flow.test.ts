@@ -24,6 +24,7 @@ import {
 } from "../../modules/flow/review-ledger";
 import {
   initialLedger,
+  isCurrentClearWave,
   normalizePostMergeEvidence,
   normalizeLedger,
 } from "../../modules/flow/state";
@@ -173,7 +174,7 @@ describe("flow compatibility primitives", () => {
         payload,
         {
           command: "bun run test:flow",
-          toolchainFingerprint: "bun@1.4.4",
+          toolchainFingerprint: "bun@1.4.5",
           inputFingerprint: "scope-hash",
           exitCode: 0,
           logPath: "",
@@ -211,7 +212,7 @@ describe("flow compatibility primitives", () => {
         payload,
         {
           command: "bun run test:flow",
-          toolchainFingerprint: "bun@1.4.4",
+          toolchainFingerprint: "bun@1.4.5",
           inputFingerprint: "scope-hash",
           inputPaths: ["README.md"],
           exitCode: 0,
@@ -253,7 +254,7 @@ describe("flow compatibility primitives", () => {
         blockedPayload,
         {
           command: "bun run test:flow",
-          toolchainFingerprint: "bun@1.4.4",
+          toolchainFingerprint: "bun@1.4.5",
           inputFingerprint: "scope-hash",
           inputPaths: ["README.md"],
           exitCode: 0,
@@ -406,10 +407,7 @@ describe("acceptance and review state", () => {
       source: "agent-assessment",
     };
     const lanes = [
-      { lane: "contract", model: "gpt-6-luna", effort: "max" },
-      { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
-      { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
-      { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
+      { lane: "comprehensive", model: "gpt-6-luna", effort: "max" },
     ];
     const opened = openReviewWaveState(ledger, {
       stage: "initial",
@@ -463,7 +461,7 @@ describe("acceptance and review state", () => {
     )[String(staleWave.wave_id)];
     const findingReceipt = (
       findingStale.receipts as Record<string, unknown>[]
-    ).find((receipt) => receipt.lane === "contract");
+    ).find((receipt) => receipt.lane === "comprehensive");
     if (!findingReceipt) throw new Error("stale review receipt is missing");
     findingReceipt.review_clear = false;
     findingReceipt.overall_correctness = "patch is incorrect";
@@ -484,7 +482,7 @@ describe("acceptance and review state", () => {
     )[String(staleWave.wave_id)];
     delete (
       missingWave.lanes as Record<string, Record<string, unknown>>
-    )["test-platform"];
+    ).comprehensive;
     expect(() =>
       openReviewWaveState(missingLane, {
         stage: "initial",
@@ -533,7 +531,7 @@ describe("acceptance and review state", () => {
           overall_confidence_score: 1,
         }),
         waveId: String(wave.wave_id),
-        lane: "contract",
+        lane: "comprehensive",
       }),
     ).toThrow("review wave scope binding is invalid");
     wave.scope_binding = originalBinding;
@@ -551,16 +549,16 @@ describe("acceptance and review state", () => {
           overall_confidence_score: 1,
         }),
         waveId: String(wave.wave_id),
-        lane: "contract",
+        lane: "comprehensive",
       }),
     ).toThrow("review wave scope binding is invalid");
     wave.scope_class = originalScope;
     for (const lane of lanes) {
-      if (lane.lane === "contract") {
+      if (lane.lane === "comprehensive") {
         const unavailable = recordSubagentReviewState(ledger, {
           reviewProfile: "pr-convergence",
           baseRef: sha,
-          reviewAttemptId: "contract-startup-1",
+          reviewAttemptId: "comprehensive-startup-1",
           reviewResultJson: "",
           terminalState: "unavailable",
           unavailabilityClassification: "startup-unavailable",
@@ -586,7 +584,7 @@ describe("acceptance and review state", () => {
           recordSubagentReviewState(ledger, {
             reviewProfile: "pr-convergence",
             baseRef: sha,
-            reviewAttemptId: "contract-startup-1",
+            reviewAttemptId: "comprehensive-startup-1",
             reviewResultJson: "",
             terminalState: "unavailable",
             unavailabilityClassification: "startup-unavailable",
@@ -603,7 +601,7 @@ describe("acceptance and review state", () => {
           recordSubagentReviewState(ledger, {
             reviewProfile: "pr-convergence",
             baseRef: sha,
-            reviewAttemptId: "contract-startup-1",
+            reviewAttemptId: "comprehensive-startup-1",
             reviewResultJson: "",
             terminalState: "unavailable",
             unavailabilityClassification: "startup-unavailable",
@@ -617,7 +615,7 @@ describe("acceptance and review state", () => {
           recordSubagentReviewState(ledger, {
             reviewProfile: "pr-convergence",
             baseRef: sha,
-            reviewAttemptId: "contract-startup-1",
+            reviewAttemptId: "comprehensive-startup-1",
             reviewResultJson: JSON.stringify({
               findings: [],
               overall_correctness: "patch is correct",
@@ -638,7 +636,7 @@ describe("acceptance and review state", () => {
           recordSubagentReviewState(ledger, {
             reviewProfile: "pr-convergence",
             baseRef: sha,
-            reviewAttemptId: "contract-startup-1",
+            reviewAttemptId: "comprehensive-startup-1",
             reviewResultJson: "",
             terminalState: "unavailable",
             unavailabilityClassification: "startup-unavailable",
@@ -665,14 +663,14 @@ describe("acceptance and review state", () => {
       expect(result.reused).toBe(false);
     }
     const contractReceipt = (ledger.receipts as Record<string, unknown>[]).find(
-      (receipt) => receipt.kind === "review" && receipt.lane === "contract",
+      (receipt) => receipt.kind === "review" && receipt.lane === "comprehensive",
     );
     expect(contractReceipt).toMatchObject({
       review_receipt_schema: 7,
       requested_profile: { model: "gpt-6-luna", effort: "max" },
       profile_verification: "request_recorded",
       effective_profile: null,
-      attempt_key: "attempt-contract",
+      attempt_key: "attempt-comprehensive",
     });
     expect(contractReceipt).not.toHaveProperty("reported_profile");
     if (!contractReceipt) throw new Error("contract receipt is missing");
@@ -684,7 +682,7 @@ describe("acceptance and review state", () => {
       recordSubagentReviewState(ledger, {
         reviewProfile: "pr-convergence",
         baseRef: sha,
-        reviewAttemptId: "attempt-contract",
+        reviewAttemptId: "attempt-comprehensive",
         reviewResultJson: JSON.stringify({
           findings: [],
           overall_correctness: "patch is correct",
@@ -693,7 +691,7 @@ describe("acceptance and review state", () => {
           overall_confidence_score: 1,
         }),
         waveId: String(wave.wave_id),
-        lane: "contract",
+        lane: "comprehensive",
       }),
     ).toThrow("review receipt requested profile integrity is invalid");
     contractReceipt.requested_profile = {
@@ -746,10 +744,7 @@ describe("acceptance and review state", () => {
       source: "agent-assessment",
     };
     const lanes = [
-      { lane: "contract", model: "gpt-6-luna", effort: "max" },
-      { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
-      { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
-      { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
+      { lane: "comprehensive", model: "gpt-6-luna", effort: "max" },
     ];
     const opened = openReviewWaveState(ledger, {
       stage: "initial",
@@ -766,7 +761,7 @@ describe("acceptance and review state", () => {
       terminalState: "unavailable",
       unavailabilityClassification: "startup-unavailable",
       waveId: String(wave.wave_id),
-      lane: "contract",
+      lane: "comprehensive",
     });
     expect(() =>
       finalizeReviewWaveState(ledger, String(wave.wave_id), {
@@ -779,6 +774,48 @@ describe("acceptance and review state", () => {
     ).toThrow("review wave requires terminal receipts");
   });
 
+  test("recognizes the retired four-lane topology only for schema 6", () => {
+    const synthesis = {
+      groups: [],
+      invariants: [],
+      coverage: [],
+      conflicts: [],
+      acceptance: [],
+    };
+    const wave = (lanes: Record<string, unknown>) => ({
+      stage: "initial",
+      state: "finalized",
+      head_sha: sha,
+      base_sha: sha,
+      synthesis,
+      synthesis_sha256: stableHash(synthesis),
+      lanes,
+    });
+    const historicalLanes = Object.fromEntries(
+      [
+        "contract",
+        "state-concurrency",
+        "failure-data-safety",
+        "test-platform",
+      ].map((name) => [name, { state: "completed" }]),
+    );
+    const currentLanes = { comprehensive: { state: "completed" } };
+
+    expect(
+      isCurrentClearWave(wave(historicalLanes), sha, sha, 3, {
+        legacySchema: true,
+      }),
+    ).toBe(true);
+    // A current ledger never re-authorizes the retired lanes.
+    expect(isCurrentClearWave(wave(historicalLanes), sha, sha, 3)).toBe(false);
+    expect(isCurrentClearWave(wave(currentLanes), sha, sha, 3)).toBe(true);
+    expect(
+      isCurrentClearWave(wave(currentLanes), sha, sha, 3, {
+        legacySchema: true,
+      }),
+    ).toBe(true);
+  });
+
   test("keeps schema 6 review receipts historical and blocks fresh clear", () => {
     const ledger = initialLedger("legacy-review-run", "fast-track", sha, sha, null);
     ledger.review_assessment = {
@@ -789,10 +826,7 @@ describe("acceptance and review state", () => {
       source: "agent-assessment",
     };
     const lanes = [
-      { lane: "contract", model: "gpt-6-luna", effort: "max" },
-      { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
-      { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
-      { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
+      { lane: "comprehensive", model: "gpt-6-luna", effort: "max" },
     ];
     const opened = openReviewWaveState(ledger, {
       stage: "initial",
@@ -831,7 +865,7 @@ describe("acceptance and review state", () => {
       if (receipt.kind === "review") receipt.review_receipt_schema = 6;
     const disguisedReceipt = (
       disguisedCurrent.receipts as Record<string, unknown>[]
-    ).find((receipt) => receipt.lane === "contract");
+    ).find((receipt) => receipt.lane === "comprehensive");
     if (!disguisedReceipt) throw new Error("disguised review receipt is missing");
     disguisedReceipt.review_clear = false;
     disguisedReceipt.overall_correctness = "patch is incorrect";
@@ -848,7 +882,7 @@ describe("acceptance and review state", () => {
     const malformedCurrent = structuredClone(ledger) as Record<string, unknown>;
     const malformedReceipt = (
       malformedCurrent.receipts as Record<string, unknown>[]
-    ).find((receipt) => receipt.lane === "contract");
+    ).find((receipt) => receipt.lane === "comprehensive");
     if (!malformedReceipt) throw new Error("malformed review receipt is missing");
     malformedReceipt.review_result_sha256 = "tampered-result-hash";
     expect(() =>
@@ -1036,7 +1070,7 @@ describe("acceptance and review state", () => {
         string,
         Record<string, unknown>
       >
-    ).contract;
+    ).comprehensive;
     danglingLane.receipt_id = "missing-review-receipt";
     expect(() =>
       openReviewWaveState(danglingReceipt, {
@@ -1059,7 +1093,7 @@ describe("acceptance and review state", () => {
         string,
         Record<string, unknown>
       >
-    )["test-platform"];
+    ).comprehensive;
     unfinishedLane.state = "pending";
     unfinishedLane.receipt_id = null;
     expect(() =>
@@ -1079,7 +1113,7 @@ describe("acceptance and review state", () => {
     )[String(wave.wave_id)];
     const partialLane = (
       partialWave.lanes as Record<string, Record<string, unknown>>
-    )["test-platform"];
+    ).comprehensive;
     partialLane.receipt_id = null;
     partialLane.state = "pending";
     expect(() =>
@@ -1111,7 +1145,7 @@ describe("acceptance and review state", () => {
     ).toBe(true);
     delete (
       freshWave.lanes as Record<string, Record<string, unknown>>
-    )["test-platform"];
+    ).comprehensive;
     expect(() =>
       finalizeReviewWaveState(normalized, String(freshWave.wave_id), {
         groups: [],
@@ -1138,10 +1172,7 @@ describe("acceptance and review state", () => {
         baseSha: sha,
         headSha: sha,
         laneSpecs: [
-          { lane: "contract", model: "gpt-5.6-luna", effort: "medium" },
-          { lane: "state-concurrency", model: "gpt-6-luna", effort: "max" },
-          { lane: "failure-data-safety", model: "gpt-6-luna", effort: "max" },
-          { lane: "test-platform", model: "gpt-6-luna", effort: "max" },
+          { lane: "comprehensive", model: "gpt-5.6-luna", effort: "medium" },
         ],
       }),
     ).toThrow("requested gpt-6-luna + max profile");

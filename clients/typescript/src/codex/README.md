@@ -1,6 +1,6 @@
 # Codex app-server 适配
 
-本模块在 Bun 1.4.4 中使用标准 API，通过独立子进程的 stdio NDJSON 连接本机 Codex app-server；调用入口为源码 `src/codex/index.ts`，不依赖 Loomhelm 服务端、Web App 。只有显式调用 `CodexAppServer.start()` 才启动进程。
+本模块在 Bun 1.4.5 中使用标准 API，通过独立子进程的 stdio NDJSON 连接本机 Codex app-server；调用入口为源码 `src/codex/index.ts`，不依赖 Loomhelm 服务端、Web App 。只有显式调用 `CodexAppServer.start()` 才启动进程。
 
 协议来源为本机 `codex-cli 0.166.0` 的 `codex app-server generate-ts` 稳定输出和 [官方 app-server 文档](https://developers.openai.com/codex/app-server)。`protocol.ts` 保存所用参数、响应、服务器请求及依赖的生成类型；生成脚本只移除重复生成头和内部 import，将依赖闭包合并为一个文件，不自行推断字段。升级协议时，在本包目录执行 `bun src/codex/generate-protocol.ts`，审核差异并重跑行为测试。服务器仍使用已有本机 Codex 配置与凭据；适配器不读取、复制或上传凭据。
 

@@ -2,10 +2,14 @@ import {
   DYNAMIC_REVIEW_LANES,
   FIXED_REVIEW_LANES,
   FlowError,
+  MAX_DYNAMIC_REVIEW_LANES,
+  MAX_REVIEW_ROUNDS,
+  RETIRED_REVIEW_LANES,
   REVIEW_SCOPE_CLASSES,
   canonicalJson,
   isoNow,
   isRecord,
+  sha256Bytes,
   stableHash,
 } from "./common";
 import { normalizeAcceptanceManifest } from "./acceptance";
@@ -30,6 +34,7 @@ export function openReviewWaveState(
     highRequirement?: boolean | undefined;
     arbitrationConflicts?: string[] | undefined;
     arbitrationBlockerFingerprints?: string[] | undefined;
+    ownerReviewRoundAuthorization?: ReviewRoundAuthorization | undefined;
   },
 ): Record<string, unknown> {
   const assessment = isRecord(ledger.review_assessment)
@@ -45,6 +50,10 @@ export function openReviewWaveState(
     options.laneSpecs,
     tier,
     options.highRequirement ?? false,
+  );
+  const creditPaid = authorizeReviewRound(
+    ledger,
+    options.ownerReviewRoundAuthorization,
   );
   const arbitrationConflicts = sortedStrings(
     options.arbitrationConflicts,
@@ -160,6 +169,7 @@ export function openReviewWaveState(
     wave_id: waveId,
     epoch_id: epoch.epoch_id,
     state: "open",
+    review_round_paid_by_credit: creditPaid,
     stage: options.stage,
     base_sha: options.baseSha,
     base_ref: options.baseRef ?? null,
@@ -396,14 +406,118 @@ function reviewLaneTopologyMatches(
     : undefined;
   if (wave.stage === "risk-arbitration")
     return names.size === 1 && names.has("risk-arbitration");
+  if (
+    ledger.schema_version === 6 &&
+    matchesRetiredTopology(names, assessment)
+  )
+    return true;
   const fixed = [...FIXED_REVIEW_LANES].every((lane) => names.has(lane));
   const dynamic = [...names].filter((lane) => !FIXED_REVIEW_LANES.has(lane));
   return (
     fixed &&
-    dynamic.length <= 2 &&
+    dynamic.length <= MAX_DYNAMIC_REVIEW_LANES &&
     dynamic.every((lane) => DYNAMIC_REVIEW_LANES.has(lane)) &&
     (assessment?.tier === 3
       ? dynamic.length === 0
       : assessment?.tier === 4 && dynamic.length >= 1)
   );
+}
+
+/**
+ * The four-lane topology retired by ADR 0043. It stays recognizable so a
+ * schema-6 ledger written by the published runtime can still reach its
+ * historical branch instead of failing closed as "already active".
+ */
+function matchesRetiredTopology(
+  names: Set<string>,
+  assessment: Record<string, unknown> | undefined,
+): boolean {
+  if (!assessment || (assessment.tier !== 3 && assessment.tier !== 4))
+    return false;
+  if (![...RETIRED_REVIEW_LANES].every((lane) => names.has(lane))) return false;
+  const dynamic = [...names].filter((lane) => !RETIRED_REVIEW_LANES.has(lane));
+  return assessment.tier === 3
+    ? dynamic.length === 0
+    : dynamic.length >= 1 &&
+        dynamic.length <= MAX_DYNAMIC_REVIEW_LANES &&
+        dynamic.every((lane) => DYNAMIC_REVIEW_LANES.has(lane));
+}
+
+/**
+ * Bound review effort across the whole run. `review_rounds` counts waves that
+ * did not clear the candidate; it lives in `review.cumulative` so a new epoch
+ * cannot reset it. Past the cap, one explicit owner authorization unlocks
+ * exactly one more round.
+ *
+ * The authorization is bound to an owner message the same way
+ * `reopenConvergence` is: `owner:<ref>` reference, a sha256 of the reason text,
+ * and a user message id consumed once. A bare non-empty string is not
+ * authorization, because the caller being bounded would otherwise author its
+ * own approval.
+ */
+export function authorizeReviewRound(
+  ledger: Record<string, unknown>,
+  authorization?: ReviewRoundAuthorization | undefined,
+): boolean {
+  const review = reviewState(ledger);
+  const cumulative = isRecord(review.cumulative) ? review.cumulative : {};
+  const used = Number(cumulative.review_rounds ?? 0);
+  if (used < MAX_REVIEW_ROUNDS) {
+    if (authorization)
+      throw new FlowError(
+        "owner review round authorization is only valid after the round budget is exhausted",
+      );
+    return false;
+  }
+  // An unspent credit already pays for this round. Consume it here, at open,
+  // so it authorizes exactly one round: the gate is what a retry re-enters, so
+  // deferring the spend to finalize would let one credit admit round after
+  // round when a wave never finalizes.
+  const credits = Number(cumulative.review_rounds_paid_ahead ?? 0);
+  if (credits > 0) {
+    if (authorization)
+      throw new FlowError(
+        "a review round credit is already available; it is consumed by this round",
+      );
+    cumulative.review_rounds_paid_ahead = credits - 1;
+    return true;
+  }
+  if (!authorization)
+    throw new FlowError(
+      `review round budget is exhausted after ${MAX_REVIEW_ROUNDS} non-clearing rounds; owner authorization is required for another round`,
+    );
+  const { authorizationRef, authorizationTextSha256, reason, userMessageId } =
+    authorization;
+  if (
+    !/^owner:[A-Za-z0-9-]+(?::[^\s:]+)?$/.test(authorizationRef.trim()) ||
+    !/^[0-9a-f]{64}$/i.test(authorizationTextSha256) ||
+    sha256Bytes(new TextEncoder().encode(reason)) !==
+      authorizationTextSha256.toLowerCase() ||
+    !userMessageId.trim() ||
+    !reason.trim()
+  )
+    throw new FlowError(
+      "review round authorization requires an owner ref, a matching reason digest, and a user message id",
+    );
+  const consumed = Array.isArray(cumulative.review_rounds_authorization_ids)
+    ? (cumulative.review_rounds_authorization_ids as string[])
+    : [];
+  if (consumed.includes(userMessageId))
+    throw new FlowError(
+      "review round authorization user message id was already consumed",
+    );
+  cumulative.review_rounds_authorization_ids = [...consumed, userMessageId];
+  cumulative.review_rounds_owner_authorized =
+    Number(cumulative.review_rounds_owner_authorized ?? 0) + 1;
+  cumulative.review_rounds_owner_authorization_reason = reason.trim();
+  // The authorization pays for the round that is opening now; no balance is
+  // left behind, so a stray retry cannot reuse it.
+  return true;
+}
+
+export interface ReviewRoundAuthorization {
+  authorizationRef: string;
+  authorizationTextSha256: string;
+  reason: string;
+  userMessageId: string;
 }

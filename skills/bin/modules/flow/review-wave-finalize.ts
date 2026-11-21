@@ -232,6 +232,7 @@ export function finalizeReviewWaveState(
     recordReviewHistory(review, epoch, waveId, blockers, synthesis);
     epoch.status = blockers.length ? "repair_pending" : "complete";
   }
+  if (blockers.length) countReviewRound(review, wave);
   if (!blockers.length && wave.stage !== "risk-arbitration") {
     epoch.review_proof_wave_id = waveId;
     review.active_epoch_id = null;
@@ -256,3 +257,23 @@ export function finalizeReviewWaveState(
         : "merge-ready",
   };
 }
+
+/**
+ * Count one review round that did not clear the candidate. The count lives in
+ * `review.cumulative` so a new epoch cannot reset it: a wave re-opened after a
+ * base change, candidate change, legacy retirement, or owner reopen still
+ * consumes review budget.
+ */
+export function countReviewRound(
+  review: Record<string, unknown>,
+  wave?: Record<string, unknown> | undefined,
+): number {
+  if (!isRecord(review.cumulative)) return 0;
+  const cumulative = review.cumulative;
+  const used = Number(cumulative.review_rounds ?? 0);
+  // The credit was already spent at open; this round must not charge twice.
+  if (wave?.review_round_paid_by_credit === true) return used;
+  cumulative.review_rounds = used + 1;
+  return cumulative.review_rounds as number;
+}
+

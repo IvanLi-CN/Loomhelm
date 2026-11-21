@@ -91,13 +91,7 @@ describe("flow receipt CLI replay", () => {
         "--head-sha",
         head,
         "--lane",
-        "contract:gpt-6-luna:max",
-        "--lane",
-        "state-concurrency:gpt-6-luna:max",
-        "--lane",
-        "failure-data-safety:gpt-6-luna:max",
-        "--lane",
-        "test-platform:gpt-6-luna:max",
+        "comprehensive:gpt-6-luna:max",
       ]);
       const openedWave = opened.wave as Record<string, unknown>;
       const waveId = String(openedWave.wave_id);
@@ -127,7 +121,7 @@ describe("flow receipt CLI replay", () => {
         "--wave-id",
         waveId,
         "--lane",
-        "contract",
+        "comprehensive",
       ]);
       expect(recorded.receipt).toMatchObject({
         requested_profile: { model: "gpt-6-luna", effort: "max" },
@@ -161,32 +155,6 @@ describe("flow receipt CLI replay", () => {
         "missing required option --review-attempt-id",
       );
 
-      for (const [lane, attempt] of [
-        ["state-concurrency", "cli-state"],
-        ["failure-data-safety", "cli-failure"],
-        ["test-platform", "cli-test"],
-      ])
-        runCli(root, [
-          "record",
-          "--repo",
-          root,
-          "--kind",
-          "review",
-          "--base-ref",
-          "base",
-          "--head-sha",
-          head,
-          "--review-profile",
-          "pr-convergence",
-          "--review-attempt-id",
-          attempt,
-          "--review-result-json",
-          result,
-          "--wave-id",
-          waveId,
-          "--lane",
-          lane,
-        ]);
       const finalized = runCli(root, [
         "review-wave",
         "finalize",

@@ -33,21 +33,7 @@ The contract must state a release policy of `branch-preview` or `trunk-only` and
 
 ## Owner Review Projection
 
-For an explicit `$dev-plan` request, first emit and validate the canonical raw-plan. Only after the checker passes, derive the transient owner-facing Markdown view from the same parsed canonical facts. The projection is written to stdout or the current response, is not persisted, is never reparsed as an execution contract, and cannot replace the raw-plan input. Native Codex Plan Mode without an explicit `$dev-plan` invocation remains unchanged.
-
-The canonical `Task Orchestration` section is the only source for batch, wave, task, dependency, owned-surface, acceptance, and skill facts. Existing fast-track fixtures that use the older direct single-task shape remain on the explicit compatibility projection until they are migrated. New v2 tasks also declare `title`, `purpose`, and `outputs` in the task field list so the projection can explain the work without maintaining a second task registry. Compatibility direct plans project every direct task line accepted by the TypeScript checker, including the usual single `main-agent` shape, without inventing a second task registry. Historical JSONL may omit these display fields and remains limited to the explicit read-only compatibility route.
-
-The owner-facing projection uses these sections in order: `决策卡`, `目标`, `不包含的工作`, `波次与依赖`, `执行规则`, `任务卡`, `约束`, `验收清单`, and `Review、运行时门禁与收口`. Its `波次与依赖` section contains a Mermaid graph derived only from canonical waves, tasks, same-wave parallelism, and explicit dependencies. The `任务卡` section displays every canonical task and every non-empty canonical batch lifecycle field. Displayed fields include target, parent branch, child PR, topology, event protocol, release policy, condition, acceptance, and observation window.
-
-Direct task cards preserve the canonical `[model, effort]` profile and every accepted inline `$skill` annotation when present.
-
-The `验收清单` section uses two phase headings: `PR 合并前验收` and `PR 合并后验收`. Under each heading, render one readable card per canonical acceptance item rather than a wide table. Each card shows its ID, proof target, pass conditions, and evidence; when scope is present, show it as a labeled field. Cards under the post-merge heading also show the applicable trigger, such as `Merge Receipt 已存在` or `部署身份已核验`. Keep each assertion and evidence item on its own semantic line so long text wraps naturally and is not forced into equal-width columns. The projection must not emit a long-text acceptance table or maintain a second machine-readable manifest. Review Readiness, PR convergence, and Step 5C consume only the pre-merge cards.
-
-Task cards and acceptance items are views of canonical facts, not new machine-readable batch/task syntax. The historical coordinator contract section remains forbidden in new raw-plans and is accepted only by historical JSONL compatibility.
-
-The `决策卡` retains the canonical flow lock as `流程类型`, so `$flow-continue` can resume the locked route without treating the projection as a new execution contract. Flow Decision fields are read only from unfenced list items with optional indentation, and fenced examples never affect routing.
-
-Optional task profiles use the same supported model/effort matrix as the runtime profile checker.
+The projection contract, including its required section order, Mermaid graph, acceptance cards, and compatibility rules, lives in `references/owner-review-projection.md`. Read it only when validating or emitting the owner-facing view.
 
 ## Plan Shape
 
@@ -74,40 +60,8 @@ Keep these headings in order: `Summary`, `Flow Decision`, `Goals`, optional `Con
 
 ## Final Check
 
-The explicit `$dev-plan` route has one public finalization command.
+`skills/bin/plan-cli.sh --input <raw-plan.md>` is the only public finalization entry. It rejects NUL-containing input, runs the canonical raw-plan checker internally, derives and validates the projection only after the check passes, and returns a single `pass` or `reject` result. A passing response wraps the projection in exactly one `<proposed_plan>` block.
 
-It rejects NUL-containing input before invoking the raw checker and runs the canonical raw-plan checker internally.
-
-It derives the projection only after that check passes, validates the projection, and returns the single final `pass` or `reject` result:
-
-```bash
-skills/bin/plan-cli.sh --input <raw-plan.md>
-```
-
-The launcher is the trusted boundary: it clears Bun and Node preload environment variables and selects `skills/bin/plan_bunfig.toml`. Direct `bun --no-install run skills/bin/plan_review_view.ts` remains a development-only diagnostic path and is not a secure interface for untrusted candidate input.
-
-The finalizer has one public result: `pass` emits the projection and permits the explicit plan response; `reject` emits stable findings, no compliant projection, and blocks execution.
-
-The `$dev-plan` response wraps a passing projection in exactly one `<proposed_plan>` block.
-
-Use `bun --no-install run skills/bin/plan_contract_check.ts --plan -` only for focused raw-contract diagnostics or fixture tests.
-
-Its standalone `PASS` is not an explicit `$dev-plan` finalization result.
-
-For historical replay fixtures or runtime input, validate the in-memory state and task events with the dedicated compatibility checker before dispatch. Do not write the state into the project repository.
-
-The TypeScript checker is the source of truth for exact field, executor, topology, and acceptance syntax.
-
-The projection adapter must cover every direct task form accepted by that checker and reject any task it cannot project instead of silently omitting it.
+`references/finalization.md` owns the launcher boundary, diagnostics-only paths, and compatibility-checker rules.
 
 Keep plan prose concise and write owner-facing text in Simplified Chinese unless the owner requests another language.
-
-File inputs must resolve inside the candidate Worktree.
-
-Use stdin or the current response for an in-memory raw-plan, and never point the projection entrypoint at runtime `CODEX_HOME` or another repository.
-
-The file route must read through a no-follow traversal of every absolute candidate-root component and the requested path so a symlink swap cannot escape that boundary.
-
-The requested path must name a regular file; non-regular inputs are rejected before reading.
-
-Do not feed the projection, a historical JSONL session, or a persisted copy back into the raw-plan checker as a new plan.

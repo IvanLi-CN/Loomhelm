@@ -11,6 +11,12 @@ export const FLOW_SCHEMA_VERSION = 7;
 export const REVIEW_RECEIPT_SCHEMA_VERSION = 7;
 export const DEFAULT_COMMAND_BUDGET_SECONDS = 1800;
 export const MAX_CONVERGENCE_ROUNDS = 3;
+/**
+ * Cap on review rounds that did not clear the candidate, counted across every
+ * epoch of one run. `MAX_CONVERGENCE_ROUNDS` bounds repair writes; this bounds
+ * review effort, so re-opening a wave without repairing cannot reset it.
+ */
+export const MAX_REVIEW_ROUNDS = 3;
 export const TRANSIENT_VALIDATION_EXIT_CODES = new Set([75, 124]);
 export const TERMINAL_STATES = new Set([
   "complete",
@@ -25,7 +31,13 @@ export const DIRECT_REVIEW_FLOW_TYPES = new Set([
   "local-merge",
 ]);
 export const PR_BOUND_FLOW_TYPES = new Set(["fast-track", "normal"]);
-export const FIXED_REVIEW_LANES = new Set([
+export const FIXED_REVIEW_LANES = new Set(["comprehensive"]);
+/**
+ * Lane set retired by ADR 0043. A schema-6 ledger written by the published
+ * runtime still carries these lanes, so historical detection must recognize
+ * them even though no current wave may use them.
+ */
+export const RETIRED_REVIEW_LANES = new Set([
   "contract",
   "state-concurrency",
   "failure-data-safety",

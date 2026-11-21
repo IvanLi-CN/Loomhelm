@@ -1,6 +1,6 @@
 # 局部验证与通用 Skill 目录读取
 
-`workflow/index.ts` 仅提供通用 Skills 目录读取和局部验证 API；正式迁入入口由 `SkillsRuntime` 与根 `skills/` 提供。局部验证不代表完整工程交付、PR 就绪或发布完成。`workflow/cli.ts` 是独立机器可读入口，由 Bun 1.4.4 直接调用 TS；现有客户端公共入口不因本模块改变。实现以 `docs/design/client.md` 中的 Skills 和工作流职责为边界，参考已安装 `project-engineering-workflow` 的本地阶段语义。
+`workflow/index.ts` 仅提供通用 Skills 目录读取和局部验证 API；正式迁入入口由 `SkillsRuntime` 与根 `skills/` 提供。局部验证不代表完整工程交付、PR 就绪或发布完成。`workflow/cli.ts` 是独立机器可读入口，由 Bun 1.4.5 直接调用 TS；现有客户端公共入口不因本模块改变。实现以 `docs/design/client.md` 中的 Skills 和工作流职责为边界，参考已安装 `project-engineering-workflow` 的本地阶段语义。
 
 ## Skills
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project doc promote"
+  short_description: "Promote stable conclusions into human-facing project docs"
+  default_prompt: "Use $project-doc-promote to settle project_doc_disposition and promote stable project truth from docs/specs or docs/solutions into the repository's existing human-facing project docs."

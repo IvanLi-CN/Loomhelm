@@ -4,7 +4,7 @@
   "description": "Versioned Bun CLI and complete Multi-task Flow Skill runtime for Loomhelm",
   "type": "module",
   "engines": {
-    "bun": "1.4.4"
+    "bun": "1.4.5"
   },
   "bin": {
     "multi-task-flow": "src/cli.ts",
@@ -31,7 +31,7 @@
   },
   "devDependencies": {
     "typescript": "5.9.3",
-    "@types/bun": "1.4.4"
+    "@types/bun": "1.4.5"
   },
   "dependencies": {
     "@loomhelm/runtime-core": "0.2.0",
@@ -53,5 +53,5 @@
   "publishConfig": {
     "access": "public"
   },
-  "packageManager": "bun@1.4.4"
+  "packageManager": "bun@1.4.5"
 }

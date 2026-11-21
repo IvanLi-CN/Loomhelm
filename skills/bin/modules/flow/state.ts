@@ -53,6 +53,8 @@ export function defaultReviewState(): Record<string, unknown> {
       coverage_lanes: [],
       conflicts: [],
       conflict_dispositions: [],
+      review_rounds: 0,
+      review_rounds_owner_authorized: 0,
     },
   };
 }

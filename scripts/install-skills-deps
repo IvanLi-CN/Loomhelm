@@ -1,0 +1,20 @@
+#!/bin/sh
+set -u
+
+# Single owner for installing the independent `skills/` dependency tree.
+#
+# `skills/` has its own `bun.lock` and resolves `@loomhelm/runtime-core` as a
+# registry dependency instead of inheriting the root workspace, so the root
+# install never provides it. Every entrypoint that needs `skills/node_modules`
+# (bootstrap setup and the client check) must call this script, so a regression
+# here fails the same code path in both places.
+#
+# Extra arguments are forwarded to `bun install`, e.g. `--backend=copy`.
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || {
+	echo "install-skills-deps: cannot resolve repository root" >&2
+	exit 1
+}
+cd "$repo_root" || exit 1
+
+exec bun install --cwd skills --frozen-lockfile --ignore-scripts "$@"

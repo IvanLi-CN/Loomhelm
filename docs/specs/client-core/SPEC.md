@@ -8,13 +8,13 @@
 
 本主题使用与 [术语表](../../../GLOSSARY.md) 一致的对象定义：Task 是具有稳定身份、目标、范围、验收条件和依赖的工作单元；Run 是一次 Task 执行尝试；Receipt 是账本中的可验证重要执行事实；Ledger 是按顺序保存 Receipt、摘要链和恢复信息的本地账本；operation identity 是识别一次请求的稳定键；`schemaVersion` 是持久化格式版本键。Codex thread、turn 和 Dispatch 属于客户端总体设计，但不属于本核心 SPEC 的接口。
 
-公共源码入口为 `clients/typescript/src/index.ts`，本地 CLI 为 `clients/typescript/src/cli.ts`，通过 Bun 1.4.4 直接执行；两者共享同一核心合同。
+公共源码入口为 `clients/typescript/src/index.ts`，本地 CLI 为 `clients/typescript/src/cli.ts`，通过 Bun 1.4.5 直接执行；两者共享同一核心合同。
 
 ## Requirements
 
 ### REQ-CORE-001
 
-客户端 MUST 无需服务端或凭据即可加载本地配置、启动、查询和停止。生产 MUST 仅支持 Bun 1.4.4，直接执行 TS，MUST NOT 要求预编译 JS 或 Node 运行时。配置 MUST 拒绝未知版本和无效字段。
+客户端 MUST 无需服务端或凭据即可加载本地配置、启动、查询和停止。生产 MUST 仅支持 Bun 1.4.5，直接执行 TS，MUST NOT 要求预编译 JS 或 Node 运行时。配置 MUST 拒绝未知版本和无效字段。
 
 ### REQ-CORE-002
 
@@ -32,7 +32,7 @@ Task MUST 具备目标、范围、验收条件、依赖和稳定身份。相同 
 
 ### VER-CORE-001
 
-- Method: 固定 Bun 1.4.4 源码入口配置与 CLI 集成验证。
+- Method: 固定 Bun 1.4.5 源码入口配置与 CLI 集成验证。
 - covers: `REQ-CORE-001`
 - Pass condition: 无服务端通过实际 Bun 子进程直接执行 TS CLI 完成任务生命周期，非法配置被拒绝，测试不得调用旧 dist 入口。
 

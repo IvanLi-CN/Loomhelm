@@ -54,7 +54,7 @@ Connected mode 断开后必须降级为可解释的离线状态；本地可继�
 
 ## 核心模块
 
-- `runtime`：Bun 1.4.4 下的进程、文件、信号、锁和平台适配。
+- `runtime`：Bun 1.4.5 下的进程、文件、信号、锁和平台适配。
 - `codex`：Codex app-server 生命周期、协议、事件和恢复。
 - `workflow`：Skills、工程工作流和验证阶段。
 - `tasks`：任务模型、依赖、状态机、账本和收据。

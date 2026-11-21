@@ -12,7 +12,7 @@ Viewer 维护按 [ADR 0026](../../adr/0026-viewer-compatibility-lifecycle.md) �
 
 根 `skills/` 保存源 Skill、references、测试及模板；`@loomhelm/runtime-core` 保存 Multi-task Flow 运行时需要的共享执行模块。资源合同和实现均以当前仓库内容为准。源码资源直接从仓库目录发现，构建时生成包内 `resources/skills/resource-manifest.json`，记录发布资源路径和摘要；`skills/catalog.json` 提供入口、脚本和条件性外部依赖。资源校验不执行专项外部操作，不将源包存在视为宿主能力可用。
 
-生产仅使用 Bun 1.4.4 直接运行 TS。源码打包保留模块和完整资源路径，无服务端 JS 编译或导入后缀改写。计划 finalizer 从校验过的 TS 描述符读取私有快照，清理预加载和配置环境；POSIX 操作通过 Bun 内置 FFI 保留原子不覆盖重命名、目录描述符相对操作与原 flock 互斥，不构建 Node-API 模块。
+生产仅使用 Bun 1.4.5 直接运行 TS。源码打包保留模块和完整资源路径，无服务端 JS 编译或导入后缀改写。计划 finalizer 从校验过的 TS 描述符读取私有快照，清理预加载和配置环境；POSIX 操作通过 Bun 内置 FFI 保留原子不覆盖重命名、目录描述符相对操作与原 flock 互斥，不构建 Node-API 模块。
 
 `SkillsRuntime` 使用包内资源；CLI 的 `skills list/check/run` 和 `flow COMMAND --input -` 分别承担发现、能力/完整性报告、脚本执行及原任务流委托。socket 选择遵守显式参数/配置、Loomhelm 环境变量、Codex 环境变量及原默认路径的顺序。构建产物包含网页资源，不要求服务端或来源 checkout。
 

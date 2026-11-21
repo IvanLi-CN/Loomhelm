@@ -12,8 +12,8 @@
   "exports": {
     "./modules/*": "./src/modules/*"
   },
-  "engines": { "bun": "1.4.4" },
+  "engines": { "bun": "1.4.5" },
   "publishConfig": { "access": "public" },
   "loomhelm": { "compatibilityLine": "compat-v1" },
-  "packageManager": "bun@1.4.4"
+  "packageManager": "bun@1.4.5"
 }

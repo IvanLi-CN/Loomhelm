@@ -35,3 +35,5 @@ Dev Plan 私有快照对每个源目录和文件检查 root/当前用户所有�
 - Viewer 兼容生命周期补充真实目标 reader 预检、受支持历史格式双读、previous build 只读 fallback、机械迁移护栏及独立清理决策；历史格式和拒绝路径测试继续保留。
 
 - 删除源码侧逐文件资源摘要清单；源码检查、目录生成和打包统一从仓库文件发现资源，包内清单及文件摘要在构建时生成。
+
+- Skill 集合按“拆分、简化、合并或删除”三类整理：`storybook-screenshots` 并入 `ui-visual-evidence`，`spec-sync` 并入 `topic-spec` 的 sync 模式；`find-next-plan` 在 topic-spec 仓库无法产出任务队列结果，随目录、catalog 与安装清单移除。`solution-sync` 与 `project-doc-promote` 保留为独立 Skill：前者是共享流程内单任务 solution 门禁的日常入口，后者是单任务项目文档 promotion 入口，二者与 `docs-migrate` 的批量历史迁移语义不同，且 `docs-migrate` 显式禁止模型自动调用。`project-engineering-workflow`、`ui-visual-evidence`、`storybook-stories`、`dev-plan`、`global-port-manager`、`git-cleanup`、`fresh-thread-dispatch` 的阶段细节移入各自 `references/`，重复的 viewport、边距、`scope_id`、`BASE_REF` 与 review 合同改为单点定义并交叉引用。授权边界、停靠点、门禁字段与审计命令不变。

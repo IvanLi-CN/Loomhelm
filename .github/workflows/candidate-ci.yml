@@ -61,10 +61,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Read pinned tool versions
+        run: grep -E '^BUN_VERSION=' tools/versions.env >> "$GITHUB_ENV"
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
       - name: Install verified sqlc
         run: |
           scripts/install-sqlc "$RUNNER_TEMP/loomhelm-bin"
@@ -83,10 +85,12 @@ jobs:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Read pinned tool versions
+        run: grep -E '^BUN_VERSION=' tools/versions.env >> "$GITHUB_ENV"
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
       - name: Install Web tooling
         run: bun install --frozen-lockfile
       - name: Check changed React files
@@ -132,10 +136,12 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           purpose: repository
+      - name: Read pinned tool versions
+        run: grep -E '^BUN_VERSION=' tools/versions.env >> "$GITHUB_ENV"
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
       - name: Check Go source
         run: scripts/checks source
       - name: Check multi-task-flow TypeScript style
@@ -230,10 +236,12 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           purpose: repository
+      - name: Read pinned tool versions
+        run: grep -E '^BUN_VERSION=' tools/versions.env >> "$GITHUB_ENV"
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
       - name: Install verified sqlc
         run: |
           scripts/install-sqlc "$RUNNER_TEMP/loomhelm-bin"
@@ -255,9 +263,11 @@ jobs:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
           fetch-depth: 1
           persist-credentials: false
+      - name: Read pinned tool versions
+        run: grep -E '^BUN_VERSION=' tools/versions.env >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
       - name: Prepare trusted Bun executable for sensitive launchers
         run: |
           bun_source=$(bun -e 'console.log(process.execPath)')
@@ -276,9 +286,11 @@ jobs:
           ref: ${{ env.CANDIDATE_SOURCE_SHA }}
           fetch-depth: 1
           persist-credentials: false
+      - name: Read pinned tool versions
+        run: grep -E '^BUN_VERSION=' tools/versions.env >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
       - name: Verify Bun FFI without project native compilation
         run: |
           export TMPDIR="$PWD/.tmp/ffi/tmp" HOME="$PWD/.tmp/ffi/home" BUN_INSTALL_CACHE_DIR="$PWD/.tmp/ffi/cache" BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
@@ -322,10 +334,12 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           purpose: candidate
+      - name: Read pinned tool versions
+        run: grep -E '^BUN_VERSION=' tools/versions.env >> "$GITHUB_ENV"
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
       - name: Build immutable candidate
         run: scripts/build-candidate --source-sha "$CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-candidate"
       - name: Compile Windows Connector and application
@@ -396,10 +410,12 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           purpose: candidate
+      - name: Read pinned tool versions
+        run: grep -E '^BUN_VERSION=' tools/versions.env >> "$GITHUB_ENV"
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
       - name: Rebuild and compare candidate identity
         run: scripts/reproduce-candidate --source-sha "$CANDIDATE_SOURCE_SHA" --output "$RUNNER_TEMP/loomhelm-candidate-repro"
 
@@ -441,9 +457,11 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           purpose: candidate
+      - name: Read pinned tool versions
+        run: grep -E '^BUN_VERSION=' tools/versions.env >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
       - name: Prepare fixture record at exact Candidate SHA
         run: python3 tools/release/fixture_record.py > "$RUNNER_TEMP/record.json"
       - name: Prepare offline image importer
@@ -471,9 +489,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Read pinned tool versions
+        run: grep -E '^BUN_VERSION=' tools/versions.env >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
       - name: Prepare fixture record at exact Candidate SHA
         run: python3 tools/release/fixture_record.py > "$RUNNER_TEMP/record.json"
       - name: Build and observe native package partitions

@@ -30,18 +30,14 @@ const cliRequirements = (name) => {
       "git-branch",
       "git-worktree",
       "git-cleanup",
-      "find-next-plan",
       "docs-migrate",
-      "spec-sync",
       "topic-spec",
-      "solution-sync",
-      "project-doc-promote",
       "rust-crate-release",
       "srv-101-ops",
     ].includes(name)
   )
     add("git", "repository inspection or Git operations");
-  if ([...delivery, "git-cleanup", "find-next-plan", "rust-crate-release"].includes(name)) {
+  if ([...delivery, "git-cleanup", "rust-crate-release"].includes(name)) {
     add("gh", "GitHub backend PR, check or release operations only");
     if (name !== "rust-crate-release") add("tea", "Gitea backend operations only");
   }
@@ -50,11 +46,10 @@ const cliRequirements = (name) => {
     add("rustup", "toolchain inspection or explicitly authorized changes");
   }
   if (name === "srv-101-ops") add("ssh", "authorized remote machine inspection");
-  if (["storybook-stories", "storybook-screenshots"].includes(name))
+  if (name === "storybook-stories")
     add("bun", "original Storybook project build scripts when the selected project uses Bun");
   if (
     [
-      "storybook-screenshots",
       "ui-visual-evidence",
       "gui-escalation-gate",
       "cn-ecommerce-data-collection",
