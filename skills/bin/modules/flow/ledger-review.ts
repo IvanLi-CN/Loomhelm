@@ -117,6 +117,7 @@ export function openReviewWave(
     highRequirement?: boolean | undefined;
     arbitrationConflicts?: string[] | undefined;
     arbitrationBlockerFingerprints?: string[] | undefined;
+    ownerReviewRoundAuthorization?: string | undefined;
   },
 ): Record<string, unknown> {
   if (!ledger.repo)
@@ -245,6 +246,7 @@ export function openReviewWave(
       highRequirement: options.highRequirement,
       arbitrationConflicts: options.arbitrationConflicts,
       arbitrationBlockerFingerprints: options.arbitrationBlockerFingerprints,
+      ownerReviewRoundAuthorization: options.ownerReviewRoundAuthorization,
       baseRef,
       baseSha: base,
       headSha: head,

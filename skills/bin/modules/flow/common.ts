@@ -11,6 +11,12 @@ export const FLOW_SCHEMA_VERSION = 7;
 export const REVIEW_RECEIPT_SCHEMA_VERSION = 7;
 export const DEFAULT_COMMAND_BUDGET_SECONDS = 1800;
 export const MAX_CONVERGENCE_ROUNDS = 3;
+/**
+ * Cap on review rounds that did not clear the candidate, counted across every
+ * epoch of one run. `MAX_CONVERGENCE_ROUNDS` bounds repair writes; this bounds
+ * review effort, so re-opening a wave without repairing cannot reset it.
+ */
+export const MAX_REVIEW_ROUNDS = 3;
 export const TRANSIENT_VALIDATION_EXIT_CODES = new Set([75, 124]);
 export const TERMINAL_STATES = new Set([
   "complete",

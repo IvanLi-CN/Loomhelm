@@ -142,6 +142,11 @@ async function main(argv: string[]): Promise<number> {
             argv,
             "arbitration-blocker-fingerprint",
           ),
+          ownerReviewRoundAuthorization: value(
+            parsed.options,
+            "owner-review-round-authorization",
+            false,
+          ),
         }),
       );
       return 0;

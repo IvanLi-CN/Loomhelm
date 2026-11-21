@@ -3,6 +3,7 @@ import {
   FIXED_REVIEW_LANES,
   FlowError,
   MAX_DYNAMIC_REVIEW_LANES,
+  MAX_REVIEW_ROUNDS,
   RETIRED_REVIEW_LANES,
   REVIEW_SCOPE_CLASSES,
   canonicalJson,
@@ -32,6 +33,7 @@ export function openReviewWaveState(
     highRequirement?: boolean | undefined;
     arbitrationConflicts?: string[] | undefined;
     arbitrationBlockerFingerprints?: string[] | undefined;
+    ownerReviewRoundAuthorization?: string | undefined;
   },
 ): Record<string, unknown> {
   const assessment = isRecord(ledger.review_assessment)
@@ -48,6 +50,7 @@ export function openReviewWaveState(
     tier,
     options.highRequirement ?? false,
   );
+  authorizeReviewRound(ledger, options.ownerReviewRoundAuthorization);
   const arbitrationConflicts = sortedStrings(
     options.arbitrationConflicts,
     "arbitration conflicts",
@@ -433,4 +436,31 @@ function matchesRetiredTopology(
     : dynamic.length >= 1 &&
         dynamic.length <= MAX_DYNAMIC_REVIEW_LANES &&
         dynamic.every((lane) => DYNAMIC_REVIEW_LANES.has(lane));
+}
+
+/**
+ * Bound review effort across the whole run. `review_rounds` counts waves that
+ * did not clear the candidate; it lives in `review.cumulative` so a new epoch
+ * cannot reset it. Past the cap, one explicit owner authorization unlocks
+ * exactly one more round.
+ */
+export function authorizeReviewRound(
+  ledger: Record<string, unknown>,
+  ownerAuthorization?: string | undefined,
+): void {
+  const review = reviewState(ledger);
+  const cumulative = isRecord(review.cumulative) ? review.cumulative : {};
+  const used = Number(cumulative.review_rounds ?? 0);
+  if (used < MAX_REVIEW_ROUNDS) return;
+  const reason = ownerAuthorization?.trim() ?? "";
+  if (!reason)
+    throw new FlowError(
+      `review round budget is exhausted after ${MAX_REVIEW_ROUNDS} non-clearing rounds; owner authorization is required for another round`,
+    );
+  // Mark this round as paid for; the non-clearing round consumes the mark.
+  cumulative.review_rounds_paid_ahead =
+    Number(cumulative.review_rounds_paid_ahead ?? 0) + 1;
+  cumulative.review_rounds_owner_authorized =
+    Number(cumulative.review_rounds_owner_authorized ?? 0) + 1;
+  cumulative.review_rounds_owner_authorization_reason = reason;
 }
