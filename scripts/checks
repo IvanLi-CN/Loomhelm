@@ -76,7 +76,7 @@ check_quality() {
 }
 
 check_syntax() {
-	for script in scripts/accept-v01 scripts/build-candidate scripts/build-deployment-envelope scripts/checks scripts/codegen scripts/db scripts/dev scripts/install-sqlc scripts/preview scripts/promote-candidate scripts/reproduce-candidate scripts/setup; do
+	for script in scripts/accept-v01 scripts/build-candidate scripts/build-deployment-envelope scripts/checks scripts/codegen scripts/db scripts/dev scripts/install-skills-deps scripts/install-sqlc scripts/preview scripts/promote-candidate scripts/reproduce-candidate scripts/setup; do
 		sh -n "$script"
 	done
 	python3 - <<'PY'
@@ -285,7 +285,7 @@ check_client() {
 	export BUN_INSTALL_CACHE_DIR="$repo_root/.tmp/client-tests/cache"
 	export BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
 	mkdir -p "$TMPDIR" "$HOME" "$CODEX_HOME" "$BUN_INSTALL_CACHE_DIR"
-	run_command "Skills frozen dependencies" bun install --cwd skills --frozen-lockfile --ignore-scripts --backend=copy
+	run_command "Skills frozen dependencies" scripts/install-skills-deps --backend=copy
 	run_command "Dashboard frozen dependencies" bun install --cwd packages/multi-task-flow-runtime --frozen-lockfile --ignore-scripts --backend=copy
 	run_command "Source resource discovery" bun packages/multi-task-flow-runtime/scripts/check-client-skills.ts
 	run_command "Dashboard browser assets only" bun run skills:build

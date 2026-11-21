@@ -16,7 +16,7 @@ A canonical target may be selected only with one of these proofs:
 2. a same-diff Git rename recorded in the change;
 3. a historical catalog row proving the exact `ID + source path`, resolved relative to the catalog directory and allowing inline-code or Markdown-link wrapping;
 4. one unique slug target with that same catalog proof;
-5. for a retained read-only alias, an exact `- Legacy compatibility identity: \`#id\`.` marker in the canonical `HISTORY.md`.
+5. for a retained read-only alias, an exact marker line in the canonical `HISTORY.md` of the form `- Legacy compatibility identity: `#<id>``, where `<id>` is replaced by the retained identifier.
 
 ## Never proof
 
