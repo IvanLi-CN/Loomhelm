@@ -22,7 +22,11 @@ def notifications(record):
     return [e for e in record['events'] if e['kind'] == 'notification']
 
 
-RUN_ENV = dict(GITHUB_REPOSITORY='owner/repo', FAILURE_HEAD_SHA='f'*40, FAILURE_RUN_ATTEMPT='5', FAILURE_ACTOR='owner', GITHUB_RUN_ATTEMPT='2', GITHUB_ACTOR='github-actions[bot]')
+RUN_ENV = dict(GITHUB_REPOSITORY='owner/repo', FAILURE_HEAD_SHA='f'*40, FAILURE_RUN_ATTEMPT='5', FAILURE_ACTOR='owner', GITHUB_RUN_ATTEMPT='1', GITHUB_ACTOR='github-actions[bot]')
+
+
+def attempt(number):
+    return patch.dict(os.environ, dict(RUN_ENV, GITHUB_RUN_ATTEMPT=str(number)))
 
 
 class ProductNotificationTests(unittest.TestCase):
@@ -93,6 +97,39 @@ class ProductNotificationTests(unittest.TestCase):
         self.assertEqual(ledger.appends, 0)
         self.assertEqual(notifications(record), [])
 
+    def test_retried_handoff_records_its_own_verdict_without_a_new_pending(self):
+        record = reserved()
+        ledger = MemoryLedger(record)
+        with patch.dict(os.environ, RUN_ENV):
+            self.prepare(record, ledger)
+            notify_failure(record, ledger, 'owner/repo', '9', 'Release', 'result', 'failed')
+        # Only the failed notify job is re-run: prepare does not run again.
+        with attempt(2):
+            notify_failure(record, ledger, 'owner/repo', '9', 'Release', 'result', 'accepted')
+        self.assertEqual([e['status'] for e in notifications(record)], ['pending', 'failed-or-unknown', 'handoff-accepted'])
+        self.assertEqual(ledger.appends, 3)
+
+    def test_orphaned_pending_is_converged_by_the_next_attempt(self):
+        record = reserved()
+        ledger = MemoryLedger(record)
+        with patch.dict(os.environ, RUN_ENV):
+            self.prepare(record, ledger)
+        with attempt(2):
+            self.prepare(record, ledger)
+            notify_failure(record, ledger, 'owner/repo', '9', 'Release', 'result', 'accepted')
+        self.assertEqual([e['status'] for e in notifications(record)], ['pending', 'handoff-accepted'])
+        self.assertEqual(ledger.appends, 2)
+
+    def test_new_attempt_opens_one_new_pending(self):
+        record = reserved()
+        ledger = MemoryLedger(record)
+        with patch.dict(os.environ, RUN_ENV):
+            self.prepare(record, ledger)
+            notify_failure(record, ledger, 'owner/repo', '9', 'Release', 'result', 'failed')
+        with attempt(2):
+            self.assertTrue(self.prepare(record, ledger)['deliver'])
+        self.assertEqual([e['status'] for e in notifications(record)], ['pending', 'failed-or-unknown', 'pending'])
+
     def test_duplicate_result_does_not_append_a_second_verdict(self):
         record = reserved()
         ledger = MemoryLedger(record)
@@ -114,17 +151,6 @@ class ProductNotificationTests(unittest.TestCase):
         self.assertFalse(repeated['deliver'])
         self.assertEqual([e['status'] for e in notifications(record)], ['pending', 'handoff-accepted'])
         self.assertEqual(ledger.appends, 2)
-
-    def test_failed_handoff_retry_opens_one_new_pending(self):
-        record = reserved()
-        ledger = MemoryLedger(record)
-        with patch.dict(os.environ, RUN_ENV):
-            self.prepare(record, ledger)
-            notify_failure(record, ledger, 'owner/repo', '9', 'Release', 'result', 'failed')
-            retried = self.prepare(record, ledger)
-        self.assertTrue(retried['deliver'])
-        self.assertEqual([e['status'] for e in notifications(record)], ['pending', 'failed-or-unknown', 'pending'])
-        self.assertEqual(ledger.appends, 3)
 
     def test_unsupported_stage_and_run_are_rejected_before_any_write(self):
         record = reserved()

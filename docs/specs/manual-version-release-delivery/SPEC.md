@@ -122,7 +122,7 @@ Go 客户端现有独立发布链 MUST 收敛到统一产品发布身份，保�
 
 - covers: `REQ-MVR-011`
 - Method: checked-in transport gate 与 workflow route contract test、ledger phase 状态测试，以及一次 `workflow_dispatch` smoke handoff 验证。
-- Pass condition: 每个 workflow 在 gate 中有唯一 route，同一 run 只写一次 pending 并收敛到 handoff-accepted 或 failed-or-unknown，202 不被写成 Telegram 送达，通知内容无凭据与无关数据。
+- Pass condition: 每个 workflow 在 gate 中有唯一 route，同一 run 的同一 sidecar attempt 至多写一个 `pending`，每次实际发生的 handoff 都收敛到恰好一个 handoff-accepted 或 failed-or-unknown，handoff 已 accepted 后重跑不再投递，202 不被写成 Telegram 送达，通知内容无凭据与无关数据。
 
 ## Related ADRs
 

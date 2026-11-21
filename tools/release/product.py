@@ -207,12 +207,19 @@ def notify_failure(record, ledger, repo, run_id, stage, phase, result=None):
                run_attempt=os.environ.get('FAILURE_RUN_ATTEMPT') or os.environ.get('GITHUB_RUN_ATTEMPT', ''),
                actor={'login': os.environ.get('FAILURE_ACTOR') or os.environ.get('GITHUB_ACTOR', 'unknown')})
     same = [e for e in record['events'] if e['kind'] == 'notification' and e.get('run') == run_id and e.get('stage') == stage]
+    attempt = os.environ.get('GITHUB_RUN_ATTEMPT')
     accepted = [e for e in same if e.get('status') == 'handoff-accepted']
     pending = [e for e in same if e.get('status') == 'pending']
+    # Keyed by the sidecar attempt: re-running only the failed notify job keeps
+    # the earlier attempt's pending, so a count-based guard would drop the
+    # verdict for the handoff that actually happened.
     converged = [e for e in same if e.get('status') in ('handoff-accepted', 'failed-or-unknown')]
+    delivered = [e for e in same if e.get('status') in ('pending', 'handoff-accepted', 'failed-or-unknown') and e.get('workflow_attempt') == attempt]
     if phase == 'prepare':
+        # Reuse an outstanding pending from an aborted attempt instead of
+        # orphaning it; never mint two for the same attempt.
         deliver = not accepted
-        if deliver and len(pending) <= len(converged):
+        if deliver and not any(e.get('status') == 'pending' for e in delivered) and len(pending) <= len(converged):
             transition(record, 'notification', status='pending', run=run_id, stage=stage)
             ledger.append(ledger.state)
         tail = ['Product release ' + record['version'], 'Identity: ' + record['id'], 'Stage: ' + stage,
@@ -222,9 +229,7 @@ def notify_failure(record, ledger, repo, run_id, stage, phase, result=None):
         raise ReleaseError('notification result required')
     if not pending:
         raise ReleaseError('no pending notification for this run')
-    # One failed run converges once. A duplicate record call must not append a
-    # second terminal verdict for the same run and stage.
-    if len(pending) <= len(converged):
+    if any(e.get('status') in ('handoff-accepted', 'failed-or-unknown') for e in delivered):
         return
     transition(record, 'notification', status='handoff-accepted' if result == 'accepted' else 'failed-or-unknown', run=run_id, stage=stage)
     ledger.append(ledger.state)

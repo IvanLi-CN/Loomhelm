@@ -46,4 +46,4 @@ PR #92 实现意图核验后，原 0.1.0 reservation 经签名追加修订继续
 
 ## 失败通知 transport 切换
 
-2026-11-21：Owner 指出 Issue 自动创建并非其要求（当时已积累 50 条 Skill release 与 4 条 Product release open Issue），要求删除该功能并改由 IvanLi-CN/oidrune 通知。实现删除 `GitHub.issues`/`GitHub.notify` 与 sidecar 的 Issue 对账，新增 `.github/release-failure-notification.json` 作为 transport gate 与 workflow route allowlist，sidecar 改为 prepare/notify/record 三阶段（`id-token: write`、SHA-pinned reusable workflow、`202` 仅表示 durable handoff），ledger 记录 `pending`／`handoff-accepted`／`failed-or-unknown`，并保留 `workflow_dispatch` smoke 入口；历史 Issue 一并 close。
+2026-11-21：Owner 指出 Issue 自动创建并非其要求（当时已积累 50 条 Skill release 与 4 条 Product release open Issue），要求删除该功能并改由 IvanLi-CN/oidrune 通知。实现删除 `GitHub.issues`/`GitHub.notify` 与 sidecar 的 Issue 对账，新增 `.github/release-failure-notification.json` 作为 transport gate 与 workflow route allowlist，sidecar 改为 prepare/notify/record 三阶段（`id-token: write`、SHA-pinned reusable workflow、`202` 仅表示 durable handoff），ledger 记录 `pending`／`handoff-accepted`／`failed-or-unknown`，并保留 `workflow_dispatch` smoke 入口；历史 Issue 的关闭属 merge 后的 owner 外部动作，不在本实现内完成。
